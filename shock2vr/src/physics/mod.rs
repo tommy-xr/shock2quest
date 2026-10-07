@@ -1671,8 +1671,8 @@ fn plan_swim_mantle(
 /// still collides with parented entities. Same-height and lower landings
 /// require a genuinely clear all-world point probe above the lip, so
 /// full-height walls remain solid. An elevated landing may cross the local
-/// platform lip with Dark's parentless-terrain jump-through probe, but its
-/// initial vertical rise must remain clear against all world geometry. That
+/// platform lip with Dark's parentless-terrain jump-through probe, but every
+/// candidate's initial rise must remain clear against all world geometry. That
 /// is what permits authored stacked corridors such as shodan's log platforms
 /// without treating a room ceiling directly overhead as an exterior landing.
 fn plan_jump_mantle(
@@ -1740,7 +1740,12 @@ fn plan_jump_mantle(
     let mut rise_ss2 = PLAYER_JUMP_MANTLE_PROBE_STEP;
     while rise_ss2 <= max_rise * SCALE_FACTOR + 1.0e-4 && transition.is_none() {
         let raised = head + Vector::y() * (rise_ss2 / SCALE_FACTOR);
-        let vertical_probe_clear = ray_segment_is_clear(validation_queries, head, raised);
+        // A clear forward probe above a wall cannot authorize crossing the
+        // room ceiling to reach it, even for same-height/lower landings (#2071).
+        // Taller probes retain this obstruction, so no later rise can work.
+        if !ray_segment_is_clear(validation_queries, head, raised) {
+            break;
+        }
         let mut forward_ss2 = minimum_forward * SCALE_FACTOR;
         while forward_ss2 <= PLAYER_JUMP_MANTLE_FORWARD + 1.0e-4 {
             let forward = forward_ss2 / SCALE_FACTOR;
@@ -1762,9 +1767,7 @@ fn plan_jump_mantle(
                 let nearest_floor = validation_queries
                     .cast_ray_and_get_normal(&down_ray, 2.0 * max_rise, true)
                     .map(|(_, ground)| (ground.normal.y, raised_forward.y - ground.time_of_impact));
-                let elevated_floor = vertical_probe_clear
-                    .then_some(nearest_floor)
-                    .flatten()
+                let elevated_floor = nearest_floor
                     .filter(|(normal_y, _)| *normal_y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
                     .map(|(_, floor_y)| floor_y)
                     .filter(|floor_y| {
@@ -14983,6 +14986,53 @@ mod tests {
         assert!(
             end.y < 3.6,
             "an obstacle below a world ceiling must not script the player onto its exterior, ended {end:?}"
+        );
+    }
+
+    /// A room's wall and ceiling meet below the jump apex. Empty space outside
+    /// the room is not a same-height mantle landing: reaching the clear forward
+    /// probe above the wall would first carry the head through the ceiling.
+    #[test]
+    fn jump_mantle_cannot_cross_a_room_ceiling_to_reach_exterior_void() {
+        let mut world = PhysicsWorld::new();
+        for (id, shape) in [
+            (
+                1000,
+                ColliderBuilder::cuboid(5.0, 0.1, 4.0).translation(vector![-5.0, -0.1, 0.0]),
+            ),
+            (
+                1001,
+                ColliderBuilder::cuboid(5.0, 0.1, 4.0).translation(vector![-5.0, 3.1, 0.0]),
+            ),
+            (
+                1002,
+                ColliderBuilder::cuboid(0.1, 1.5, 4.0).translation(vector![0.0, 1.5, 0.0]),
+            ),
+        ] {
+            world.add_collider(EntityId::from_inner(id).unwrap(), shape.build());
+        }
+        let mut player = world.create_player(
+            vec3(-0.8, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+        for _ in 0..10 {
+            world.update(vec3(0.1, 0.0, 0.0), &mut player);
+        }
+        let mut maximum_y = world.get_player_translation(&player).y;
+        for frame in 0..180 {
+            world.update_with_facing_and_jump(
+                vec3(0.1, 0.0, 0.0),
+                Vector3::unit_x(),
+                frame == 0,
+                &mut player,
+            );
+            maximum_y = maximum_y.max(world.get_player_translation(&player).y);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            end.x < -0.1 && end.y > 0.0 && maximum_y < 3.0,
+            "jump must stay inside the room, ended {end:?}, highest center {maximum_y}"
         );
     }
 

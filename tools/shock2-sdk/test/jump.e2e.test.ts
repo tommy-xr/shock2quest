@@ -11,202 +11,81 @@ async function pulseJump(game: GameServer): Promise<void> {
   await game.input.setJump(false);
 }
 
-// Issue #708: shodan.mis's mandatory final descent begins behind a low
-// non-climbable barrier at z=32. Ordinary walking, crouching, and the
-// collision-valid move endpoint all stop at its face; retail expects the
-// player to jump over it and land on the authored ledges below.
+// The old #708 fixture jumped through the ceiling of the enclosed outer
+// corridor at (28.14,-0.48,31.64), then descended outside the real shaft.
+// Retail enters beside log 3, follows the spiral, and jumps into its opening.
+// Keep this positive route when tightening ceiling rejection (#2071).
 test(
-  "ordinary jumps traverse shodan's final descent into the log 4 passage",
+  "ordinary VR movement follows SHODAN's spiral and jumps into the log 4 passage",
   { skip: !e2eEnabled, timeout: 600_000 },
-  async () => {
+  async (t) => {
     await using game = await GameServer.launch({
       mission: "shodan.mis",
+      debugFlags: ["--vr"],
     });
     await game.step({ frames: 5 });
-
-    // Setup only: place the player at the campaign-confirmed approach. The
-    // crossing itself uses only the production jump and locomotion channels.
-    await game.player.teleport({
-      x: 28.14371,
-      y: -0.5959,
-      z: 31.63964,
-    });
+    // Setup at log 3 only. Every subsequent position uses production input.
+    await game.player.teleport({ x: 33.6, y: 1.25, z: 15 });
     await game.step({ frames: 30 });
-    const before = await game.player.position();
-
-    // A save at the authored frontier must reload to a normal grounded player,
-    // not preserve a stale airborne edge or lose the newly available input.
-    await game.save("jump-shodan-final-barrier");
-    await game.step({ frames: 2 });
-    await game.load("jump-shodan-final-barrier");
+    await game.save("jump-shodan-authored-entrance");
+    await game.load("jump-shodan-authored-entrance");
     await game.step({ frames: 30 });
-    const restored = await game.player.position();
-    assert.ok(
-      Math.hypot(restored.x - before.x, restored.z - before.z) < 0.1,
-      `save/load should preserve the jump approach (${JSON.stringify(before)} -> ` +
-        `${JSON.stringify(restored)})`,
-    );
 
-    // Face world +Z irrespective of the mission's authored pawn rotation,
-    // then press ordinary forward locomotion through the jump.
-    await game.input.lookAtWorldPoint([
-      restored.x,
-      restored.y + PLAYER_EYE_HEIGHT_WORLD,
-      restored.z + 4,
-    ]);
+    async function walkTo(x: number, z: number, expectedY: number): Promise<void> {
+      for (let frame = 0; frame < 80; frame++) {
+        const position = await game.player.position();
+        if (Math.hypot(x - position.x, z - position.z) < 0.2) break;
+        await game.input.lookAtWorldPoint([x, position.y + PLAYER_EYE_HEIGHT_WORLD, z]);
+        await game.input.set("right_hand.thumbstick", [0, 1]);
+        await game.step({ frames: 1 });
+      }
+      await game.input.set("right_hand.thumbstick", [0, 0]);
+      await game.step({ frames: 90 });
+      const landed = await game.player.position();
+      assert.ok(
+        Math.hypot(x - landed.x, z - landed.z) < 0.25 &&
+          Math.abs(landed.y - expectedY) < 0.15,
+        `authored step (${x},${expectedY},${z}) must support the player: ${JSON.stringify(landed)}`,
+      );
+    }
+
+    // Seven descending treads wrap around the column twice. The eighth tread
+    // lies below the passage entrance; jump from the seventh through the
+    // visible opening instead of dropping past it.
+    for (const [x, z, y] of [
+      [33.2, 9, 1.244], [35, 7.5, -1.956], [35, 4.8, -1.956],
+      [32, 3.2, -5.156], [29, 4.8, -8.356], [29, 7, -8.356],
+      [32, 9.5, -11.556], [35, 7.5, -14.756], [35, 4.8, -14.756],
+      [32, 3.2, -17.956], [29, 4.8, -21.156], [29, 7, -21.156],
+    ]) await walkTo(x!, z!, y!);
+
+    const seventhStep = await game.player.position();
+    await game.input.lookAtWorldPoint([32, seventhStep.y + PLAYER_EYE_HEIGHT_WORLD, 14]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
     await pulseJump(game);
     await game.step({ frames: 59 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
-
-    const crossed = await game.player.position();
-    assert.ok(
-      crossed.z > 32.3,
-      `jump should clear the z=32 barrier (started ${JSON.stringify(before)}, ` +
-        `ended ${JSON.stringify(crossed)})`,
-    );
-
-    // Fall straight onto the first authored sloping ledge. Contact sharply
-    // slows the old 0.2-unit/frame free fall; five more frames remain within
-    // one half unit vertically while the walkable surface slides the
-    // controller a little down-slope.
-    await game.step({ frames: 111 });
-    const landed = await game.player.position();
-    await game.step({ frames: 5 });
-    const supported = await game.player.position();
-    assert.ok(
-      landed.y > -19 && landed.y < -18 &&
-        Math.abs(supported.y - landed.y) < 0.5,
-      `player should land on the first authored lower ledge ` +
-        `(contact ${JSON.stringify(landed)}, after five frames ${JSON.stringify(supported)})`,
-    );
-
-    // A short diagonal jump reaches the stacked upper floor. From here the
-    // mandatory route wraps under its east lip onto a finite lower side ring;
-    // a continuous standing capsule cannot expose that ring through an
-    // ordinary ballistic edge fall.
-    await game.input.lookAtWorldPoint([31, supported.y + PLAYER_EYE_HEIGHT_WORLD, 28.5]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
-    await pulseJump(game);
-    await game.step({ frames: 24 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
-    await game.step({ frames: 60 });
-    let position = await game.player.position();
-    assert.ok(
-      position.y > -18.2 && position.y < -17.7,
-      `diagonal jump should reach the stacked upper floor, got ${JSON.stringify(position)}`,
-    );
-
-    // Walk to the real east lip and align over the narrow z=30..32 side ring.
-    // There is no setup placement after the initial campaign frontier: every
-    // pose in the crossing is reached through production locomotion.
-    await game.input.lookAtWorldPoint([35, position.y + PLAYER_EYE_HEIGHT_WORLD, 31]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
-    await game.step({ frames: 29 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
-    position = await game.player.position();
-    assert.ok(
-      position.x > 34.7 &&
-        position.x < 35.8 &&
-        position.z > 30.8 &&
-        position.z < 31.3,
-      `production movement should stage at the east lip, got ${JSON.stringify(position)}`,
-    );
-
-    // The lower ring immediately enters a crouch-only passage. Crouch before
-    // jumping so the bounded sparse-body transition can restore the same
-    // collision profile under the stacked upper-floor ceiling; it must never
-    // expand a standing capsule into that headroom.
-    await game.input.set("crouch", 1);
-    await game.step({ frames: 5 });
-    position = await game.player.position();
-
-    // A forward jump at the parentless lip uses the bounded sparse-body
-    // transition to the first all-collider-valid crouched pose below. Before
-    // the downward transition this pulse simply landed back on y=-19.2.
-    await game.input.lookAtWorldPoint([40, position.y + PLAYER_EYE_HEIGHT_WORLD, position.z]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
-    await pulseJump(game);
-    await game.input.set("right_hand.thumbstick", [0, 0]);
-    // Do not mistake the scripted transition passing through the ring's
-    // height for a landing. With no steering input, it must settle on authored
-    // collision for ten seconds and remain stationary for two more.
-    await game.step({ frames: 600 });
-    const lowerRing = await game.player.position();
     await game.step({ frames: 120 });
-    const supportedLowerRing = await game.player.position();
-    const onLowerRing = (sample: typeof lowerRing): boolean =>
-      sample.x > 35.2 &&
-      sample.x < 36.8 &&
-      sample.y > -32.5 &&
-      sample.y < -31.5 &&
-      sample.z > 30.2 &&
-      sample.z < 31.8;
+    const entrance = await game.player.position();
     assert.ok(
-      onLowerRing(lowerRing) &&
-        onLowerRing(supportedLowerRing) &&
-        Math.hypot(
-          supportedLowerRing.x - lowerRing.x,
-          supportedLowerRing.y - lowerRing.y,
-          supportedLowerRing.z - lowerRing.z,
-        ) < 0.05,
-      `jump should remain supported on the finite lower side ring ` +
-        `(${JSON.stringify(lowerRing)} -> ${JSON.stringify(supportedLowerRing)})`,
+      entrance.x > 31 && entrance.x < 34 && entrance.z > 11.2 &&
+        Math.abs(entrance.y + 21.156) < 0.15,
+      `ordinary jump must land inside the open passage: ${JSON.stringify(entrance)}`,
     );
-    position = supportedLowerRing;
-
-    // Follow the authored crouch-only continuation around the outer north edge
-    // at z~=29, then west toward Delacroix log 4. This proves the landing opens
-    // the real route rather than merely finding an isolated point below.
-    await game.input.lookAtWorldPoint([
-      position.x,
-      position.y + PLAYER_EYE_HEIGHT_WORLD,
-      28,
-    ]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
-    await game.step({ frames: 18 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
-    await game.step({ frames: 5 });
-    position = await game.player.position();
-    assert.ok(
-      position.z > 28.5 && position.z < 29.1,
-      `crouched movement should round the outer north edge, got ${JSON.stringify(position)}`,
-    );
-    await game.input.lookAtWorldPoint(
-      [30, position.y + 1.1, position.z],
-      { eyeHeight: 1.1 },
-    );
-    await game.input.set("right_hand.thumbstick", [0, 1]);
-    await game.step({ frames: 20 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
-    // The passage floor is a finite authored 45-degree tread ending in a lip
-    // at z=28.8, with void beyond. Release input and prove the apparent entry
-    // is support rather than a mid-fall sample over that void.
-    await game.step({ frames: 600 });
+    await walkTo(32, 20, -22.31);
+    await walkTo(32, 27, -26.63);
     const passage = await game.player.position();
     await game.step({ frames: 120 });
-    const supportedPassage = await game.player.position();
-    const inPassage = (sample: typeof passage): boolean =>
-      sample.x > 31 &&
-      sample.x < 33 &&
-      // Player positions are capsule centers. The 1.2-ft-radius crouched body rests
-      // on the 45-degree tread (y=-33.6 at its z=28.8 lip) with its center
-      // 0.52 wu out along the tread normal, so up to ~0.3 past the lip.
-      sample.y > -33.1 &&
-      sample.y < -32.74 &&
-      sample.z > 28.5 &&
-      sample.z < 29.1;
+    const supported = await game.player.position();
     assert.ok(
-      inPassage(passage) &&
-        inPassage(supportedPassage) &&
-        Math.hypot(
-          supportedPassage.x - passage.x,
-          supportedPassage.y - passage.y,
-          supportedPassage.z - passage.z,
-        ) < 0.05,
-      `crouched production movement should remain supported in the log 4 passage ` +
-        `(${JSON.stringify(passage)} -> ${JSON.stringify(supportedPassage)})`,
+      Math.hypot(supported.x - passage.x, supported.y - passage.y, supported.z - passage.z) < 0.05,
+      `log 4 approach must remain supported: ${JSON.stringify({ passage, supported })}`,
     );
+    const [log4] = await game.entities.byTemplate(290);
+    assert.ok(log4?.position, "authored Delacroix log 4 must exist");
+    assert.ok(Math.hypot(supported.x - log4.position[0]!, supported.y - log4.position[1]!, supported.z - log4.position[2]!) < 2);
+    assert.equal((await game.info()).player.life_state, "alive");
+    t.diagnostic(`authored spiral: ${JSON.stringify({ seventhStep, entrance, supported })}`);
   },
 );
 
