@@ -61,15 +61,19 @@ test(
     );
     assert.equal(mines.length, 1, "the cast lobs one PsiMine Projectile");
     const mineId = mines[0].id;
+    // A slain mine's numeric slot can be reused immediately by creature loot.
+    // Match its authored template too, so nanites cannot masquerade as a mine.
+    const isMine = (entity: (typeof mines)[number]) =>
+      entity.id === mineId && entity.template_id === mines[0].template_id;
 
     // The mine reaches the creature and trips on it.
     let entities = (await game.entities.list({ limit: 200 })).entities;
-    for (let waited = 0; waited < 8 && entities.some((e) => e.id === mineId); waited += 1) {
+    for (let waited = 0; waited < 8 && entities.some(isMine); waited += 1) {
       await game.step({ frames: 15 });
       entities = (await game.entities.list({ limit: 200 })).entities;
     }
     assert.ok(
-      !entities.some((entity) => entity.id === mineId),
+      !entities.some(isMine),
       "the mine detonates on the creature instead of drifting past it",
     );
     assert.ok(
@@ -79,7 +83,7 @@ test(
 
     // ...and the blast it spawns (30 @ r4 of Psi Stim) hurts what tripped it.
     const detail = await game.entities.detail(creature.id).catch(() => null);
-    const healthAfter = detail === null ? 0 : hitPoints(detail);
+    const healthAfter = detail === null || detail.template_id !== creature.template_id ? 0 : hitPoints(detail);
     assert.ok(
       healthAfter < healthBefore,
       `the blast damages the creature (${healthBefore} -> ${healthAfter})`,
