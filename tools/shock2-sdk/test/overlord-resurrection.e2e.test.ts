@@ -26,21 +26,33 @@ for (const brainDeath of ["living", "hidden"] as const) {
       await retreat();
       await game.input.trigger("Reload");
       await game.step({ frames: 120 });
+      let coveredFrames = 0;
       for (let shot = 0; shot < 30; shot++) {
         const target = await find(template);
         if (!target || await hp(target.id) <= 0) return;
         let aimed = false;
         const rejected: string[] = [];
-        // The linked brain occupies a narrow side alcove, whereas its mobile
-        // projection needs wider views around the arena.
+        // The linked brain occupies a narrow side alcove. Stay close to its
+        // flying projection and survey all three axes: one height can be fully
+        // occluded by the boss base or orbiting balls as it crosses the arena.
         const offsets = template === 728
           ? [[3.103, 1.68, -3.59], [-3, 0, 0], [3, 0, 0], [0, 0, -3], [0, 0, 3], [-5, 0, -3], [5, 0, -3]]
-          : [[-10, 0.5, 8], [10, 0.5, 8], [-10, 0.5, -8], [10, 0.5, -8]];
+          : [...[-4, 4].flatMap(x => [-4, 4].flatMap(y => [-4, 4].map(z => [x, y, z]))),
+            [-4, 0, 0], [4, 0, 0], [0, -4, 0], [0, 4, 0], [0, 0, -4], [0, 0, 4]];
         for (const [x, y, z] of offsets) {
           await game.player.teleport({ x: target.position[0] + x, y: target.position[1] + y, z: target.position[2] + z });
           await game.step({ frames: 1 });
           try { await game.player.aimAt(target.id, { visibility: "required", hitbox: "torso" }); aimed = true; break; }
           catch (error) { rejected.push(String(error)); }
+        }
+        if (!aimed && template === 730 && coveredFrames < 600) {
+          // The flying projection can pass behind the solid boss base. Let it
+          // emerge before firing; failed visibility probes never count as shots.
+          await retreat();
+          await game.step({ frames: 30 });
+          coveredFrames += 30;
+          shot--;
+          continue;
         }
         assert.ok(aimed, `real shot requires visible authored target ${template}: ${rejected.join("; ")}`);
         await game.input.set("right_hand.trigger_value", 1);
