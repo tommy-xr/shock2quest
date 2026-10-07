@@ -1136,6 +1136,35 @@ fn detect_support(
     })
 }
 
+/// A foot contact can support a deliberate jump even when its bank is too
+/// steep to walk. Dark's PhysPlayerJump uses contact friction rather than a
+/// walkable-slope flag. This is a conservative contact approximation, not a
+/// conversion of its friction threshold: accept only a nearby lower-capsule
+/// contact facing at least halfway upward. Walls, overhead ledges and open
+/// water cannot provide a launch, and ordinary slope limits stay unchanged.
+fn has_jump_support(queries: &QueryPipeline, shape: &dyn Shape, pos: &Isometry<Real>) -> bool {
+    let Some(capsule) = shape.as_capsule() else {
+        return false;
+    };
+    queries
+        .cast_shape(
+            pos,
+            &-Vector::y(),
+            shape,
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: SUPPORT_PROBE_DISTANCE,
+                target_distance: 0.0,
+                stop_at_penetration: false,
+                compute_impact_geometry_on_penetration: true,
+            },
+        )
+        .is_some_and(|(_, hit)| {
+            hit.normal1.y > 0.5
+                && hit.witness1.y
+                    <= pos.translation.y - capsule.half_height() + SUPPORT_PROBE_DISTANCE
+        })
+}
+
 /// Distance along a horizontal ray at which it exits a climbable AABB expanded
 /// by the player's required clearance. `None` means the ray never crosses the
 /// expanded box.
@@ -7408,7 +7437,13 @@ impl PhysicsWorld {
                 PlayerMedium::Air,
             ),
         };
-        let swimming = medium != PlayerMedium::Air;
+        // A contact-supported jump keeps its upward impulse while breaking the
+        // surface. Returning to buoyancy at the apex prevents an underwater
+        // launch from turning into a falling arc through the pool floor.
+        let mut swimming = medium != PlayerMedium::Air
+            && !player_handle
+                .jump_velocity
+                .is_some_and(|velocity| velocity > 0.0);
         if hand_climb.is_some() || swimming {
             // Hanging or swimming: the hand or the water owns the body, so any
             // ballistic arc ends here and no gravity pass runs below.
@@ -7426,18 +7461,41 @@ impl PhysicsWorld {
         };
         let jump_edge = jump_pressed && !player_handle.jump_was_pressed;
         player_handle.jump_was_pressed = jump_pressed;
-        // Underwater the held button swims up (below) instead of launching.
+        let contact_supported_jump = jump_edge
+            && medium != PlayerMedium::Air
+            && hand_climb.is_none()
+            && !player_handle
+                .jump_velocity
+                .is_some_and(|velocity| velocity > 0.0)
+            && {
+                let body = &self.rigid_body_set[player_handle.character_handle];
+                let collider = &self.collider_set[body.colliders()[0]];
+                let queries = self.player_movement_queries(
+                    self.narrow_phase.query_dispatcher(),
+                    player_movement_filter(player_handle.character_handle),
+                );
+                has_jump_support(&queries, collider.shape(), collider.position())
+            };
+        // Away from foot contact, underwater held jump swims up (below).
         // A held ladder launches a jump like the floor does, and the jump
         // lets go of it (below: a rising arc never grips).
         let ladder_jump_from = player_handle
             .ladder_grip
             .filter(|_| push_to_climb && !player_handle.is_grounded);
-        let launch_jump = !swimming
-            && jump_edge
-            && (player_handle.is_grounded || ladder_jump_from.is_some())
+        let launch_jump = jump_edge
+            && (contact_supported_jump
+                || (!swimming && (player_handle.is_grounded || ladder_jump_from.is_some())))
             && player_handle.top_out.is_none();
         if launch_jump {
-            player_handle.jump_velocity = Some(PLAYER_JUMP_LAUNCH_SPEED);
+            // Match Dark's reduced push-off while the body is still submerged.
+            // At the surface the normal jump can clear the bank ahead.
+            let speed = if medium == PlayerMedium::Water {
+                PLAYER_JUMP_LAUNCH_SPEED * 0.5
+            } else {
+                PLAYER_JUMP_LAUNCH_SPEED
+            };
+            player_handle.jump_velocity = Some(speed);
+            swimming = false;
             player_handle.air_velocity = ladder_jump_from
                 .map_or_else(Vector::zeros, |toward| ladder_jump_push(facing, toward));
             player_handle.is_grounded = false;
@@ -10443,6 +10501,146 @@ mod tests {
             (end.y - start.y).abs() < 0.01,
             "treading water must neither sink nor rise, moved from {start:?} to {end:?}"
         );
+    }
+
+    #[test]
+    fn a_surface_swimmer_can_jump_from_contact_with_a_steep_bank() {
+        let mut world = PhysicsWorld::new();
+        let slope = 1.125;
+        world.add_collider(
+            EntityId::from_inner(1151).unwrap(),
+            ColliderBuilder::trimesh(
+                vec![
+                    point![-10.0, -10.0 * slope, -10.0],
+                    point![10.0, 10.0 * slope, -10.0],
+                    point![10.0, 10.0 * slope, 10.0],
+                    point![-10.0, -10.0 * slope, 10.0],
+                ],
+                vec![[0, 2, 1], [0, 3, 2]],
+            )
+            .unwrap()
+            .build(),
+        );
+        let capsule = standing_player_capsule();
+        let normal_y = 1.0 / (1.0_f32 + slope * slope).sqrt();
+        let contact_y = capsule.half_height()
+            + (capsule.radius + PLAYER_CONTACT_OFFSET / SCALE_FACTOR) / normal_y;
+        let mut player = world.create_player(
+            vec3(0.0, contact_y, 0.0),
+            EntityId::from_inner(1152).unwrap(),
+        );
+        let request = |jump_pressed| PlayerMoveRequest::Walk {
+            movement: Vector3::new(0.0, 0.0, 0.0),
+            facing: Vector3::new(1.0, 0.0, 0.0),
+            jump_pressed,
+            push_to_climb: false,
+            medium: PlayerMedium::WaterSurface,
+        };
+        world.update_player_movement(request(false), &mut player);
+        let start = world.get_player_translation(&player);
+        for _ in 0..10 {
+            world.update_player_movement(request(true), &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            end.y > start.y + 0.3,
+            "a real bank contact must permit a surface jump without making the slope walkable: {start:?} -> {end:?}"
+        );
+        let upward_speed = player.jump_velocity.unwrap();
+        world.update_player_movement(request(false), &mut player);
+        world.update_player_movement(request(true), &mut player);
+        assert!(
+            player.jump_velocity.unwrap() < upward_speed,
+            "a fresh button edge in the launch arc must not add a second jump"
+        );
+    }
+
+    #[test]
+    fn surface_jump_needs_foot_contact_not_a_wall_or_open_water() {
+        for (wall, medium) in [
+            (false, PlayerMedium::WaterSurface),
+            (true, PlayerMedium::WaterSurface),
+            (false, PlayerMedium::Air),
+            (true, PlayerMedium::Air),
+        ] {
+            let mut world = PhysicsWorld::new();
+            if wall {
+                world.add_collider(
+                    EntityId::from_inner(1160).unwrap(),
+                    ColliderBuilder::cuboid(1.0, 10.0, 10.0)
+                        .translation(vector![1.5, 0.0, 0.0])
+                        .build(),
+                );
+            }
+            let mut player =
+                world.create_player(vec3(0.0, 0.0, 0.0), EntityId::from_inner(1161).unwrap());
+            for frame in 0..60 {
+                world.update_player_movement(
+                    PlayerMoveRequest::Walk {
+                        movement: Vector3::new(0.0, 0.0, 0.0),
+                        facing: Vector3::new(1.0, 0.0, 0.0),
+                        jump_pressed: frame % 2 == 1,
+                        push_to_climb: false,
+                        medium,
+                    },
+                    &mut player,
+                );
+            }
+            assert!(world.get_player_translation(&player).y < 0.01);
+            assert!(player.jump_velocity.is_none());
+        }
+    }
+
+    #[test]
+    fn submerged_contact_jump_is_reduced_and_returns_to_buoyancy() {
+        for ceiling in [false, true] {
+            let mut world = PhysicsWorld::new();
+            world.add_collider(
+                EntityId::from_inner(1170).unwrap(),
+                ColliderBuilder::cuboid(10.0, 1.0, 10.0)
+                    .translation(vector![0.0, -1.0, 0.0])
+                    .build(),
+            );
+            if ceiling {
+                world.add_collider(
+                    EntityId::from_inner(1171).unwrap(),
+                    ColliderBuilder::cuboid(10.0, 1.0, 10.0)
+                        .translation(vector![0.0, 4.0, 0.0])
+                        .build(),
+                );
+            }
+            let mut player = world.create_player(
+                vec3(0.0, player_center_above_floor(false) + 0.1, 0.0),
+                EntityId::from_inner(1172).unwrap(),
+            );
+            step(&mut world, &mut player, 30);
+            swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), false);
+            swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), true);
+            let launch = player.jump_velocity.unwrap_or(0.0);
+            assert!(launch > 0.0 && launch <= PLAYER_JUMP_LAUNCH_SPEED * 0.5);
+            for _ in 0..60 {
+                swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), false);
+                if ceiling {
+                    let capsule = standing_player_capsule();
+                    assert!(
+                        world.get_player_translation(&player).y
+                            + capsule.half_height()
+                            + capsule.radius
+                            <= 3.01,
+                        "the submerged launch must respect the low ceiling"
+                    );
+                }
+            }
+            assert!(player.jump_velocity.is_none());
+            let end = world.get_player_translation(&player);
+            for _ in 0..30 {
+                swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), false);
+            }
+            assert!(
+                (world.get_player_translation(&player).y - end.y).abs() < 0.01,
+                "after the launch apex, neutral water movement must regain buoyancy"
+            );
+        }
     }
 
     #[test]
