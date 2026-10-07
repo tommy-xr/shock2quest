@@ -199,6 +199,7 @@ pub fn resolve_stim_freeze(
 fn victim_receptrons(world: &World, victim: EntityId) -> Vec<(i32, ReceptronOptions)> {
     // The same active power filters apply to contact hits and radius blasts.
     let mut receptrons = crate::psi_defenses::active_receptrons(world, victim);
+    receptrons.extend(crate::armor::active_receptrons(world, victim));
     let Ok(v_links) = world.borrow::<View<Links>>() else {
         return receptrons;
     };

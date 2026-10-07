@@ -379,6 +379,7 @@ fn get_link_types(entity_id: i32, entity_info: &SystemShock2EntityInfo) -> Vec<S
                 Link::AIProjectile(_) => "AIProjectile".to_string(),
                 Link::AIRangedWeapon => "AIRangedWeapon".to_string(),
                 Link::Weapon => "Weapon".to_string(),
+                Link::ArmorEffect => "ArmorEffect".to_string(),
                 Link::Clip => "Clip".to_string(),
                 Link::GunFlash(_) => "GunFlash".to_string(),
                 Link::LandingPoint => "LandingPoint".to_string(),

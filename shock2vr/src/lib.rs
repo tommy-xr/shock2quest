@@ -1,3 +1,4 @@
+pub mod armor;
 pub mod audio_log;
 pub mod benchmark_scene;
 pub mod environment_map;

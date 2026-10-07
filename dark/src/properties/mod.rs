@@ -413,6 +413,10 @@ pub struct PropArmor {
     pub combat: f32,
 }
 
+/// Required primary stats, in retail order: STR, END, PSI, AGI, CYB.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropRequiredStats(pub [i32; 5]);
+
 /// A container's inventory grid, in cells. The `Contains` link's ordinal is
 /// `y * width + x` against *this* width, so it is what makes a stored cell
 /// mean anything.
@@ -795,6 +799,8 @@ pub enum Link {
     /// archetype this object responds to (e.g. Human Vulnerability ->
     /// High Explosive: Damage x4).
     Receptron(ReceptronOptions),
+    /// Armor item -> metaproperty supplying its damage filters.
+    ArmorEffect,
 }
 
 #[derive(
@@ -1589,6 +1595,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_link("L$Miss Span", |_| Link::MissSpang),
         define_link("L$Weapon", |_| Link::Weapon),
         define_link("L$Organ", |_| Link::Organ),
+        define_link("L$Armor Eff", |_| Link::ArmorEffect),
         //define_link("L$TPath", |_| Link::TPath),
     ];
 
@@ -1670,6 +1677,15 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
 
     // Properties
     let props = vec![
+        define_prop(
+            "P$ReqStatsD",
+            |reader, len| {
+                assert_eq!(len, 20, "required stats contain five i32 values");
+                PropRequiredStats(std::array::from_fn(|_| read_i32(reader)))
+            },
+            identity,
+            accumulator::latest,
+        ),
         define_prop(
             "P$AI",
             read_prop_string,

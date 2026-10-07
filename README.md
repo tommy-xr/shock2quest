@@ -131,6 +131,14 @@ a deck, keep one hand attached while placing the other on the edge, then pull
 down or inward. To descend, crouch, grip near the ladder's top, pull yourself past
 the edge, and raise the held hand to lower your body. Release grip to let go.
 
+**Armor.** Open the cyber interface and point at armor in your inventory, then
+pull the trigger to equip it (double-click in flat mode). The paperdoll's ARMOR
+slot shows the worn suit; point and trigger there to remove it. Only one suit
+can be worn, and it keeps its backpack cells. Strength requirements and research
+apply. Powered armor shows remaining charge and recharges at a recharge station;
+empty armor gives no protection. Worm Skin grants +2 PSI but spends one PSI point
+every 30 seconds, or one health point when PSI is empty.
+
 **Implants.** Bring a held implant to the narrow socket on the pinky side of the opposite wristband and
 release grip to install it. Squeeze with the empty opposite hand to remove it.
 Either wrist can hold your first implant; the other locks while it is occupied.
