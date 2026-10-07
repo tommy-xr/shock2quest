@@ -230,6 +230,15 @@ fn update_squeeze_swallow(
     }
 }
 
+fn mask_body_grab(hand: &mut crate::input_context::Hand, ammo_claim: bool) {
+    // Shoulder proximity reserves grip for weapon retrieval, not the independent
+    // point-and-trigger gesture. A deliberate squeeze still owns both inputs.
+    if ammo_claim || hand.squeeze_value >= 0.5 {
+        hand.trigger_value = 0.0;
+    }
+    hand.squeeze_value = 0.0;
+}
+
 /// Which hands must not see their own trigger this frame, while the VR cyber
 /// interface is up (see [`MissionCore::vr_trigger_swallow`]).
 ///
@@ -6208,8 +6217,7 @@ impl MissionCore {
                 } else {
                     &mut shoulder_input.right_hand
                 };
-                hand.squeeze_value = 0.0;
-                hand.trigger_value = 0.0;
+                mask_body_grab(hand, self.ammo_pouch.blocks_grab[i]);
             }
             match pouch_actions[i] {
                 Some(super::ammo_pouch::Action::Withdraw { weapon }) => {
@@ -21248,7 +21256,32 @@ mod vr_squeeze_swallow_tests {
 
 #[cfg(test)]
 mod vr_trigger_safe_tests {
-    use super::{latch_trigger_safe, trigger_safe_mask};
+    use super::{latch_trigger_safe, mask_body_grab, trigger_safe_mask};
+
+    #[test]
+    fn shoulder_proximity_preserves_trigger_but_retrieval_reserves_it() {
+        let mut tracker = super::super::shoulder_backpack::ShoulderBackpack::default();
+        let mut input = crate::input_context::InputContext::default();
+        input.left_hand.position =
+            input.head.position + cgmath::vec3(-0.26, 0.05, -0.03) / crate::METERS_PER_WORLD_UNIT;
+        input.left_hand.trigger_value = 1.0;
+        tracker.update(&input, [None; 2], true, 1.0 / 60.0);
+        assert!(tracker.blocks_grab[0]);
+        assert_eq!(tracker.draws[0], None);
+        let mut hand = input.left_hand.clone();
+        mask_body_grab(&mut hand, false);
+        assert_eq!(hand.trigger_value, 1.0);
+
+        input.left_hand.squeeze_value = 0.5;
+        tracker.update(&input, [None; 2], true, 1.0 / 60.0);
+        assert_eq!(tracker.draws[0], Some(0));
+        hand = input.left_hand.clone();
+        mask_body_grab(&mut hand, false);
+        assert_eq!((hand.squeeze_value, hand.trigger_value), (0.0, 0.0));
+        hand.trigger_value = 1.0;
+        mask_body_grab(&mut hand, true);
+        assert_eq!((hand.squeeze_value, hand.trigger_value), (0.0, 0.0));
+    }
 
     const LEFT: usize = 0;
     const RIGHT: usize = 1;
