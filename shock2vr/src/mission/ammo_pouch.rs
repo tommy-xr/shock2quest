@@ -94,7 +94,9 @@ impl AmmoPouch {
             }
             let can_draw =
                 self.near[i] && held[i].is_none() && available[i] && weapons[i].is_some();
-            self.blocks_grab[i] = held[i].is_none() && (can_draw || self.consumed[i]);
+            // Proximity prepares a clip; only a squeeze owns the interaction.
+            // Leave an unsqueezed hand's independent world trigger available.
+            self.blocks_grab[i] = held[i].is_none() && ((can_draw && pressed) || self.consumed[i]);
             if self.near[i] {
                 if ammo[i] && !pressed && self.pressed_item[i] == held[i] {
                     if let Some(entity) = held[i] {
@@ -233,6 +235,69 @@ mod tests {
         assert_eq!(update(&mut pouch, &input, true, true), None);
         input.pose_tracking = None;
         assert_eq!(update(&mut pouch, &input, true, true), None);
+    }
+
+    #[test]
+    fn pouch_reach_leaves_world_trigger_free_until_a_squeeze_claims_it() {
+        let mut world = World::new();
+        let gun = world.add_entity(());
+        let reserve = world.add_entity(());
+        let offer = PouchClip {
+            reserve,
+            template: -31,
+            rounds: 12,
+            stock: 24,
+        };
+        for hand in 0..2 {
+            let mut input = InputContext::default();
+            let body = BodyPose {
+                head: input.head.position,
+                yaw: 0.0,
+            };
+            let mut pouch = AmmoPouch::default();
+            let mut held = [Some(gun); 2];
+            held[hand] = None;
+            let update = |pouch: &mut AmmoPouch, input: &InputContext| {
+                pouch.update(
+                    input,
+                    Some(body),
+                    held,
+                    [true; 2],
+                    [Some(gun); 2],
+                    [false; 2],
+                    [Some(offer); 2],
+                    true,
+                )[hand]
+            };
+            let set_hand = |input: &mut InputContext, squeeze, trigger| {
+                let input = if hand == 0 {
+                    &mut input.left_hand
+                } else {
+                    &mut input.right_hand
+                };
+                input.position = center_for(body);
+                input.squeeze_value = squeeze;
+                input.trigger_value = trigger;
+            };
+            for trigger in [0.0, 1.0, 0.0] {
+                set_hand(&mut input, 0.0, trigger);
+                assert_eq!(update(&mut pouch, &input), None);
+                assert!(pouch.near[hand]);
+                assert!(
+                    !pouch.blocks_grab[hand],
+                    "reach cannot consume world trigger"
+                );
+            }
+            set_hand(&mut input, 1.0, 1.0);
+            assert_eq!(
+                update(&mut pouch, &input),
+                Some(Action::Withdraw { weapon: gun })
+            );
+            assert!(pouch.blocks_grab[hand], "actual pouch squeeze claims input");
+            set_hand(&mut input, 0.0, 0.0);
+            assert_eq!(update(&mut pouch, &input), None);
+            assert!(!pouch.blocks_grab[hand], "release restores world input");
+        }
     }
 
     #[test]
