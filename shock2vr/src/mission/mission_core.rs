@@ -17150,9 +17150,12 @@ impl MissionCore {
         ));
 
         if self.show_position_readout_visible(options.presentation_mode) {
-            let mut dots = self.show_position_targets.render();
-            crate::util::tag_render_source(&mut dots, crate::util::render_source::DEBUG_OVERLAY);
-            scene.extend(dots);
+            let mut pointers = self.show_position_targets.render(sim_time as f32);
+            crate::util::tag_render_source(
+                &mut pointers,
+                crate::util::render_source::DEBUG_OVERLAY,
+            );
+            scene.extend(pointers);
         }
 
         // `show_position` readout (VR): the same canvas flat draws in screen

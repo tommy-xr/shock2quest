@@ -15,12 +15,15 @@ use crate::ui::{HAlign, PanelPlacement, Rect, UiCanvas, VAlign, WorldPanel};
 /// Full-width so the readout is centered on the canvas; the rows sit in the
 /// gap between the psi-overload meter and the flat HUD's bottom panels.
 const READOUT: Rect = Rect::new(0.0, 352.0, CANVAS_SIZE.x, 54.0);
+/// Start beyond the glove so the beam emerges from the pointing hand.
+const BEAM_HAND_CLEARANCE: f32 = 0.25;
 
-/// One sample drives both the labels and the surface spots. Debug rays have
+/// One sample drives the labels, beams and surface spots. Debug rays have
 /// unlimited reach without changing the game's grab/use range.
 #[derive(Default)]
 pub(crate) struct DebugPositionTargets {
-    hits: [Option<RayCastResult>; 2],
+    /// Each tracked hand's world-space ray origin and its surface hit.
+    hits: [Option<(Vector3<f32>, RayCastResult)>; 2],
 }
 
 impl DebugPositionTargets {
@@ -47,19 +50,21 @@ impl DebugPositionTargets {
                 {
                     return None;
                 }
-                physics.ray_cast2(
-                    crate::util::vec3_to_point3(pose.position),
-                    pose.rotation
-                        .normalize()
-                        .rotate_vector(vec3(0.0, 0.0, -1.0)),
-                    f32::MAX,
-                    InternalCollisionGroups::WORLD
-                        | InternalCollisionGroups::ENTITIES
-                        | InternalCollisionGroups::SELECTABLE
-                        | InternalCollisionGroups::RAYCAST,
-                    held[i],
-                    true,
-                )
+                physics
+                    .ray_cast2(
+                        crate::util::vec3_to_point3(pose.position),
+                        pose.rotation
+                            .normalize()
+                            .rotate_vector(vec3(0.0, 0.0, -1.0)),
+                        f32::MAX,
+                        InternalCollisionGroups::WORLD
+                            | InternalCollisionGroups::ENTITIES
+                            | InternalCollisionGroups::SELECTABLE
+                            | InternalCollisionGroups::RAYCAST,
+                        held[i],
+                        true,
+                    )
+                    .map(|hit| (pose.position, hit))
             }),
         }
     }
@@ -67,36 +72,46 @@ impl DebugPositionTargets {
     pub(crate) fn positions(&self) -> [Option<Vector3<f32>>; 2] {
         self.hits.each_ref().map(|hit| {
             hit.as_ref()
-                .map(|hit| crate::util::point3_to_vec3(hit.hit_point))
+                .map(|(_, hit)| crate::util::point3_to_vec3(hit.hit_point))
         })
     }
 
-    pub(crate) fn render(&self) -> Vec<SceneObject> {
-        self.hits
-            .iter()
-            .flatten()
-            .filter_map(|hit| {
-                if hit.hit_normal.magnitude2() <= 1e-8 {
-                    return None;
-                }
-                let normal = hit.hit_normal.normalize();
-                let mut dot = SceneObject::new(
-                    laser_material::create(vec3(1.0, 1.0, 1.0)),
-                    Box::new(quad::create()),
-                );
-                // Surface-aligned and depth-tested; the tiny lift avoids z-fighting
-                // without changing the exact hit reported by the coordinate label.
-                dot.set_transform(
-                    Matrix4::from_translation(
-                        crate::util::point3_to_vec3(hit.hit_point) + normal * 0.001,
-                    ) * Matrix4::from(Quaternion::from_arc(vec3(0.0, 0.0, 1.0), normal, None))
-                        * Matrix4::from_nonuniform_scale(0.11, 0.11, 1.0),
-                );
-                dot.set_depth_write(false);
-                dot.set_backface_culling(None);
-                Some(dot)
-            })
-            .collect()
+    pub(crate) fn render(&self, seconds: f32) -> Vec<SceneObject> {
+        let mut objects = Vec::new();
+        for (origin, hit) in self.hits.iter().flatten() {
+            let end = crate::util::point3_to_vec3(hit.hit_point);
+            let along = end - origin;
+            let length = along.magnitude();
+            if length > BEAM_HAND_CLEARANCE {
+                let start = origin + along / length * BEAM_HAND_CLEARANCE;
+                objects.extend(laser_material::beam(
+                    start,
+                    end - start,
+                    (0.012, vec3(1.0, 1.0, 1.0)),
+                    (0.0025, vec3(1.0, 1.0, 1.0)),
+                    seconds,
+                ));
+            }
+            if hit.hit_normal.magnitude2() <= 1e-8 {
+                continue;
+            }
+            let normal = hit.hit_normal.normalize();
+            let mut dot = SceneObject::new(
+                laser_material::create(vec3(1.0, 1.0, 1.0)),
+                Box::new(quad::create()),
+            );
+            // Surface-aligned and depth-tested; the tiny lift avoids z-fighting
+            // without changing the exact hit reported by the coordinate label.
+            dot.set_transform(
+                Matrix4::from_translation(end + normal * 0.001)
+                    * Matrix4::from(Quaternion::from_arc(vec3(0.0, 0.0, 1.0), normal, None))
+                    * Matrix4::from_nonuniform_scale(0.11, 0.11, 1.0),
+            );
+            dot.set_depth_write(false);
+            dot.set_backface_culling(None);
+            objects.push(dot);
+        }
+        objects
     }
 }
 
@@ -234,11 +249,27 @@ mod tests {
         {
             assert!((actual.unwrap() - expected).magnitude() < 1e-4);
         }
-        let dots = targets.render();
-        assert_eq!(dots.len(), 2);
-        for (dot, point) in dots.iter().zip(targets.positions()) {
-            assert!((dot.get_transform().w.truncate() - point.unwrap()).magnitude() < 0.002);
+        let objects = targets.render(0.0);
+        assert_eq!(objects.len(), 6);
+        for (visuals, target) in objects.chunks_exact(3).zip(targets.hits.iter().flatten()) {
+            let (origin, hit) = target;
+            let end = crate::util::point3_to_vec3(hit.hit_point);
+            for beam in &visuals[..2] {
+                let transform = beam.get_transform();
+                let start = transform.w.truncate();
+                assert!((start + transform.z.truncate() - end).magnitude() < 1e-4);
+                assert!(((start - origin).magnitude() - BEAM_HAND_CLEARANCE).abs() < 1e-4);
+            }
+            assert!((visuals[2].get_transform().w.truncate() - end).magnitude() < 0.002);
         }
+
+        // A hand already touching the surface retains its dot without a
+        // zero-length cylinder or a beam drawn backwards into the glove.
+        let mut touching = targets;
+        for (origin, hit) in touching.hits.iter_mut().flatten() {
+            *origin = crate::util::point3_to_vec3(hit.hit_point);
+        }
+        assert_eq!(touching.render(0.0).len(), 2);
 
         input.pose_tracking = Some(PoseTracking {
             head: true,
@@ -247,7 +278,7 @@ mod tests {
         assert_eq!(sample(&input).positions()[0], None);
         input.right_hand.rotation = Quaternion::from_angle_y(cgmath::Deg(180.0));
         assert_eq!(sample(&input).positions(), [None; 2]);
-        assert!(sample(&input).render().is_empty());
+        assert!(sample(&input).render(0.0).is_empty());
         input.pose_tracking = None;
         input.left_hand.rotation = Quaternion::zero();
         assert_eq!(sample(&input).positions(), [None; 2]);
