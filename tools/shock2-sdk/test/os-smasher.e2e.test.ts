@@ -47,6 +47,9 @@ test("VR Smasher cues charge and ready once on the owning hand", {
   {
     await using flat = await GameServer.launch({ mission: "medsci2.mis" });
     await acquireOsUpgrade(flat, "Smasher");
+    // The MedSci2 machine has a nearby pipe hybrid: a real parry adds a
+    // separate pulse. Measure charge cues from Earth's quiet arrival area.
+    await flat.transitionLevel("earth.mis");
     await flat.player.spawnItem(-928);
     await flat.input.trigger("EquipWrench");
     await flat.step({ frames: 5 });
@@ -57,6 +60,7 @@ test("VR Smasher cues charge and ready once on the owning hand", {
   assert.ok((await game.load(save)).success);
   await game.step({ frames: 30 });
   assert.ok((await game.info()).player.stats!.os_traits.includes(11));
+  const startingHealth = (await game.info()).player.hit_points;
   const pulses = async () => (await game.info()).player.hand_feedback!.haptics!.sequence;
   const renderOffset = async (id: number) => {
     const body = await game.entities.detail(id);
@@ -113,6 +117,7 @@ test("VR Smasher cues charge and ready once on the owning hand", {
     assert.equal((await game.info()).player[owner], null);
     assert.equal((await pulses())[i], before[i] + 4, "dropping cancels the ready pulse");
     assert.equal((await pulses())[1 - i], before[1 - i], "other controller stays silent");
+    assert.equal((await game.info()).player.hit_points, startingHealth, "no combat interrupts the charge fixture");
     await game.input.set(`${hand}_hand.trigger`, 0);
     await game.step({ frames: 3 });
   }
