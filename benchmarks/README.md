@@ -15,7 +15,9 @@ worst-performing locations**.
 Build/install a release Quest APK containing the benchmark runtime support, then:
 
 ```sh
-node --test tools/quest-bench/run.test.mjs
+node --test .claude/skills/vr-device-loop/scripts/quest-device.test.mjs \
+  .claude/skills/oculus-profiling/scripts/quest-benchmark.test.mjs \
+  tools/quest-bench/run.test.mjs
 node tools/quest-bench/run.mjs --scene all --lighting both \
   --repeats 2 --warmup 10 --seconds 30 --output /tmp/quest-lighting
 ```
@@ -71,4 +73,5 @@ gameplay performance.
 
 ## Baselines
 
+- [Quest 3 refresh-rate exploration, 2026-10-06](results/2026-10-06-quest3-refresh.md): 90/120 Hz crowd samples, lighting cost, and PR #2068 lifecycle checks, with retained telemetry.
 - [Quest 3 object lighting, 2026-09-21](results/2026-09-21-quest3-lighting.md): paired timing runs, GPU counters, and stereo comparisons.

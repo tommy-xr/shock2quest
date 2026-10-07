@@ -1,0 +1,94 @@
+[
+  {
+    "cycle": 1,
+    "kind": "home",
+    "same_process": true,
+    "fresh_focused_samples": 6,
+    "states": [
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=READY",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=FOCUSED"
+    ],
+    "away_states": [
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE"
+    ],
+    "passed": true
+  },
+  {
+    "cycle": 2,
+    "kind": "home",
+    "same_process": true,
+    "fresh_focused_samples": 7,
+    "states": [
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=READY",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=FOCUSED"
+    ],
+    "away_states": [
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE"
+    ],
+    "passed": true
+  },
+  {
+    "cycle": 3,
+    "kind": "sleep",
+    "same_process": true,
+    "fresh_focused_samples": 7,
+    "states": [
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=READY",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=FOCUSED"
+    ],
+    "away_states": [
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE"
+    ],
+    "passed": true
+  },
+  {
+    "cycle": 4,
+    "kind": "sleep",
+    "same_process": true,
+    "fresh_focused_samples": 7,
+    "states": [
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=READY",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=FOCUSED"
+    ],
+    "away_states": [
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING",
+      "SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE"
+    ],
+    "passed": true
+  }
+]

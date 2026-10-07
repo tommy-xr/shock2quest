@@ -1,0 +1,23 @@
+name: Quest profiling tools
+
+on:
+  push:
+    paths:
+      - '.claude/skills/vr-device-loop/scripts/**'
+      - '.claude/skills/oculus-profiling/scripts/**'
+      - 'tools/quest-bench/**'
+      - '.github/workflows/quest-tools.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: >-
+          node --test
+          .claude/skills/vr-device-loop/scripts/quest-device.test.mjs
+          .claude/skills/oculus-profiling/scripts/quest-benchmark.test.mjs
+          tools/quest-bench/run.test.mjs

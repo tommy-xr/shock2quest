@@ -85,16 +85,25 @@ function writeMissionSelection(serial, contents) {
 }
 
 export function missionSelection(serial) {
-  try {
-    return {
-      exists: true,
-      contents: adb(serial, ["exec-out", "cat", MISSION_CONFIG], {
-        encoding: null,
-      }),
-    };
-  } catch {
+  // exec-out can exit successfully with cat's error text as its output. Probe
+  // absence explicitly, then use shell's remote exit status for the read.
+  const presence = adb(serial, [
+    "shell",
+    `if [ -e ${MISSION_CONFIG} ]; then echo present; else echo absent; fi`,
+  ]);
+  if (presence === "absent") {
     return { exists: false, contents: Buffer.alloc(0) };
   }
+  if (presence !== "present") {
+    throw new Error(`unexpected mission selector probe: ${presence}`);
+  }
+  return {
+    exists: true,
+    // No PTY: preserve an existing selector's bytes, including an empty file.
+    contents: adb(serial, ["shell", "-T", "cat", MISSION_CONFIG], {
+      encoding: null,
+    }),
+  };
 }
 
 export function restoreMissionSelection(serial, selection) {

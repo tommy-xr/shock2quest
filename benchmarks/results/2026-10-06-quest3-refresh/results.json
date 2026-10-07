@@ -1,0 +1,697 @@
+{
+  "schema_version": 1,
+  "collected_on": "2026-10-06",
+  "sample_seconds": 30,
+  "warmup_seconds": 10,
+  "runs": [
+    {
+      "id": "pr2068-90-on",
+      "commit": "5dec9748f4620c7ba8d5afba056384319cda9246",
+      "dirty": false,
+      "patch": null,
+      "fixture": "pr2068-90-on.fixture.json",
+      "telemetry": "pr2068-90-on.telemetry.txt",
+      "battery": {
+        "before": {
+          "AC powered": true,
+          "USB powered": false,
+          "level": 96,
+          "temperature": 320
+        },
+        "after": {
+          "AC powered": true,
+          "USB powered": false,
+          "level": 96,
+          "temperature": 340
+        }
+      },
+      "visual_review": "Inspected stereo PNG; six hybrids visibly rendered with authored lighting.",
+      "result": {
+        "status": "ok",
+        "mission": "rec1.mis",
+        "device": {
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "e5719fee87fe29ee94ff7559ffa0c8b2f05dfca06ad34bfef0369a9cf70c4d89"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 6043.792,
+          "launch_to_focused_ms": 7161
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 86.348,
+            "min": 81.518,
+            "p5": 82.409,
+            "p95": 88.902,
+            "max": 88.976
+          },
+          "frame_ms": {
+            "mean": 11.586,
+            "min": 11.239,
+            "p5": 11.248,
+            "p95": 12.135,
+            "max": 12.267
+          },
+          "update_ms": {
+            "mean": 4.779,
+            "min": 4.565,
+            "p5": 4.589,
+            "p95": 5.23,
+            "max": 5.316
+          },
+          "scene_ms": {
+            "mean": 1.17,
+            "min": 1.018,
+            "p5": 1.07,
+            "p95": 1.278,
+            "max": 1.332
+          },
+          "left_eye_ms": {
+            "mean": 1.701,
+            "min": 1.604,
+            "p5": 1.609,
+            "p95": 1.993,
+            "max": 2.066
+          },
+          "right_eye_ms": {
+            "mean": 1.46,
+            "min": 1.391,
+            "p5": 1.401,
+            "p95": 1.577,
+            "max": 1.592
+          },
+          "finish_ms": {
+            "mean": 1.295,
+            "min": 1.266,
+            "p5": 1.266,
+            "p95": 1.355,
+            "max": 1.368
+          },
+          "submit_ms": {
+            "mean": 0.308,
+            "min": 0.295,
+            "p5": 0.296,
+            "p95": 0.33,
+            "max": 0.349
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 87.167,
+            "min": 82,
+            "p5": 83,
+            "p95": 89,
+            "max": 91
+          },
+          "app_ms": {
+            "mean": 4.473,
+            "min": 4.27,
+            "p5": 4.31,
+            "p95": 4.76,
+            "max": 4.86
+          },
+          "compositor_ms": {
+            "mean": 0.722,
+            "min": 0.69,
+            "p5": 0.7,
+            "p95": 0.76,
+            "max": 0.76
+          },
+          "cpu_gpu_ms": {
+            "mean": 15.733,
+            "min": 14.5,
+            "p5": 14.54,
+            "p95": 17.52,
+            "max": 19.09
+          },
+          "gpu_load": {
+            "mean": 0.472,
+            "min": 0.46,
+            "p5": 0.46,
+            "p95": 0.5,
+            "max": 0.5
+          },
+          "cpu_load": {
+            "mean": 0.354,
+            "min": 0.34,
+            "p5": 0.34,
+            "p95": 0.38,
+            "max": 0.38
+          },
+          "temperature_c": {
+            "mean": 32.867,
+            "min": 32,
+            "p5": 32,
+            "p95": 34,
+            "max": 34
+          },
+          "stale_frames": 160,
+          "torn_frames": 2
+        },
+        "memory": {
+          "total_pss_mib": 666.2,
+          "total_rss_mib": 804.4,
+          "graphics_pss_mib": 419.5
+        },
+        "screenshot_url": "https://gist.githubusercontent.com/tommy-xr/9de5bcd0f203cf2bdae4af09a26c4a4f/raw/4c4b8f98d8b9b428db9ef9aeda7666f32daba10a/pr2068-head-90hz-six-hybrids.png"
+      }
+    },
+    {
+      "id": "base-90-off",
+      "commit": "30d92fdb27f08a5f43a640d3a18af6adf9d10769",
+      "dirty": false,
+      "patch": null,
+      "fixture": "base-90-off.fixture.json",
+      "telemetry": "base-90-off.telemetry.txt",
+      "battery": {
+        "before": {
+          "AC powered": true,
+          "USB powered": false,
+          "level": 95,
+          "temperature": 330
+        },
+        "after": {
+          "AC powered": true,
+          "USB powered": false,
+          "level": 95,
+          "temperature": 350
+        }
+      },
+      "visual_review": "Rejected as a quality baseline: black silhouettes with lighting off.",
+      "result": {
+        "status": "ok",
+        "mission": "rec1.mis",
+        "device": {
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "5861008ab560ef5ee4547bc23fdd437047c363fb496dd5d0c02e9d3b0666aa16"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 6116.899,
+          "launch_to_focused_ms": 7200
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 84.737,
+            "min": 81.916,
+            "p5": 82.041,
+            "p95": 87.812,
+            "max": 88.975
+          },
+          "frame_ms": {
+            "mean": 11.807,
+            "min": 11.239,
+            "p5": 11.388,
+            "p95": 12.189,
+            "max": 12.208
+          },
+          "update_ms": {
+            "mean": 4.796,
+            "min": 4.539,
+            "p5": 4.647,
+            "p95": 4.992,
+            "max": 5.173
+          },
+          "scene_ms": {
+            "mean": 1.124,
+            "min": 0.935,
+            "p5": 0.98,
+            "p95": 1.228,
+            "max": 1.243
+          },
+          "left_eye_ms": {
+            "mean": 1.752,
+            "min": 1.575,
+            "p5": 1.591,
+            "p95": 1.865,
+            "max": 1.887
+          },
+          "right_eye_ms": {
+            "mean": 1.389,
+            "min": 1.346,
+            "p5": 1.352,
+            "p95": 1.438,
+            "max": 1.471
+          },
+          "finish_ms": {
+            "mean": 1.332,
+            "min": 1.3,
+            "p5": 1.303,
+            "p95": 1.41,
+            "max": 1.413
+          },
+          "submit_ms": {
+            "mean": 0.306,
+            "min": 0.283,
+            "p5": 0.298,
+            "p95": 0.327,
+            "max": 0.33
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 85.4,
+            "min": 81,
+            "p5": 82,
+            "p95": 89,
+            "max": 90
+          },
+          "app_ms": {
+            "mean": 3.42,
+            "min": 3.26,
+            "p5": 3.3,
+            "p95": 3.52,
+            "max": 3.73
+          },
+          "compositor_ms": {
+            "mean": 0.709,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.73,
+            "max": 0.75
+          },
+          "cpu_gpu_ms": {
+            "mean": 14.307,
+            "min": 13.36,
+            "p5": 13.48,
+            "p95": 15.33,
+            "max": 15.56
+          },
+          "gpu_load": {
+            "mean": 0.373,
+            "min": 0.36,
+            "p5": 0.36,
+            "p95": 0.38,
+            "max": 0.4
+          },
+          "cpu_load": {
+            "mean": 0.351,
+            "min": 0.33,
+            "p5": 0.34,
+            "p95": 0.37,
+            "max": 0.37
+          },
+          "temperature_c": {
+            "mean": 33.7,
+            "min": 32,
+            "p5": 32,
+            "p95": 35,
+            "max": 35
+          },
+          "stale_frames": 265,
+          "torn_frames": 0
+        },
+        "memory": {
+          "total_pss_mib": 667.2,
+          "total_rss_mib": 805.2,
+          "graphics_pss_mib": 419.5
+        },
+        "screenshot_url": "https://gist.githubusercontent.com/tommy-xr/9de5bcd0f203cf2bdae4af09a26c4a4f/raw/4c4b8f98d8b9b428db9ef9aeda7666f32daba10a/base-90hz-lighting-off.png"
+      }
+    },
+    {
+      "id": "base-90-on",
+      "commit": "30d92fdb27f08a5f43a640d3a18af6adf9d10769",
+      "dirty": false,
+      "patch": null,
+      "fixture": "base-90-on.fixture.json",
+      "telemetry": "base-90-on.telemetry.txt",
+      "battery": {
+        "before": {
+          "AC powered": true,
+          "USB powered": false,
+          "level": 95,
+          "temperature": 350
+        },
+        "after": {
+          "AC powered": true,
+          "USB powered": false,
+          "level": 94,
+          "temperature": 360
+        }
+      },
+      "visual_review": "Inspected stereo PNG; six hybrids visibly rendered with authored lighting.",
+      "result": {
+        "status": "ok",
+        "mission": "rec1.mis",
+        "device": {
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "5861008ab560ef5ee4547bc23fdd437047c363fb496dd5d0c02e9d3b0666aa16"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5380.513,
+          "launch_to_focused_ms": 6612
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 84.479,
+            "min": 79.315,
+            "p5": 80.375,
+            "p95": 88.123,
+            "max": 88.828
+          },
+          "frame_ms": {
+            "mean": 11.846,
+            "min": 11.258,
+            "p5": 11.348,
+            "p95": 12.442,
+            "max": 12.608
+          },
+          "update_ms": {
+            "mean": 4.857,
+            "min": 4.648,
+            "p5": 4.708,
+            "p95": 5.224,
+            "max": 5.269
+          },
+          "scene_ms": {
+            "mean": 1.119,
+            "min": 0.864,
+            "p5": 0.882,
+            "p95": 1.295,
+            "max": 1.298
+          },
+          "left_eye_ms": {
+            "mean": 1.768,
+            "min": 1.638,
+            "p5": 1.646,
+            "p95": 1.911,
+            "max": 1.913
+          },
+          "right_eye_ms": {
+            "mean": 1.466,
+            "min": 1.407,
+            "p5": 1.419,
+            "p95": 1.519,
+            "max": 1.538
+          },
+          "finish_ms": {
+            "mean": 1.332,
+            "min": 1.295,
+            "p5": 1.301,
+            "p95": 1.393,
+            "max": 1.394
+          },
+          "submit_ms": {
+            "mean": 0.31,
+            "min": 0.296,
+            "p5": 0.297,
+            "p95": 0.329,
+            "max": 0.335
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 84.967,
+            "min": 80,
+            "p5": 81,
+            "p95": 88,
+            "max": 89
+          },
+          "app_ms": {
+            "mean": 4.525,
+            "min": 4.19,
+            "p5": 4.23,
+            "p95": 5.28,
+            "max": 5.36
+          },
+          "compositor_ms": {
+            "mean": 0.732,
+            "min": 0.71,
+            "p5": 0.71,
+            "p95": 0.77,
+            "max": 0.79
+          },
+          "cpu_gpu_ms": {
+            "mean": 15.804,
+            "min": 14.34,
+            "p5": 14.62,
+            "p95": 17.34,
+            "max": 17.4
+          },
+          "gpu_load": {
+            "mean": 0.473,
+            "min": 0.44,
+            "p5": 0.45,
+            "p95": 0.52,
+            "max": 0.52
+          },
+          "cpu_load": {
+            "mean": 0.364,
+            "min": 0.35,
+            "p5": 0.35,
+            "p95": 0.39,
+            "max": 0.39
+          },
+          "temperature_c": {
+            "mean": 36,
+            "min": 36,
+            "p5": 36,
+            "p95": 36,
+            "max": 36
+          },
+          "stale_frames": 244,
+          "torn_frames": 1
+        },
+        "memory": {
+          "total_pss_mib": 668.5,
+          "total_rss_mib": 806.8,
+          "graphics_pss_mib": 418.5
+        },
+        "screenshot_url": "https://gist.githubusercontent.com/tommy-xr/9de5bcd0f203cf2bdae4af09a26c4a4f/raw/4c4b8f98d8b9b428db9ef9aeda7666f32daba10a/base-90hz-lighting-on.png"
+      }
+    },
+    {
+      "id": "pr2068-120-on",
+      "commit": "5dec9748f4620c7ba8d5afba056384319cda9246",
+      "dirty": true,
+      "patch": "target-120.patch",
+      "fixture": "pr2068-120-on.fixture.json",
+      "telemetry": "pr2068-120-on.telemetry.txt",
+      "battery": {
+        "before": {
+          "AC powered": true,
+          "USB powered": false,
+          "level": 94,
+          "temperature": 360
+        },
+        "after": {
+          "AC powered": true,
+          "USB powered": false,
+          "level": 93,
+          "temperature": 370
+        }
+      },
+      "visual_review": "Inspected stereo PNG; six hybrids visibly rendered with authored lighting.",
+      "result": {
+        "status": "ok",
+        "mission": "rec1.mis",
+        "device": {
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "c4ef5fa8845d284503593726c42a31e862bc1c66f1992c42a4474cf91a4fd2b1"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5732.035,
+          "launch_to_focused_ms": 6973
+        },
+        "ready": {
+          "target_refresh_hz": 120,
+          "requested_refresh_hz": 120,
+          "refresh_hz": 120,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 92.506,
+            "min": 85.458,
+            "p5": 86.221,
+            "p95": 96.626,
+            "max": 96.948
+          },
+          "frame_ms": {
+            "mean": 10.825,
+            "min": 10.315,
+            "p5": 10.349,
+            "p95": 11.598,
+            "max": 11.702
+          },
+          "update_ms": {
+            "mean": 4.893,
+            "min": 4.662,
+            "p5": 4.669,
+            "p95": 5.244,
+            "max": 5.298
+          },
+          "scene_ms": {
+            "mean": 0.989,
+            "min": 0.823,
+            "p5": 0.824,
+            "p95": 1.16,
+            "max": 1.161
+          },
+          "left_eye_ms": {
+            "mean": 1.666,
+            "min": 1.563,
+            "p5": 1.581,
+            "p95": 1.861,
+            "max": 1.896
+          },
+          "right_eye_ms": {
+            "mean": 1.415,
+            "min": 1.327,
+            "p5": 1.34,
+            "p95": 1.542,
+            "max": 1.555
+          },
+          "finish_ms": {
+            "mean": 1.311,
+            "min": 1.276,
+            "p5": 1.278,
+            "p95": 1.402,
+            "max": 1.424
+          },
+          "submit_ms": {
+            "mean": 0.32,
+            "min": 0.301,
+            "p5": 0.306,
+            "p95": 0.348,
+            "max": 0.353
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 93.267,
+            "min": 86,
+            "p5": 86,
+            "p95": 97,
+            "max": 98
+          },
+          "app_ms": {
+            "mean": 4.386,
+            "min": 4.24,
+            "p5": 4.29,
+            "p95": 4.49,
+            "max": 4.53
+          },
+          "compositor_ms": {
+            "mean": 0.714,
+            "min": 0.7,
+            "p5": 0.7,
+            "p95": 0.75,
+            "max": 0.75
+          },
+          "cpu_gpu_ms": {
+            "mean": 15.707,
+            "min": 14.26,
+            "p5": 14.6,
+            "p95": 16.7,
+            "max": 17.02
+          },
+          "gpu_load": {
+            "mean": 0.528,
+            "min": 0.51,
+            "p5": 0.51,
+            "p95": 0.55,
+            "max": 0.55
+          },
+          "cpu_load": {
+            "mean": 0.399,
+            "min": 0.37,
+            "p5": 0.37,
+            "p95": 0.48,
+            "max": 0.49
+          },
+          "temperature_c": {
+            "mean": 36.467,
+            "min": 35,
+            "p5": 35,
+            "p95": 37,
+            "max": 37
+          },
+          "stale_frames": 865,
+          "torn_frames": 0
+        },
+        "memory": {
+          "total_pss_mib": 668.8,
+          "total_rss_mib": 807.1,
+          "graphics_pss_mib": 419.7
+        },
+        "screenshot_url": "https://gist.githubusercontent.com/tommy-xr/9de5bcd0f203cf2bdae4af09a26c4a4f/raw/4c4b8f98d8b9b428db9ef9aeda7666f32daba10a/pr2068-head-target120hz-six-hybrids.png"
+      }
+    }
+  ],
+  "os": "oculus/eureka/eureka:14/UP1A.231005.007.A1/52433670048800520:user/abl_signing_keys:release,amss_signing_keys:release,release-keys",
+  "assets": {
+    "sshock2.kpf": "35597daf68cf3e0c811cd9b9d24a9604d2cffa1d2c793985056b8946c538c6bd",
+    "mods/400.kpf": "7436ff552c0bccc040aa29914fd0385ab8e063c59c3f8d9a2c66c3b3c1d471a6",
+    "mods/patch_ext.kpf": "be36b80f0bab653ae506d790893fe99cb38e6bb22d42b3f2cd14605f9ef1d0d1",
+    "mods/scp.kpf": "44c7383a32a19a2bfc9db494eb1d672440e2c20de89ce79fbf79dbbd1739c5b2",
+    "mods/shtup.kpf": "f187b5fc3645756c0d29a9e9159b23fb25c8d28082a0ecf722a8828fe5e7cbe9",
+    "mods/sshock2ee.kpf": "22663dae9b7118781e7ea6dc4ff329c6ecc2b7436918abff1d85961e7ce72011"
+  }
+}
