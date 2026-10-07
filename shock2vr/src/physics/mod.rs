@@ -5195,6 +5195,16 @@ impl PhysicsWorld {
         }
     }
 
+    /// Conservative selection bounds, including attached model-bounds colliders.
+    pub(crate) fn entity_world_aabb(&self, entity: EntityId) -> Option<Aabb3<f32>> {
+        let handle = *self.entity_id_to_body.get(&entity)?;
+        let (min, max) = self.body_world_aabb(handle)?;
+        Some(Aabb3 {
+            min: point3(min.x, min.y, min.z),
+            max: point3(max.x, max.y, max.z),
+        })
+    }
+
     pub fn get_position(&self, handle: RigidBodyHandle) -> Option<Vector3<f32>> {
         let maybe_rigid_body = self.rigid_body_set.get(handle);
 

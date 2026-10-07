@@ -3,7 +3,9 @@
 use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, Zero, point3, vec3};
 use dark::{
     SCALE_FACTOR,
-    properties::{FrobFlag, PropFrobInfo, PropModelName},
+    properties::{
+        FrobFlag, PropFrobInfo, PropModelName, PropPickBias, PropRotatingDoor, PropTranslatingDoor,
+    },
 };
 use engine::scene::SceneObject;
 use engine::script_log;
@@ -930,6 +932,84 @@ fn resolve_hit_proxy_entity(world: &World, ray_cast_result: RayCastResult) -> Ra
     }
 }
 
+/// Retail `engfeat/pick.cpp::Weight`: PickBias pads the projected rectangle by
+/// bias * (canvas_height >> 4); negative values shrink it, not a distance offset.
+/// VR has no cursor canvas: use a ray-aligned, world-up-stabilized 90-degree
+/// vertical-FOV 640x480 virtual canvas. This adapts exclusion only, not retail's
+/// ranking or positive-bias near-miss selection. Do not clamp bounds to canvas.
+///
+/// Unknown bounds and bounds crossing the ray's near plane remain occluders:
+/// we cannot safely infer exclusion there from an un-clipped projection.
+fn pick_bias_allows_ray(
+    bounds: Option<collision::Aabb3<f32>>,
+    bias: f32,
+    origin: cgmath::Point3<f32>,
+    forward: Vector3<f32>,
+) -> bool {
+    use cgmath::{Deg, Matrix4, Vector2, perspective};
+
+    if !bias.is_finite() || bias >= 0.0 {
+        return true;
+    }
+    let Some(bounds) = bounds else { return true };
+    let values = [
+        bounds.min.x,
+        bounds.min.y,
+        bounds.min.z,
+        bounds.max.x,
+        bounds.max.y,
+        bounds.max.z,
+        origin.x,
+        origin.y,
+        origin.z,
+        forward.x,
+        forward.y,
+        forward.z,
+    ];
+    if values.iter().any(|value| !value.is_finite())
+        || bounds.min.x >= bounds.max.x
+        || bounds.min.y >= bounds.max.y
+        || bounds.min.z >= bounds.max.z
+        || forward.magnitude2() < 1.0e-8
+        || !forward.magnitude2().is_finite()
+    {
+        return true;
+    }
+    let forward = forward.normalize();
+    let half = (bounds.max - bounds.min) * 0.5;
+    let center = bounds.min + half;
+    let min_depth = (center - origin).dot(forward)
+        - half.dot(vec3(forward.x.abs(), forward.y.abs(), forward.z.abs()));
+    const NEAR: f32 = 0.001;
+    if !min_depth.is_finite() || min_depth <= NEAR {
+        return true;
+    }
+    // Looking along world up needs a different reference to avoid a singular view.
+    let up = if forward.y.abs() > 0.99 {
+        Vector3::unit_z()
+    } else {
+        Vector3::unit_y()
+    };
+    let rect = crate::hud::project_aabb3(
+        &bounds,
+        Matrix4::look_at_rh(origin, origin + forward, up),
+        perspective(Deg(90.0), 640.0 / 480.0, NEAR, 1000.0),
+        Vector2::new(640.0, 480.0),
+    );
+    let margins = [
+        320.0 - rect.min.x,
+        rect.max.x - 320.0,
+        240.0 - rect.min.y,
+        rect.max.y - 240.0,
+    ];
+    if margins.iter().any(|margin| !margin.is_finite()) {
+        return true;
+    }
+    margins
+        .iter()
+        .all(|margin| *margin + bias * (480 >> 4) as f32 >= 0.0)
+}
+
 pub(crate) fn interaction_ray_cast(
     physics: &PhysicsWorld,
     world: &World,
@@ -941,6 +1021,39 @@ pub(crate) fn interaction_ray_cast(
         | InternalCollisionGroups::SELECTABLE
         | InternalCollisionGroups::WORLD
         | InternalCollisionGroups::RAYCAST;
+    let pick_bias = world.borrow::<View<PropPickBias>>().ok();
+    let translating_doors = world.borrow::<View<PropTranslatingDoor>>().ok();
+    let rotating_doors = world.borrow::<View<PropRotatingDoor>>().ok();
+    let permits_pick = |candidate| {
+        use collision::Union;
+        let entity = util::resolve_proxy_entity(world, candidate);
+        // Retail doorphys.cpp also blocks portal vision through closed doors.
+        // We do not retain its vision_blocking field, so preserve physical door
+        // obstruction rather than expose unseen targets when PickBias shrinks it.
+        if translating_doors
+            .as_ref()
+            .is_some_and(|v| v.get(entity).is_ok())
+            || rotating_doors
+                .as_ref()
+                .is_some_and(|v| v.get(entity).is_ok())
+        {
+            return true;
+        }
+        let bias = pick_bias.as_ref().and_then(|view| view.get(entity).ok());
+        bias.is_none_or(|bias| {
+            let bounds = physics.entity_world_aabb(entity).and_then(|host| {
+                if entity == candidate {
+                    Some(host)
+                } else {
+                    // A limb proxy can extend past its parent's physical body.
+                    physics
+                        .entity_world_aabb(candidate)
+                        .map(|proxy| host.union(&proxy))
+                }
+            });
+            pick_bias_allows_ray(bounds, bias.0, ray_start, forward)
+        })
+    };
     let ui_hit = physics.ray_cast2(
         ray_start,
         forward,
@@ -962,8 +1075,9 @@ pub(crate) fn interaction_ray_cast(
 
     if let (Some(ui_hit), Some(gui_host)) = (ui_hit, gui_host) {
         let ui_distance = (ui_hit.hit_point - ray_start).magnitude();
-        let is_not_panel_host =
-            |entity_id| util::resolve_proxy_entity(world, entity_id) != gui_host;
+        let is_not_panel_host = |entity_id| {
+            util::resolve_proxy_entity(world, entity_id) != gui_host && permits_pick(entity_id)
+        };
         let blocker = physics.ray_cast2_with_entity_filter(
             ray_start,
             forward,
@@ -979,13 +1093,14 @@ pub(crate) fn interaction_ray_cast(
             .or(Some(ui_hit))
     } else {
         physics
-            .ray_cast2(
+            .ray_cast2_with_entity_filter(
                 ray_start,
                 forward,
                 FROB_REACH,
                 ordinary_groups | InternalCollisionGroups::UI,
                 entity_to_ignore,
                 true,
+                &permits_pick,
             )
             .map(|result| resolve_hit_proxy_entity(world, result))
     }
@@ -1204,6 +1319,268 @@ mod tests {
             ignored,
         )
         .and_then(|hit| hit.maybe_entity_id)
+    }
+
+    /// Fluidics authors a non-interactive shell around its invisible button.
+    #[test]
+    fn authored_pick_bias_shell_does_not_hide_inner_target() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let shell = world.add_entity(dark::properties::PropPickBias(-2000.0));
+        register_kinematic_body(
+            &mut world,
+            &mut physics,
+            shell,
+            vec3(0.0, 0.0, -1.0),
+            vec3(1.0, 1.0, 0.4),
+            CollisionGroup::selectable(),
+        );
+        let button = add_occluder(&mut world, &mut physics, -1.0, CollisionGroup::selectable());
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(button));
+    }
+
+    #[test]
+    fn pick_bias_shrinks_edges_without_disabling_the_center() {
+        let bounds = collision::Aabb3 {
+            min: point3(-0.5, -0.5, -1.1),
+            max: point3(0.5, 0.5, -0.9),
+        };
+        let forward = vec3(0.0, 0.0, -1.0);
+        assert!(pick_bias_allows_ray(
+            Some(bounds),
+            -1.0,
+            point3(0.0, 0.0, 0.0),
+            forward
+        ));
+        assert!(!pick_bias_allows_ray(
+            Some(bounds),
+            -1.0,
+            point3(0.45, 0.0, 0.0),
+            forward
+        ));
+        for bias in [0.0, 1.0, f32::NAN, f32::NEG_INFINITY] {
+            assert!(pick_bias_allows_ray(
+                Some(bounds),
+                bias,
+                point3(0.45, 0.0, 0.0),
+                forward
+            ));
+        }
+    }
+
+    #[test]
+    fn pick_bias_conservatively_keeps_unknown_and_near_plane_bounds() {
+        let origin = point3(0.0, 0.0, 0.0);
+        let forward = vec3(0.0, 0.0, -1.0);
+        let bounds = collision::Aabb3 {
+            min: point3(-0.5, -0.5, -1.1),
+            max: point3(0.5, 0.5, -0.9),
+        };
+        assert!(pick_bias_allows_ray(None, -2000.0, origin, forward));
+        for max in [
+            point3(0.5, 0.5, 0.1),
+            point3(f32::NAN, 0.5, -0.9),
+            bounds.min,
+        ] {
+            assert!(pick_bias_allows_ray(
+                Some(collision::Aabb3 { max, ..bounds }),
+                -2000.0,
+                origin,
+                forward
+            ));
+        }
+        for direction in [Vector3::zero(), vec3(f32::NAN, 0.0, -1.0)] {
+            assert!(pick_bias_allows_ray(
+                Some(bounds),
+                -2000.0,
+                origin,
+                direction
+            ));
+        }
+    }
+
+    #[test]
+    fn pick_bias_projection_handles_vertical_and_non_unit_rays() {
+        let origin = point3(0.0, 0.0, 0.0);
+        let bounds = collision::Aabb3 {
+            min: point3(-0.5, 0.9, -0.5),
+            max: point3(0.5, 1.1, 0.5),
+        };
+        for forward in [
+            vec3(0.0, 1.0, 0.0),
+            vec3(0.0, 10.0, 0.0),
+            vec3(0.001, 1.0, 0.001),
+        ] {
+            assert!(pick_bias_allows_ray(Some(bounds), -1.0, origin, forward));
+            assert!(!pick_bias_allows_ray(
+                Some(bounds),
+                -2000.0,
+                origin,
+                forward
+            ));
+        }
+    }
+
+    #[test]
+    fn pick_bias_keeps_ordinary_blockers_behind_excluded_shell() {
+        for group in [
+            CollisionGroup::selectable(),
+            CollisionGroup::world_for_test(),
+        ] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let shell = add_occluder(&mut world, &mut physics, -0.5, CollisionGroup::selectable());
+            world.add_component(shell, PropPickBias(-2000.0));
+            let blocker = add_occluder(&mut world, &mut physics, -1.0, group);
+            add_occluder(&mut world, &mut physics, -1.5, CollisionGroup::selectable());
+            assert_eq!(cast_at_fixture(&world, &physics, None), Some(blocker));
+            // Ballistic/physical raycasts do not inherit interaction-only exclusion.
+            let hit = physics
+                .ray_cast2(
+                    point3(0.0, 0.0, 0.0),
+                    vec3(0.0, 0.0, -1.0),
+                    FROB_REACH,
+                    InternalCollisionGroups::SELECTABLE,
+                    None,
+                    true,
+                )
+                .unwrap();
+            assert_eq!(hit.maybe_entity_id, Some(shell));
+        }
+    }
+
+    #[test]
+    fn pick_bias_exclusion_composes_with_panel_host_exception() {
+        let (mut world, mut physics, _host, proxy) = interaction_fixture();
+        let shell = add_occluder(&mut world, &mut physics, -0.5, CollisionGroup::selectable());
+        world.add_component(shell, PropPickBias(-2000.0));
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(proxy));
+        let wall = add_occluder(
+            &mut world,
+            &mut physics,
+            -0.7,
+            CollisionGroup::world_for_test(),
+        );
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(wall));
+    }
+
+    #[test]
+    fn pick_bias_uses_resolved_proxy_property_and_bounds() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let host = add_occluder(&mut world, &mut physics, -0.5, CollisionGroup::selectable());
+        world.add_component(host, PropPickBias(-2000.0));
+        let proxy = world.add_entity(crate::runtime_props::RuntimePropProxyEntity(host));
+        register_kinematic_body(
+            &mut world,
+            &mut physics,
+            proxy,
+            vec3(0.0, 0.0, -0.4),
+            vec3(1.0, 1.0, 0.1),
+            CollisionGroup::selectable(),
+        );
+        let target = add_occluder(&mut world, &mut physics, -1.0, CollisionGroup::selectable());
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(target));
+    }
+
+    #[test]
+    fn pick_bias_includes_larger_interaction_collider_bounds() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let target = world.add_entity(PropPickBias(-1.0));
+        let handle = physics.add_kinematic(
+            target,
+            vec3(0.0, 0.0, -1.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Vector3::zero(),
+            vec3(0.05, 0.05, 0.05),
+            CollisionGroup::selectable(),
+            false,
+        );
+        physics.add_interaction_cuboid(
+            handle,
+            target,
+            Vector3::zero(),
+            vec3(1.0, 1.0, 0.1),
+            CollisionGroup::selectable(),
+        );
+        update_queries(&mut world, &mut physics);
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(target));
+    }
+
+    #[test]
+    fn pick_bias_proxy_bounds_do_not_shrink_to_the_parent_body() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let host = world.add_entity(PropPickBias(-1.0));
+        register_kinematic_body(
+            &mut world,
+            &mut physics,
+            host,
+            vec3(0.0, 0.0, -1.0),
+            vec3(0.05, 0.05, 0.05),
+            CollisionGroup::selectable(),
+        );
+        let proxy = world.add_entity(crate::runtime_props::RuntimePropProxyEntity(host));
+        register_kinematic_body(
+            &mut world,
+            &mut physics,
+            proxy,
+            vec3(0.0, 0.0, -1.0),
+            vec3(1.0, 1.0, 0.1),
+            CollisionGroup::selectable(),
+        );
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(host));
+    }
+
+    #[test]
+    fn authored_doors_keep_obstructing_despite_negative_pick_bias() {
+        for rotating in [false, true] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let door = add_occluder(&mut world, &mut physics, -0.5, CollisionGroup::selectable());
+            world.add_component(door, PropPickBias(-20.0));
+            let location = vec3(0.0, 0.0, -0.5);
+            if rotating {
+                let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+                world.add_component(
+                    door,
+                    PropRotatingDoor {
+                        door_type: 0,
+                        closed: 0.0,
+                        open: 90.0,
+                        speed: 1.0,
+                        axis: 1,
+                        state: 0,
+                        clockwise: false,
+                        base_closed_location: location,
+                        base_open_location: location,
+                        base_location: location,
+                        base_rotation: identity,
+                        base_closed_rotation: identity,
+                        base_open_rotation: identity,
+                        progress: 0.0,
+                    },
+                );
+            } else {
+                world.add_component(
+                    door,
+                    PropTranslatingDoor {
+                        door_type: 1,
+                        closed: 0.0,
+                        open: 1.0,
+                        speed: 1.0,
+                        axis: 1,
+                        state: 0,
+                        base_closed_location: location,
+                        base_open_location: location,
+                        base_location: location,
+                    },
+                );
+            }
+            add_occluder(&mut world, &mut physics, -1.0, CollisionGroup::selectable());
+            assert_eq!(cast_at_fixture(&world, &physics, None), Some(door));
+        }
     }
 
     /// Negative-first regression for #1114: the transmitter's selectable
