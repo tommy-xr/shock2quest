@@ -182,7 +182,9 @@ test(
     let bodyPosition = bodies[0].position;
     await teleportVerified(game, {
       x: bodyPosition[0] - 1.5,
-      y: bodyPosition[1] - 0.42,
+      // Spawn above the shelf floor; placing the pawn below it falls
+      // through the room and turns this healing check into lethal fall damage.
+      y: bodyPosition[1] + 1.0,
       z: bodyPosition[2],
     });
     await game.step({ frames: 60 });
