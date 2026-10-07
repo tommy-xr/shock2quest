@@ -2,7 +2,7 @@ import { launchDeveloperGame } from "./helpers/developer-game.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import type { GameServer } from "../src/index.js";
 import {
   DEV_ACTION,
   PAUSE_DEVELOPER,
@@ -40,8 +40,8 @@ for (const vr of [false, true]) {
   test(`Rain gadgets spawns usable devices and implants (${vr ? "VR" : "flat"})`, {
     skip: !e2eEnabled,
     timeout: 120_000,
-  }, async () => {
-    await using game = await GameServer.launch({ mission: "debug_minimal", debugFlags: vr ? ["--vr"] : [] });
+  }, async (t) => {
+    await using game = await launchDeveloperGame(t, { mission: "debug_minimal", debugFlags: vr ? ["--vr"] : [] });
     const clickPoint = vr ? vrClickCanvasPoint : click;
     const gadgets = [
       "French-Epstein Device", "Molec. Analyzer", "ICE Pick",
