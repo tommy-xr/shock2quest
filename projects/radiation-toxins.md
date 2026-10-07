@@ -176,3 +176,21 @@ unchanged `ae2eaf5a`, as well as this branch:
 
 These are recorded separately from the hazard scenarios; this feature does not
 change their expected behavior. All 23 authored mission-load checks pass.
+
+### Rad Shield closeout — October 6, 2026
+
+Issue #1300's original proposal to purge radiation and suppress all new exposure
+was an unverified sketch. Current main already implements the distinct authored
+paths described above. Focused `psi-rad-shield.e2e.test.ts` coverage verifies:
+
+- real flat and VR casts spend two psi points without curing stored radiation;
+- a direct radiation exposure of 10 becomes 9.5 while active, then 10 after expiry;
+- Engineering's authored radiation room accumulates at one fifth its ordinary
+  rate, including after a mission transition and a current-build save/load;
+- after expiry the same room returns to its unprotected absorption rate.
+
+The room test measures an unprotected baseline in a separate fresh mission and
+casts in `debug_psi` before transitioning to Engineering. This avoids assuming
+that debug-scene power provisioning grants a permanent career purchase.
+No new RadShield object script or gameplay formula is required: the sustained
+power registry and hazard protection consumers already implement it.
