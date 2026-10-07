@@ -9550,6 +9550,17 @@ impl MissionCore {
         rotation: Quaternion<f32>,
         scale: Vector3<f32>,
     ) {
+        // Script links and queued effects can outlive their target (for example,
+        // Command2's teleport traps after the Overlord brain is destroyed).
+        // Ignore that stale target before touching either physics or components.
+        if !self
+            .world
+            .borrow::<EntitiesView>()
+            .unwrap()
+            .is_alive(entity_id)
+        {
+            return;
+        }
         if let Some(rigid_body_handle) = self.id_to_physics.get(&entity_id) {
             self.physics
                 .set_position_rotation(*rigid_body_handle, position, rotation);
