@@ -114,9 +114,8 @@ pub const HUMANOID_HIT_BOXES: Lazy<Arc<HashMap<u32, HitBoxType>>> = Lazy::new(||
         (13, HitBoxType::Extremity), // RElbow - forearm
         // The `LWeap`/`RWeap` joints are where a weapon is *attached*; the
         // vertices skinned to them are the creature's own hands, and the pipe
-        // it carries is a separate object with no hitbox at all. So these are
-        // hands - far limb - and a blow on the weapon itself is not something
-        // this engine can currently tell apart.
+        // it carries has its own attack volume (`pipe_melee` in VR). These
+        // hurtboxes remain hands: a weapon clash must not damage the hybrid.
         (14, HitBoxType::Extremity), // LWeap - the hand
         (15, HitBoxType::Extremity), // RWeap
         (18, HitBoxType::Body),      // Abdomen

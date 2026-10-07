@@ -83,6 +83,11 @@ type returns the loaded rounds to your backpack. In the amp's power selector, us
 stick up/down for tiers and left/right for purchased powers; confirm with its
 upper button or trigger. Each amp remembers its current and alternate powers.
 
+**Parrying.** Meet a pipe hybrid's incoming pipe with your held wrench or other
+melee weapon to block it. Placement matters: a stationary guard works, but the
+pipe must touch your weapon before it touches you. A block clangs, pulses the
+blocking controller, and sends the hybrid's swing back to its ready pose.
+
 **Maintenance tools.** In flat inventory, drag a tool onto a ranged weapon.
 In VR, bring the held tool close to a weapon and pull the trigger or release
 it onto the weapon; the weapon can be in your other hand. The preview shows

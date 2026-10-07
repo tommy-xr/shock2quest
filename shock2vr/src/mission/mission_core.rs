@@ -5411,6 +5411,14 @@ impl MissionCore {
             &mut self.id_to_physics,
         );
 
+        if !time.elapsed.is_zero() {
+            effects.extend(crate::pipe_melee::resolve(
+                &mut self.world,
+                &mut self.physics,
+                &mut self.id_to_animation_player,
+            ));
+        }
+
         // Default VR has one object-bound world-panel slot. Keep its
         // transient proxy faithful to the original overlay lifecycle before
         // either hand raycasts: destroyed hosts and walk-away panels close.
@@ -7837,6 +7845,8 @@ impl MissionCore {
                 self.world
                     .add_component(*id, RuntimePropJointTransforms(joint_transforms));
             }
+
+            crate::pipe_melee::observe(&mut self.world, *id, player, flags);
 
             let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
             let maybe_transform = v_transform.get(*id);
@@ -12387,6 +12397,26 @@ impl MissionCore {
                     }
                 }
 
+                Effect::DebugPlayMotion { entity_id, name } => {
+                    if let Some(clip) =
+                        asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{name}_.mc"))
+                    {
+                        if let Some(player) = self.id_to_animation_player.get_mut(&entity_id) {
+                            *player = AnimationPlayer::play_animation(player, clip);
+                            if let Some(payload) = self.turn_clips.on_animation_applied(
+                                entity_id,
+                                Some(player.blend_alpha_now() < 1.0),
+                                false,
+                            ) {
+                                self.script_world.dispatch(Message {
+                                    to: entity_id,
+                                    payload,
+                                });
+                            }
+                        }
+                    }
+                }
+
                 Effect::QueueAnimationBySchema {
                     entity_id,
                     motion_queries,
@@ -16748,6 +16778,7 @@ impl MissionCore {
         // that carries RuntimePropVrGripOffset, so that component *is* the
         // set of held melee weapons.
         if crate::dev_params::get(crate::dev_params::MELEE_VOLUMES) > 0.5 {
+            scene.extend(crate::pipe_melee::debug_geometry(&self.world));
             let held = self
                 .world
                 .borrow::<View<RuntimePropVrGripOffset>>()
@@ -18858,6 +18889,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             entity_id: id.inner() as i32,
             clip: head.as_ref().and_then(|entry| entry.name.clone()),
             frame: snapshot.current_frame,
+            recoil: player.is_recoiling(),
             num_frames: head.as_ref().map(|entry| entry.num_frames).unwrap_or(0),
             looping: head.as_ref().map(|entry| entry.looping).unwrap_or(false),
             remaining_time: snapshot.remaining_time,
@@ -19119,6 +19151,14 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     });
                 }
 
+                if let Ok(states) = self.world.borrow::<View<crate::pipe_melee::PipeAttack>>() {
+                    if let Ok(state) = states.get(id) {
+                        properties.push(DebugPropertyInfo {
+                            name: "PipeAttack".into(),
+                            value: serde_json::to_string(state).unwrap(),
+                        });
+                    }
+                }
                 // Cyber-module award amount (EXP trap `PropExp` / EXP-cookie
                 // stack count), so tests can read the exact award.
                 if let Some(exp) = exp_value {
@@ -20545,6 +20585,19 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         // the way the effect appliers do, so a test can put an object into a
         // state that normally takes a long detour to reach.
         match message {
+            DebugEntityMessage::PlayMotion { name } => {
+                if !self.id_to_animation_player.contains_key(&id) {
+                    return false;
+                }
+                self.world
+                    .borrow::<UniqueViewMut<EffectQueue>>()
+                    .unwrap()
+                    .push(Effect::DebugPlayMotion {
+                        entity_id: id,
+                        name,
+                    });
+                return true;
+            }
             DebugEntityMessage::SetGunCondition { condition } => {
                 let mut v_gun_state = self
                     .world
@@ -20613,6 +20666,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             DebugEntityMessage::TurnOff => MessagePayload::TurnOff { from: id },
             // Handled above: these write state instead of dispatching.
             DebugEntityMessage::SetGunCondition { .. }
+            | DebugEntityMessage::PlayMotion { .. }
             | DebugEntityMessage::SetObjectState { .. } => {
                 tracing::error!("send_entity_message: {:?} reached the dispatch path", id);
                 return false;

@@ -193,6 +193,7 @@ export interface PathfindingTestStatus {
  * Mirrors the engine's `DebugEntityMessage`; the `type` field is the serde tag.
  */
 export type DebugEntityMessage =
+  | { type: "PlayMotion"; name: string }
   | { type: "Hazard"; toxin: boolean; amount: number }
   | {
       type: "Damage";
@@ -387,6 +388,8 @@ export interface AnimationBlend {
  * animation player).
  */
 export interface AnimationState {
+  /** Interrupted melee attack rewinding to its opening pose. */
+  recoil: boolean;
   entity_id: number;
   /** Currently playing clip (queue head), null when the queue is empty. */
   clip: string | null;

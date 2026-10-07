@@ -443,6 +443,32 @@ The full psi MFD is still available inside the cyber interface, with its existin
 pointer controls and thumbstick navigation. Its readout resolves the target amp's
 selection rather than a shared setting.
 
+### VR pipe parries
+
+`cargo dbgr --mission debug_melee --vr --port 0` provides live pipe hybrids and
+a rack of melee weapons. Hold a wrench across the incoming pipe: no trigger or
+swing-speed threshold is required to block. Only held melee weapons guard;
+dropped items and guns do not. The first contact wins, so a pipe that reaches
+the player before the wrench still damages. Each attack can connect only once.
+
+Under **Pause → Developer → Visualizations → Combat**, enable **Melee contact
+volumes** (`melee_volumes`) to show the held weapon in red and the retail
+wrist-to-tip pipe spheres: gray outside the contact window, yellow while active,
+cyan during recoil. Enable **Creature hitboxes** (`show_hitboxes`) for green
+creature hurtboxes. Both overlays are visible in the headset. Entity detail exposes
+`PipeAttack` (window, consumption, recovery and parry count), and the animation
+endpoint exposes `recoil`. `/v1/audio/recent` records the resolved metal clang;
+player `hand_feedback.haptics.sequence` reports the blocking hand's pulse.
+
+For repeatable tests, discover the hybrid by template/name, set its alertness
+to High, step, then send `{"type":"PlayMotion","name":"bh413001"}` to its
+`/v1/entities/:id/message` endpoint and step once. `bh413001` is the rising
+attack; `bh413004` is a high sweep. This selects the clip while preserving normal
+AI, animation flags and collision handling. The SDK regression is
+`test/vr-pipe-parry.e2e.test.ts`; it covers both directions, missed guards,
+recovery, damage, sound and haptics. Other enemy types and flatscreen retain
+their existing melee resolution.
+
 ### VR implant sockets
 
 The existing powered implant system has a narrow socket on the pinky side

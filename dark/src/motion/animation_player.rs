@@ -83,9 +83,30 @@ pub struct AnimationPlayer {
     /// `AnimationInfo::cancel_root_motion`). Set for first-person viewmodels,
     /// whose entity transform is re-anchored to the camera every frame.
     cancel_root_motion: bool,
+    recoil_speed: Option<f32>,
 }
 
 impl AnimationPlayer {
+    /// Recoil from the displayed attack frame back to its opening pose.
+    pub fn recoil(&self, duration: Duration) -> Self {
+        let Some((clip, _)) = self.animation.first() else {
+            return self.clone();
+        };
+        let mut player = self.clone();
+        let frame_time = clip.time_per_frame.as_secs_f32();
+        let position = self.current_frame as f32 + self.remaining_time / frame_time;
+        player.recoil_speed = Some(position / duration.as_secs_f32().max(0.001));
+        // Discard queued swings. Rewinding must never re-open a damage window
+        // or undo world-space root travel/turning.
+        player.animation =
+            immutable::List::new().push_front((clip.clone(), AnimationFlags::PlayOnce));
+        player
+    }
+
+    pub fn is_recoiling(&self) -> bool {
+        self.recoil_speed.is_some()
+    }
+
     pub fn empty() -> AnimationPlayer {
         let animation = immutable::List::new();
         AnimationPlayer {
@@ -97,6 +118,7 @@ impl AnimationPlayer {
             blend_state: None,
             rotation_pos: 0.0,
             cancel_root_motion: false,
+            recoil_speed: None,
         }
     }
     pub fn from_animation(animation_clip: Rc<AnimationClip>) -> AnimationPlayer {
@@ -111,6 +133,7 @@ impl AnimationPlayer {
             blend_state: None,
             rotation_pos: 0.0,
             cancel_root_motion: false,
+            recoil_speed: None,
         }
     }
 
@@ -138,6 +161,7 @@ impl AnimationPlayer {
             blend_state: None,
             rotation_pos: 0.0,
             cancel_root_motion: false,
+            recoil_speed: None,
         }
     }
 
@@ -250,6 +274,7 @@ impl AnimationPlayer {
             blend_state,
             rotation_pos: 0.0,
             cancel_root_motion: player.cancel_root_motion,
+            recoil_speed: None,
         }
     }
 
@@ -294,6 +319,7 @@ impl AnimationPlayer {
             blend_state: player.blend_state.clone(),
             rotation_pos: player.rotation_pos,
             cancel_root_motion: player.cancel_root_motion,
+            recoil_speed: player.recoil_speed,
         }
     }
 
@@ -306,6 +332,34 @@ impl AnimationPlayer {
         Vec<AnimationEvent>,
         Vector3<f32>,
     ) {
+        if let Some(speed) = player.recoil_speed {
+            let mut next = player.clone();
+            // Keep the displayed blend at impact, then finish its fade while
+            // rewinding. Dropping it immediately would pop on an early block.
+            if let Some(blend) = next.blend_state.as_mut() {
+                blend.elapsed += time.as_secs_f32();
+                if blend.elapsed >= blend.duration {
+                    next.blend_state = None;
+                }
+            }
+            let mut events = Vec::new();
+            if let Some((clip, _)) = player.animation.first() {
+                let frame_time = clip.time_per_frame.as_secs_f32();
+                let position = (player.current_frame as f32 + player.remaining_time / frame_time
+                    - speed * time.as_secs_f32())
+                .max(0.0);
+                next.current_frame = position.floor() as u32;
+                next.remaining_time = position.fract() * frame_time;
+                if position <= 0.0 && !time.is_zero() {
+                    next.animation = immutable::List::new();
+                    next.last_animation = Some((clip.clone(), 0));
+                    next.recoil_speed = None;
+                    next.blend_state = None;
+                    events.push(AnimationEvent::Completed);
+                }
+            }
+            return (next, MotionFlags::empty(), events, vec3(0.0, 0.0, 0.0));
+        }
         let mut remaining_duration = player.remaining_time + time.as_secs_f32();
         let mut blend_state = player.blend_state.clone();
         let mut clear_blend = false;
@@ -444,6 +498,7 @@ impl AnimationPlayer {
                                 blend_state,
                                 rotation_pos: raw_end_pos - current_clip.num_frames as f32,
                                 cancel_root_motion: player.cancel_root_motion,
+                                recoil_speed: None,
                             },
                             motion_flags,
                             events,
@@ -484,6 +539,7 @@ impl AnimationPlayer {
                                 // slice is emitted on its first tick.
                                 rotation_pos: 0.0,
                                 cancel_root_motion: player.cancel_root_motion,
+                                recoil_speed: None,
                             },
                             motion_flags,
                             events,
@@ -514,6 +570,7 @@ impl AnimationPlayer {
                         blend_state,
                         rotation_pos: raw_end_pos,
                         cancel_root_motion: player.cancel_root_motion,
+                        recoil_speed: None,
                     },
                     motion_flags,
                     events,
@@ -757,6 +814,37 @@ mod tests {
             motion_flags: Vec::new(),
             name: None,
         })
+    }
+
+    #[test]
+    fn recoil_runs_backwards_without_replaying_attack_flags_or_root_motion() {
+        let mut clip = (*clip_with_root_motion()).clone();
+        clip.motion_flags = vec![super::super::FrameFlags {
+            frame: 1,
+            flags: MotionFlags::MELEE_CONTACT_START,
+        }];
+        let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), Rc::new(clip));
+        let (player, _, _, _) = AnimationPlayer::update(&player, Duration::from_millis(150));
+        let player = player.recoil(Duration::from_millis(200));
+        let (half, flags, events, velocity) =
+            AnimationPlayer::update(&player, Duration::from_millis(100));
+        assert_eq!(
+            half.current_frame, 0,
+            "recoil must rewind from frame 1.5 to 0.75"
+        );
+        assert!((half.remaining_time - 0.075).abs() < 1e-5);
+        assert!(flags.is_empty());
+        assert!(events.is_empty());
+        assert_eq!(velocity, vec3(0.0, 0.0, 0.0));
+        let (done, flags, events, velocity) =
+            AnimationPlayer::update(&half, Duration::from_millis(110));
+        assert!(done.is_queue_empty());
+        assert_eq!(done.last_animation.as_ref().unwrap().1, 0);
+        assert!(flags.is_empty());
+        assert!(matches!(events.as_slice(), [AnimationEvent::Completed]));
+        assert_eq!(velocity, vec3(0.0, 0.0, 0.0));
+        let (_, _, events, _) = AnimationPlayer::update(&done, Duration::from_secs(1));
+        assert!(events.is_empty(), "completion is emitted only once");
     }
 
     #[test]

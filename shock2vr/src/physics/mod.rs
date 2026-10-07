@@ -5282,6 +5282,59 @@ impl PhysicsWorld {
         })
     }
 
+    /// Current body frame, for relative swept contact queries.
+    pub(crate) fn entity_body_pose(&self, entity: EntityId) -> Option<Isometry<Real>> {
+        self.entity_id_to_body
+            .get(&entity)
+            .and_then(|handle| self.get_body_transform(*handle))
+    }
+
+    /// Sweep an attack sphere against one entity's actual colliders. Moving
+    /// guards are tested in their own frame using last tick's body pose, so a
+    /// fast wrench and pipe cannot simply exchange sides between samples.
+    pub(crate) fn sweep_sphere_against_entity(
+        &self,
+        from: Vector3<f32>,
+        to: Vector3<f32>,
+        radius: f32,
+        entity: EntityId,
+        previous_pose: Option<Isometry<Real>>,
+    ) -> Option<f32> {
+        let body = self
+            .rigid_body_set
+            .get(*self.entity_id_to_body.get(&entity)?)?;
+        let previous_pose = previous_pose.unwrap_or(*body.position());
+        let from = previous_pose.inverse_transform_point(&point![from.x, from.y, from.z]);
+        let to = body
+            .position()
+            .inverse_transform_point(&point![to.x, to.y, to.z]);
+        body.colliders()
+            .iter()
+            .filter_map(|handle| {
+                let collider = &self.collider_set[*handle];
+                if !collider.is_enabled() {
+                    return None;
+                }
+                rapier3d::parry::query::cast_shapes(
+                    &Isometry::translation(from.x, from.y, from.z),
+                    &(to - from),
+                    &Ball::new(radius),
+                    &collider.position_wrt_parent().copied().unwrap_or_default(),
+                    &Vector::zeros(),
+                    collider.shape(),
+                    rapier3d::parry::query::ShapeCastOptions {
+                        max_time_of_impact: 1.0,
+                        stop_at_penetration: true,
+                        ..Default::default()
+                    },
+                )
+                .ok()
+                .flatten()
+                .map(|hit| hit.time_of_impact)
+            })
+            .min_by(f32::total_cmp)
+    }
+
     /// Exact overlap of two entities' authored colliders, including sensors.
     pub fn entities_overlap(&self, first: EntityId, second: EntityId) -> bool {
         let bodies = self
@@ -9321,6 +9374,57 @@ mod tests {
                 "a player-fired shot must still hit {still_solid:?}"
             );
         }
+    }
+
+    #[test]
+    fn pipe_sweep_catches_crossing_a_thin_guard_and_a_moving_guard() {
+        let mut world = PhysicsWorld::new();
+        let guard = EntityId::from_inner(123).unwrap();
+        world.add_dynamic(
+            guard,
+            vec3(0.0, 0.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.05, 0.5, 0.05)),
+            CollisionGroup::held_melee(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        let hit = world
+            .sweep_sphere_against_entity(
+                vec3(-1.0, 0.0, 0.0),
+                vec3(1.0, 0.0, 0.0),
+                0.1,
+                guard,
+                None,
+            )
+            .expect("a pipe crossing the whole guard in one tick must still hit");
+        assert!(hit > 0.3 && hit < 0.5, "{hit}");
+        assert!(
+            world
+                .sweep_sphere_against_entity(
+                    vec3(-1.0, 2.0, 0.0),
+                    vec3(1.0, 2.0, 0.0),
+                    0.1,
+                    guard,
+                    None,
+                )
+                .is_none(),
+            "passing above the wrench is not a block"
+        );
+        world.set_position_rotation2(guard, vec3(1.0, 0.0, 0.0), identity_quat());
+        assert!(
+            world
+                .sweep_sphere_against_entity(
+                    vec3(0.0, 0.0, 0.0),
+                    vec3(0.0, 0.0, 0.0),
+                    0.1,
+                    guard,
+                    Some(Isometry::translation(-1.0, 0.0, 0.0)),
+                )
+                .is_some(),
+            "a moving wrench must not tunnel through a stationary pipe"
+        );
     }
 
     #[test]
