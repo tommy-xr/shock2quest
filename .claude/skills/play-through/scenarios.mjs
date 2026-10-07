@@ -53,9 +53,9 @@ export const SCENARIOS = [
   },
   {
     id: "shodan",
-    name: "SHODAN finale",
-    missions: ["shodan"],
-    goal: "Verify the end-game sequence and the final boss battle, especially the SHODAN AI.",
+    name: "Many → SHODAN finale",
+    missions: ["many", "shodan"],
+    goal: "Traverse Many using VR locomotion and interactions, defeat the Many and SHODAN bosses, and verify the end-game sequence and state.",
   },
 ];
 
