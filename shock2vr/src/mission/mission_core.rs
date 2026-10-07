@@ -5261,6 +5261,7 @@ impl MissionCore {
             let jump = input_context.jump
                 || std::mem::take(&mut self.button_jump)
                 || self.button_jump_held;
+            let (medium, water_current) = self.player_water_state(jump);
             let request = match hand_climb.translation {
                 Some(translation) => crate::physics::PlayerMoveRequest::HandClimb { translation },
                 None => crate::physics::PlayerMoveRequest::Walk {
@@ -5270,7 +5271,8 @@ impl MissionCore {
                     // Push-to-climb is the FLAT climb input; VR's hands are
                     // its own (see `vr_climb`).
                     push_to_climb: game_options.presentation_mode == crate::PresentationMode::Flat,
-                    medium: self.player_medium(jump),
+                    medium,
+                    water_current,
                 },
             };
             let held = self.interaction.held_entities();
@@ -17530,20 +17532,24 @@ impl MissionCore {
     /// Water when the player's body center is in an authored water cell.
     /// A swimmer holding jump whose center has just broken the surface treads
     /// water there, instead of alternating a gravity frame with a swim frame.
-    fn player_medium(&self, jump: bool) -> crate::physics::PlayerMedium {
+    fn player_water_state(&self, jump: bool) -> (crate::physics::PlayerMedium, Vector3<f32>) {
+        use crate::physics::PlayerMedium;
         let center = self.physics.get_player_translation(&self.player_handle);
-        let in_water = |position: Vector3<f32>| {
+        let water_at = |position| {
             self.spatial_data
                 .as_deref()
                 .and_then(|spatial| spatial.get_cell_from_position(position))
-                .is_some_and(|cell| cell.medium == dark::mission::CellMedium::Water)
+                .filter(|cell| cell.medium == dark::mission::CellMedium::Water)
         };
-        if in_water(center) {
-            crate::physics::PlayerMedium::Water
-        } else if jump && in_water(center - cgmath::vec3(0.0, WATER_SURFACE_BAND, 0.0)) {
-            crate::physics::PlayerMedium::WaterSurface
+        if let Some(cell) = water_at(center) {
+            (PlayerMedium::Water, cell.water_current)
+        } else if let Some(cell) = jump
+            .then(|| water_at(center - cgmath::vec3(0.0, WATER_SURFACE_BAND, 0.0)))
+            .flatten()
+        {
+            (PlayerMedium::WaterSurface, cell.water_current)
         } else {
-            crate::physics::PlayerMedium::Air
+            (PlayerMedium::Air, cgmath::vec3(0.0, 0.0, 0.0))
         }
     }
 
