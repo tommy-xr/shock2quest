@@ -3,6 +3,9 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import {
   aimVrHandAt,
+  dot,
+  quatRotate,
+  sub,
   quatConjugate,
   quatMultiply,
   quatNormalize,
@@ -32,10 +35,16 @@ for (const [name, template, hand] of [
     },
     async (context) => {
       await using game = await GameServer.launch({
-        mission: "medsci1.mis",
+        // A fixed-controller comparison needs stationary footing and a clear
+        // recoil envelope; the cryo-room pawn can shift during the shot.
+        mission: "debug_minimal",
         debugFlags: ["--vr", "--experimental", "physical_held_items"],
       });
       await game.step({ frames: 10 });
+      const stats = (await game.info()).player.stats!;
+      assert.equal(stats.strength, 1);
+      assert.equal(stats.agility, 1);
+      assert.equal(stats.skills.standard_weapons, 0);
       const gun = await cycleToWeapon(game, (e) => e.template_id === template, {
         settleFrames: 90,
       });
@@ -49,7 +58,7 @@ for (const [name, template, hand] of [
         gun.id,
       );
       await game.input.set("head.rotation", [0, 0, 0, 1]);
-      // Keep the recoil sweep clear of the pawn and nearby cryo geometry.
+      // Keep the recoil sweep clear of the pawn and floor.
       await game.input.set(`${hand}_hand.position`, [0, 1, -0.8]);
       await game.input.set(`${hand}_hand.rotation`, [
         0,
@@ -61,7 +70,13 @@ for (const [name, template, hand] of [
       const body = async () =>
         (await game.physics.bodies({ entityId: gun.id })).bodies[0]!;
       const initial = await body();
-      const initialHead = (await game.info()).player.camera_rotation;
+      // These gun models point along local -X; project displacement onto
+      // their backward axis so the measurement is independent of spawn yaw.
+      const backward = quatRotate(initial.rotation, [1, 0, 0]);
+      const backwardDisplacement = async () =>
+        dot(sub((await body()).position, initial.position), backward);
+      const initialPlayer = (await game.info()).player;
+      const initialHead = initialPlayer.camera_rotation;
       const initialAmmo = ammoOf(await game.entities.detail(gun.id));
       await game.input.set(`${hand}_hand.trigger`, 1);
       await game.step({ frames: 1 });
@@ -83,13 +98,13 @@ for (const [name, template, hand] of [
       await game.step({ frames: 1 });
       await game.input.set(`${hand}_hand.trigger`, 0);
       // Measure the kick before the fast return spring has recovered.
-      let peakBackward = (await body()).position[0] - initial.position[0];
+      let peakBackward = await backwardDisplacement();
       let peakAngle = rotationDifferenceDegrees(
         initial.rotation,
         (await body()).rotation,
       );
       await game.step({ frames: 1 });
-      peakBackward = Math.max(peakBackward, (await body()).position[0] - initial.position[0]);
+      peakBackward = Math.max(peakBackward, await backwardDisplacement());
       peakAngle = Math.max(
         peakAngle,
         rotationDifferenceDegrees(initial.rotation, (await body()).rotation),
@@ -99,7 +114,7 @@ for (const [name, template, hand] of [
       await game.input.set(`${hand}_hand.trigger`, 1);
       await game.step({ frames: 1 });
       await game.input.set(`${hand}_hand.trigger`, 0);
-      peakBackward = Math.max(peakBackward, (await body()).position[0] - initial.position[0]);
+      peakBackward = Math.max(peakBackward, await backwardDisplacement());
       peakAngle = Math.max(
         peakAngle,
         rotationDifferenceDegrees(initial.rotation, (await body()).rotation),
@@ -111,7 +126,7 @@ for (const [name, template, hand] of [
       );
       for (let frame = 0; frame < 12; frame++) {
         await game.step({ frames: 1 });
-        peakBackward = Math.max(peakBackward, (await body()).position[0] - initial.position[0]);
+        peakBackward = Math.max(peakBackward, await backwardDisplacement());
         peakAngle = Math.max(
           peakAngle,
           rotationDifferenceDegrees(initial.rotation, (await body()).rotation),
@@ -139,6 +154,11 @@ for (const [name, template, hand] of [
       );
       await game.step({ frames: 300 });
       const settled = await body();
+      assert.deepEqual(
+        (await game.info()).player.position,
+        initialPlayer.position,
+        "the pawn stays fixed while measuring return to the original hand pose",
+      );
       assert.ok(
         Math.hypot(
           ...settled.position.map((v, i) => v - initial.position[i]!),
