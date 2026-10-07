@@ -55,9 +55,6 @@ pub struct WaterStatus {
     pub tint: f32,
 }
 impl WaterStatus {
-    pub fn visible(&self) -> bool {
-        self.submerged || self.remaining_seconds < self.maximum_seconds
-    }
     pub fn from_world(world: &World) -> Self {
         world
             .borrow::<UniqueView<Self>>()

@@ -193,7 +193,6 @@ pub(crate) struct UseModeReadouts {
     pub resources: [i32; 2],
     pub hazards: Option<super::hazards::HazardReadout>,
     pub alarm_seconds: Option<f32>,
-    pub water: crate::swimming::WaterStatus,
 }
 
 impl UseModeReadouts {
@@ -207,7 +206,6 @@ impl UseModeReadouts {
             hand_entities: [None; 2],
             hazards: Some(super::hazards::HazardReadout::from_world(world)),
             alarm_seconds: crate::security_alarm::status(world).hud_seconds(),
-            water: crate::swimming::WaterStatus::from_world(world),
             bio: BioReadout::from_world(world),
             ammo: AmmoReadout::for_weapon(world, weapon, true),
             resources: [
@@ -227,7 +225,6 @@ pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
     if let Some(seconds) = readouts.alarm_seconds {
         super::alarm_panel::emit(canvas, super::alarm_panel::FLAT_ORIGIN, seconds);
     }
-    super::breath::emit(canvas, super::breath::SCREEN_ORIGIN, readouts.water);
     if let Some(hazards) = &readouts.hazards {
         super::hazards::emit(canvas, super::hazards::SCREEN_ORIGIN, hazards);
     }
@@ -344,7 +341,6 @@ mod tests {
             resources: [0; 2],
             hazards: Default::default(),
             alarm_seconds: None,
-            water: Default::default(),
             bio: BioReadout {
                 health_points: 40,
                 psi_points: 21,

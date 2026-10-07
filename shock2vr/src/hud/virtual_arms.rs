@@ -42,19 +42,10 @@ pub fn create_wrist_hud_panels(
             let alarm_canvas = alarm
                 .map(super::alarm_panel::build_panel_canvas)
                 .unwrap_or_else(|| crate::ui::UiCanvas::new(super::alarm_panel::PANEL));
-            for (canvas, offset_x) in [
-                (
-                    super::breath::wrist_canvas(crate::swimming::WaterStatus::from_world(world)),
-                    -0.17,
-                ),
-                (alarm_canvas, 0.0),
-            ] {
-                if canvas.element_count() == 0 {
-                    continue;
-                }
-                objects.extend(canvas.render_world_space(
+            if alarm_canvas.element_count() > 0 {
+                objects.extend(alarm_canvas.render_world_space(
                     asset_cache,
-                    wrist_hologram_transform(root, canvas.size(), offset_x),
+                    wrist_hologram_transform(root, alarm_canvas.size(), 0.0),
                     None,
                     None,
                     0.001,

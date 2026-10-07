@@ -185,11 +185,6 @@ pub(crate) fn create_flat_hud(
         message_font.as_ref().as_ref(),
     );
     if !use_mode {
-        super::breath::emit(
-            &mut canvas,
-            super::breath::SCREEN_ORIGIN,
-            crate::swimming::WaterStatus::from_world(world),
-        );
         super::hazards::emit(
             &mut canvas,
             super::hazards::SCREEN_ORIGIN,

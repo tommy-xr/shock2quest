@@ -683,10 +683,9 @@ the standing capsule even when the head appears above water.
 
 Breathing is measured at the player's head, independently of swimming at the
 body. Air capacity is **60 + 10 × effective Endurance seconds** (70 s at END 1,
-120 s at END 6), in both presentations. The O2 readout appears underwater and
-while refilling: on the left wrist in VR and above the bio/hazard area on the
-screen or cyber interface. At 30 seconds it turns amber and announces low air
-with a status message and beep. Exhaustion costs 3 HP every 3 seconds, with
+120 s at END 6), in both presentations. At 30 seconds remaining, a status
+message and beep warn of low air. There is no persistent oxygen meter.
+Exhaustion costs 3 HP every 3 seconds, with
 the normal hurt sound and hit feedback. Surfacing refills air at 5× real time.
 Remaining air and the damage interval survive saves and level transitions.
 
