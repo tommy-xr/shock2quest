@@ -1392,6 +1392,7 @@ impl PlayerInteraction for VrInteraction {
                             && resolved.as_ref() == Some(&expected)
                     });
                 if crate::mission::mission_core::held_item_collision_group(world, entity).is_some()
+                    || crate::pipe_melee::is_ranged_guard(world, entity)
                 {
                     if let (Some(grip), Some(geometry), Some(contact)) = (
                         resolved.as_ref(),

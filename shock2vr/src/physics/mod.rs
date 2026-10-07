@@ -5303,11 +5303,6 @@ impl PhysicsWorld {
         let body = self
             .rigid_body_set
             .get(*self.entity_id_to_body.get(&entity)?)?;
-        let previous_pose = previous_pose.unwrap_or(*body.position());
-        let from = previous_pose.inverse_transform_point(&point![from.x, from.y, from.z]);
-        let to = body
-            .position()
-            .inverse_transform_point(&point![to.x, to.y, to.z]);
         body.colliders()
             .iter()
             .filter_map(|handle| {
@@ -5315,24 +5310,62 @@ impl PhysicsWorld {
                 if !collider.is_enabled() {
                     return None;
                 }
-                rapier3d::parry::query::cast_shapes(
-                    &Isometry::translation(from.x, from.y, from.z),
-                    &(to - from),
-                    &Ball::new(radius),
-                    &collider.position_wrt_parent().copied().unwrap_or_default(),
-                    &Vector::zeros(),
+                let local = collider.position_wrt_parent().copied().unwrap_or_default();
+                Self::sweep_sphere_against_shape(
+                    from,
+                    to,
+                    radius,
                     collider.shape(),
-                    rapier3d::parry::query::ShapeCastOptions {
-                        max_time_of_impact: 1.0,
-                        stop_at_penetration: true,
-                        ..Default::default()
-                    },
+                    body.position() * local,
+                    previous_pose.map(|pose| pose * local),
                 )
-                .ok()
-                .flatten()
-                .map(|hit| hit.time_of_impact)
             })
             .min_by(f32::total_cmp)
+    }
+
+    /// Relative-motion query also used by held guns without a rigid body.
+    pub(crate) fn sweep_sphere_against_shape(
+        from: Vector3<f32>,
+        to: Vector3<f32>,
+        radius: f32,
+        shape: &dyn rapier3d::parry::shape::Shape,
+        pose: Isometry<Real>,
+        previous_pose: Option<Isometry<Real>>,
+    ) -> Option<f32> {
+        let from = previous_pose
+            .unwrap_or(pose)
+            .inverse_transform_point(&point![from.x, from.y, from.z]);
+        let to = pose.inverse_transform_point(&point![to.x, to.y, to.z]);
+        let sphere_pose = Isometry::translation(from.x, from.y, from.z);
+        let sphere = Ball::new(radius);
+        // A zero-length cast can miss a sphere already inside a cuboid. Held
+        // guards and the opening damage sample must still recognize overlap.
+        if rapier3d::parry::query::intersection_test(
+            &sphere_pose,
+            &sphere,
+            &Isometry::identity(),
+            shape,
+        )
+        .unwrap_or(false)
+        {
+            return Some(0.0);
+        }
+        rapier3d::parry::query::cast_shapes(
+            &sphere_pose,
+            &(to - from),
+            &sphere,
+            &Isometry::identity(),
+            &Vector::zeros(),
+            shape,
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: 1.0,
+                stop_at_penetration: true,
+                ..Default::default()
+            },
+        )
+        .ok()
+        .flatten()
+        .map(|hit| hit.time_of_impact)
     }
 
     /// Exact overlap of two entities' authored colliders, including sensors.
@@ -9411,6 +9444,28 @@ mod tests {
                 )
                 .is_none(),
             "passing above the wrench is not a block"
+        );
+        assert_eq!(
+            world.sweep_sphere_against_entity(
+                vec3(0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, 0.0),
+                0.1,
+                guard,
+                None,
+            ),
+            Some(0.0),
+            "an already overlapping stationary guard must count"
+        );
+        assert_eq!(
+            world.sweep_sphere_against_entity(
+                vec3(0.0, 2.0, 0.0),
+                vec3(0.0, 2.0, 0.0),
+                0.1,
+                guard,
+                None,
+            ),
+            None,
+            "stationary separation must not become a block"
         );
         world.set_position_rotation2(guard, vec3(1.0, 0.0, 0.0), identity_quat());
         assert!(

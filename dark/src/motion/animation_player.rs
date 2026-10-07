@@ -609,6 +609,17 @@ impl AnimationPlayer {
         }
     }
 
+    /// Whether the currently playing clip will emit this flag on forward playback.
+    /// Queued attacks and flags behind the current pose cannot open a guard window.
+    pub fn has_upcoming_motion_flag(&self, flag: MotionFlags) -> bool {
+        !self.is_recoiling()
+            && self.animation.first().is_some_and(|(clip, _)| {
+                clip.motion_flags
+                    .iter()
+                    .any(|event| event.frame > self.current_frame && event.flags.intersects(flag))
+            })
+    }
+
     pub fn is_queue_empty(&self) -> bool {
         self.animation.is_empty()
     }
@@ -814,6 +825,42 @@ mod tests {
             motion_flags: Vec::new(),
             name: None,
         })
+    }
+
+    #[test]
+    fn upcoming_contact_belongs_to_the_current_forward_playing_clip() {
+        let idle = clip_with_root_motion();
+        let mut attack = (*idle).clone();
+        attack.motion_flags = vec![super::super::FrameFlags {
+            frame: 1,
+            flags: MotionFlags::MELEE_CONTACT_START,
+        }];
+        let attack = Rc::new(attack);
+        let flag = MotionFlags::MELEE_CONTACT_START;
+        assert!(!AnimationPlayer::empty().has_upcoming_motion_flag(flag));
+        let mut waiting = AnimationPlayer::from_animation(attack.clone());
+        waiting.animation = waiting
+            .animation
+            .push_front((idle, AnimationFlags::PlayOnce));
+        assert!(
+            !waiting.has_upcoming_motion_flag(flag),
+            "a queued attack is not a windup"
+        );
+        let player = AnimationPlayer::from_animation(attack);
+        assert!(player.has_upcoming_motion_flag(flag));
+        let (windup, _, _, _) = AnimationPlayer::update(&player, Duration::from_millis(50));
+        assert!(windup.has_upcoming_motion_flag(flag));
+        assert!(
+            !windup
+                .recoil(Duration::from_millis(280))
+                .has_upcoming_motion_flag(flag)
+        );
+        let (active, flags, _, _) = AnimationPlayer::update(&windup, Duration::from_millis(60));
+        assert!(flags.contains(flag));
+        assert!(
+            !active.has_upcoming_motion_flag(flag),
+            "contact has already started"
+        );
     }
 
     #[test]

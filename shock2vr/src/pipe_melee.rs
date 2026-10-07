@@ -1,5 +1,6 @@
 //! Physical pipe attacks in VR. Retail's humanoid weapon is four spheres
-//! along wrist 15 -> tip 17 (shkcrhum.cpp), enabled by MF_TRIGGER2/3. Resolve
+//! along wrist 15 -> tip 17 (shkcrhum.cpp), damaging during MF_TRIGGER2/3.
+//! Guards can intercept the windup too, before the pipe passes through them. Resolve
 //! their swept contacts before billing damage, so a nearer guard wins even
 //! when the same tick also reaches the player. Other melee stays unchanged.
 
@@ -9,7 +10,7 @@ use cgmath::{EuclideanSpace, InnerSpace, Point3, Vector3, vec3};
 use dark::{
     SCALE_FACTOR,
     motion::{AnimationPlayer, MotionFlags},
-    properties::PropHitPoints,
+    properties::{PropGunState, PropHitPoints, PropPlayerGun, PropPosition},
 };
 use rapier3d::prelude::{Isometry, Real};
 use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
@@ -28,9 +29,44 @@ use crate::{
 const RADIUS: f32 = 0.4 / SCALE_FACTOR;
 const RECOIL: Duration = Duration::from_millis(280);
 
+/// Mesh-fitted guard bounds, independent of the experimental gun rigid bodies.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct GunGuard {
+    pub size: Vector3<f32>,
+    pub center: Vector3<f32>,
+}
+
+pub(crate) fn is_ranged_guard(world: &World, entity: EntityId) -> bool {
+    crate::mission::presentation_is_vr(world)
+        && !crate::wielded_weapon::is_psi_amp(world, entity)
+        && world
+            .borrow::<View<PropPlayerGun>>()
+            .is_ok_and(|v| v.get(entity).is_ok())
+        && world
+            .borrow::<View<PropGunState>>()
+            .is_ok_and(|v| v.get(entity).is_ok())
+}
+
+fn target_pose(world: &World, physics: &PhysicsWorld, entity: EntityId) -> Option<Isometry<Real>> {
+    physics.entity_body_pose(entity).or_else(|| {
+        let positions = world.borrow::<View<PropPosition>>().ok()?;
+        let p = positions.get(entity).ok()?;
+        let q = p.rotation;
+        Some(Isometry::from_parts(
+            rapier3d::na::Translation3::new(p.position.x, p.position.y, p.position.z),
+            rapier3d::na::UnitQuaternion::from_quaternion(rapier3d::na::Quaternion::new(
+                q.s, q.v.x, q.v.y, q.v.z,
+            )),
+        ))
+    })
+}
+
 #[derive(Component, Clone, Default, serde::Serialize)]
 pub(crate) struct PipeAttack {
+    /// Authored damage window.
     pub active: bool,
+    /// Current attack can be intercepted, including its pre-contact windup.
+    pub guardable: bool,
     pub consumed: bool,
     pub recovering: bool,
     pub parries: u64,
@@ -46,6 +82,8 @@ pub(crate) struct PipeAttack {
     frame: u32,
     #[serde(skip)]
     closing: bool,
+    #[serde(skip)]
+    starting: bool,
 }
 
 pub(crate) fn uses_physical_pipe(world: &World, entity: EntityId) -> bool {
@@ -122,16 +160,21 @@ pub(crate) fn observe(
     state.wrist = wrist;
     state.tip = tip;
     state.recovering = player.is_recoiling();
-    if flags.contains(MotionFlags::MELEE_CONTACT_START) {
+    state.starting = flags.contains(MotionFlags::MELEE_CONTACT_START);
+    if state.starting {
         state.active = true;
         state.consumed = false;
-        // The path before this flag is windup, not an attack sweep.
-        state.previous = None;
+        // Keep guard history across the opening flag. Damage below still
+        // excludes the pre-flag sweep, but an interception must not disappear.
     }
     state.closing = flags.contains(MotionFlags::MELEE_CONTACT_END) || player.is_queue_empty();
     if state.recovering {
         state.active = false;
     }
+    // A held weapon can physically obstruct a windup before the damage flag.
+    // Only the current attack clip qualifies; idle/walk/recoil poses cannot parry.
+    state.guardable =
+        state.active || player.has_upcoming_motion_flag(MotionFlags::MELEE_CONTACT_START);
     world.add_component(entity, state);
 }
 
@@ -142,26 +185,56 @@ fn points(wrist: [f32; 3], tip: [f32; 3]) -> [Vector3<f32>; 4] {
 }
 
 fn contact_time(
+    world: &World,
     state: &PipeAttack,
     physics: &PhysicsWorld,
     target: EntityId,
+    sweep: bool,
 ) -> Option<(f32, Vector3<f32>)> {
-    let (previous_wrist, previous_tip) = state.previous.unwrap_or((state.wrist, state.tip));
+    let (previous_wrist, previous_tip) = state
+        .previous
+        .filter(|_| sweep)
+        .unwrap_or((state.wrist, state.tip));
     let previous = points(previous_wrist, previous_tip);
     let current = points(state.wrist, state.tip);
     previous
         .into_iter()
         .zip(current)
         .filter_map(|(from, to)| {
-            physics
-                .sweep_sphere_against_entity(
+            let gun = world
+                .borrow::<View<GunGuard>>()
+                .ok()
+                .and_then(|v| v.get(target).ok().copied())
+                .filter(|_| is_ranged_guard(world, target));
+            let time = if let Some(gun) = gun {
+                let offset = Isometry::translation(gun.center.x, gun.center.y, gun.center.z);
+                let shape = rapier3d::prelude::Cuboid::new(
+                    rapier3d::na::Vector3::new(gun.size.x, gun.size.y, gun.size.z) * 0.5,
+                );
+                PhysicsWorld::sweep_sphere_against_shape(
+                    from,
+                    to,
+                    RADIUS,
+                    &shape,
+                    target_pose(world, physics, target)? * offset,
+                    state
+                        .targets
+                        .get(&target)
+                        .filter(|_| sweep)
+                        .map(|pose| pose * offset),
+                )
+            } else {
+                physics.sweep_sphere_against_entity(
                     from,
                     to,
                     RADIUS,
                     target,
-                    state.targets.get(&target).copied(),
+                    state.targets.get(&target).filter(|_| sweep).copied(),
                 )
-                .map(|time| (time, from + (to - from) * time))
+            };
+            // A discrete opening-frame damage sample happens at the END of
+            // this tick; an earlier guard sweep must win that comparison.
+            time.map(|time| (if sweep { time } else { 1.0 }, from + (to - from) * time))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
 }
@@ -204,7 +277,17 @@ pub(crate) fn resolve(
             [player.left_hand_entity_id, player.right_hand_entity_id],
         )
     };
-    let guards = guards.map(|guard| guard.filter(|id| is_vr_melee_weapon(world, *id)));
+    let guards = guards.map(|guard| {
+        guard.filter(|id| {
+            is_vr_melee_weapon(world, *id)
+                || (is_ranged_guard(world, *id)
+                    && world
+                        .borrow::<View<PropGunState>>()
+                        .unwrap()
+                        .get(*id)
+                        .is_ok_and(|gun| gun.condition > 0.0))
+        })
+    });
     let attacks = world
         .borrow::<View<PipeAttack>>()
         .unwrap()
@@ -219,19 +302,22 @@ pub(crate) fn resolve(
             .unwrap()
             .get(entity)
             .is_ok_and(|hp| hp.hit_points > 0);
-        if state.active && !state.consumed && alive && uses_physical_pipe(world, entity) {
+        if state.guardable && !state.consumed && alive && uses_physical_pipe(world, entity) {
             let participants = [Some(entity), Some(player), guards[0], guards[1]]
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>();
-            let body_hit = contact_time(&state, physics, player)
+            let body_hit = state
+                .active
+                .then(|| contact_time(world, &state, physics, player, !state.starting))
+                .flatten()
                 .filter(|(_, point)| unobstructed(physics, &state, *point, &participants));
             let block = guards
                 .iter()
                 .enumerate()
                 .filter_map(|(hand, guard)| {
                     let guard = (*guard)?;
-                    let (time, point) = contact_time(&state, physics, guard)?;
+                    let (time, point) = contact_time(world, &state, physics, guard, true)?;
                     if !unobstructed(physics, &state, point, &participants) {
                         return None;
                     }
@@ -243,8 +329,15 @@ pub(crate) fn resolve(
             {
                 state.consumed = true;
                 state.active = false;
+                state.guardable = false;
                 state.recovering = true;
                 state.parries += 1;
+                if is_ranged_guard(world, guard) {
+                    effects.push(Effect::AdjustWeaponCondition {
+                        entity_id: guard,
+                        delta: -5.0,
+                    });
+                }
                 if let Some(animation) = animations.get_mut(&entity) {
                     *animation = animation.recoil(RECOIL);
                 }
@@ -279,12 +372,13 @@ pub(crate) fn resolve(
         }
         if state.closing || !alive {
             state.active = false;
+            state.guardable = false;
         }
         state.targets = guards
             .into_iter()
             .flatten()
             .chain(std::iter::once(player))
-            .filter_map(|entity| physics.entity_body_pose(entity).map(|pose| (entity, pose)))
+            .filter_map(|entity| target_pose(world, physics, entity).map(|pose| (entity, pose)))
             .collect();
         world.add_component(entity, state);
     }
@@ -295,13 +389,15 @@ pub(crate) fn resolve(
 
 pub(crate) fn debug_geometry(world: &World) -> Vec<engine::scene::SceneObject> {
     let states = world.borrow::<View<PipeAttack>>().unwrap();
-    states
+    let mut objects: Vec<_> = states
         .iter()
         .flat_map(|state| {
             let color = if state.recovering {
                 vec3(0.2, 1.0, 0.9)
             } else if state.active {
                 vec3(1.0, 0.8, 0.1)
+            } else if state.guardable {
+                vec3(0.7, 0.4, 1.0)
             } else {
                 vec3(0.4, 0.4, 0.4)
             };
@@ -309,5 +405,70 @@ pub(crate) fn debug_geometry(world: &World) -> Vec<engine::scene::SceneObject> {
                 .into_iter()
                 .map(move |point| dark::hit_box::draw_debug_wire_sphere(point, RADIUS, color))
         })
-        .collect()
+        .collect();
+    let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+    let guns = world.borrow::<View<GunGuard>>().unwrap();
+    let positions = world.borrow::<View<PropPosition>>().unwrap();
+    for entity in [player.left_hand_entity_id, player.right_hand_entity_id]
+        .into_iter()
+        .flatten()
+    {
+        if !is_ranged_guard(world, entity) {
+            continue;
+        }
+        if let (Ok(gun), Ok(pose)) = (guns.get(entity), positions.get(entity)) {
+            let shapes = HashMap::from([(
+                0,
+                dark::hit_box::HitBoxShape::Cuboid {
+                    half_extents: gun.size * 0.5,
+                    center: gun.center,
+                },
+            )]);
+            let transform = cgmath::Matrix4::from_translation(pose.position)
+                * cgmath::Matrix4::from(pose.rotation);
+            objects.extend(dark::hit_box::draw_debug_hit_box_shapes(
+                &shapes,
+                &[transform],
+                vec3(1.0, 0.25, 0.25),
+            ));
+        }
+    }
+    objects
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physics::{CollisionGroup, DynamicPhysicsOptions, PhysicsShape};
+
+    #[test]
+    fn opening_damage_sample_does_not_precede_a_guard_sweep() {
+        let world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let target = EntityId::from_inner(123).unwrap();
+        physics.add_dynamic(
+            target,
+            vec3(0.0, 0.0, 0.0),
+            cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.05, 0.5, 0.05)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        let state = PipeAttack {
+            wrist: [0.0; 3],
+            tip: [0.0; 3],
+            previous: Some(([-1.0, 0.0, 0.0], [-1.0, 0.0, 0.0])),
+            ..Default::default()
+        };
+        let guard = contact_time(&world, &state, &physics, target, true).unwrap();
+        let opening_damage = contact_time(&world, &state, &physics, target, false).unwrap();
+        assert!(guard.0 > 0.0 && guard.0 < 1.0);
+        assert_eq!(opening_damage.0, 1.0);
+        assert!(
+            guard.0 < opening_damage.0,
+            "the earlier guard intercepts the opening damage sample"
+        );
+    }
 }
