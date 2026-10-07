@@ -149,6 +149,19 @@ lighting, ambient/level intensity, brightness, ambient boost and wrap. This
 scene supplies synthetic object lights because it has no mission light table;
 use a real mission to test cell-based light selection.
 
+### Flashlight beam
+
+Weapon flashlights and the `hand_spotlights` developer override share a 20°
+outer half-angle (40° full cone), with a soft hotspot and wider, dimmer spill.
+`spotlight_cone`, `spotlight_intensity`, and `spotlight_range` remain live tuning
+controls. The last quarter of the range fades smoothly to zero.
+
+Walls, props and characters use the same analytic radial projection profile;
+there is no texture-resolution limit or additional texture sample. World
+positions and beam math retain high precision on GLES to avoid stepped light
+motion and cone bands on Quest. Authored object lights keep their original
+cone and inverse-distance falloff.
+
 ### Weapon parts and Nightdive animations in `dark_explorer`
 
 Run `cargo dx ui` and select `obj/atek_h.bin` (pistol), `obj/sg_h.bin`
