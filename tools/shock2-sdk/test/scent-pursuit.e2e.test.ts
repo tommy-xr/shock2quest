@@ -30,15 +30,20 @@ for (const { name, expired, speed, samples, frames } of [
       await game.player.teleport({ x: -30, y: -5, z: 7 });
       await game.step({ frames: 1260 });
     }
-    // Return airborne for the two setup frames, so no fresh scent is deposited
-    // back at the start. Damage establishes the ordinary initial awareness cue.
-    await game.player.teleport({ x: 0, y: 2, z: 4 });
+    // Spawn directly at the trail start (the action places the hybrid four
+    // units ahead). Its first local scent acquisition must not depend on
+    // turning around and chasing back to the start in this navmesh-free scene.
+    // Stay airborne during setup so no fresh scent refreshes the expired case.
+    await game.player.teleport({ x: 4, y: 2, z: 4 });
     await game.input.trigger("SpawnDebugMonster");
     await game.step({ frames: 1 });
     const hybrid = (await game.entities.list({ filter: "OG-Pipe" })).entities.find(
       entity => entity.template_id === -397,
     );
     assert.ok(hybrid);
+    assert.ok(Math.hypot(hybrid.position[0], hybrid.position[2] - 4) < 0.1,
+      "the hybrid starts at the original scent location");
+    await game.player.teleport({ x: 0, y: 2, z: 4 });
     await game.entities.sendMessage(hybrid.id, { type: "Damage", amount: 1 });
     await game.step({ frames: 1 });
     const alerted = await game.entities.detail(hybrid.id);
