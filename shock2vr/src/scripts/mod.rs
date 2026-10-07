@@ -1250,7 +1250,7 @@ impl ScriptWorld {
             // earth:
             "comestible" => Box::new(Comestible::new(1)),
             "cheeseborger" => Box::new(Comestible::new(15)),
-            "liquor" => Box::new(NoopScript::new()),
+            "liquor" => Box::new(Comestible::liquor()),
 
             // Not implemented - new medsci1 ones:
             "apparition" => Box::new(CompositeScript::new(vec![
