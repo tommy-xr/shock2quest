@@ -32,7 +32,7 @@ for (const { name, expired, speed, samples, frames } of [
     }
     // Spawn directly at the trail start (the action places the hybrid four
     // units ahead). Its first local scent acquisition must not depend on
-    // turning around and chasing back to the start in this navmesh-free scene.
+    // chasing back after a random damage-reaction clip in this navmesh-free scene.
     // Stay airborne during setup so no fresh scent refreshes the expired case.
     await game.player.teleport({ x: 4, y: 2, z: 4 });
     await game.input.trigger("SpawnDebugMonster");
