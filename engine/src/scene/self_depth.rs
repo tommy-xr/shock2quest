@@ -39,7 +39,7 @@ bool hiddenBySelfDepth() {
 pub(crate) const FRAGMENT: &str = r#"
 out vec4 fragColor;
 in vec2 texCoord;
-in vec3 worldPos;
+in highp vec3 worldPos;
 in vec3 worldNormal;
 uniform sampler2D texture1;
 void main() {

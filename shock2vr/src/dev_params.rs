@@ -498,8 +498,8 @@ dev_params! {
     /// A spotlight along each VR hand's pointing ray.
     HAND_SPOTLIGHTS = Lighting::bool("hand_spotlights", "Hand spotlights", false),
     SPOTLIGHT_INTENSITY = Lighting::float("spotlight_intensity", "Spotlight intensity", 2.0, 0.0, 4.0, 0.1),
-    /// Outer cone half-angle in degrees; the full-brightness core is half of it.
-    SPOTLIGHT_CONE = Lighting::float("spotlight_cone", "Spotlight cone", 30.0, 5.0, 60.0, 1.0),
+    /// Outer cone half-angle in degrees; the hotspot radius uses half of it.
+    SPOTLIGHT_CONE = Lighting::float("spotlight_cone", "Spotlight cone", 20.0, 5.0, 60.0, 1.0),
     SPOTLIGHT_RANGE = Lighting::float("spotlight_range", "Spotlight range", 10.0, 1.0, 20.0, 0.5),
     /// Multiplies every object light's brightness. The default 1.0 is the
     /// faithful value - brightness as authored, divided back down for our

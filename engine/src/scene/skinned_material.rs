@@ -20,31 +20,31 @@ use std::any::Any;
 const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
         // Depth and color link this vertex shader into separate programs.
         invariant gl_Position;
-        layout (location = 0) in vec3 inPos;
+        layout (location = 0) in highp vec3 inPos;
         layout (location = 1) in vec2 inTex;
         layout (location = 2) in ivec4 bone_ids;
         layout (location = 3) in vec4 bone_weights;
         layout (location = 4) in vec3 inNormal;
 
-        uniform mat4 world;
-        uniform mat4 view;
-        uniform mat4 projection;
+        uniform highp mat4 world;
+        uniform highp mat4 view;
+        uniform highp mat4 projection;
         uniform mat3 normalMatrix;
         // Affine bones packed as 3 vec4 rows each (the mat3x4's columns hold
         // the matrix rows), so the 80-slot palette costs 240 uniform vectors
         // and fits the GLES 3.0 guaranteed vertex budget (256); a mat4 array
         // would need 320. Apply with `vec4(v) * bone_matrices[i]`.
-        uniform mat3x4 bone_matrices[80];
+        uniform highp mat3x4 bone_matrices[80];
 
         out vec2 texCoord;
-        out vec3 worldPos;
+        out highp vec3 worldPos;
         out vec3 worldNormal;
 
         void main() {
             texCoord = inTex;
 
             // Apply weighted bone transformations to position and normal
-            vec3 skinnedPos = vec3(0.0);
+            highp vec3 skinnedPos = vec3(0.0);
             vec3 skinnedNormal = vec3(0.0);
             float totalWeight = 0.0;
 
@@ -71,11 +71,11 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
             }
 
             // Fallback to original position if no valid bones
-            vec4 mod_position = (totalWeight > 0.0) ? vec4(skinnedPos, 1.0) : vec4(inPos, 1.0);
+            highp vec4 mod_position = (totalWeight > 0.0) ? vec4(skinnedPos, 1.0) : vec4(inPos, 1.0);
             vec3 mod_normal = (length(skinnedNormal) > 0.0) ? normalize(skinnedNormal) : inNormal;
 
             // Transform to world space
-            vec4 worldPosition = world * mod_position;
+            highp vec4 worldPosition = world * mod_position;
             worldPos = worldPosition.xyz;
             worldNormal = normalize(normalMatrix * mod_normal);
 
@@ -87,7 +87,7 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         out vec4 fragColor;
 
         in vec2 texCoord;
-        in vec3 worldPos;
+        in highp vec3 worldPos;
         in vec3 worldNormal;
 
         // Material properties
@@ -108,12 +108,12 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform vec3 emissiveTint;
 
         // Spotlight array uniforms (up to 6 spotlights)
-        uniform vec3 spotlightPos[6];
+        uniform highp vec3 spotlightPos[6];
         uniform vec4 spotlightColorIntensity[6];  // RGB + intensity
-        uniform vec3 spotlightDirection[6];
-        uniform float spotlightInnerAngle[6];
-        uniform float spotlightOuterAngle[6];
-        uniform float spotlightRange[6];
+        uniform highp vec3 spotlightDirection[6];
+        uniform highp float spotlightInnerAngle[6];
+        uniform highp float spotlightOuterAngle[6];
+        uniform highp float spotlightRange[6];
 
         // Light every surface gets before any lamp reaches it.
         uniform vec3 ambientLight;
@@ -129,45 +129,48 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         const float SOURCE_RADIUS = 0.8;
 
         // Calculate spotlight contribution
-        vec3 calculateSpotlight(int i, vec3 worldPos, vec3 normal, vec3 texColor, inout vec3 specular, float power) {
+        vec3 calculateSpotlight(int i, highp vec3 worldPos, vec3 normal, vec3 texColor, inout vec3 specular, float power) {
             // Skip if light has zero intensity
             if (spotlightColorIntensity[i].w <= 0.0) {
                 return vec3(0.0);
             }
 
-            vec3 lightVec = spotlightPos[i] - worldPos;
-            float distance = length(lightVec);
+            highp vec3 lightVec = spotlightPos[i] - worldPos;
+            highp float distance = length(lightVec);
 
             // Range check
             if (distance > spotlightRange[i]) {
                 return vec3(0.0);
             }
 
-            vec3 lightDir = normalize(lightVec);
+            highp vec3 lightDir = lightVec / max(distance, 0.00001);
 
             // Cone attenuation. A negative inner angle marks a point light -
             // it has no cone, so it lights every direction equally.
-            float coneAttenuation = 1.0;
+            highp float coneAttenuation = 1.0;
             if (spotlightInnerAngle[i] >= 0.0) {
-                float cosOuterCone = cos(spotlightOuterAngle[i]);
-                float cosInnerCone = cos(spotlightInnerAngle[i]);
-                float spotFactor = dot(-lightDir, normalize(spotlightDirection[i]));
+                highp float cosOuterCone = cos(spotlightOuterAngle[i]);
+                highp float cosInnerCone = cos(spotlightInnerAngle[i]);
+                highp float spotFactor = dot(-lightDir, normalize(spotlightDirection[i]));
 
                 if (spotFactor < cosOuterCone) {
                     return vec3(0.0);
                 }
 
-                if (spotFactor < cosInnerCone) {
+                if (lightFalloffMode[i] == 0) {
+                    coneAttenuation = flashlightCone(spotFactor, cosInnerCone, cosOuterCone);
+                } else if (spotFactor < cosInnerCone) {
+                    // Preserve the mission's authored spotlight profile.
                     coneAttenuation = (spotFactor - cosOuterCone) / (cosInnerCone - cosOuterCone);
                 }
             }
 
             // Distance attenuation
-            float distanceAttenuation;
+            highp float distanceAttenuation;
             if (lightFalloffMode[i] == 1) {
                 distanceAttenuation = 1.0 / max(distance, SOURCE_RADIUS);
             } else {
-                distanceAttenuation = 1.0 / (1.0 + 0.1 * distance + 0.01 * distance * distance);
+                distanceAttenuation = flashlightDistance(distance, spotlightRange[i]);
             }
 
             // Diffuse lighting, optionally wrapped past the terminator so a
@@ -525,7 +528,8 @@ impl Material for SkinnedMaterial {
 
             let fragment_shader = crate::shader::build(
                 &format!(
-                    "{}\n{}\n{}\n{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    include_str!("flashlight.glsl"),
                     super::self_depth::GLSL,
                     super::incidence::GLSL,
                     super::environment::GLSL,
