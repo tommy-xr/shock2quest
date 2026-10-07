@@ -26,6 +26,7 @@ mod frame_profiler;
 mod passthrough;
 mod quest_config;
 mod refresh_rate;
+mod xr_recovery;
 
 use tokio::runtime::Runtime;
 
@@ -661,13 +662,45 @@ fn main() {
     let mut session_focused = false;
     let haptic_clock = Instant::now();
     let mut haptic_mixer = shock2vr::haptics::HapticMixer::default();
-    // Consecutive rejected frame submissions, and consecutive frames whose
-    // views were not tracked. Both are logged once at the start of a burst and
-    // once on recovery (with the length), so a long outage is still visible in
-    // logcat without printing at the display refresh rate.
-    let mut submit_failures: u64 = 0;
+    // Log each failed XR operation once per burst and once on recovery.
+    // Retain a successful wait if begin fails: waiting again would deadlock.
+    let mut xr_failures = XrFailures::default();
+    let mut pending_frame = xr_recovery::PendingFrame::default();
     let mut untracked_view_frames: u64 = 0;
     'main_loop: loop {
+        let mut frame_started = None;
+        // Every failed running-frame operation comes back through the Android
+        // event pump. Only a successfully begun frame may submit empty layers.
+        macro_rules! xr_try {
+            ($operation:expr, $result:expr) => {
+                match xr_failures.check($operation, $result) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        if xr_session_lost(error) {
+                            break 'main_loop;
+                        }
+                        if let Some(display_time) = frame_started.take() {
+                            if let Err(error) = xr_failures.check(
+                                "end_empty_frame",
+                                end_frame_with_no_layers(
+                                    &mut frame_stream,
+                                    display_time,
+                                    environment_blend_mode,
+                                ),
+                            ) {
+                                if xr_session_lost(error) {
+                                    break 'main_loop;
+                                }
+                            }
+                        }
+                        // Avoid a tight retry loop if wait/begin immediately fail.
+                        std::thread::sleep(Duration::from_millis(10));
+                        last_update_time = Instant::now();
+                        continue 'main_loop;
+                    }
+                }
+            };
+        }
         // Drain Android's NativeActivity queues. OpenXR is the real input
         // path - nothing here feeds gameplay - but NativeActivity hands the
         // app a lifecycle event pipe and an input queue, and leaving them
@@ -680,7 +713,7 @@ fn main() {
         //     " - Before polling events: {}",
         //     render_time.elapsed().as_secs_f32()
         // );
-        while let Some(event) = xr_instance.poll_event(&mut event_storage).unwrap() {
+        while let Some(event) = xr_try!("poll_event", xr_instance.poll_event(&mut event_storage)) {
             use xr::Event::*;
             match event {
                 SessionStateChanged(e) => {
@@ -701,10 +734,17 @@ fn main() {
                     session_focused = next_session_focused;
                     match e.state() {
                         xr::SessionState::READY => {
-                            session.begin(VIEW_TYPE).unwrap();
+                            if xr_failures
+                                .check("begin_session", session.begin(VIEW_TYPE))
+                                .is_err()
+                            {
+                                break 'main_loop;
+                            }
+                            pending_frame.reset();
                             session_running = true;
-                            let available_refresh_rates =
-                                session.enumerate_display_refresh_rates().unwrap();
+                            let available_refresh_rates = session
+                                .enumerate_display_refresh_rates()
+                                .unwrap_or_default();
                             let advertised_refresh_rate = refresh_rate::select_supported_rate(
                                 &available_refresh_rates,
                                 refresh_rate::TARGET_HZ,
@@ -736,16 +776,17 @@ fn main() {
                                             None
                                         }
                                         Err(error) => {
-                                            panic!(
-                                                "failed to request advertised refresh rate {requested_hz:.3}: {error:?}"
-                                            );
+                                            println!("SHOCK2QUEST_REFRESH_REQUEST_FAILED error={error:?}");
+                                            None
                                         }
                                     }
                                 });
-                            display_refresh_rate =
-                                Some(session.get_display_refresh_rate().unwrap_or_else(|error| {
-                                    panic!("failed to query active display refresh rate: {error:?}")
-                                }));
+                            display_refresh_rate = session
+                                .get_display_refresh_rate()
+                                .map_err(|error| {
+                                    println!("SHOCK2QUEST_REFRESH_QUERY_FAILED error={error:?}");
+                                })
+                                .ok();
                             ready_reported = false;
                             last_update_time = Instant::now();
                             frame_profiler.reset();
@@ -772,7 +813,13 @@ fn main() {
                             // Re-create the feature on the next running fit
                             // frame; do not assume it survives end/begin.
                             fit_passthrough.update(&session, false);
-                            session.end().unwrap();
+                            if xr_failures.check("end_session", session.end()).is_err() {
+                                break 'main_loop;
+                            }
+                            pending_frame.reset();
+                            // Session restart resets XR call ordering. Recreate
+                            // swapchains too, including any interrupted image lease.
+                            swapchain = None;
                             session_running = false;
                             last_update_time = Instant::now();
                             frame_profiler.reset();
@@ -839,7 +886,11 @@ fn main() {
         // Block until the previous frame is finished displaying, and is ready for another one.
         // Also returns a prediction of when the next frame will be displayed, for use with
         // predicting locations of controllers, viewpoints, etc.
-        let xr_frame_state = frame_wait.wait().unwrap();
+        let xr_frame_state = xr_try!(
+            "wait_begin_frame",
+            pending_frame.begin(|| frame_wait.wait(), || frame_stream.begin())
+        );
+        frame_started = Some(xr_frame_state.predicted_display_time);
 
         if let Some(change_time) = pending_stage_change_time {
             if xr_frame_state.predicted_display_time.as_nanos() >= change_time.as_nanos() {
@@ -861,7 +912,10 @@ fn main() {
             total: total_time,
         };
 
-        session.sync_actions(&[(&action_set).into()]).unwrap();
+        xr_try!(
+            "sync_actions",
+            session.sync_actions(&[(&action_set).into()])
+        );
         // Gameplay currently uses aim poses. Compare grip poses only in the
         // fit scene, before the shared tracking conversion and validity checks.
         let use_grip = passthrough::is_fit_scene(&game)
@@ -872,30 +926,75 @@ fn main() {
             (&left_aim_space, &right_aim_space)
         };
         // Find where our controllers are located in the Stage space
-        let left_hand_location = left_hand_space
-            .locate(&stage, xr_frame_state.predicted_display_time)
-            .unwrap();
-        let right_hand_location = right_hand_space
-            .locate(&stage, xr_frame_state.predicted_display_time)
-            .unwrap();
-        let head_location = head_space
-            .locate(&stage, xr_frame_state.predicted_display_time)
-            .unwrap();
+        let left_hand_location = xr_try!(
+            "left_hand_space",
+            left_hand_space.locate(&stage, xr_frame_state.predicted_display_time)
+        );
+        let right_hand_location = xr_try!(
+            "right_hand_space",
+            right_hand_space.locate(&stage, xr_frame_state.predicted_display_time)
+        );
+        let head_location = xr_try!(
+            "head_space",
+            head_space.locate(&stage, xr_frame_state.predicted_display_time)
+        );
 
-        let left_thumbstick_value = left_thumbstick_action
-            .state(&session, xr::Path::NULL)
-            .unwrap()
-            .current_state;
-        let right_thumbstick_value = right_thumbstick_action
-            .state(&session, xr::Path::NULL)
-            .unwrap()
-            .current_state;
-        let crouch_state = crouch_action.state(&session, xr::Path::NULL).unwrap();
-        let left_lower_state = left_lower_action.state(&session, xr::Path::NULL).unwrap();
-        let left_upper_state = left_upper_action.state(&session, xr::Path::NULL).unwrap();
-        let right_lower_state = right_lower_action.state(&session, xr::Path::NULL).unwrap();
-        let right_upper_state = right_upper_action.state(&session, xr::Path::NULL).unwrap();
-        let menu_state = menu_action.state(&session, xr::Path::NULL).unwrap();
+        let left_thumbstick_value = xr_try!(
+            "left_thumbstick_action",
+            left_thumbstick_action.state(&session, xr::Path::NULL)
+        )
+        .current_state;
+        let right_thumbstick_value = xr_try!(
+            "right_thumbstick_action",
+            right_thumbstick_action.state(&session, xr::Path::NULL)
+        )
+        .current_state;
+        let crouch_state = xr_try!(
+            "crouch_action",
+            crouch_action.state(&session, xr::Path::NULL)
+        );
+        let left_lower_state = xr_try!(
+            "left_lower_action",
+            left_lower_action.state(&session, xr::Path::NULL)
+        );
+        let left_upper_state = xr_try!(
+            "left_upper_action",
+            left_upper_action.state(&session, xr::Path::NULL)
+        );
+        let right_lower_state = xr_try!(
+            "right_lower_action",
+            right_lower_action.state(&session, xr::Path::NULL)
+        );
+        let right_upper_state = xr_try!(
+            "right_upper_action",
+            right_upper_action.state(&session, xr::Path::NULL)
+        );
+        let menu_state = xr_try!("menu_action", menu_action.state(&session, xr::Path::NULL));
+        let left_trigger_value =
+            xr_try!("left_trigger", left_trigger.state(&session, xr::Path::NULL)).current_state;
+        let right_trigger_value = xr_try!(
+            "right_trigger",
+            right_trigger.state(&session, xr::Path::NULL)
+        )
+        .current_state;
+
+        let left_squeeze_value =
+            xr_try!("left_squeeze", left_squeeze.state(&session, xr::Path::NULL)).current_state;
+        let right_squeeze_value = xr_try!(
+            "right_squeeze",
+            right_squeeze.state(&session, xr::Path::NULL)
+        )
+        .current_state;
+
+        let record_state = if shock2vr::dev_params::get_bool(shock2vr::dev_params::INPUT_RECORDING)
+        {
+            Some(xr_try!(
+                "record_action",
+                record_action.state(&session, xr::Path::NULL)
+            ))
+        } else {
+            None
+        };
         // Only edge-detect while the action is live: with the session merely
         // VISIBLE (system overlay up), current_state reads false even though
         // the button may still be physically held, and treating that as a
@@ -943,8 +1042,7 @@ fn main() {
         );
         // Right stick click records input for desktop replay, but only while
         // its dev option is on (see `dev_params::INPUT_RECORDING`).
-        if shock2vr::dev_params::get_bool(shock2vr::dev_params::INPUT_RECORDING) {
-            let record_state = record_action.state(&session, xr::Path::NULL).unwrap();
+        if let Some(record_state) = record_state {
             action_state.sync_discrete_button(
                 shock2vr::input::InputAction::ToggleInputRecording,
                 record_state.is_active,
@@ -969,24 +1067,6 @@ fn main() {
             right_lower_state.current_state,
             right_upper_state.current_state,
         );
-
-        let left_trigger_value = left_trigger
-            .state(&session, xr::Path::NULL)
-            .unwrap()
-            .current_state;
-        let right_trigger_value = right_trigger
-            .state(&session, xr::Path::NULL)
-            .unwrap()
-            .current_state;
-
-        let left_squeeze_value = left_squeeze
-            .state(&session, xr::Path::NULL)
-            .unwrap()
-            .current_state;
-        let right_squeeze_value = right_squeeze
-            .state(&session, xr::Path::NULL)
-            .unwrap()
-            .current_state;
 
         let _speed = 50.0;
 
@@ -1169,8 +1249,8 @@ fn main() {
         }
         let update_elapsed = update_started.elapsed();
 
-        // Must be called before any rendering is done!
-        frame_stream.begin().unwrap();
+        // The frame began before input reads so every fallible XR call can
+        // abandon it with an empty submission.
 
         // println!(
         //     " - After blocking for previous frame: {}",
@@ -1179,10 +1259,14 @@ fn main() {
 
         if !xr_frame_state.should_render {
             //println!("Skipping frame!");
-            end_frame_with_no_layers(
-                &mut frame_stream,
-                xr_frame_state.predicted_display_time,
-                environment_blend_mode,
+            frame_started.take();
+            xr_try!(
+                "end_empty_frame",
+                end_frame_with_no_layers(
+                    &mut frame_stream,
+                    xr_frame_state.predicted_display_time,
+                    environment_blend_mode,
+                )
             );
             if let Some(report) = frame_profiler.record_skipped(elapsed_time, update_elapsed) {
                 print_frame_report(&mission, session_focused, report);
@@ -1190,29 +1274,29 @@ fn main() {
             continue;
         }
 
-        let swapchain = swapchain.get_or_insert_with(|| {
-            // Now we need to find all the viewpoints we need to take care of! This is a
-            // property of the view configuration type; in this example we use PRIMARY_STEREO,
-            // so we should have 2 viewpoints.
-            //
-            // Because we are using multiview in this example, we require that all view
-            // dimensions are identical.
-            //println!("Creating views...");
-            let views = xr_instance
-                .enumerate_view_configuration_views(system, VIEW_TYPE)
-                .unwrap();
-            assert_eq!(views.len(), VIEW_COUNT as usize);
-            assert_eq!(views[0], views[1]);
-            //println!("Views: {:#?}", views);
+        if swapchain.is_none() {
+            let created = (|| -> xr::Result<Vec<Swapchain>> {
+                // Now we need to find all the viewpoints we need to take care of! This is a
+                // property of the view configuration type; in this example we use PRIMARY_STEREO,
+                // so we should have 2 viewpoints.
+                //
+                // Because we are using multiview in this example, we require that all view
+                // dimensions are identical.
+                //println!("Creating views...");
+                let views = xr_instance.enumerate_view_configuration_views(system, VIEW_TYPE)?;
+                if views.len() != VIEW_COUNT as usize {
+                    return Err(xr::sys::Result::ERROR_VIEW_CONFIGURATION_TYPE_UNSUPPORTED);
+                }
 
-            let width = views[0].recommended_image_rect_width;
-            let height = views[0].recommended_image_rect_height;
+                //println!("Views: {:#?}", views);
 
-            let swapchain_handles = views
-                .into_iter()
-                .map(|view| {
-                    let swapchain = session
-                        .create_swapchain(&xr::SwapchainCreateInfo {
+                let width = views[0].recommended_image_rect_width;
+                let height = views[0].recommended_image_rect_height;
+
+                let swapchain_handles = views
+                    .into_iter()
+                    .map(|view| {
+                        let swapchain = session.create_swapchain(&xr::SwapchainCreateInfo {
                             create_flags: xr::SwapchainCreateFlags::EMPTY,
                             usage_flags: xr::SwapchainUsageFlags::COLOR_ATTACHMENT
                                 | xr::SwapchainUsageFlags::SAMPLED,
@@ -1226,103 +1310,107 @@ fn main() {
                             face_count: 1,
                             array_size: 1,
                             mip_count: 1,
-                        })
-                        .unwrap();
+                        })?;
 
-                    let images = swapchain.enumerate_images().unwrap();
+                        let images = swapchain.enumerate_images()?;
 
-                    let buffers = images
-                        .into_iter()
-                        .map(|image| {
-                            unsafe {
-                                gl::BindTexture(gl::TEXTURE_2D, image);
-                                gl::TexParameteri(
-                                    gl::TEXTURE_2D,
-                                    gl::TEXTURE_WRAP_S,
-                                    gl::CLAMP_TO_EDGE.try_into().unwrap(),
-                                );
-                                gl::TexParameteri(
-                                    gl::TEXTURE_2D,
-                                    gl::TEXTURE_WRAP_T,
-                                    gl::CLAMP_TO_EDGE.try_into().unwrap(),
-                                );
-                                gl::TexParameteri(
-                                    gl::TEXTURE_2D,
-                                    gl::TEXTURE_MIN_FILTER,
-                                    gl::LINEAR.try_into().unwrap(),
-                                );
-                                gl::TexParameteri(
-                                    gl::TEXTURE_2D,
-                                    gl::TEXTURE_MAG_FILTER,
-                                    gl::LINEAR.try_into().unwrap(),
-                                );
-                                gl::BindTexture(gl::TEXTURE_2D, 0);
+                        let buffers = images
+                            .into_iter()
+                            .map(|image| {
+                                unsafe {
+                                    gl::BindTexture(gl::TEXTURE_2D, image);
+                                    gl::TexParameteri(
+                                        gl::TEXTURE_2D,
+                                        gl::TEXTURE_WRAP_S,
+                                        gl::CLAMP_TO_EDGE.try_into().unwrap(),
+                                    );
+                                    gl::TexParameteri(
+                                        gl::TEXTURE_2D,
+                                        gl::TEXTURE_WRAP_T,
+                                        gl::CLAMP_TO_EDGE.try_into().unwrap(),
+                                    );
+                                    gl::TexParameteri(
+                                        gl::TEXTURE_2D,
+                                        gl::TEXTURE_MIN_FILTER,
+                                        gl::LINEAR.try_into().unwrap(),
+                                    );
+                                    gl::TexParameteri(
+                                        gl::TEXTURE_2D,
+                                        gl::TEXTURE_MAG_FILTER,
+                                        gl::LINEAR.try_into().unwrap(),
+                                    );
+                                    gl::BindTexture(gl::TEXTURE_2D, 0);
 
-                                // Create a depth buffer
-                                let mut depth_buffer: gl::types::GLuint = 0;
-                                gl::GenRenderbuffers(1, &mut depth_buffer);
-                                gl::BindRenderbuffer(gl::RENDERBUFFER, depth_buffer);
-                                gl::RenderbufferStorage(
-                                    gl::RENDERBUFFER,
-                                    gl::DEPTH_COMPONENT24,
-                                    width as i32,
-                                    height as i32,
-                                );
+                                    // Create a depth buffer
+                                    let mut depth_buffer: gl::types::GLuint = 0;
+                                    gl::GenRenderbuffers(1, &mut depth_buffer);
+                                    gl::BindRenderbuffer(gl::RENDERBUFFER, depth_buffer);
+                                    gl::RenderbufferStorage(
+                                        gl::RENDERBUFFER,
+                                        gl::DEPTH_COMPONENT24,
+                                        width as i32,
+                                        height as i32,
+                                    );
 
-                                gl::BindRenderbuffer(gl::RENDERBUFFER, 0);
+                                    gl::BindRenderbuffer(gl::RENDERBUFFER, 0);
 
-                                // Create the frame buffer.
-                                let mut buffer: gl::types::GLuint = 0;
-                                gl::GenFramebuffers(1, &mut buffer);
-                                gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, buffer);
-                                gl::FramebufferTexture2D(
-                                    gl::DRAW_FRAMEBUFFER,
-                                    gl::COLOR_ATTACHMENT0,
-                                    gl::TEXTURE_2D,
-                                    image,
-                                    0,
-                                );
-                                // Attach the depth buffer to the frame buffer
-                                gl::FramebufferRenderbuffer(
-                                    gl::DRAW_FRAMEBUFFER,
-                                    gl::DEPTH_ATTACHMENT,
-                                    gl::RENDERBUFFER,
-                                    depth_buffer,
-                                );
-                                let _result = gl::CheckFramebufferStatus(gl::DRAW_FRAMEBUFFER);
-                                // This app was originally written with the presumption that
-                                // its swapchains and compositor front buffer were RGB.
-                                // In order to have the colors the same now that its compositing
-                                // to an sRGB front buffer, we have to write to an sRGB swapchain
-                                // but with the linear->sRGB conversion disabled on write.
-                                gl::Disable(gl::FRAMEBUFFER_SRGB);
-                                Framebuffer {
-                                    image,
-                                    depth_buffer,
-                                    gl_color_buffer: buffer,
+                                    // Create the frame buffer.
+                                    let mut buffer: gl::types::GLuint = 0;
+                                    gl::GenFramebuffers(1, &mut buffer);
+                                    gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, buffer);
+                                    gl::FramebufferTexture2D(
+                                        gl::DRAW_FRAMEBUFFER,
+                                        gl::COLOR_ATTACHMENT0,
+                                        gl::TEXTURE_2D,
+                                        image,
+                                        0,
+                                    );
+                                    // Attach the depth buffer to the frame buffer
+                                    gl::FramebufferRenderbuffer(
+                                        gl::DRAW_FRAMEBUFFER,
+                                        gl::DEPTH_ATTACHMENT,
+                                        gl::RENDERBUFFER,
+                                        depth_buffer,
+                                    );
+                                    let _result = gl::CheckFramebufferStatus(gl::DRAW_FRAMEBUFFER);
+                                    // This app was originally written with the presumption that
+                                    // its swapchains and compositor front buffer were RGB.
+                                    // In order to have the colors the same now that its compositing
+                                    // to an sRGB front buffer, we have to write to an sRGB swapchain
+                                    // but with the linear->sRGB conversion disabled on write.
+                                    gl::Disable(gl::FRAMEBUFFER_SRGB);
+                                    Framebuffer {
+                                        image,
+                                        depth_buffer,
+                                        gl_color_buffer: buffer,
+                                    }
                                 }
-                            }
+                            })
+                            .collect::<Vec<Framebuffer>>();
+
+                        let width = view.recommended_image_rect_width as i32;
+                        let height = view.recommended_image_rect_height as i32;
+                        Ok(Swapchain {
+                            width,
+                            height,
+                            view,
+                            handle: RefCell::new(swapchain),
+                            framebuffers: buffers,
+                            lease: RefCell::new(xr_recovery::ImageLease::default()),
                         })
-                        .collect::<Vec<Framebuffer>>();
+                    })
+                    .collect::<xr::Result<Vec<_>>>()?;
 
-                    let width = i32::try_from(view.recommended_image_rect_width).unwrap();
-                    let height = i32::try_from(view.recommended_image_rect_height).unwrap();
-                    Swapchain {
-                        width,
-                        height,
-                        view,
-                        handle: RefCell::new(swapchain),
-                        framebuffers: buffers,
-                    }
-                })
-                .collect::<Vec<_>>();
+                Ok(swapchain_handles)
+            })();
+            swapchain = Some(xr_try!("create_swapchains", created));
+        }
+        let swapchain = swapchain.as_ref().expect("swapchains were created");
 
-            swapchain_handles
-        });
-
-        let (view_flags, views) = session
-            .locate_views(VIEW_TYPE, xr_frame_state.predicted_display_time, &stage)
-            .unwrap();
+        let (view_flags, views) = xr_try!(
+            "locate_views",
+            session.locate_views(VIEW_TYPE, xr_frame_state.predicted_display_time, &stage)
+        );
 
         // `should_render` being true does not promise the views are tracked:
         // for a frame or two after the session begins (donning the headset, or
@@ -1334,17 +1422,23 @@ fn main() {
         // Horizon OS raises "shock2quest isn't responding" on the next key
         // event. Treat an untracked view exactly like a frame we were told not
         // to render: submit no layers and try again next frame.
-        if !view_flags
-            .contains(xr::ViewStateFlags::ORIENTATION_VALID | xr::ViewStateFlags::POSITION_VALID)
+        if views.len() != VIEW_COUNT as usize
+            || !view_flags.contains(
+                xr::ViewStateFlags::ORIENTATION_VALID | xr::ViewStateFlags::POSITION_VALID,
+            )
         {
             if untracked_view_frames == 0 {
                 println!("SHOCK2QUEST_XR_VIEWS_UNTRACKED mission={mission} flags={view_flags:?}");
             }
             untracked_view_frames += 1;
-            end_frame_with_no_layers(
-                &mut frame_stream,
-                xr_frame_state.predicted_display_time,
-                environment_blend_mode,
+            frame_started.take();
+            xr_try!(
+                "end_empty_frame",
+                end_frame_with_no_layers(
+                    &mut frame_stream,
+                    xr_frame_state.predicted_display_time,
+                    environment_blend_mode,
+                )
             );
             if let Some(report) = frame_profiler.record_skipped(elapsed_time, update_elapsed) {
                 print_frame_report(&mission, session_focused, report);
@@ -1372,14 +1466,6 @@ fn main() {
                 view.pose.orientation.z,
             ));
         }
-
-        let (_, _eyes) = session
-            .locate_views(
-                VIEW_TYPE,
-                xr_frame_state.predicted_display_time,
-                &head_space,
-            )
-            .unwrap();
 
         fit_passthrough.update(
             &session,
@@ -1409,33 +1495,39 @@ fn main() {
 
         // Render to each eye
         let time = now.elapsed().as_secs_f32();
-        let (left_eye_elapsed, _) = render_swapchain(
-            &mut game,
-            &engine,
-            camera_pos,
-            camera_rot,
-            &swapchain[0],
-            time,
-            &views[0],
-            head_centre_stage,
-            tracking,
-            true,
-            &scene,
-            false,
+        let (left_eye_elapsed, _) = xr_try!(
+            "render_left_eye",
+            render_swapchain(
+                &mut game,
+                &engine,
+                camera_pos,
+                camera_rot,
+                &swapchain[0],
+                time,
+                &views[0],
+                head_centre_stage,
+                tracking,
+                true,
+                &scene,
+                false,
+            )
         );
-        let (right_eye_elapsed, finish_elapsed) = render_swapchain(
-            &mut game,
-            &engine,
-            camera_pos,
-            camera_rot,
-            &swapchain[1],
-            time,
-            &views[1],
-            head_centre_stage,
-            tracking,
-            true,
-            &scene,
-            true,
+        let (right_eye_elapsed, finish_elapsed) = xr_try!(
+            "render_right_eye",
+            render_swapchain(
+                &mut game,
+                &engine,
+                camera_pos,
+                camera_rot,
+                &swapchain[1],
+                time,
+                &views[1],
+                head_centre_stage,
+                tracking,
+                true,
+                &scene,
+                true,
+            )
         );
 
         let swap1 = &swapchain[0].handle.borrow();
@@ -1519,34 +1611,24 @@ fn main() {
             });
         }
         layers.push(&projection);
-        if let Err(error) = frame_stream.end(
-            xr_frame_state.predicted_display_time,
-            // Quest passthrough uses an explicit compositor layer, not the
-            // environment ALPHA_BLEND mode. The engine already clears RGBA=0.
-            if underlay.is_some() {
-                xr::EnvironmentBlendMode::OPAQUE
-            } else {
-                environment_blend_mode
-            },
-            &layers,
-        ) {
-            // Only the start of a burst is logged, so a persistently unhappy
-            // compositor cannot flood logcat at 90 Hz.
-            if submit_failures == 0 {
-                println!("SHOCK2QUEST_XR_SUBMIT_FAILED mission={mission} error={error:?}");
-            }
-            submit_failures += 1;
-        } else {
-            if submit_failures > 0 {
-                println!(
-                    "SHOCK2QUEST_XR_SUBMIT_RECOVERED mission={mission} failed_frames={submit_failures}"
-                );
-            }
-            submit_failures = 0;
-        }
+        frame_started.take();
+        xr_try!(
+            "end_frame",
+            frame_stream.end(
+                xr_frame_state.predicted_display_time,
+                // Quest passthrough uses an explicit compositor layer, not the
+                // environment ALPHA_BLEND mode. The engine already clears RGBA=0.
+                if underlay.is_some() {
+                    xr::EnvironmentBlendMode::OPAQUE
+                } else {
+                    environment_blend_mode
+                },
+                &layers,
+            )
+        );
         let submit_elapsed = submit_started.elapsed();
 
-        let requested_refresh_is_active = display_refresh_rate.is_some_and(|active_hz| {
+        let requested_refresh_is_active = display_refresh_rate.is_none_or(|active_hz| {
             requested_display_refresh_rate
                 .is_none_or(|requested_hz| refresh_rate::rate_matches(active_hz, requested_hz))
         });
@@ -1727,10 +1809,8 @@ fn end_frame_with_no_layers(
     frame_stream: &mut xr::FrameStream<xr::OpenGlEs>,
     predicted_display_time: xr::Time,
     environment_blend_mode: xr::EnvironmentBlendMode,
-) {
-    if let Err(error) = frame_stream.end(predicted_display_time, environment_blend_mode, &[]) {
-        println!("SHOCK2QUEST_XR_EMPTY_FRAME_FAILED error={error:?}");
-    }
+) -> xr::Result<()> {
+    frame_stream.end(predicted_display_time, environment_blend_mode, &[])
 }
 
 /// Non-blockingly drain the Android lifecycle and input queues once per frame.
@@ -1849,13 +1929,11 @@ fn render_swapchain(
     _log: bool,
     scene: &Vec<SceneObject>,
     is_last: bool,
-) -> (Duration, Duration) {
+) -> xr::Result<(Duration, Duration)> {
     let eye_started = Instant::now();
     let mut xr_swapchain = swapchain.handle.borrow_mut();
-    let image_index1 = xr_swapchain.acquire_image().unwrap();
-    // Wait until the image is available to render to. The compositor could still be
-    // reading from it.
-    xr_swapchain.wait_image(xr::Duration::INFINITE).unwrap();
+    let mut lease = swapchain.lease.borrow_mut();
+    let image_index1 = lease.acquire(&mut *xr_swapchain)?;
 
     let framebuffer = swapchain.framebuffers.get(image_index1 as usize).unwrap();
 
@@ -1938,12 +2016,12 @@ fn render_swapchain(
         Duration::ZERO
     };
 
-    xr_swapchain.release_image().unwrap();
+    lease.release(&mut *xr_swapchain)?;
 
-    (
+    Ok((
         eye_started.elapsed().saturating_sub(finish_elapsed),
         finish_elapsed,
-    )
+    ))
 }
 
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
@@ -1957,6 +2035,7 @@ struct Swapchain {
     view: xr::ViewConfigurationView,
     handle: RefCell<xr::Swapchain<xr::OpenGlEs>>,
     framebuffers: Vec<Framebuffer>,
+    lease: RefCell<xr_recovery::ImageLease>,
     //     buffers: Vec<Framebuffer>,
     //     resolution: vk::Extent2D,
 }
@@ -1967,4 +2046,62 @@ struct Framebuffer {
     image: u32,
     depth_buffer: gl::types::GLuint,
     gl_color_buffer: gl::types::GLuint,
+}
+
+// The OpenXR wrapper keeps its own waited flag. ImageLease retains the matching
+// acquisition across errors, so a failed release cannot cause its next wait to panic.
+impl xr_recovery::SwapchainImages for xr::Swapchain<xr::OpenGlEs> {
+    type Error = xr::sys::Result;
+    fn acquire(&mut self) -> xr::Result<u32> {
+        self.acquire_image()
+    }
+    fn wait(&mut self) -> xr::Result<()> {
+        self.wait_image(xr::Duration::INFINITE)
+    }
+    fn release(&mut self) -> xr::Result<()> {
+        self.release_image()
+    }
+}
+
+fn xr_session_lost(error: xr::sys::Result) -> bool {
+    matches!(
+        error,
+        xr::sys::Result::ERROR_INSTANCE_LOST | xr::sys::Result::ERROR_SESSION_LOST
+    )
+}
+
+#[derive(Default)]
+struct XrFailures(std::collections::HashMap<&'static str, u64>);
+impl XrFailures {
+    fn check<T>(&mut self, operation: &'static str, result: xr::Result<T>) -> xr::Result<T> {
+        match &result {
+            Err(error) => {
+                let count = self.0.entry(operation).or_default();
+                if *count == 0 {
+                    println!("SHOCK2QUEST_XR_CALL_FAILED operation={operation} error={error:?}");
+                }
+                *count = count.saturating_add(1);
+            }
+            Ok(_) => {
+                if let Some(count) = self.0.remove(operation) {
+                    println!(
+                        "SHOCK2QUEST_XR_CALL_RECOVERED operation={operation} failures={count}"
+                    );
+                }
+            }
+        }
+        result
+    }
+}
+
+impl Drop for Swapchain {
+    fn drop(&mut self) {
+        for framebuffer in &self.framebuffers {
+            // The swapchain is owned by the render thread and dropped before EGL.
+            unsafe {
+                gl::DeleteFramebuffers(1, &framebuffer.gl_color_buffer);
+                gl::DeleteRenderbuffers(1, &framebuffer.depth_buffer);
+            }
+        }
+    }
 }
