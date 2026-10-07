@@ -3165,6 +3165,7 @@ pub struct MissionCore {
     /// with the head. Reset while the param is off, so turning it back on
     /// re-places it where the player is now looking.
     show_position_anchor: crate::ui::FrontendPanelAnchor,
+    show_position_targets: crate::hud::DebugPositionTargets,
 
     /// The fall to the floor that plays while the player is dying, or `None`
     /// while they are alive. Runtime-only, like [`PlayerLifeState`] itself: a
@@ -4075,6 +4076,7 @@ impl MissionCore {
             last_head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             last_head_position: vec3(0.0, 0.0, 0.0),
             show_position_anchor: crate::ui::FrontendPanelAnchor::new(),
+            show_position_targets: Default::default(),
             death_camera: None,
             flat_lean: Default::default(),
             flat_eye: None,
@@ -5658,6 +5660,20 @@ impl MissionCore {
         {
             self.vr_use_mode_head = (input_context.head.position, input_context.head.rotation);
         }
+        self.show_position_targets =
+            if self.show_position_readout_visible(game_options.presentation_mode) {
+                let (left, right) = self.interaction.held_entities();
+                crate::hud::DebugPositionTargets::sample(
+                    input_context,
+                    player_pos,
+                    player_rot,
+                    [left, right],
+                    &self.physics,
+                )
+            } else {
+                Default::default()
+            };
+
         // The `show_position` readout's panel. Advanced here (not in `render`)
         // because the anchor needs the tracked head and a dt; while the readout
         // is not being drawn the anchor is reset, so the next time it comes up
@@ -15866,7 +15882,11 @@ impl MissionCore {
             if self.show_position_readout_visible(options.presentation_mode) {
                 let pos = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
                 ret.extend(
-                    crate::hud::build_debug_overlay_canvas(pos).render_screen_space(
+                    crate::hud::build_debug_overlay_canvas(
+                        pos,
+                        self.show_position_targets.positions(),
+                    )
+                    .render_screen_space(
                         asset_cache,
                         screen_size,
                         crate::ui::ScaleMode::PreserveAspect,
@@ -17129,6 +17149,12 @@ impl MissionCore {
             sim_time,
         ));
 
+        if self.show_position_readout_visible(options.presentation_mode) {
+            let mut dots = self.show_position_targets.render();
+            crate::util::tag_render_source(&mut dots, crate::util::render_source::DEBUG_OVERLAY);
+            scene.extend(dots);
+        }
+
         // `show_position` readout (VR): the same canvas flat draws in screen
         // space, on its own anchored panel - nearer than the system panels so
         // it cannot be coplanar with them. Labelled `DEBUG_OVERLAY` so
@@ -17140,14 +17166,17 @@ impl MissionCore {
             .flatten()
         {
             let panel = crate::hud::readout_panel(placement);
-            let mut objects = crate::hud::build_debug_overlay_canvas(player.pos)
-                .render_world_space(
-                    asset_cache,
-                    panel.transform(),
-                    None,
-                    None,
-                    crate::ui::VR_COMPONENT_Z_STEP,
-                );
+            let mut objects = crate::hud::build_debug_overlay_canvas(
+                player.pos,
+                self.show_position_targets.positions(),
+            )
+            .render_world_space(
+                asset_cache,
+                panel.transform(),
+                None,
+                None,
+                crate::ui::VR_COMPONENT_Z_STEP,
+            );
             crate::util::tag_render_source(&mut objects, crate::util::render_source::DEBUG_OVERLAY);
             rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
             scene.extend(objects);
