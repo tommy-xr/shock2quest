@@ -231,6 +231,8 @@ struct CursorItem {
 /// open, the panel's latest components (from `Effect::SetUI`), and the
 /// cursor/pointer bookkeeping needed to render and hit-test them.
 pub struct FlatUiHost {
+    /// Earth can expose the system menu before the cyber software is installed.
+    pub(super) software_missing: bool,
     pub(crate) device: bool,
     pub(crate) psionic_projection: bool,
     pub(crate) scan_label: Option<String>,
@@ -352,6 +354,7 @@ impl FlatUiHost {
             device: false,
             psionic_projection: false,
             scan_label: None,
+            software_missing: false,
             active_panel: None,
             panel_size_px: None,
             panel_sidecar: None,
@@ -710,6 +713,9 @@ impl FlatUiHost {
     /// The readout's clickable controls on the canvas this frame - exactly the
     /// ones [`readouts::emit_use_mode`] drew.
     fn readout_buttons(&self) -> Vec<ReadoutButtonSpec> {
+        if self.software_missing {
+            return vec![readouts::system_button()];
+        }
         self.readouts
             .as_ref()
             .map(readouts::buttons)
@@ -744,7 +750,7 @@ impl FlatUiHost {
 
     /// Utility geometry uses the same viewport mapping as the readouts.
     pub fn utility_elements_debug(&self) -> Vec<crate::game_scene::DebugUiElement> {
-        if self.strip.is_none() && !self.device {
+        if self.software_missing || (self.strip.is_none() && !self.device) {
             return Vec::new();
         }
         self.utilities
@@ -767,6 +773,9 @@ impl FlatUiHost {
     /// them, so it cannot drift from what is on screen. Images and bars label
     /// as their art's stem (`biofull`, `hpbar`); text has no label.
     pub fn readout_elements_debug(&self) -> Vec<crate::game_scene::DebugUiElement> {
+        if self.software_missing {
+            return self.readout_buttons_debug();
+        }
         let Some(readouts) = self.readouts.as_ref() else {
             return Vec::new();
         };
@@ -1116,6 +1125,18 @@ impl FlatUiHost {
         let pressed = pointer.map(|p| p.pressed).unwrap_or(false);
         let pressed_edge = pressed && !self.last_pointer_pressed;
         self.last_pointer_pressed = pressed;
+
+        if self.software_missing {
+            self.cursor_canvas = pointer.and_then(|p| p.canvas_pos);
+            let menu = readouts::system_button();
+            let actions =
+                if pressed_edge && self.cursor_canvas.is_some_and(|p| menu.rect.contains(p)) {
+                    vec![FlatUiDragAction::Readout(ReadoutButton::SystemMenu, None)]
+                } else {
+                    Vec::new()
+                };
+            return (Vec::new(), actions);
+        }
 
         // MFD-slot auto-close: the bound object is gone (destroyed / level
         // state changed), or the player walked away from it (the original's
@@ -1552,6 +1573,18 @@ impl FlatUiHost {
     /// marks the pointer with its own beam dot, so the arrow is a dev-param
     /// choice there; a lifted item or the inspect cursor always draws.
     fn build_canvas_with(&self, arrow: bool) -> Option<UiCanvas> {
+        if self.software_missing {
+            let mut canvas = UiCanvas::new(CANVAS_SIZE);
+            let menu = readouts::system_button();
+            crate::hud::ammo_panel::draw_button(&mut canvas, &menu, menu.rect);
+            if let Some(cursor) = self.cursor_canvas.filter(|_| arrow) {
+                canvas.image(
+                    Rect::new(cursor.x, cursor.y, CURSOR_SIZE.x, CURSOR_SIZE.y),
+                    "cursor.pcx",
+                );
+            }
+            return Some(canvas);
+        }
         let strip_rect = self.strip_rect();
         let panel_rect = self.panel_rect();
         if strip_rect.is_none() && panel_rect.is_none() && self.readouts.is_none() && !self.device {
@@ -3877,6 +3910,30 @@ mod tests {
                 Some(left)
             )]
         );
+    }
+
+    #[test]
+    fn missing_software_exposes_only_the_working_system_menu() {
+        let (world, mut host, _wrench, _inv) = drag_world();
+        host.set_readouts(Some(readout_fixture()));
+        host.software_missing = true;
+        assert_eq!(host.readout_buttons_debug().len(), 1);
+        assert!(host.utility_elements_debug().is_empty());
+        assert_eq!(
+            press_edge(&mut host, &world, (320.0, 390.0)),
+            vec![FlatUiDragAction::Readout(ReadoutButton::SystemMenu, None)]
+        );
+        assert!(press_edge(&mut host, &world, (570.0, 449.0)).is_empty());
+        let canvas = host.build_canvas_with(false).unwrap();
+        assert!(canvas.elements().iter().all(|element| {
+            let rect = element.rect();
+            rect.x >= 288.0
+                && rect.x + rect.w <= 352.0
+                && rect.y >= 372.0
+                && rect.y + rect.h <= 408.0
+        }));
+        host.software_missing = false;
+        assert!(host.readout_buttons_debug().len() > 1);
     }
 
     #[test]

@@ -599,7 +599,11 @@ impl VirtualHand {
                     self.get_held_entity().is_some(),
                     anticipation,
                     grip,
-                    light_override.unwrap_or(self.feedback.light()),
+                    if crate::cyber_interface::installed(world) {
+                        light_override.unwrap_or(self.feedback.light())
+                    } else {
+                        crate::hand_glove::HandLight::Off
+                    },
                     hand_lights,
                 )
             })

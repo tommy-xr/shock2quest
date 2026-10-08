@@ -3505,7 +3505,7 @@ impl MissionCore {
         audio_context: &mut AudioContext<EntityId, String>,
         global_context: &GlobalContext,
         spawn_loc: SpawnLocation,
-        quest_info: QuestInfo,
+        mut quest_info: QuestInfo,
         entity_populator: Box<dyn EntityPopulator>,
         held_item_save_data: HeldItemSaveData,
         game_options: &GameOptions,
@@ -3986,6 +3986,7 @@ impl MissionCore {
         });
         world.add_unique(PlayerLifeState::Alive);
 
+        crate::cyber_interface::initialize(&mut quest_info, &mission);
         world.add_unique(quest_info);
         world.add_unique(crate::difficulty::GlobalDifficultyParams::from_gamesys(
             game_entity_info,
@@ -10219,6 +10220,22 @@ impl MissionCore {
     /// reads this and `use_mode` independently (the flat HUD skips what the
     /// interface draws), so the two must never disagree on a frame.
     fn refresh_readouts(&mut self) {
+        let missing = !crate::cyber_interface::installed(&self.world);
+        self.flat_ui.software_missing = self.use_mode && missing;
+        if self.use_mode {
+            let inventory = self
+                .world
+                .borrow::<UniqueView<PlayerInfo>>()
+                .ok()
+                .map(|player| player.inventory_entity_id);
+            let strip = if missing { None } else { inventory };
+            if self.flat_ui.strip_entity() != strip {
+                self.flat_ui.set_strip(strip);
+            }
+            if missing {
+                self.flat_ui.close();
+            }
+        }
         let (weapon, _) = self.flat_ui.ammo_selection();
         self.flat_ui.set_readouts(
             (self.use_mode || self.flat_ui.device)
@@ -14275,6 +14292,10 @@ impl MissionCore {
                         "Updated quest info for {}({:?}): {:?}",
                         quest_bit_name, quest_bit_value, quests_new
                     );
+                    drop(quests_new);
+                    if quest_bit_name.eq_ignore_ascii_case(crate::cyber_interface::QUEST_NAME) {
+                        self.refresh_readouts();
+                    }
                 }
 
                 Effect::GrantTourReward { career, year, tour } => {
@@ -16271,6 +16292,9 @@ impl MissionCore {
             }
         }
         messages.extend(self.interaction.maintenance_previews(&self.world));
+        if self.use_mode && !crate::cyber_interface::installed(&self.world) {
+            messages.push(crate::cyber_interface::NOT_INSTALLED.to_owned());
+        }
         if messages.len() > crate::hud::message_line::MAX_LINES {
             messages.drain(..messages.len() - crate::hud::message_line::MAX_LINES);
         }

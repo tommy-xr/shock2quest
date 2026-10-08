@@ -117,6 +117,9 @@ impl Sockets {
         frames: [Option<Matrix4<f32>>; 2],
         lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<engine::scene::SceneObject> {
+        if !crate::cyber_interface::installed(world) {
+            return Vec::new();
+        }
         use crate::hud::virtual_arms::IMPLANT_SLOT_WIDTH;
         let mut objects = Vec::new();
         let housing = self
