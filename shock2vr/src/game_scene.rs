@@ -57,10 +57,17 @@ impl PlayerSavePoseError {
 }
 
 #[derive(Clone, Debug)]
+pub struct EnvironmentalCue {
+    pub entity: EntityId,
+    pub schema: String,
+    pub auxiliary: [String; 2],
+}
+
+#[derive(Clone, Debug)]
 pub struct AmbientAudioState {
     pub player_position: Vector3<f32>,
     pub music_cue: Option<String>,
-    pub environmental_cue: Option<String>,
+    pub environmental_cue: Option<EnvironmentalCue>,
     pub ambient_emitters: Vec<(EntityId, Vector3<f32>, String)>,
 }
 

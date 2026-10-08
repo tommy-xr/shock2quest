@@ -16478,6 +16478,7 @@ impl MissionCore {
 
         let mut music_cue = None;
         let mut environmental_cue = None;
+        let mut environmental_distance = f32::INFINITY;
         let mut emitter_candidates: Vec<(f32, EntityId, Vector3<f32>, String)> = Vec::new();
 
         for (id, (ambient_sound, position)) in (&v_ambient_hacked, &v_position).iter().with_id() {
@@ -16490,7 +16491,20 @@ impl MissionCore {
                     .sound_flags
                     .contains(AmbientSoundFlags::ENVIRONMENTAL)
                 {
-                    environmental_cue = Some(ambient_sound.schema.clone());
+                    // Retail chooses the nearest environmental region, not the
+                    // final entity in ECS iteration order. Its layers travel together.
+                    if !ambient_sound
+                        .sound_flags
+                        .contains(AmbientSoundFlags::TURNED_OFF)
+                        && dist_squared < environmental_distance
+                    {
+                        environmental_distance = dist_squared;
+                        environmental_cue = Some(crate::game_scene::EnvironmentalCue {
+                            entity: id,
+                            schema: ambient_sound.schema.clone(),
+                            auxiliary: [ambient_sound.aux1.clone(), ambient_sound.aux2.clone()],
+                        });
+                    }
                 } else {
                     emitter_candidates.push((
                         dist_squared,

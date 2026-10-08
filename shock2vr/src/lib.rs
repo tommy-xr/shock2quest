@@ -3,6 +3,7 @@ pub mod armor;
 pub mod audio_log;
 pub mod benchmark_scene;
 pub mod environment_map;
+mod environmental_aux;
 pub mod game_scene;
 pub mod hand_buttons;
 pub mod hand_pose;
@@ -688,7 +689,9 @@ pub struct Game {
     // id_to_physics: HashMap<EntityId, RigidBodyHandle>,
     // scene_objects: Vec<RefCell<SceneObject>>,
     //world: World,
+    // Schema identity, not its randomly selected sample: keep a bed stable.
     last_env_sound: Option<String>,
+    environmental_aux: environmental_aux::EnvironmentalAuxAudio,
 
     mission_to_save_data: HashMap<String, EntitySaveData>,
 
@@ -1556,6 +1559,7 @@ impl Game {
             preserved_scene_state: None,
             global_context: Arc::new(global_context),
             last_env_sound: None,
+            environmental_aux: Default::default(),
             options,
             mission_to_save_data,
             should_quit: false,
@@ -1752,6 +1756,15 @@ impl Game {
 
         // Handle ambient audio
         let ambient_state = self.active_game_scene.ambient_audio_state();
+        self.environmental_aux.update(
+            ambient_state
+                .as_ref()
+                .and_then(|state| state.environmental_cue.as_ref()),
+            time.elapsed,
+            &self.global_context.gamesys.sound_schema,
+            &mut self.asset_cache,
+            &mut self.audio_context,
+        );
         let player_pose = self
             .active_game_scene
             .world()
@@ -1782,8 +1795,7 @@ impl Game {
             }
 
             if let Some(cue_schema) = state.environmental_cue {
-                let resolved = self.resolve_schema(&cue_schema);
-                self.update_env_sound_if_necessary(resolved);
+                self.update_env_sound_if_necessary(cue_schema.schema);
             } else {
                 self.audio_context.stop_environmental_sound();
                 self.last_env_sound = None;
@@ -2536,6 +2548,7 @@ impl Game {
         }
         self.weapon_buttons.cancel(self.active_game_scene.world());
         self.active_game_scene.on_exit(&mut self.audio_context);
+        self.environmental_aux.clear(&mut self.audio_context);
         self.audio_context.stop_ambient_sounds();
         self.last_env_sound = None;
         // Only a scene standing in for the mission carries state on its behalf,
@@ -2989,19 +3002,29 @@ impl Game {
     }
 
     fn update_env_sound_if_necessary(&mut self, new_cue: String) {
+        // Retail permits an auxiliary-only environmental region.
+        if new_cue.is_empty() {
+            self.audio_context.stop_environmental_sound();
+            self.last_env_sound = None;
+            return;
+        }
         if self.last_env_sound.is_none() || !self.last_env_sound.as_ref().unwrap().eq(&new_cue) {
             self.audio_context.stop_environmental_sound();
             self.last_env_sound = None;
+            let sample = self.resolve_schema(&new_cue);
             let maybe_audio_clip = self
                 .asset_cache
-                .get_opt(&AUDIO_IMPORTER, &format!("{new_cue}.wav"));
+                .get_opt(&AUDIO_IMPORTER, &format!("{sample}.wav"));
 
             if let Some(audio_clip) = maybe_audio_clip {
                 info!("updating env_sound: {}", new_cue);
                 self.audio_context.set_environmental_sound(audio_clip);
                 self.last_env_sound = Some(new_cue);
             } else {
-                warn!("env_sound: unable to load sound: {}", new_cue)
+                warn!("env_sound: unable to load sound: {}", new_cue);
+                // Missing retail schemas (eng1's eng_pump1) must not cause
+                // another asset lookup and warning every frame.
+                self.last_env_sound = Some(new_cue);
             }
         }
     }

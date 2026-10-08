@@ -58,6 +58,12 @@ pub struct SoundSchema {
 }
 
 impl SoundSchema {
+    /// Authored repeat timing, including interval-based environmental layers.
+    pub fn loop_params(&self, schema: &str) -> Option<&PropSchemaLoopParams> {
+        let id = self.name_to_schema_id.get(&schema.to_ascii_lowercase())?;
+        self.id_to_loop_params.get(id)
+    }
+
     pub fn get_random_sample(&self, schema: &str) -> Option<String> {
         let id = *self.name_to_schema_id.get(&schema.to_ascii_lowercase())?;
         let samples = self.id_to_samples.get(&id)?;
