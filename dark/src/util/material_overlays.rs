@@ -63,7 +63,12 @@ pub(crate) fn append_incidence_overlays(
     let Some(profile) = profile(name) else {
         let qualified = material_name(name, skinned);
         if let Some(object) = objects.last_mut() {
-            super::render_material::apply(object, assets, &qualified, skinned);
+            let applied = super::render_material::apply(object, assets, &qualified, skinned);
+            // Nightdive shares the rapier hilt script with the world model but
+            // only ships it in obj/txt16. Keep other mesh families isolated.
+            if !applied && skinned && name.eq_ignore_ascii_case("ND-rapier.psd") {
+                super::render_material::apply(object, assets, "obj/txt16/ND-rapier.psd", skinned);
+            }
         }
         return;
     };

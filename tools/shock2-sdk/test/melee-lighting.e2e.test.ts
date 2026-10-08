@@ -29,6 +29,11 @@ for (const [template, name, action, material, emission] of [
       assert.ok(blades.length, `rendered ${material} must be identifiable`);
       assert.ok(blades.every(o => Math.abs((o.emissivity ?? -1) - emission) < 1e-5));
       if (name === "rapier") {
+        const hilts = scene.objects.filter(o => o.material_name?.toLowerCase() === "nd-rapier.psd");
+        assert.ok(hilts.length && hilts.every(o => o.material_passes?.length === 4), "hilt must restore the four authored viewmodel passes");
+        const glows = scene.objects.filter(o => o.material_name === "rapier_blade_glow");
+        assert.equal(glows.length, 1, "the two blade sections share one halo");
+        assert.equal(glows[0]!.depth_write, false, "soft halo must not occlude the scene");
         assert.ok(scene.objects.filter(o => o.material_name?.toLowerCase() === "nd-rapier.psd").every(o => o.emissivity === 0), "the hilt must not glow");
       }
       const points = scene.carried_lights!.filter(l => l.kind === "point");

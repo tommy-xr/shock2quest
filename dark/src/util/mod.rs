@@ -513,6 +513,16 @@ pub fn compute_bounding_sphere(vertices: &Vec<Point3<f32>>) -> Sphere<f32> {
     sphere
 }
 
+/// Measured emitter and tip delta for the remaster rapier in PMNM bind space.
+/// Shared by its blade deformation and attached soft halo.
+pub fn rapier_blade_bind_segment() -> (cgmath::Vector3<f32>, cgmath::Vector3<f32>) {
+    use cgmath::Vector3;
+    (
+        Vector3::new(-0.203623, 0.520707, -1.164806),
+        Vector3::new(-0.162133, 0.164634, -0.919503),
+    )
+}
+
 /// Minimum self-light for remaster melee materials. The rapier's separate
 /// energy blade is self-lit; the shard keeps its texture and most room shading.
 /// Preserve brighter authored values and leave handles/arms untouched.

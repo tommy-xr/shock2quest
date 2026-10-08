@@ -55,10 +55,13 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
         void main() {
             if (beam.x > 0.5) {
                 float facing = abs(dot(normalize(viewNormal), normalize(-viewPos)));
-                float ends = smoothstep(0.0, 0.015, uv.y) * (1.0 - smoothstep(0.8, 1.0, uv.y));
+                float ends = beam.x > 2.5
+                    ? smoothstep(0.0, 0.12, uv.y) * (1.0 - smoothstep(0.85, 1.0, uv.y))
+                    : smoothstep(0.0, 0.015, uv.y) * (1.0 - smoothstep(0.8, 1.0, uv.y));
                 float smoke = 0.65 + 0.35 * sin(uv.y * 87.0 - beam.y * 1.4 + sin(uv.x * 18.84955592 + beam.y))
                                           * sin(uv.y * 31.0 + uv.x * 12.56637061 - beam.y * 0.6);
-                float alpha = beam.x > 1.5 ? 0.8 * pow(facing, 0.7) : 0.24 * pow(facing, 1.8) * smoke;
+                float alpha = beam.x > 2.5 ? 0.22 * pow(facing, 2.4)
+                    : (beam.x > 1.5 ? 0.8 * pow(facing, 0.7) : 0.24 * pow(facing, 1.8) * smoke);
                 fragColor = vec4(vertexColor, alpha * ends * (1.0 - transparency));
                 return;
             }
@@ -89,6 +92,9 @@ pub struct LaserMaterial {
     /// Additional opacity override, applied on top of the radial alpha.
     transparency: f32,
     beam: [f32; 2],
+    /// Optional rigid attachment in the mesh's bind space. The live palette
+    /// follows both its animation and per-instance blade extension.
+    attachment: Option<(usize, Matrix4<f32>)>,
 }
 
 impl Material for LaserMaterial {
@@ -164,10 +170,17 @@ impl Material for LaserMaterial {
         render_context: &EngineRenderContext,
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
-        _skinning_data: &[Matrix4<f32>],
+        skinning_data: &[Matrix4<f32>],
         _lights: &crate::scene::light::LightArray,
     ) -> bool {
-        self.draw(render_context, view_matrix, world_matrix);
+        let attached = self
+            .attachment
+            .map(|(joint, local)| *world_matrix * skinning_data[joint] * local);
+        self.draw(
+            render_context,
+            view_matrix,
+            attached.as_ref().unwrap_or(world_matrix),
+        );
         true
     }
 }
@@ -201,6 +214,7 @@ pub fn create(color: Vector3<f32>) -> Box<dyn Material> {
         color,
         transparency: 0.0,
         beam: [0.0, 0.0],
+        attachment: None,
     })
 }
 
@@ -210,6 +224,7 @@ fn create_beam(core: bool, color: Vector3<f32>, seconds: f32) -> Box<dyn Materia
         color,
         transparency: 0.0,
         beam: [if core { 2.0 } else { 1.0 }, seconds],
+        attachment: None,
     })
 }
 
@@ -223,6 +238,38 @@ pub fn beam(
     core: (f32, Vector3<f32>),
     seconds: f32,
 ) -> [SceneObject; 2] {
+    [(false, halo), (true, core)].map(|(is_core, (radius, color))| {
+        let mut object = SceneObject::new(
+            create_beam(is_core, color, seconds),
+            Box::new(cylinder::Cylinder),
+        );
+        object.set_transform(beam_frame(origin, reach, radius));
+        object.set_depth_write(false);
+        object.set_backface_culling(Some(FrontFaceWinding::CounterClockwise));
+        object
+    })
+}
+
+/// A steady additive halo attached to a rigidly skinned blade. Reuses the
+/// laser beam's soft silhouette falloff without its smoky animation or core.
+pub fn attached_glow(
+    origin: Vector3<f32>,
+    reach: Vector3<f32>,
+    radius: f32,
+    color: Vector3<f32>,
+    joint: usize,
+) -> Box<dyn Material> {
+    let local = beam_frame(origin, reach, radius);
+    Box::new(LaserMaterial {
+        has_initialized: false,
+        color,
+        transparency: 0.0,
+        beam: [3.0, 0.0],
+        attachment: Some((joint, local)),
+    })
+}
+
+fn beam_frame(origin: Vector3<f32>, reach: Vector3<f32>, radius: f32) -> Matrix4<f32> {
     let forward = reach.normalize();
     let tangent = if forward.y.abs() < 0.9 {
         Vector3::new(0.0, 1.0, 0.0)
@@ -231,19 +278,10 @@ pub fn beam(
     };
     let right = tangent.cross(forward).normalize();
     let up = forward.cross(right);
-    [(false, halo), (true, core)].map(|(is_core, (radius, color))| {
-        let mut object = SceneObject::new(
-            create_beam(is_core, color, seconds),
-            Box::new(cylinder::Cylinder),
-        );
-        object.set_transform(Matrix4::from_cols(
-            (right * radius).extend(0.0),
-            (up * radius).extend(0.0),
-            reach.extend(0.0),
-            origin.extend(1.0),
-        ));
-        object.set_depth_write(false);
-        object.set_backface_culling(Some(FrontFaceWinding::CounterClockwise));
-        object
-    })
+    Matrix4::from_cols(
+        (right * radius).extend(0.0),
+        (up * radius).extend(0.0),
+        reach.extend(0.0),
+        origin.extend(1.0),
+    )
 }

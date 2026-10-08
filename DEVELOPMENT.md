@@ -505,6 +505,11 @@ with flatscreen positions mapped from the viewmodel into mission space.
 `/v1/scene` reports material names/emissivity and current `carried_lights` for
 inspection. These lights do not replace the existing weapon flashlights.
 
+The held remaster rapier also loads the hilt's four authored material passes
+from its shared `obj/txt16` script. A soft additive blade halo follows the
+blade's skinning and extension, with depth testing and no depth writes. This
+halo is a local effect using the laser shader, not the remaster's bloom pass.
+
 ### VR pipe parries
 
 `cargo dbgr --mission debug_melee --vr --port 0` provides live pipe hybrids and

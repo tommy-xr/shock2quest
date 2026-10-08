@@ -191,10 +191,8 @@ impl RapierFeedback {
 /// weapon AABB (which includes the hilt/arm and would move the grip).
 fn blade_transform(amount: f32, held: bool) -> Matrix4<f32> {
     let (base, axis) = if held {
-        (
-            vec3(-0.203623, 0.520707, -1.164806),
-            vec3(-0.162133, 0.164634, -0.919503).normalize(),
-        )
+        let (base, reach) = dark::util::rapier_blade_bind_segment();
+        (base, reach.normalize())
     } else {
         (vec3(0.0, -0.418516, -0.03825), Vector3::unit_y())
     };
@@ -205,9 +203,9 @@ fn blade_transform(amount: f32, held: bool) -> Matrix4<f32> {
 
 pub(crate) fn animate(objects: &mut Vec<SceneObject>, extension: f32, held_model: bool) {
     let blade = |o: &SceneObject| {
-        o.material_name
-            .as_deref()
-            .is_some_and(|name| name.eq_ignore_ascii_case("ND-rapier_b.psd"))
+        o.material_name.as_deref().is_some_and(|name| {
+            name.eq_ignore_ascii_case("ND-rapier_b.psd") || name == "rapier_blade_glow"
+        })
     };
     if extension <= 0.0 {
         objects.retain(|o| !blade(o));
