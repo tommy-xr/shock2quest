@@ -139,15 +139,10 @@ impl SupportProfile {
                 .rotation_degrees
                 .iter()
                 .all(|v| v.is_finite() && v.abs() <= 360.0)
+            && crate::vr_grip::valid_finger_curls(&self.curls)
             && self
-                .curls
-                .iter()
-                .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-            && self.trigger_curls.is_none_or(|curls| {
-                curls
-                    .into_iter()
-                    .all(|v| v.is_finite() && (0.0..=1.0).contains(&v))
-            })
+                .trigger_curls
+                .is_none_or(|curls| crate::vr_grip::valid_finger_curls(&curls))
             && self.grab_radius.is_finite()
             && (0.01..=0.15).contains(&self.grab_radius)
             && self.release_distance.is_finite()
@@ -469,6 +464,12 @@ mod tests {
         profile.max_swing_degrees = 181.0;
         assert!(!profile.is_valid());
         profile.max_swing_degrees = 150.0;
+        profile.curls[0] = -0.5;
+        profile.trigger_curls = Some([-1.0, 0.5, 0.5, 0.5, 0.5]);
+        assert!(
+            profile.is_valid(),
+            "support thumbs can extend past the open pose too"
+        );
         profile.curls[0] = f32::NAN;
         assert!(!profile.is_valid());
     }

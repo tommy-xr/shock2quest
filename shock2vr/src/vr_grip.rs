@@ -14,8 +14,19 @@ use crate::{hand_pose::FingerAmounts, vr_config::Handedness};
 
 pub const CURL_STEPS: usize = 24;
 /// Bump when solver policy changes require existing results to be rebaked.
-pub const SOLVER_REVISION: u32 = 2;
+pub const SOLVER_REVISION: u32 = 3;
 const FINGER_RADIUS: f32 = 0.007 / crate::METERS_PER_WORLD_UNIT;
+
+/// Negative authored thumb curl extends beyond the open pose. Auto-fit still
+/// searches the measured open-to-fist arcs; other fingers remain in 0..=1.
+pub const MIN_THUMB_CURL: f32 = -1.0;
+
+pub fn valid_finger_curls(curls: &[f32; 5]) -> bool {
+    curls.iter().enumerate().all(|(finger, value)| {
+        let min = if finger == 0 { MIN_THUMB_CURL } else { 0.0 };
+        value.is_finite() && (min..=1.0).contains(value)
+    })
+}
 
 /// Sampled from the very same glove skeleton and pose endpoints used to draw it.
 pub struct GripKinematics {
@@ -75,15 +86,10 @@ impl ResolvedGrip {
             && self.item_scale > 0.0
             && self.item_scale <= 10.0
             && (self.rotation.magnitude2() - 1.0).abs() < 0.001
+            && valid_finger_curls(&self.curls)
             && self
-                .curls
-                .iter()
-                .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
-            && self.trigger_curls.is_none_or(|curls| {
-                curls
-                    .into_iter()
-                    .all(|v| v.is_finite() && (0.0..=1.0).contains(&v))
-            })
+                .trigger_curls
+                .is_none_or(|curls| valid_finger_curls(&curls))
             && self
                 .anchor
                 .iter()
@@ -190,15 +196,19 @@ impl GripSurface {
         let closed = edges
             .values()
             .all(|&(count, orientation)| count == 2 && orientation == 0);
+        let center = (min + max) * 0.5;
         let volume: f32 = triangles
             .iter()
             .map(|t| {
-                let a = vec3(t[0].x, t[0].y, t[0].z);
-                let b = vec3(t[1].x, t[1].y, t[1].z);
-                let c = vec3(t[2].x, t[2].y, t[2].z);
+                let a = vec3(t[0].x, t[0].y, t[0].z) - center;
+                let b = vec3(t[1].x, t[1].y, t[1].z) - center;
+                let c = vec3(t[2].x, t[2].y, t[2].z) - center;
                 a.dot(b.cross(c)) / 6.0
             })
             .sum();
+        // Double-sided picture tiles pair every edge but enclose no solid.
+        // An inside test on those coplanar faces rejects otherwise valid grips.
+        let closed = closed && volume.abs() > f32::EPSILON * (max - min).magnitude().powi(3);
         tracing::info!(
             closed,
             volume,
@@ -244,12 +254,19 @@ impl GripSurface {
             })
             .unwrap_or(family);
         let mut best: Option<ResolvedGrip> = None;
+        // A broad sheet needs an edge grip: the original interior-only grid
+        // can put the thumb through it even at the largest palm clearance.
+        let samples: &[f32] = if sorted[0] < sorted[2] * 0.2 {
+            &[-0.98, -0.7, 0.0, 0.7, 0.98]
+        } else {
+            &[-0.7, 0.0, 0.7]
+        };
         for axis in 0..3 {
             for sign in [-1.0, 1.0] {
                 let mut outward = vec3(0.0, 0.0, 0.0);
                 outward[axis] = sign;
-                for u in [-0.7, 0.0, 0.7] {
-                    for v in [-0.7, 0.0, 0.7] {
+                for &u in samples {
+                    for &v in samples {
                         let mut origin = center;
                         origin[axis] += sign * (extent[axis] * 0.5 + 0.1);
                         origin[(axis + 1) % 3] += u * extent[(axis + 1) % 3] * 0.5;
@@ -743,6 +760,26 @@ mod tests {
     }
 
     #[test]
+    fn double_sided_picture_has_no_solid_interior() {
+        // Retail score-picture tiles triangulate the two faces with opposite
+        // diagonals. Every edge is paired, but the sheet encloses no volume.
+        let a = point3(-0.22, -0.22, 0.05);
+        let b = point3(-0.22, 0.22, 0.05);
+        let c = point3(0.22, -0.22, 0.05);
+        let d = point3(0.22, 0.22, 0.05);
+        let surface = GripSurface::new(&[[b, a, d], [d, a, c], [a, b, c], [c, b, d]]).unwrap();
+        assert!(!surface.closed, "paired coplanar faces are not a solid");
+        let grip = surface.fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
+        assert!(grip.is_valid());
+        assert!(grip.contacts.iter().all(Option::is_some));
+        let edge = GripHints {
+            anchor_region: Some([[0.20, -0.22, 0.049], [0.22, 0.22, 0.051]]),
+            ..Default::default()
+        };
+        assert!(surface.resolve(&straight_fingers(), &edge).is_some());
+    }
+
+    #[test]
     fn unreachable_fingers_use_nearest_pose_instead_of_closing_into_empty_space() {
         let grip = plane(-0.5).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
         assert_eq!(grip.curls, [0.0; 5]);
@@ -790,6 +827,22 @@ mod tests {
         assert!(restored.is_valid());
         assert_eq!(restored.curls, grip.curls);
         restored.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        assert!(!restored.is_valid());
+    }
+    #[test]
+    fn extended_thumb_round_trips_and_blends_without_extending_other_fingers() {
+        let mut grip =
+            plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
+        grip.curls = [-0.5, 1.0, 1.0, 1.0, 1.0];
+        grip.trigger_curls = Some([-1.0, 0.8, 1.0, 1.0, 1.0]);
+        let mut restored: ResolvedGrip =
+            serde_json::from_str(&serde_json::to_string(&grip).unwrap()).unwrap();
+        assert!(restored.is_valid());
+        assert_eq!(restored.curls_at(0.5), [-0.75, 0.9, 1.0, 1.0, 1.0]);
+        restored.curls[0] = -1.01;
+        assert!(!restored.is_valid());
+        restored.curls[0] = -0.5;
+        restored.curls[1] = -0.1;
         assert!(!restored.is_valid());
     }
     #[test]

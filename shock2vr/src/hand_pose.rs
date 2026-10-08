@@ -525,6 +525,19 @@ mod tests {
             ("open", open_right_hand()),
             ("point", point_right_hand()),
             ("fist", fist_right_hand()),
+            (
+                "extended thumb",
+                open_right_hand().blend_per_finger(
+                    &fist_right_hand(),
+                    &FingerAmounts {
+                        thumb: -1.0,
+                        index: 1.0,
+                        middle: 1.0,
+                        ring: 1.0,
+                        pinky: 1.0,
+                    },
+                ),
+            ),
         ] {
             retarget.apply(&pose, &mut model);
             let lengths = segment_lengths(&joint_positions(&mut model), &parents);
