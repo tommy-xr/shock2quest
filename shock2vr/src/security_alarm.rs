@@ -298,6 +298,7 @@ impl Klaxon {
                 vec![Effect::PlayLoopingSound {
                     handle,
                     name: KLAXON_SCHEMA.to_owned(),
+                    source: None,
                 }]
             }
             (false, Some(handle)) => vec![
@@ -650,7 +651,7 @@ mod tests {
 
         world.add_component(ecology_id, PropEcoState(ECOLOGY_STATE_ALERT));
         let started = klaxon.update(&world);
-        let [Effect::PlayLoopingSound { handle, name }] = started.as_slice() else {
+        let [Effect::PlayLoopingSound { handle, name, .. }] = started.as_slice() else {
             panic!("expected the klaxon loop, got {started:?}");
         };
         assert_eq!(name, KLAXON_SCHEMA);

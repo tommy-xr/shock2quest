@@ -13619,15 +13619,19 @@ impl MissionCore {
                         false,
                     );
                 }
-                Effect::PlayLoopingSound { handle, name } => play_schema_sound(
+                Effect::PlayLoopingSound {
+                    handle,
+                    name,
+                    source,
+                } => play_schema_sound(
                     &self.world,
                     global_context,
                     asset_cache,
                     audio_context,
                     handle,
                     &name,
-                    None,
-                    false,
+                    source,
+                    source.is_some(),
                     true,
                 ),
                 Effect::PlaySpeech {
@@ -18840,10 +18844,14 @@ fn play_schema_sound(
             None
         };
         let play_options = if let Some(position) = maybe_position {
-            crate::audio_log::PlayOptions::Spatial {
+            crate::audio_log::PlayOptions::SpatialWithSettings {
                 position,
                 source,
-                gain,
+                settings: AudioPlaybackSettings {
+                    gain,
+                    looping: allow_loop && resolved.looping,
+                    ..Default::default()
+                },
             }
         } else {
             crate::audio_log::PlayOptions::ListenerRelative(AudioPlaybackSettings {

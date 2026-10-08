@@ -879,12 +879,45 @@ pub fn play_spatial_audio_with_gain<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     audio_clip: Rc<AudioClip>,
     gain: f32,
 ) -> Vec<u64> {
-    let id = handle.id;
-    let scaled_position = position / SOUND_SCALE_FACTOR;
-    let (sink, preempted) =
-        play_audio_core(context, scaled_position, handle, maybe_channel, audio_clip);
-    sink.set_volume(gain);
+    play_spatial_audio_with_settings(
+        context,
+        position,
+        source,
+        handle,
+        maybe_channel,
+        audio_clip,
+        AudioPlaybackSettings {
+            gain,
+            ..Default::default()
+        },
+    )
+}
 
+/// Positional one-shots and seamless loops share gain, pause, and source tracking.
+pub fn play_spatial_audio_with_settings<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
+    context: &mut AudioContext<TAmbientKey, TCue>,
+    position: Vector3<f32>,
+    source: Option<TAmbientKey>,
+    handle: AudioHandle,
+    maybe_channel: Option<AudioChannel>,
+    audio_clip: Rc<AudioClip>,
+    settings: AudioPlaybackSettings,
+) -> Vec<u64> {
+    let id = handle.id;
+    let (sink, preempted) = play_audio_core_with_loop(
+        context,
+        position / SOUND_SCALE_FACTOR,
+        handle,
+        maybe_channel,
+        audio_clip.clone(),
+        settings.looping,
+    );
+    sink.set_volume(settings.gain);
+    if settings.looping {
+        context
+            .handle_loops
+            .insert(id, LoopPlayback::new(id, &audio_clip));
+    }
     context
         .handle_to_sink
         .insert(id, SinkAdapter::positional(sink, position, source));
@@ -905,6 +938,17 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
+) -> (SpatialSink, Vec<u64>) {
+    play_audio_core_with_loop(context, position, handle, maybe_channel, audio_clip, false)
+}
+
+fn play_audio_core_with_loop<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
+    context: &mut AudioContext<TAmbientKey, TCue>,
+    position: Vector3<f32>,
+    handle: AudioHandle,
+    maybe_channel: Option<AudioChannel>,
+    audio_clip: Rc<AudioClip>,
+    looping: bool,
 ) -> (SpatialSink, Vec<u64>) {
     // Handles whose playback this play cuts short. Reported back so callers
     // (the audio log) can mark them stopped - these preemptions never go
@@ -930,7 +974,11 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     if context.scene_paused {
         sink.pause();
     }
-    audio_clip.add_to_spatial_sink(&sink);
+    if looping {
+        audio_clip.add_to_spatial_sink_looping(&sink);
+    } else {
+        audio_clip.add_to_spatial_sink(&sink);
+    }
 
     //context.handle_to_sink.insert(handle.id, sink);
     (sink, preempted)
