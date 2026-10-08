@@ -17,6 +17,17 @@ pub const CURL_STEPS: usize = 24;
 pub const SOLVER_REVISION: u32 = 3;
 const FINGER_RADIUS: f32 = 0.007 / crate::METERS_PER_WORLD_UNIT;
 
+/// Negative authored thumb curl extends beyond the open pose. Auto-fit still
+/// searches the measured open-to-fist arcs; other fingers remain in 0..=1.
+pub const MIN_THUMB_CURL: f32 = -1.0;
+
+pub fn valid_finger_curls(curls: &[f32; 5]) -> bool {
+    curls.iter().enumerate().all(|(finger, value)| {
+        let min = if finger == 0 { MIN_THUMB_CURL } else { 0.0 };
+        value.is_finite() && (min..=1.0).contains(value)
+    })
+}
+
 /// Sampled from the very same glove skeleton and pose endpoints used to draw it.
 pub struct GripKinematics {
     pub fingers: [Vec<Vec<Vector3<f32>>>; 5],
@@ -75,15 +86,10 @@ impl ResolvedGrip {
             && self.item_scale > 0.0
             && self.item_scale <= 10.0
             && (self.rotation.magnitude2() - 1.0).abs() < 0.001
+            && valid_finger_curls(&self.curls)
             && self
-                .curls
-                .iter()
-                .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
-            && self.trigger_curls.is_none_or(|curls| {
-                curls
-                    .into_iter()
-                    .all(|v| v.is_finite() && (0.0..=1.0).contains(&v))
-            })
+                .trigger_curls
+                .is_none_or(|curls| valid_finger_curls(&curls))
             && self
                 .anchor
                 .iter()
@@ -821,6 +827,22 @@ mod tests {
         assert!(restored.is_valid());
         assert_eq!(restored.curls, grip.curls);
         restored.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        assert!(!restored.is_valid());
+    }
+    #[test]
+    fn extended_thumb_round_trips_and_blends_without_extending_other_fingers() {
+        let mut grip =
+            plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
+        grip.curls = [-0.5, 1.0, 1.0, 1.0, 1.0];
+        grip.trigger_curls = Some([-1.0, 0.8, 1.0, 1.0, 1.0]);
+        let mut restored: ResolvedGrip =
+            serde_json::from_str(&serde_json::to_string(&grip).unwrap()).unwrap();
+        assert!(restored.is_valid());
+        assert_eq!(restored.curls_at(0.5), [-0.75, 0.9, 1.0, 1.0, 1.0]);
+        restored.curls[0] = -1.01;
+        assert!(!restored.is_valid());
+        restored.curls[0] = -0.5;
+        restored.curls[1] = -0.1;
         assert!(!restored.is_valid());
     }
     #[test]

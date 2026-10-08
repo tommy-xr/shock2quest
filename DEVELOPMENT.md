@@ -216,6 +216,17 @@ magazine grip library keeps the existing automatic fit; normal ammo pickups and
 the gun's grip are unaffected. If you resize a weapon, review its magazine's
 finger curls again.
 
+All hand-grip editors allow **Thumb** values from **−1 to 1**: zero is the open
+pose, positive values curl inward, and negative values extend outward past open.
+The **Thumbs up** preset uses −0.5 with the other fingers closed. This works for
+both hands, primary/support grips, and separate Rest/Trigger pressed poses.
+The other fingers remain in 0–1. Save and restart gameplay to load the pose;
+the preview and runtime share the same skeletal blend. Auto-fit continues to
+search the measured 0–1 finger arcs, leaving thumb extension for manual tuning.
+
+To audit inventory model coverage or batch-fit missing pickup poses, see
+[Inventory hand-pose coverage](projects/inventory-grip-coverage.md).
+
 ### Gameplay music themes
 
 Mission music is driven by `PropAmbientHacked` markers with the `MUSIC` flag.

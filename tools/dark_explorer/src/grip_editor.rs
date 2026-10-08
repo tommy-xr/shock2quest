@@ -14,12 +14,13 @@ use std::{
     path::PathBuf,
 };
 
-pub(crate) const POSE_PRESETS: [(&str, [f32; 5]); 5] = [
+pub(crate) const POSE_PRESETS: [(&str, [f32; 5]); 6] = [
     ("Open", [0.0; 5]),
     ("Point", [0.85, 0.0, 0.9, 0.9, 0.9]),
     ("Closed", [1.0; 5]),
     ("Cylindrical", [0.65, 0.65, 0.7, 0.7, 0.7]),
     ("Ball", [0.35, 0.25, 0.3, 0.35, 0.4]),
+    ("Thumbs up", [-0.5, 1.0, 1.0, 1.0, 1.0]),
 ];
 
 /// Shared Rest/pressed authoring for primary and support finger poses.
@@ -71,8 +72,14 @@ impl CurlPoseEditor {
                 .into_iter()
                 .zip(curls.iter_mut())
             {
-                tweak_slider(ui, name, value, 0.0..=1.0, 0.02, 2);
+                let min = if name == "Thumb" {
+                    shock2vr::vr_grip::MIN_THUMB_CURL
+                } else {
+                    0.0
+                };
+                tweak_slider(ui, name, value, min..=1.0, 0.02, 2);
             }
+            ui.small("Negative thumb values extend outward beyond the open pose.");
             ui.horizontal_wrapped(|ui| {
                 for (name, values) in POSE_PRESETS {
                     if ui.button(name).clicked() {
@@ -1180,6 +1187,24 @@ mod tests {
         std::fs::write(&path, include_bytes!("../../../assets/vr-grips.json")).unwrap();
         let doc = GripDocument::load(path).unwrap();
         (dir, doc)
+    }
+
+    #[test]
+    fn thumbs_up_preset_saves_and_reloads_for_both_trigger_poses() {
+        let (_dir, mut doc) = document();
+        let thumbs_up = POSE_PRESETS
+            .iter()
+            .find(|(name, _)| *name == "Thumbs up")
+            .unwrap()
+            .1;
+        doc.library.entries[0].grip.curls = thumbs_up;
+        doc.library.entries[0].grip.trigger_curls = Some([-1.0, 0.8, 1.0, 1.0, 1.0]);
+        doc.save().unwrap();
+        let restored = GripDocument::load(doc.path.clone()).unwrap();
+        assert_eq!(
+            restored.library.entries[0].grip,
+            doc.library.entries[0].grip
+        );
     }
 
     #[test]
