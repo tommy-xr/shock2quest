@@ -218,7 +218,7 @@ pub fn to_scene_objects(
                         .as_ref()
                         .expect("diffuse texture should exist when debug normals disabled")
                         .clone(),
-                    material.emissivity,
+                    crate::util::melee_material_emissivity(&material.name, material.emissivity),
                     transparency,
                 )
             } else {
@@ -227,7 +227,7 @@ pub fn to_scene_objects(
                         .as_ref()
                         .expect("diffuse texture should exist when debug normals disabled")
                         .clone(),
-                    material.emissivity,
+                    crate::util::melee_material_emissivity(&material.name, material.emissivity),
                     transparency,
                     additive,
                 )

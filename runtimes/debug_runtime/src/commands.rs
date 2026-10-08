@@ -337,6 +337,8 @@ pub struct RayCastResult {
 /// Scene objects submitted on the last rendered frame
 #[derive(Debug, Serialize)]
 pub struct SceneListResult {
+    /// Current player-carried lights, using the same accessor as all renderers.
+    pub carried_lights: Vec<CarriedLightSummary>,
     pub objects: Vec<SceneObjectSummary>,
     /// Objects in the frame before any filtering.
     pub total_count: usize,
@@ -346,9 +348,20 @@ pub struct SceneListResult {
     pub frame_index: u64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct CarriedLightSummary {
+    pub kind: &'static str,
+    pub position: [f32; 3],
+    pub color_intensity: [f32; 4],
+    pub range: f32,
+}
+
 /// One scene object as submitted to the renderer
 #[derive(Clone, Debug, Serialize)]
 pub struct SceneObjectSummary {
+    pub material_name: Option<String>,
+    /// Authored self-light, before any per-draw power multiplier.
+    pub emissivity: f32,
     pub entity_id: Option<i32>,
     pub name: Option<String>,
     pub model: Option<String>,

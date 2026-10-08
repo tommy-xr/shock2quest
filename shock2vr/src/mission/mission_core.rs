@@ -58,10 +58,7 @@ use engine::{
     assets::asset_cache::AssetCache,
     audio::{AudioChannel, AudioContext, AudioHandle, AudioPlaybackSettings},
     game_log, profile,
-    scene::{
-        BillboardMaterial, ParticleSystem, RenderLayer, SceneObject, VertexPosition,
-        light::SpotLight, quad,
-    },
+    scene::{BillboardMaterial, ParticleSystem, RenderLayer, SceneObject, VertexPosition, quad},
     texture::TextureTrait,
 };
 use physics::PhysicsWorld;
@@ -17710,7 +17707,7 @@ impl MissionCore {
         }
 
         // Note: Hand spotlights are handled in the runtime
-        // via get_hand_spotlights() method - they're added to the Scene's lighting system
+        // via get_hand_lights() method - they're added to the Scene's lighting system
 
         if options.debug_portals {
             if let Some(spatial_data) = &self.spatial_data {
@@ -17734,16 +17731,31 @@ impl MissionCore {
         (scene, player.pos, player.rotation)
     }
 
-    /// Hand spotlights (`hand_spotlights` dev param).
-    /// Returns a vector of SpotLight objects positioned at the player's hands
-    pub fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
+    /// Player-carried lights: developer spotlights, weapon flashlights, and melee glow.
+    pub fn get_hand_lights(&self, options: &GameOptions) -> Vec<engine::scene::light::SceneLight> {
         let debug_lights = self.interaction.hand_spotlights(options);
         // The developer override already supplies one light per hand.
-        if !debug_lights.is_empty() {
+        let mut lights: Vec<_> = if !debug_lights.is_empty() {
             debug_lights
         } else {
             crate::weapon_attachments::flashlights(&self.world)
         }
+        .into_iter()
+        .map(Into::into)
+        .collect();
+        if self.player_is_alive() {
+            let (left, right) = self.interaction.held_entities();
+            lights.extend(
+                crate::melee_lighting::held_lights(
+                    &self.world,
+                    [left, right],
+                    options.presentation_mode,
+                )
+                .into_iter()
+                .map(Into::into),
+            );
+        }
+        lights
     }
 
     /// Whether the runtime should show a 2D cursor instead of captured
@@ -23204,8 +23216,8 @@ impl crate::game_scene::GameScene for MissionCore {
         )
     }
 
-    fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
-        self.get_hand_spotlights(options)
+    fn get_hand_lights(&self, options: &GameOptions) -> Vec<engine::scene::light::SceneLight> {
+        self.get_hand_lights(options)
     }
 
     fn world(&self) -> &World {

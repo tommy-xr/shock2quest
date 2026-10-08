@@ -534,6 +534,9 @@ export interface ObjectLightingSummary {
 }
 
 export interface SceneObjectSummary {
+  /** Authored material identity and self-light before per-draw power scaling. */
+  material_name?: string | null;
+  emissivity?: number;
   entity_id: number | null;
   name: string | null;
   model: string | null;
@@ -562,6 +565,8 @@ export interface SceneObjectSummary {
 }
 
 export interface SceneListResult {
+  /** Current carried lights from the shared runtime accessor. */
+  carried_lights?: { kind: "point" | "spot"; position: Vec3; color_intensity: [number,number,number,number]; range: number }[];
   objects: SceneObjectSummary[];
   total_count: number;
   matched_count: number;

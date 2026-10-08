@@ -526,7 +526,7 @@ pub fn to_scene_objects(
 
         let material = RefCell::new(engine::scene::SkinnedMaterial::create(
             diffuse_texture.clone(),
-            0.0,
+            crate::util::melee_material_emissivity(&material_name, 0.0),
             0.0,
         ));
 
@@ -858,7 +858,7 @@ pub fn pmnm_to_scene_objects(
         let diffuse: Rc<dyn TextureTrait> = texture;
         let material = RefCell::new(engine::scene::SkinnedMaterial::create(
             diffuse.clone(),
-            0.0,
+            crate::util::melee_material_emissivity(&material_name, 0.0),
             0.0,
         ));
         // No palette is baked here: `expand_skinning_palette` assumes joint-local

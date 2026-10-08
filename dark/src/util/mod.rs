@@ -513,8 +513,39 @@ pub fn compute_bounding_sphere(vertices: &Vec<Point3<f32>>) -> Sphere<f32> {
     sphere
 }
 
+/// Minimum self-light for remaster melee materials. The rapier's separate
+/// energy blade is self-lit; the shard keeps its texture and most room shading.
+/// Preserve brighter authored values and leave handles/arms untouched.
+pub fn melee_material_emissivity(name: &str, authored: f32) -> f32 {
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let minimum = if stem.eq_ignore_ascii_case("ND-rapier_b") {
+        1.0
+    } else if stem.eq_ignore_ascii_case("ND-shard") {
+        0.12
+    } else {
+        0.0
+    };
+    authored.max(minimum)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn melee_emission_preserves_authored_values_and_excludes_the_hilt() {
+        assert_eq!(
+            super::melee_material_emissivity("ND-rapier_b.psd", 0.0),
+            1.0
+        );
+        assert_eq!(super::melee_material_emissivity("ND-SHARD.dds", 0.0), 0.12);
+        assert_eq!(super::melee_material_emissivity("ND-rapier.psd", 0.0), 0.0);
+        assert_eq!(
+            super::melee_material_emissivity("ND-melee_arm.psd", 0.0),
+            0.0
+        );
+        assert_eq!(super::melee_material_emissivity("ND-shard", 0.5), 0.5);
+    }
+
     use std::{cell::RefCell, collections::HashMap, io::Cursor};
 
     use engine::assets::{

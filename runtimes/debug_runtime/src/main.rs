@@ -1115,7 +1115,7 @@ fn run_game_blocking(
         let mut scene_for_render = Scene::from_objects(scene);
 
         // Add hand spotlights
-        let hand_spotlights = game.get_hand_spotlights();
+        let hand_spotlights = game.get_hand_lights();
         for spotlight in hand_spotlights {
             scene_for_render.lights_mut().add_light(spotlight);
         }
@@ -1166,6 +1166,8 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
             let render_layer = obj.render_layer();
             let first_in_layer = seen_layers.insert(render_layer);
             commands::SceneObjectSummary {
+                material_name: obj.material_name.as_deref().map(str::to_owned),
+                emissivity: obj.material.borrow().emissivity(),
                 // Match /entities' public IDs: a deferred effect can reuse a
                 // dead flash's slot with nonzero Shipyard generation bits.
                 entity_id: tag.and_then(|t| t.entity_id).map(|id| id as i32),
@@ -2051,6 +2053,23 @@ fn process_command(
                 .cloned()
                 .collect();
             let result = commands::SceneListResult {
+                carried_lights: game
+                    .get_hand_lights()
+                    .into_iter()
+                    .map(|light| {
+                        let p = light.position();
+                        let c = light.color_intensity();
+                        commands::CarriedLightSummary {
+                            kind: match light {
+                                engine::scene::light::SceneLight::Point(_) => "point",
+                                _ => "spot",
+                            },
+                            position: [p.x, p.y, p.z],
+                            color_intensity: [c.x, c.y, c.z, c.w],
+                            range: light.range(),
+                        }
+                    })
+                    .collect(),
                 objects,
                 total_count,
                 matched_count,
@@ -3911,6 +3930,7 @@ async fn list_scene_objects(
     let (reply_tx, reply_rx) = oneshot::channel();
 
     let empty = || commands::SceneListResult {
+        carried_lights: vec![],
         objects: vec![],
         total_count: 0,
         matched_count: 0,

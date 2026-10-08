@@ -12,7 +12,7 @@ use engine::{
     audio::AudioContext,
     scene::{
         SceneObject, basic_material, color_material, create_plane_with_uv_scale, cube,
-        light::{LightArray, PointLight, SpotLight},
+        light::{LightArray, PointLight},
     },
 };
 use rapier3d::prelude::{Collider, ColliderBuilder, Isometry, SharedShape};
@@ -369,8 +369,8 @@ impl GameScene for DebugScene {
         )
     }
 
-    fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
-        self.core.get_hand_spotlights(options)
+    fn get_hand_lights(&self, options: &GameOptions) -> Vec<engine::scene::light::SceneLight> {
+        self.core.get_hand_lights(options)
     }
 
     fn world(&self) -> &shipyard::World {
@@ -620,8 +620,8 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
         )
     }
 
-    fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
-        self.core.get_hand_spotlights(options)
+    fn get_hand_lights(&self, options: &GameOptions) -> Vec<engine::scene::light::SceneLight> {
+        self.core.get_hand_lights(options)
     }
 
     fn world(&self) -> &shipyard::World {
