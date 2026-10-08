@@ -4,6 +4,7 @@ use tracing::info;
 
 mod data_loader;
 mod entity_analyzer;
+mod inventory_audit;
 mod motion_analyzer;
 mod speech_analyzer;
 mod weapon_audit;
@@ -28,6 +29,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Export inherited inventory-item models, including mission overrides
+    InventoryAudit {
+        /// Also scan every installed mission
+        #[arg(long)]
+        all_missions: bool,
+    },
     /// Export inherited weapon/projectile properties and links as JSON
     WeaponAudit { mission: Option<String> },
     /// Query entities and templates from gamesys and optional mission
@@ -142,6 +149,7 @@ fn main() -> Result<()> {
     info!("Starting dark_query");
 
     match cli.command {
+        Commands::InventoryAudit { all_missions } => inventory_audit::run(all_missions)?,
         Commands::WeaponAudit { mission } => weapon_audit::run(mission.as_deref())?,
         Commands::Entities {
             mission,
