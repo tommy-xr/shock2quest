@@ -79,6 +79,7 @@ mod psi_mine;
 mod psi_sword;
 mod put_bomb_in_replicator;
 pub mod radiation;
+mod reduce_hp;
 mod reduce_psi;
 mod reroute_elevator_button;
 mod researchable;
@@ -1064,7 +1065,7 @@ impl ScriptWorld {
 
             // TODO: Necessary
             "changeinterface" => Box::new(NoopScript::new()),
-            "reducehp" => Box::new(NoopScript::new()),
+            "reducehp" => Box::new(reduce_hp::ReduceHp),
             "engineremoverad" => Box::new(hazard_objects::HazardObject::EngineCleanup),
             "radroom" => Box::new(hazard_objects::HazardObject::Room),
             // SHODAN's ordinary creature/base-monster scripts own combat and
