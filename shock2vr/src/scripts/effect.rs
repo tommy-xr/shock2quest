@@ -318,6 +318,11 @@ pub enum Effect {
         amount: i32,
     },
 
+    /// Authored training pool assignment, without combat damage feedback.
+    SetPlayerHitPoints {
+        hit_points: i32,
+    },
+
     AdjustHitPoints {
         entity_id: EntityId,
         delta: i32,

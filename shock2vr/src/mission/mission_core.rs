@@ -12063,6 +12063,13 @@ impl MissionCore {
                     effects.extend(spend_player_psi_points(&self.world, amount));
                 }
 
+                Effect::SetPlayerHitPoints { hit_points } => {
+                    if self.player_is_alive() {
+                        self.world
+                            .add_component(player_entity, PropHitPoints { hit_points });
+                    }
+                }
+
                 Effect::SetPsiPoints { points } => {
                     update_player_psi_points(&self.world, |_| points);
                 }
