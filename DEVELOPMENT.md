@@ -485,8 +485,10 @@ blade in 0.18 seconds with a short controller pulse and a quiet positional
 `ES_loop` hum. Releasing it retracts the blade in 0.14 seconds and fades/stops
 the loop. Ownership comes from the existing hands/holsters; quick redraws
 reverse the animation without restarting the hum. The blade must finish
-extending before it can damage or play a damage-speed whoosh. Flatscreen keeps
-its authored blade presentation.
+extending before it can damage or play a damage-speed whoosh. Its held collider
+grows from the measured hilt bounds with the blade, respecting the authored grip
+scale, so a retracted tip cannot block the hand. Flatscreen keeps its authored
+blade presentation.
 
 `/v1/info` includes `player.hand_feedback.rapiers` (entity, extension, held,
 hum handle); `/v1/audio/loops` reports the live loop. The model's separate

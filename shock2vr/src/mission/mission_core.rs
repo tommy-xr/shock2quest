@@ -5302,6 +5302,13 @@ impl MissionCore {
                     });
                 self.physics.set_held_recovery_context(entity, context);
             }
+            // Match the blade rendered on the previous frame before sweeping it.
+            for entity in [held.0, held.1].into_iter().flatten() {
+                if let Some(bounds) = crate::rapier::collider_bounds(&self.world, entity) {
+                    self.physics
+                        .fit_held_item_cuboid(entity, bounds.size, bounds.center);
+                }
+            }
             self.physics.rebase_held_targets(
                 &self.player_handle,
                 new_rotation,
@@ -13502,6 +13509,37 @@ impl MissionCore {
                                                         "wield '{model_name}': baked arm unmeasured"
                                                     ),
                                                 }
+                                                let bounds = if crate::rapier::is_rapier(
+                                                    &self.world,
+                                                    entity_id,
+                                                ) {
+                                                    let hilt = vr_held_source
+                                                        .as_ref()
+                                                        .and_then(|source| {
+                                                            source.posed_weapon_bounds_filtered(
+                                                                &player,
+                                                                correction,
+                                                                |name| {
+                                                                    !name.eq_ignore_ascii_case(
+                                                                        "ND-rapier_b.psd",
+                                                                    )
+                                                                },
+                                                            )
+                                                        })
+                                                        .unwrap_or(bounds);
+                                                    let collider = crate::rapier::Collider {
+                                                        hilt,
+                                                        full: bounds,
+                                                    };
+                                                    self.world.add_component(entity_id, collider);
+                                                    crate::rapier::collider_bounds(
+                                                        &self.world,
+                                                        entity_id,
+                                                    )
+                                                    .unwrap_or(bounds)
+                                                } else {
+                                                    bounds
+                                                };
                                                 self.physics.fit_held_item_cuboid(
                                                     entity_id,
                                                     bounds.size,
@@ -18112,6 +18150,9 @@ impl MissionCore {
                     size,
                     center,
                 } => {
+                    let (size, center) = crate::rapier::collider_bounds(&self.world, entity_id)
+                        .map(|b| (b.size, b.center))
+                        .unwrap_or((size, center));
                     self.physics.fit_held_item_cuboid(entity_id, size, center);
                     if crate::pipe_melee::is_ranged_guard(&self.world, entity_id) {
                         self.world

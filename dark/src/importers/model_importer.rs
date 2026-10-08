@@ -290,6 +290,7 @@ pub struct VrHeldModel {
 
 #[derive(Clone)]
 struct VrHeldWeaponGeometry {
+    material_runs: Vec<(String, Vec<VertexPositionTextureSkinnedNormal>)>,
     vertices: Vec<VertexPositionTextureSkinnedNormal>,
     /// The complement of `vertices` - the baked hand and forearm. Kept only so
     /// the arm can be *measured* against the weapon it holds: a first-person
@@ -319,6 +320,17 @@ impl VrHeldModel {
         player: &AnimationPlayer,
         local_transform: Matrix4<f32>,
     ) -> Option<VrHeldWeaponBounds> {
+        self.posed_weapon_bounds_filtered(player, local_transform, |_| true)
+    }
+
+    /// Fit selected authored materials, for weapons with independently deployed parts.
+    /// Classic meshes without separate materials keep their normal weapon bounds.
+    pub fn posed_weapon_bounds_filtered(
+        &self,
+        player: &AnimationPlayer,
+        local_transform: Matrix4<f32>,
+        include: impl Fn(&str) -> bool,
+    ) -> Option<VrHeldWeaponBounds> {
         let geometry = self.weapon_geometry.as_ref()?;
         let pose = player.get_transforms(&geometry.skeleton);
         let palette = match &geometry.bind {
@@ -334,7 +346,17 @@ impl VrHeldModel {
             }
         };
 
-        bounds_of_skinned_vertices(&geometry.vertices, &palette, local_transform)
+        if geometry.material_runs.is_empty() {
+            bounds_of_skinned_vertices(&geometry.vertices, &palette, local_transform)
+        } else {
+            let selected = geometry
+                .material_runs
+                .iter()
+                .filter(|(name, _)| include(name))
+                .flat_map(|(_, vertices)| vertices.iter().cloned())
+                .collect::<Vec<_>>();
+            bounds_of_skinned_vertices(&selected, &palette, local_transform)
+        }
     }
 
     /// The same fit over the baked hand/forearm instead of the weapon. Purely
@@ -424,6 +446,7 @@ fn obj_weapon_geometry(obj: &SystemShock2ObjectMesh) -> Option<VrHeldWeaponGeome
     }
 
     (!vertices.is_empty()).then(|| VrHeldWeaponGeometry {
+        material_runs: Vec::new(),
         vertices,
         arm_vertices,
         skeleton: Rc::new(ss2_bin_obj_loader::obj_skeleton(obj)),
@@ -452,6 +475,14 @@ fn skinned_weapon_geometry(
         let has_named_arm = runs
             .iter()
             .any(|(material, _)| is_melee_arm_material(material));
+        let material_runs = if has_named_arm {
+            runs.iter()
+                .filter(|(name, _)| !is_melee_arm_material(name))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
         let (vertices, arm_vertices) = if has_named_arm {
             let (arm, weapon): (Vec<_>, Vec<_>) = runs
                 .into_iter()
@@ -469,6 +500,7 @@ fn skinned_weapon_geometry(
             return None;
         }
         return Some(VrHeldWeaponGeometry {
+            material_runs,
             vertices,
             arm_vertices,
             skeleton: skeleton.clone(),
@@ -487,6 +519,7 @@ fn skinned_weapon_geometry(
             .flat_map(|(_, vertices)| vertices),
     );
     (!vertices.is_empty()).then_some(VrHeldWeaponGeometry {
+        material_runs: Vec::new(),
         vertices,
         arm_vertices,
         skeleton: skeleton.clone(),

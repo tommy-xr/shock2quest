@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use cgmath::{InnerSpace, Matrix3, Matrix4, SquareMatrix, Vector3, vec3};
-use dark::properties::PropLimbModel;
+use dark::{importers::VrHeldWeaponBounds, properties::PropLimbModel};
 use engine::{audio::AudioHandle, scene::SceneObject};
 use shipyard::{Component, EntityId, Get, View, World};
 
@@ -17,6 +17,42 @@ const HUM_GAIN: f32 = 0.056234;
 
 #[derive(Component, Clone, Copy)]
 pub(crate) struct Blade(pub f32);
+
+/// Endpoint envelopes measured from the authored hilt and complete weapon.
+/// Interpolation keeps the whole hilt inside the collider at every extension.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct Collider {
+    pub hilt: VrHeldWeaponBounds,
+    pub full: VrHeldWeaponBounds,
+}
+
+impl Collider {
+    pub fn bounds(self, extension: f32) -> VrHeldWeaponBounds {
+        let t = extension.clamp(0.0, 1.0);
+        VrHeldWeaponBounds {
+            size: self.hilt.size + (self.full.size - self.hilt.size) * t,
+            center: self.hilt.center + (self.full.center - self.hilt.center) * t,
+        }
+    }
+}
+
+pub(crate) fn collider_bounds(world: &World, entity: EntityId) -> Option<VrHeldWeaponBounds> {
+    let collider = world
+        .borrow::<View<Collider>>()
+        .ok()?
+        .get(entity)
+        .ok()
+        .copied()?;
+    let scale = world
+        .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+        .ok()
+        .and_then(|v| v.get(entity).ok().map(|weapon| weapon.item_scale))
+        .unwrap_or(1.0);
+    let mut bounds = collider.bounds(amount(world, entity));
+    bounds.size *= scale;
+    bounds.center *= scale;
+    Some(bounds)
+}
 
 #[derive(Default)]
 struct Activation {
@@ -197,6 +233,45 @@ pub(crate) fn animate(objects: &mut Vec<SceneObject>, extension: f32, held_model
 mod tests {
     use super::*;
     use cgmath::{Transform, point3};
+
+    #[test]
+    fn extending_collider_retains_the_hilt_and_reaches_the_full_blade() {
+        let hilt = VrHeldWeaponBounds {
+            size: vec3(0.2, 0.4, 0.2),
+            center: vec3(0.0, 0.0, 0.0),
+        };
+        let full = VrHeldWeaponBounds {
+            size: vec3(0.2, 1.4, 0.2),
+            center: vec3(0.0, 0.5, 0.0),
+        };
+        let collider = Collider { hilt, full };
+        assert_eq!(collider.bounds(0.0), hilt);
+        assert_eq!(collider.bounds(1.0), full);
+        let mut world = World::new();
+        let entity = world.add_entity((
+            collider,
+            Blade(1.0),
+            crate::runtime_props::RuntimePropGloveWeapon {
+                item_scale: 0.7,
+                magazine_removed: false,
+                magazine_anchor: None,
+            },
+        ));
+        let scaled = collider_bounds(&world, entity).unwrap();
+        assert_eq!(scaled.size, full.size * 0.7);
+        assert_eq!(scaled.center, full.center * 0.7);
+        for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let b = collider.bounds(t);
+            assert!(
+                (b.center.y - b.size.y / 2.0 + 0.2).abs() < 1e-6,
+                "hilt base must stay fixed"
+            );
+            assert!(
+                (b.center.y + b.size.y / 2.0 - (0.2 + t)).abs() < 1e-6,
+                "tip must follow extension"
+            );
+        }
+    }
 
     #[test]
     fn draw_reverses_retraction_without_reset_or_extra_draw_pulses() {
