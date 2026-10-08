@@ -30,8 +30,8 @@
       0.6
     ],
     "grab_radius": 0.07,
-    "release_distance": 0.12,
-    "max_swing_degrees": 75.0
+    "release_distance": 0.6,
+    "max_swing_degrees": 150.0
   },
   "ar15_h": {
     "palm_anchor": [
@@ -52,8 +52,8 @@
       0.65
     ],
     "grab_radius": 0.07,
-    "release_distance": 0.12,
-    "max_swing_degrees": 75.0
+    "release_distance": 0.6,
+    "max_swing_degrees": 150.0
   },
   "atek_h": {
     "palm_anchor": [
@@ -74,8 +74,8 @@
       0.4
     ],
     "grab_radius": 0.07,
-    "release_distance": 0.12,
-    "max_swing_degrees": 75.0
+    "release_distance": 0.6,
+    "max_swing_degrees": 150.0
   },
   "fsn_h": {
     "palm_anchor": [
@@ -108,8 +108,8 @@
       0.45
     ],
     "grab_radius": 0.07,
-    "release_distance": 0.12,
-    "max_swing_degrees": 75.0
+    "release_distance": 0.6,
+    "max_swing_degrees": 150.0
   },
   "rapier_h": {
     "palm_anchor": [
@@ -130,8 +130,8 @@
       0.6666667
     ],
     "grab_radius": 0.07,
-    "release_distance": 0.12,
-    "max_swing_degrees": 75.0
+    "release_distance": 0.6,
+    "max_swing_degrees": 150.0
   },
   "sg_h": {
     "palm_anchor": [
@@ -179,8 +179,8 @@
       0.5833333
     ],
     "grab_radius": 0.07,
-    "release_distance": 0.12,
-    "max_swing_degrees": 75.0
+    "release_distance": 0.6,
+    "max_swing_degrees": 150.0
   },
   "wrench_h": {
     "palm_anchor": [
@@ -213,7 +213,7 @@
       0.6
     ],
     "grab_radius": 0.07,
-    "release_distance": 0.12,
-    "max_swing_degrees": 75.0
+    "release_distance": 0.6,
+    "max_swing_degrees": 150.0
   }
 }
