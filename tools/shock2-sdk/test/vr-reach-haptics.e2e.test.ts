@@ -77,6 +77,12 @@ test("enlarged holster accepts a release thirty centimetres below its mesh", { s
 
 test("glove sphere contacts a holster while its calibrated palm is still outside", { skip: !enabled, timeout: 180_000 }, async () => {
   await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+  // An empty hand ignores an empty holster, so carry a holsterable pistol.
+  await game.step({ frames: 30 });
+  const pistol = (await game.entities.list()).entities.find(e => e.template_id === -17)!;
+  await aimVrHandAt(game, pistol.position, 0.2, 1, 0, { hand: "right" });
+  await game.step({ frames: 5 });
+  assert.equal((await game.info()).player.right_hand_entity_id, pistol.id);
   const start: [number, number, number] = [0.8, 1, -0.4];
   await game.input.set("right_hand.position", start);
   await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
