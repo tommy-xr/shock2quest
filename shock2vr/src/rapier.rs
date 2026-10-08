@@ -9,7 +9,7 @@ use shipyard::{Component, EntityId, Get, View, World};
 
 use crate::{Handedness, haptics::HapticPulse, scripts::Effect};
 
-const EXTEND_SECONDS: f32 = 0.18;
+const EXTEND_SECONDS: f32 = 0.45;
 const RETRACT_SECONDS: f32 = 0.14;
 // patch_ext's ES_loop override is -2500 millibels. Keep the continuous near-ear
 // source at that quiet level, fading with the blade instead of retriggering it.
@@ -276,13 +276,13 @@ mod tests {
     #[test]
     fn draw_reverses_retraction_without_reset_or_extra_draw_pulses() {
         let mut s = Activation::default();
-        assert!(s.advance(true, 0.09));
+        assert!(s.advance(true, EXTEND_SECONDS / 2.0));
         assert!((s.amount - 0.5).abs() < 0.001);
-        assert!(!s.advance(true, 0.09));
+        assert!(!s.advance(true, EXTEND_SECONDS / 2.0));
         assert_eq!(s.amount, 1.0);
         assert!(!s.advance(false, 0.07));
         assert!((s.amount - 0.5).abs() < 0.001);
-        assert!(s.advance(true, 0.09));
+        assert!(s.advance(true, EXTEND_SECONDS / 2.0));
         assert_eq!(s.amount, 1.0);
         s.advance(false, 1.0);
         assert_eq!(s.amount, 0.0);
@@ -300,7 +300,7 @@ mod tests {
                 .any(|e| matches!(e, Effect::PlaySpatialLoopingSound { .. }))
         );
         assert!(!ready(&world, entity));
-        let swap = feedback.update(&mut world, [None, Some(entity)], true, 0.1);
+        let swap = feedback.update(&mut world, [None, Some(entity)], true, EXTEND_SECONDS);
         assert!(ready(&world, entity));
         assert!(!swap.iter().any(|e| matches!(
             e,

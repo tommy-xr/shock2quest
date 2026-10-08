@@ -481,7 +481,7 @@ to the shard's whoosh. Flatscreen plays the cue once when a swing is accepted.
 ### VR laser rapier activation
 
 The remaster rapier is hilt-only while stowed or loose. Grabbing it extends the
-blade in 0.18 seconds with a short controller pulse and a quiet positional
+blade in 0.45 seconds with a short controller pulse and a quiet positional
 `ES_loop` hum. Releasing it retracts the blade in 0.14 seconds and fades/stops
 the loop. Ownership comes from the existing hands/holsters; quick redraws
 reverse the animation without restarting the hum. The blade must finish
