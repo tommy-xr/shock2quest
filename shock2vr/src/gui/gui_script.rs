@@ -17,6 +17,7 @@ where
 {
     handle: Option<GuiHandle>,
     cursor: Point2<f32>,
+    hover_by_hand: [Option<Point2<f32>>; 2],
     gui: Box<dyn Gui<TState, TMsg>>,
     state: TState,
     last_input_info_by_hand: [Option<GuiInputInfo>; 2],
@@ -32,6 +33,7 @@ where
         GuiScript {
             handle: None,
             cursor: point2(0.0, 0.0),
+            hover_by_hand: [None; 2],
             gui,
             state: TState::default(),
             last_input_info_by_hand: [None, None],
@@ -78,10 +80,19 @@ where
             texture: "cursor.pcx".to_owned(),
             kind: crate::ui::ImageKind::Ui,
         });
+        let hover = std::mem::take(&mut self.hover_by_hand);
         let render_components = canvas
             .into_elements()
             .into_iter()
-            .map(|c| c.to_render_info(config.screen_size_in_pixels, self.cursor))
+            .map(|c| {
+                let cursor = hover
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .find(|p| c.rect().contains(vec2(p.x, p.y)))
+                    .unwrap_or(point2(-1.0, -1.0));
+                c.to_render_info(config.screen_size_in_pixels, cursor)
+            })
             .collect();
 
         Effect::SetUI {
@@ -188,6 +199,7 @@ where
                     }
                 }
 
+                self.hover_by_hand[hand_index] = Some(cursor);
                 self.cursor = cursor;
                 self.last_input_info_by_hand[hand_index] = Some(current_input_info);
 
@@ -252,6 +264,71 @@ mod tests {
             _msg: &(),
         ) -> (usize, Effect) {
             (state + 1, Effect::NoEffect)
+        }
+    }
+
+    struct TwoButtons;
+    impl Gui<(), ()> for TwoButtons {
+        fn get_components(
+            &self,
+            _: &Option<GuiCursor>,
+            _: EntityId,
+            _: &World,
+            _: &(),
+        ) -> Vec<GuiComponent<()>> {
+            [0.0, 50.0]
+                .map(|x| {
+                    gui::button(())
+                        .with_position(vec2(x, 0.0))
+                        .with_size(vec2(50.0, 100.0))
+                        .with_image("off.pcx")
+                        .with_hover(crate::ui::ButtonHoverBehavior::Texture("on.pcx".into()))
+                })
+                .to_vec()
+        }
+        fn get_config(&self) -> crate::gui::GuiConfig {
+            CountingGui.get_config()
+        }
+        fn handle_msg(&self, _: EntityId, _: &World, _: &(), _: &()) -> ((), Effect) {
+            ((), Effect::NoEffect)
+        }
+    }
+
+    #[test]
+    fn both_hands_highlight_their_own_widget_and_clear_when_they_leave() {
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        let physics = PhysicsWorld::new();
+        let mut script = GuiScript::new(Box::new(TwoButtons));
+        script.initialize(entity, &world);
+        for (hand, x) in [(Handedness::Left, 0.25), (Handedness::Right, 0.75)] {
+            script.handle_message(
+                entity,
+                &world,
+                &physics,
+                &MessagePayload::GUIHover {
+                    held_entity_id: None,
+                    screen_coordinates: point2(x, 0.5),
+                    is_triggered: false,
+                    is_grabbing: false,
+                    hand,
+                },
+            );
+        }
+        let time = Time {
+            elapsed: std::time::Duration::ZERO,
+            total: std::time::Duration::ZERO,
+        };
+        for expected in ["on.pcx", "off.pcx"] {
+            let Effect::SetUI { components, .. } = script.update(entity, &world, &physics, &time)
+            else {
+                panic!("expected UI");
+            };
+            for component in &components[..2] {
+                assert!(
+                    matches!(component, crate::gui::GuiComponentRenderInfo::Image { texture, .. } if texture == expected)
+                );
+            }
         }
     }
 
