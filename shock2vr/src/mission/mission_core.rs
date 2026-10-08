@@ -12987,6 +12987,9 @@ impl MissionCore {
                 Effect::StartHordeWave { wave } => {
                     effects.push_front(super::earth_horde::wave_jump_message(&self.world, wave));
                 }
+                Effect::SendWithOrigin { msg, origin } => {
+                    self.script_world.dispatch_with_origin(msg, origin);
+                }
                 Effect::Send { msg } => {
                     println!("handling Effect::Send event: {:?}", msg);
                     self.script_world.dispatch(msg);
@@ -23178,7 +23181,7 @@ mod hit_point_delta_tests {
         let messages = reactions
             .into_iter()
             .filter_map(|effect| match effect {
-                Effect::Send { msg } => Some(msg),
+                Effect::Send { msg } | Effect::SendWithOrigin { msg, .. } => Some(msg),
                 _ => None,
             })
             .collect::<Vec<_>>();

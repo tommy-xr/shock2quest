@@ -1,3 +1,5 @@
+mod message_origin;
+pub use message_origin::MessageOrigin;
 pub mod ai;
 pub mod effect;
 pub(crate) mod proximity_grenade;
@@ -660,6 +662,20 @@ pub trait Script {
         Effect::NoEffect
     }
 
+    /// Relays preserve this activation through their returned Send effects.
+    /// Most scripts need only the payload; delays and sound cancellation also
+    /// need its causal identity, which is deliberately separate from `from`.
+    fn handle_message_with_origin(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        physics: &PhysicsWorld,
+        msg: &MessagePayload,
+        _origin: MessageOrigin,
+    ) -> Effect {
+        self.handle_message(entity_id, world, physics, msg)
+    }
+
     /// Read-only view of native AI stasis, shared by animation/physics gates.
     fn stasis(&self) -> Option<&stasis::StasisState> {
         None
@@ -848,6 +864,26 @@ impl Script for CompositeScript {
         Effect::combine(effects)
     }
 
+    fn handle_message_with_origin(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        physics: &PhysicsWorld,
+        msg: &MessagePayload,
+        origin: MessageOrigin,
+    ) -> Effect {
+        Effect::combine(
+            self.scripts
+                .iter_mut()
+                .map(|instance| {
+                    instance
+                        .script
+                        .handle_message_with_origin(entity_id, world, physics, msg, origin)
+                })
+                .collect(),
+        )
+    }
+
     fn initialize_after_hydration(
         &mut self,
         entity_id: EntityId,
@@ -974,7 +1010,7 @@ impl Script for NoopScript {
 pub struct ScriptWorld {
     entity_has_initialized: HashMap<EntityId, bool>,
     entity_to_scripts: HashMap<EntityId, Vec<ScriptInstance>>,
-    message_queue: Vec<Message>,
+    message_queue: Vec<(Message, MessageOrigin)>,
     /// Floating damage readouts earned by the messages dispatched here, drawn
     /// by the mission's render pass. Owned by the script world so they die
     /// with their scene - a readout is a world point in one level.
@@ -1423,6 +1459,7 @@ impl ScriptWorld {
             return Vec::new();
         }
         let message = MessagePayload::HitPointsChanged { previous, current };
+        let origin = MessageOrigin::new();
         let effects = self
             .entity_to_scripts
             .get_mut(&entity)
@@ -1431,14 +1468,19 @@ impl ScriptWorld {
             .map(|instance| {
                 instance
                     .script
-                    .handle_message(entity, world, physics, &message)
+                    .handle_message_with_origin(entity, world, physics, &message, origin)
+                    .with_message_origin(origin)
             })
             .collect();
         Effect::flatten(effects)
     }
 
     pub fn dispatch(&mut self, message: Message) {
-        self.message_queue.push(message);
+        self.dispatch_with_origin(message, MessageOrigin::new());
+    }
+
+    pub fn dispatch_with_origin(&mut self, message: Message, origin: MessageOrigin) {
+        self.message_queue.push((message, origin));
     }
 
     /// Snapshot all opting-in private script state. The output is sorted so
@@ -1545,7 +1587,7 @@ impl ScriptWorld {
                                 world,
                                 instance.hydrated,
                             );
-                            produced_effects.push(eff);
+                            produced_effects.push(eff.with_message_origin(MessageOrigin::new()));
                         }
                     });
 
@@ -1560,7 +1602,7 @@ impl ScriptWorld {
         let mut new_damage_popups = Vec::new();
         let span = span!(Level::INFO, "messages");
         let _ = span.enter();
-        for msg in &self.message_queue {
+        for (msg, origin) in &self.message_queue {
             let to_entity_id = msg.to;
             let researched_damage = match msg.payload {
                 MessagePayload::Damage { amount, impact } => Some(MessagePayload::Damage {
@@ -1617,11 +1659,14 @@ impl ScriptWorld {
                                 debug_entity(world, to_entity_id)
                             );
                         }
-                        let eff =
-                            instance
-                                .script
-                                .handle_message(to_entity_id, world, physics, payload);
-                        produced_effects.push(eff);
+                        let eff = instance.script.handle_message_with_origin(
+                            to_entity_id,
+                            world,
+                            physics,
+                            payload,
+                            *origin,
+                        );
+                        produced_effects.push(eff.with_message_origin(*origin));
                     }
                 });
         }
@@ -1637,7 +1682,7 @@ impl ScriptWorld {
         for (entity_id, scripts) in self.entity_to_scripts.iter_mut() {
             for instance in scripts.iter_mut() {
                 let eff = instance.script.update(*entity_id, world, physics, time);
-                produced_effects.push(eff);
+                produced_effects.push(eff.with_message_origin(MessageOrigin::new()));
             }
         }
 
@@ -1647,6 +1692,10 @@ impl ScriptWorld {
         // TODO: Is this necessary to filter out and manually queue?
         let mut ret = Vec::new();
         for eff in flattened_effects {
+            let (eff, origin) = match eff {
+                Effect::SendWithOrigin { msg, origin } => (Effect::Send { msg }, origin),
+                other => (other, MessageOrigin::new()),
+            };
             match eff {
                 Effect::Send { msg } if matches!(msg.payload, MessagePayload::Slay) => {
                     let entity_id = msg.to;
@@ -1662,17 +1711,21 @@ impl ScriptWorld {
                     let mut slay_effects = Vec::new();
                     if let Some(scripts) = self.entity_to_scripts.get_mut(&entity_id) {
                         for instance in scripts {
-                            slay_effects.push(instance.script.handle_message(
+                            slay_effects.push(instance.script.handle_message_with_origin(
                                 entity_id,
                                 world,
                                 physics,
                                 &MessagePayload::Slay,
+                                origin,
                             ));
                         }
                     }
                     for slay_effect in Effect::flatten(slay_effects) {
                         match slay_effect {
-                            Effect::Send { msg } => self.message_queue.push(msg),
+                            Effect::Send { msg } => self.message_queue.push((msg, origin)),
+                            Effect::SendWithOrigin { msg, origin } => {
+                                self.message_queue.push((msg, origin))
+                            }
                             other => ret.push(other),
                         }
                     }
@@ -1680,7 +1733,7 @@ impl ScriptWorld {
                         ret.push(Effect::SlayEntity { entity_id });
                     }
                 }
-                Effect::Send { msg } => self.message_queue.push(msg),
+                Effect::Send { msg } => self.message_queue.push((msg, origin)),
                 _ => ret.push(eff),
             }
         }

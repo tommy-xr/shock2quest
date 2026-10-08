@@ -488,9 +488,10 @@ pub fn create_entity_core(
     } else {
         Vec::new()
     };
-    // An object running both flavours (earth's narration traps: their own
-    // TrapSoundAmb plus the archetype's TrapSound) keeps one play, at the trap,
-    // so a late montage segment stays distant rather than at the ears.
+    // An object running both flavours keeps one play, at the trap. This is
+    // deduplication, not a narration-overlap policy: Earth's montage disables
+    // inheritance and runs only TrapSoundAmb. TrapSound's activation ordering
+    // rejects stale starts without making ambient announcements positional.
     if processed_scripts
         .iter()
         .any(|script| script.eq_ignore_ascii_case("TrapSound"))

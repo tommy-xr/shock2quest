@@ -952,6 +952,11 @@ pub enum Effect {
     Send {
         msg: Message,
     },
+    /// A relay or timer preserves the activation that requested this message.
+    SendWithOrigin {
+        msg: Message,
+        origin: super::MessageOrigin,
+    },
     PlayEmail {
         deck: u32,
         email: u32,
@@ -1522,6 +1527,26 @@ mod tests {
 }
 
 impl Effect {
+    pub(crate) fn with_message_origin(self, origin: super::MessageOrigin) -> Self {
+        match self {
+            Self::Send { msg } => Self::SendWithOrigin { msg, origin },
+            Self::Combined { effects } => Self::Combined {
+                effects: effects
+                    .into_iter()
+                    .map(|effect| effect.with_message_origin(origin))
+                    .collect(),
+            },
+            Self::Multiple(effects) => Self::Multiple(
+                effects
+                    .into_iter()
+                    .map(|effect| effect.with_message_origin(origin))
+                    .collect(),
+            ),
+            // An explicit origin from a delayed message must not be replaced.
+            other => other,
+        }
+    }
+
     pub fn combine(effects: Vec<Effect>) -> Effect {
         Effect::Combined { effects }
     }
