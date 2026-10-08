@@ -924,6 +924,7 @@ mod tests {
     fn pointer_at(rect: Rect, pressed: bool) -> Option<Pointer2D> {
         let center = rect.center();
         Some(Pointer2D {
+            secondary_pressed: false,
             position: vec2(center.x / CANVAS_W, center.y / CANVAS_H),
             pressed,
         })
@@ -1418,6 +1419,7 @@ mod tests {
         // The flat pointer counts too.
         let clicking = InputContext {
             pointer: Some(Pointer2D {
+                secondary_pressed: false,
                 position: vec2(0.5, 0.5),
                 pressed: true,
             }),

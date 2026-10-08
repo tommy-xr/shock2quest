@@ -82,6 +82,7 @@ const NAME_STRIP_FONT: &str = "mainfont.fon";
 /// cursor), so it is always reachable and serializes correctly on
 /// save/transition. **Place** only requests audible feedback. **Throw**
 /// detaches it and gives it world presence with an impulse along the view ray;
+/// **Apply** offers it to an explicitly accepting crosshair target;
 /// **Wield** equips/uses it (a double-click) via the same effect as a backpack
 /// click, acting on the still-contained item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +90,7 @@ pub enum FlatUiDragAction {
     ToggleMap,
     Place(EntityId),
     Throw(EntityId),
+    Apply(EntityId),
     Wield(EntityId),
     /// VR trigger uses the item in place; squeeze remains the grab gesture.
     UseInventory(EntityId),
@@ -143,6 +145,8 @@ pub enum BareViewPress {
 /// the mouse and the VR ray cannot drift into two different interfaces.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CanvasPointer {
+    /// Flat RMB applies a cursor tool; VR supplies false.
+    pub secondary_pressed: bool,
     /// Where the pointer is on the 640x480 canvas, or `None` when it is off it
     /// (flat: the letterbox bars; VR: the ray missed the panel).
     pub canvas_pos: Option<Vector2<f32>>,
@@ -199,6 +203,7 @@ pub fn vr_canvas_pointer(
     grabbing_hands[crate::vr_config::hand_slot(Handedness::Right)] =
         squeezing(&input_context.right_hand);
     CanvasPointer {
+        secondary_pressed: false,
         canvas_pos: pass.point(),
         pressed: pass.pressed,
         grabbing: grabbing_hands[crate::vr_config::hand_slot(hand)],
@@ -298,6 +303,7 @@ pub struct FlatUiHost {
     /// directly), so a squeeze held while the ray swept the grid would take
     /// every slot it crossed.
     last_pointer_grabbing: [bool; 2],
+    last_secondary_pointer_pressed: bool,
     /// Last known render-target size, for pointer->canvas letterbox mapping
     /// (updated every rendered frame; 4:3 default until the first render).
     screen_size: Vector2<f32>,
@@ -379,6 +385,7 @@ impl FlatUiHost {
             last_pointer_pressed: false,
             last_pointer: None,
             last_pointer_grabbing: [false; 2],
+            last_secondary_pointer_pressed: false,
             screen_size: CANVAS_SIZE,
         }
     }
@@ -1035,11 +1042,12 @@ impl FlatUiHost {
 
     /// Per-frame pointer processing while in flat presentation. Returns the
     /// `GUIHover` messages to dispatch to the strip/panel entity plus any
-    /// cursor-drag [`FlatUiDragAction`]s (lift/place/throw) for the caller to
+    /// cursor-drag [`FlatUiDragAction`]s (lift/place/apply/throw) for the caller to
     /// apply. Handles the close gestures (close button, LMB on the bare view,
     /// walk-away, entity gone) and the cursor-is-the-item drag (§1.5/§2.4):
     /// LMB on a strip item lifts it onto the cursor, LMB on another slot
-    /// places/swaps, LMB on the bare view throws it into the world. A
+    /// places/swaps, LMB on the bare view throws it into the world, and RMB
+    /// on the bare view offers it to the crosshair target. A
     /// bare-view click closes the MFD panel but never the strip - use mode is
     /// left by Tab (projects/flat-ui.md §5.2).
     pub fn update(
@@ -1068,6 +1076,7 @@ impl FlatUiHost {
                 }
             }),
             pressed: pointer.pressed,
+            secondary_pressed: pointer.secondary_pressed,
             grabbing: false,
             grabbing_hands: [false; 2],
             hand: Handedness::Right,
@@ -1116,6 +1125,9 @@ impl FlatUiHost {
         let pressed = pointer.map(|p| p.pressed).unwrap_or(false);
         let pressed_edge = pressed && !self.last_pointer_pressed;
         self.last_pointer_pressed = pressed;
+        let secondary_pressed = pointer.map(|p| p.secondary_pressed).unwrap_or(false);
+        let secondary_pressed_edge = secondary_pressed && !self.last_secondary_pointer_pressed;
+        self.last_secondary_pointer_pressed = secondary_pressed;
 
         // MFD-slot auto-close: the bound object is gone (destroyed / level
         // state changed), or the player walked away from it (the original's
@@ -1175,6 +1187,11 @@ impl FlatUiHost {
         let Some(canvas_pos) = canvas_pos else {
             if self.utilities.is_inspecting() {
                 return (Vec::new(), Vec::new());
+            }
+            if secondary_pressed_edge {
+                if let Some(held) = self.cursor_item.as_ref() {
+                    return (Vec::new(), vec![FlatUiDragAction::Apply(held.entity)]);
+                }
             }
             if pressed_edge && pointer.bare_view == BareViewPress::Exit {
                 if let Some(held) = self.cursor_item.take() {
@@ -1297,10 +1314,16 @@ impl FlatUiHost {
                     .any(|rect| rect.contains(canvas_pos)));
 
         // --- Cursor-is-the-item drag: while an item rides the cursor, LMB
-        // places/swaps/throws it and never routes to a GuiScript (protecting
-        // the held item - the original blocks losing `drag_obj`). ---
+        // places/swaps/throws it. RMB over the bare view asks mission_core to
+        // apply it to the crosshair target, but deliberately keeps it on the
+        // cursor until the target actually consumes/destroys it. ---
         if self.cursor_item.is_some() {
             self.hover_close = false;
+            if secondary_pressed_edge && !over_strip && !over_panel && !over_readout {
+                let held = self.cursor_item.as_ref().unwrap().entity;
+                self.last_lift = None;
+                return (Vec::new(), vec![FlatUiDragAction::Apply(held)]);
+            }
             if !pressed_edge {
                 return (Vec::new(), Vec::new());
             }
@@ -2587,6 +2610,7 @@ mod tests {
         let bare_view_pressed = Pointer2D {
             position: vec2(0.9, 0.9),
             pressed: true,
+            secondary_pressed: false,
         };
         host.update(&world, Some(bare_view_pressed));
         assert!(
@@ -2599,6 +2623,7 @@ mod tests {
             Some(Pointer2D {
                 position: vec2(0.9, 0.9),
                 pressed: false,
+                secondary_pressed: false,
             }),
         );
         host.update(&world, Some(bare_view_pressed));
@@ -2804,6 +2829,7 @@ mod tests {
         host.update(
             &world,
             Some(Pointer2D {
+                secondary_pressed: false,
                 position: norm(over_slot.0, over_slot.1),
                 pressed: false,
             }),
@@ -2816,6 +2842,7 @@ mod tests {
         host.update(
             &world,
             Some(Pointer2D {
+                secondary_pressed: false,
                 position: norm(320.0, 400.0),
                 pressed: false,
             }),
@@ -2853,6 +2880,7 @@ mod tests {
         let over_strip = Pointer2D {
             position: vec2(0.5, 0.125),
             pressed: false,
+            secondary_pressed: false,
         };
         let (msgs, _) = host.update(&world, Some(over_strip));
         assert_eq!(msgs.len(), 1);
@@ -2862,6 +2890,7 @@ mod tests {
         let over_panel = Pointer2D {
             position: vec2(96.0 / 640.0, 272.0 / 480.0),
             pressed: false,
+            secondary_pressed: false,
         };
         let (msgs, _) = host.update(&world, Some(over_panel));
         assert_eq!(msgs.len(), 1);
@@ -2900,6 +2929,7 @@ mod tests {
             Some(Pointer2D {
                 position: bare,
                 pressed: false,
+                secondary_pressed: false,
             }),
         );
         host.update(
@@ -2907,6 +2937,7 @@ mod tests {
             Some(Pointer2D {
                 position: bare,
                 pressed: true,
+                secondary_pressed: false,
             }),
         );
         assert!(
@@ -2925,6 +2956,7 @@ mod tests {
             Some(Pointer2D {
                 position: bare,
                 pressed: false,
+                secondary_pressed: false,
             }),
         );
         host.update(
@@ -2932,6 +2964,7 @@ mod tests {
             Some(Pointer2D {
                 position: bare,
                 pressed: true,
+                secondary_pressed: false,
             }),
         );
         assert_eq!(host.strip_entity(), Some(inventory));
@@ -3033,6 +3066,7 @@ mod tests {
         host.update(
             world,
             Some(Pointer2D {
+                secondary_pressed: false,
                 position: norm(canvas.0, canvas.1),
                 pressed: false,
             }),
@@ -3040,6 +3074,7 @@ mod tests {
         host.update(
             world,
             Some(Pointer2D {
+                secondary_pressed: false,
                 position: norm(canvas.0, canvas.1),
                 pressed: true,
             }),
@@ -3057,6 +3092,7 @@ mod tests {
             Some(Pointer2D {
                 position: norm(canvas.0, canvas.1),
                 pressed: false,
+                secondary_pressed: false,
             }),
         );
         let (_msgs, actions) = host.update(
@@ -3064,6 +3100,31 @@ mod tests {
             Some(Pointer2D {
                 position: norm(canvas.0, canvas.1),
                 pressed: true,
+                secondary_pressed: false,
+            }),
+        );
+        actions
+    }
+
+    fn secondary_press_edge(
+        host: &mut FlatUiHost,
+        world: &World,
+        canvas: (f32, f32),
+    ) -> Vec<FlatUiDragAction> {
+        host.update(
+            world,
+            Some(Pointer2D {
+                position: norm(canvas.0, canvas.1),
+                pressed: false,
+                secondary_pressed: false,
+            }),
+        );
+        let (_msgs, actions) = host.update(
+            world,
+            Some(Pointer2D {
+                position: norm(canvas.0, canvas.1),
+                pressed: false,
+                secondary_pressed: true,
             }),
         );
         actions
@@ -3508,6 +3569,7 @@ mod tests {
             host.update(
                 &world,
                 Some(Pointer2D {
+                    secondary_pressed: false,
                     position: norm(23.5, 34.0),
                     pressed: false,
                 }),
@@ -3515,6 +3577,7 @@ mod tests {
             let (msgs, actions) = host.update(
                 &world,
                 Some(Pointer2D {
+                    secondary_pressed: false,
                     position: norm(23.5, 34.0),
                     pressed: true,
                 }),
@@ -3712,6 +3775,21 @@ mod tests {
         let actions = press_edge(&mut host, &world, (320.0, 300.0));
         assert_eq!(actions, vec![FlatUiDragAction::Throw(wrench)]);
         assert!(host.cursor_debug().is_none(), "throwing clears the cursor");
+    }
+
+    #[test]
+    fn secondary_clicking_the_bare_view_offers_but_keeps_the_item() {
+        let (world, mut host, wrench, _inv) = drag_world();
+        press_edge(&mut host, &world, (23.5, 34.0)); // lift
+
+        let actions = secondary_press_edge(&mut host, &world, (320.0, 300.0));
+
+        assert_eq!(actions, vec![FlatUiDragAction::Apply(wrench)]);
+        assert_eq!(
+            host.cursor_debug().map(|cursor| cursor.entity_id),
+            Some(wrench.inner() as i32),
+            "application keeps the item until a target actually consumes it",
+        );
     }
 
     #[test]
@@ -3981,7 +4059,13 @@ mod tests {
     fn paused_updates_do_not_consume_the_double_click_window() {
         let (world, mut host, wrench, _inv) = drag_world();
         let position = norm(23.5, 34.0);
-        let pointer = |pressed| Some(Pointer2D { position, pressed });
+        let pointer = |pressed| {
+            Some(Pointer2D {
+                secondary_pressed: false,
+                position,
+                pressed,
+            })
+        };
 
         // The HTTP input command itself is a zero-time update and observes
         // the first press edge before the requested stepped frames begin.
@@ -4426,6 +4510,7 @@ mod tests {
     fn a_held_squeeze_grabs_once_however_far_the_ray_sweeps() {
         let (world, mut host, _wrench, _inv) = drag_world();
         let grabbing = |canvas: (f32, f32)| CanvasPointer {
+            secondary_pressed: false,
             canvas_pos: Some(vec2(canvas.0, canvas.1)),
             pressed: false,
             grabbing: true,

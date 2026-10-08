@@ -380,6 +380,7 @@ mod tests {
         Some(Pointer2D {
             position: vec2(center.x / CANVAS_W, center.y / CANVAS_H),
             pressed,
+            secondary_pressed: false,
         })
     }
 

@@ -794,6 +794,7 @@ mod tests {
 
     fn pointer_at(canvas_point: Vector2<f32>, pressed: bool) -> Option<Pointer2D> {
         Some(Pointer2D {
+            secondary_pressed: false,
             position: vec2(canvas_point.x / CANVAS_W, canvas_point.y / CANVAS_H),
             pressed,
         })

@@ -106,6 +106,9 @@ fn suppress_hand_controls(hand: &mut Hand, holds_item: bool) {
 pub struct Pointer2D {
     pub position: Vector2<f32>,
     pub pressed: bool,
+    /// Secondary flat-pointer button. In gameplay this is RMB, the existing
+    /// flat "use/frob" gesture; menus may ignore it.
+    pub secondary_pressed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +188,7 @@ mod tests {
         input.right_hand.squeeze_value = 1.0;
         input.right_hand.a_value = 1.0;
         input.pointer = Some(Pointer2D {
+            secondary_pressed: false,
             position: Vector2::new(0.25, 0.75),
             pressed: true,
         });
