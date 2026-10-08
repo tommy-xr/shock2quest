@@ -135,7 +135,7 @@ mod tests {
         let mut world = World::new();
         let player = world.add_entity(());
         let inventory = world.add_entity(());
-        let mut gun = |world: &mut World| {
+        let gun = |world: &mut World| {
             world.add_entity((PropGunState {
                 ammo: 12,
                 condition: 100.0,

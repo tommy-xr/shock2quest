@@ -140,7 +140,7 @@ pub fn open_data_file(name: &str) -> Option<Box<dyn ReadableAndSeekable>> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
+    use std::io::Read;
 
     use super::*;
     use crate::test_support::TempDir;

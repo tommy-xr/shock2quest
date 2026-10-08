@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn killing_installer_cancels_unfinished_job_and_drops_salvage_only_once() {
-        let mut world = world();
+        let world = world();
         let physics = PhysicsWorld::new();
         let mut tech = TechGrowth {
             builder_seen: true,

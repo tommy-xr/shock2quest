@@ -1440,7 +1440,7 @@ mod tests {
 
     #[test]
     fn surviving_report_is_once_per_victory_and_reopens_after_load() {
-        let mut world = World::new();
+        let world = World::new();
         world.add_unique(PlayerLifeState::Alive);
         world.add_unique(QuestInfo::new());
         let mut director = HordeDirector {
@@ -1672,7 +1672,7 @@ mod tests {
 
     #[test]
     fn pause_and_death_cannot_start_a_wave() {
-        let mut world = World::new();
+        let world = World::new();
         world.add_unique(PlayerLifeState::Alive);
         let mut director = HordeDirector {
             initialized: true,
