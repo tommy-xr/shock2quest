@@ -22,7 +22,7 @@ pub fn create_wrist_hud_panels(
     wrist_frames: [Matrix4<f32>; 2],
     supported: [Option<shipyard::EntityId>; 2],
 ) -> Vec<SceneObject> {
-    if use_mode {
+    if use_mode || !crate::cyber_interface::installed(world) {
         return Vec::new();
     }
     let bio = readouts::BioReadout::from_world(world);

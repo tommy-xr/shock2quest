@@ -1,4 +1,5 @@
 pub mod ai;
+mod change_interface;
 pub mod effect;
 pub(crate) mod proximity_grenade;
 pub mod speech_registry;
@@ -1110,7 +1111,7 @@ impl ScriptWorld {
             "pistolmodify" => Box::new(NoopScript::new()),
 
             // TODO: Necessary
-            "changeinterface" => Box::new(NoopScript::new()),
+            "changeinterface" => Box::new(change_interface::ChangeInterface),
             "reducehp" => Box::new(reduce_hp::ReduceHp),
             "engineremoverad" => Box::new(hazard_objects::HazardObject::EngineCleanup),
             "radroom" => Box::new(hazard_objects::HazardObject::Room),

@@ -82,7 +82,7 @@ pub(crate) const SYSTEM_BUTTON: Rect = Rect::new(288.0, 372.0, 64.0, 36.0);
 
 /// The system button as one spec, so [`emit_use_mode`] draws exactly what
 /// [`buttons`] hit-tests.
-fn system_button() -> ReadoutButtonSpec {
+pub(crate) fn system_button() -> ReadoutButtonSpec {
     ReadoutButtonSpec {
         button: ReadoutButton::SystemMenu,
         rect: SYSTEM_BUTTON,
