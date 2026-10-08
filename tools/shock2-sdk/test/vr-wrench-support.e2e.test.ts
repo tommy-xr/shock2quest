@@ -55,7 +55,7 @@ for (const primary of ["right", "left"] as const) {
       assert.equal(state[empty],null,"support does not own a second entity");
       assert.equal(state.hand_grips.length,1);
       // Move only the supporting controller sideways; scale and the primary palm stay fixed.
-      await place(add(socketHand,[.09,0,0]));
+      await place(add(socketHand,[.25,0,0]));
       await game.input.set(`${other}_hand.trigger`,1);
       await game.step({frames:45});
       const steered = await grip();
@@ -84,7 +84,7 @@ for (const primary of ["right", "left"] as const) {
       await game.input.set(`${other}_hand.squeeze`,1);
       await game.step({frames:10});
       assert.equal((await grip()).support!.attached,true);
-      await place(add(socketHand,[0,.5,0]));
+      await place(add(socketHand,[0,1.5,0]));
       await game.step({frames:1});
       assert.equal((await grip()).support!.attached,false);
       await place(socketHand);

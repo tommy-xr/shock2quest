@@ -56,6 +56,18 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
         assert.ok(forward.reduce((sum,v,i)=>sum+v*original[i]!,0) > .99,
           "support attachment preserves the primary barrel direction");
       }
+      // A rapid pull or wide sweep must keep steering without another squeeze.
+      // Keep the controller rotation fixed so only support-hand movement drives it.
+      const axis = sub(vector(before.support.socket_position),vector(before.support.primary_palm));
+      const length = Math.hypot(...axis);
+      const outward = axis.map(v=>v / length * .25) as Vec3;
+      const yaw = 100 * Math.PI / 180;
+      const swept = quatRotate([0,Math.sin(yaw / 2),0,Math.cos(yaw / 2)],axis);
+      for (const offset of [outward,sub(swept,axis),[.25,0,0],[-.25,0,0]] as Vec3[]) {
+        await place(add(socket,offset));
+        await game.step({frames:1});
+        assert.equal((await grip()).support!.attached,true,"fast support movement retains the grip");
+      }
       await place(add(socket,[.07,0,0]));
       await game.step({frames:30});
       const steered = await grip();
@@ -102,6 +114,19 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
       await game.input.set(`${other}_hand.trigger`,0);
       await game.step({frames:model === "ar15_h" ? 180 : 60});
       assert.ok(distance(vector((await grip()).support!.model_position),vector(before.support.model_position)) < .001);
+      await place(socket);
+      await game.input.set(`${other}_hand.squeeze`,1);
+      await game.step({frames:15});
+      assert.equal((await grip()).support!.attached,true);
+      // Deliberate excessive pull-off still releases and requires a fresh squeeze.
+      await place(add(socket,axis.map(v=>v / length * 1.5) as Vec3));
+      await game.step({frames:1});
+      assert.equal((await grip()).support!.attached,false);
+      await place(socket);
+      await game.step({frames:30});
+      assert.equal((await grip()).support!.attached,false,"returning while squeezed cannot reattach");
+      await game.input.set(`${other}_hand.squeeze`,0);
+      await game.step({frames:30});
       await place(socket);
       await game.input.set(`${other}_hand.squeeze`,1);
       await game.step({frames:15});

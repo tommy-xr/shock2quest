@@ -27,13 +27,13 @@ for (const [model,template] of [["fsn_h",-26],["al_h",-27],["wrench_h",-928]] as
       await game.input.set(`${other}_hand.squeeze`,0);
       await game.step({frames:30});
       const grip = async (): Promise<HandGrip> => (await game.info()).player.hand_grips.find(g=>g.hand === primary)!;
-      const placeAt = async (fraction:number) => {
+      const placeAt = async (fraction:number, offset:Vec3 = [0,0,0]) => {
         const current = await grip();
         const support = current.support!;
         assert.ok(support.region_endpoints,`${model} exposes its region`);
         const [a,b] = support.region_endpoints.map(vector);
         const palm = a!.map((v,i)=>v+(b![i]!-v)*fraction) as Vec3;
-        const wrist = add(vector(support.controller_position),sub(palm,vector(support.socket_position)));
+        const wrist = add(vector(support.controller_position),add(sub(palm,vector(support.socket_position)),offset));
         const player = (await game.info()).player;
         const inverse = quatConjugate(player.rotation);
         await game.input.set(`${other}_hand.position`,quatRotate(inverse,sub(wrist,player.position)));
@@ -50,7 +50,8 @@ for (const [model,template] of [["fsn_h",-26],["al_h",-27],["wrench_h",-928]] as
       assert.equal(attached.support!.attached,true);
       const contact = vector(attached.support!.support_anchor);
       const length = distance(...attached.support!.region_endpoints!.map(vector) as [Vec3,Vec3]);
-      await placeAt(.4);
+      // Abrupt sideways motion beyond the old tolerance keeps the locked contact.
+      await placeAt(.4,[.25,0,0]);
       await game.step({frames:10});
       const moved = await grip();
       assert.equal(moved.support!.attached,true);
