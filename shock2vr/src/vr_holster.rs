@@ -14,6 +14,13 @@ pub struct HolsterPose {
     pub rotation_degrees: [f32; 3],
     /// Length of the model's longest bounding-box edge, before rotation.
     pub length_m: f32,
+    /// Per-axis shell multipliers; item placement and size remain independent.
+    #[serde(default = "default_shell_scale")]
+    pub shell_scale: [f32; 3],
+}
+
+fn default_shell_scale() -> [f32; 3] {
+    [1.0; 3]
 }
 
 impl Default for HolsterPose {
@@ -22,6 +29,7 @@ impl Default for HolsterPose {
             position_m: [0.0, 0.04, 0.0],
             rotation_degrees: [-90.0, 0.0, 0.0],
             length_m: 0.24,
+            shell_scale: default_shell_scale(),
         }
     }
 }
@@ -37,6 +45,19 @@ impl HolsterPose {
                 .all(|v| v.is_finite() && v.abs() <= 180.0)
             && self.length_m.is_finite()
             && (0.02..=1.2).contains(&self.length_m)
+            && self
+                .shell_scale
+                .iter()
+                .all(|v| v.is_finite() && (0.1..=3.0).contains(v))
+    }
+
+    /// Shared shell transform in metres; callers convert to world units.
+    pub fn shell_transform(&self) -> Matrix4<f32> {
+        Matrix4::from_nonuniform_scale(
+            SHELL_SCALE * self.shell_scale[0],
+            SHELL_SCALE * self.shell_scale[1],
+            SHELL_SCALE * self.shell_scale[2],
+        )
     }
 
     /// Shared by the editor and gameplay; bounds are in model/world units.
@@ -196,6 +217,44 @@ mod tests {
         invalid = library.clone();
         invalid.entries.push(invalid.entries[0].clone());
         assert!(HolsterLibrary::parse(&serde_json::to_string(&invalid).unwrap()).is_err());
+    }
+
+    #[test]
+    fn shell_axes_scale_independently_without_changing_item_pose() {
+        let mut library =
+            HolsterLibrary::parse(include_str!("../../assets/vr-holsters.json")).unwrap();
+        let pose = &mut library.entries[0].pose;
+        assert_eq!(pose.shell_scale, [1.0; 3]);
+        let min = vec3(-1.0, -2.0, -3.0);
+        let max = vec3(1.0, 2.0, 3.0);
+        let item_transform = pose.model_transform(min, max);
+        pose.shell_scale = [0.5, 1.5, 2.0];
+        let shell = pose.shell_transform();
+        for (axis, multiplier) in [Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()]
+            .into_iter()
+            .zip(pose.shell_scale)
+        {
+            assert!(
+                (shell.transform_vector(axis) - axis * SHELL_SCALE * multiplier).magnitude()
+                    < 0.0001
+            );
+        }
+        assert_eq!(
+            shell.transform_point(Point3::new(0.0, 0.0, 0.0)),
+            Point3::new(0.0, 0.0, 0.0)
+        );
+        assert_eq!(pose.model_transform(min, max), item_transform);
+        assert_eq!(
+            HolsterLibrary::parse(&serde_json::to_string(&library).unwrap()).unwrap(),
+            library
+        );
+        for axis in 0..3 {
+            for invalid in [0.0, -1.0, 3.1, f32::NAN, f32::INFINITY] {
+                let mut pose = HolsterPose::default();
+                pose.shell_scale[axis] = invalid;
+                assert!(!pose.is_valid());
+            }
+        }
     }
 
     #[test]

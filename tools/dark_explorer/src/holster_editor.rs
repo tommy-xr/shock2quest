@@ -232,6 +232,18 @@ impl HolsterEditor {
                 );
             }
         });
+        ui.label("Holster shell scale (1.0 = default)");
+        ui.small("Resizes the shell for this item without changing the item's size or placement.");
+        for (i, label) in ["Width X", "Height Y", "Depth Z"].into_iter().enumerate() {
+            tweak_slider(
+                ui,
+                label,
+                &mut entry.pose.shell_scale[i],
+                0.1..=3.0,
+                0.01,
+                2,
+            );
+        }
         ui.horizontal(|ui| {
             for view in ["front", "back", "oblique", "top"] {
                 if ui.selectable_label(self.view == view, view).clicked() {
@@ -264,6 +276,7 @@ mod tests {
         let original = doc.library.get("laser").unwrap().clone();
         doc.library.entries[0].pose.position_m = [0.01, 0.06, -0.02];
         doc.library.entries[0].pose.rotation_degrees[1] = 25.0;
+        doc.library.entries[0].pose.shell_scale = [0.7, 1.3, 1.8];
         doc.save().unwrap();
         let loaded = HolsterLibrary::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
