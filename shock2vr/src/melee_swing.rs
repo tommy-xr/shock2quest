@@ -5,11 +5,12 @@ use shipyard::{EntityId, Unique, UniqueView};
 
 /// One hand's swing state. `weapon` is what the hand is holding, so a swing
 /// cannot survive putting the weapon down and picking another one up.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct SwingLatch {
     weapon: Option<EntityId>,
     hot: bool,
     two_handed: bool,
+    sound: SwingSound,
 }
 
 impl SwingLatch {
@@ -36,6 +37,10 @@ impl SwingLatch {
         self.hot = hot;
     }
 
+    pub fn sound_ready(&mut self, speed: Option<f32>, dt: f32) -> bool {
+        self.sound.update(speed, dt)
+    }
+
     #[cfg(test)]
     pub fn hot(&self) -> bool {
         self.hot
@@ -44,6 +49,77 @@ impl SwingLatch {
     #[cfg(test)]
     pub fn two_handed(&self) -> bool {
         self.two_handed
+    }
+}
+
+/// A whoosh marks crossing the damage-speed gate, once until the hand slows.
+/// The lower rearm point keeps tracking noise around the gate from chattering.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SwingSound {
+    armed: bool,
+    cooldown: f32,
+}
+
+impl SwingSound {
+    fn update(&mut self, speed: Option<f32>, dt: f32) -> bool {
+        let Some(speed) = speed.filter(|s| s.is_finite()) else {
+            *self = Self::default();
+            return false;
+        };
+        if dt <= 0.0 || !dt.is_finite() {
+            return false;
+        }
+        self.cooldown = (self.cooldown - dt).max(0.0);
+        let threshold = crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED);
+        if speed < threshold * 0.7 {
+            self.armed = true;
+        }
+        if self.armed && self.cooldown == 0.0 && speed >= threshold {
+            self.armed = false;
+            self.cooldown = 0.25;
+            return true;
+        }
+        false
+    }
+}
+
+/// Both flat attacks and physical VR swings use the weapon's motion schema.
+/// The shipped psi sword has none, so it falls back to the shard's whoosh.
+pub(crate) fn sound_effect(world: &shipyard::World, entity: EntityId) -> crate::scripts::Effect {
+    use crate::scripts::{Effect, script_util::play_environmental_sound};
+    use dark::{EnvSoundQuery, properties::PropLimbModel};
+    use engine::audio::AudioHandle;
+    use shipyard::{Get, View};
+    if !world
+        .borrow::<View<PropLimbModel>>()
+        .is_ok_and(|models| models.get(entity).is_ok())
+    {
+        return Effect::NoEffect;
+    }
+    let effect = play_environmental_sound(
+        world,
+        entity,
+        "motion",
+        vec![("plyrmelee", "2"), ("plyrmeleeswing", "1")],
+        AudioHandle::new(),
+    );
+    match effect {
+        Effect::PlayEnvironmentalSound {
+            audio_handle,
+            query,
+            position,
+        } => Effect::PlayEnvironmentalSoundWithFallback {
+            audio_handle,
+            query,
+            position,
+            fallback: EnvSoundQuery::from_tag_values(vec![
+                ("event", "motion"),
+                ("weapontype", "crystalshard"),
+                ("plyrmelee", "2"),
+                ("plyrmeleeswing", "1"),
+            ]),
+        },
+        other => other,
     }
 }
 
@@ -161,5 +237,39 @@ mod tests {
         latch.update(weapon(), true, true);
         latch.update(EntityId::from_inner(2), true, false);
         assert!(!latch.two_handed());
+    }
+}
+
+#[cfg(test)]
+mod sound_tests {
+    use super::SwingSound;
+
+    #[test]
+    fn whoosh_marks_damage_threshold_once_until_slow_again() {
+        let mut gate = SwingSound::default();
+        let threshold = crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED);
+        assert!(!gate.update(Some(0.0), 0.016));
+        assert!(!gate.update(Some(threshold * 0.9), 0.016));
+        assert!(gate.update(Some(threshold), 0.016));
+        for _ in 0..100 {
+            assert!(!gate.update(Some(threshold * 1.1), 0.016));
+            assert!(!gate.update(Some(threshold * 0.9), 0.016));
+        }
+        assert!(!gate.update(Some(0.0), 0.3));
+        assert!(gate.update(Some(threshold), 0.016));
+    }
+
+    #[test]
+    fn pickup_and_tracking_recovery_require_a_slow_sample() {
+        let mut gate = SwingSound::default();
+        assert!(!gate.update(Some(10.0), 0.016));
+        assert!(!gate.update(Some(0.0), 0.016));
+        assert!(!gate.update(None, 0.016));
+        assert!(!gate.update(Some(10.0), 0.016));
+        assert!(!gate.update(Some(0.0), 0.016));
+        assert!(!gate.update(Some(10.0), 0.0));
+        assert!(gate.update(Some(10.0), 0.016));
+        assert!(!gate.update(Some(0.0), 0.016));
+        assert!(!gate.update(Some(10.0), 0.016));
     }
 }

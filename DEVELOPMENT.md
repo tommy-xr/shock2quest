@@ -467,6 +467,17 @@ The full psi MFD is still available inside the cyber interface, with its existin
 pointer controls and thumbstick navigation. Its readout resolves the target amp's
 selection rather than a shared setting.
 
+### Melee swing feedback
+
+VR melee weapons play their authored swing sound when hand-relative weapon
+speed crosses the same `melee_free_swing` threshold used for damage (default
+2.0 world units/s). Slow movements stay silent; the hand must slow below 70%
+of that threshold before another whoosh. Walking with a still hand does not
+count. The cue signals a damage-capable swing; contact direction, target motion,
+and the per-target damage cooldown still determine whether a hit deals damage.
+Wrench, rapier, and shard use their motion schemas; the psi sword falls back
+to the shard's whoosh. Flatscreen plays the cue once when a swing is accepted.
+
 ### VR pipe parries
 
 `cargo dbgr --mission debug_melee --vr --port 0` provides live pipe hybrids and
