@@ -96,6 +96,18 @@ pub(crate) fn sound_effect(world: &shipyard::World, entity: EntityId) -> crate::
     {
         return Effect::NoEffect;
     }
+    // Smasher windup deliberately cannot damage until the trigger is released.
+    // Keep the speed cue honest while that charge is being held.
+    if world
+        .borrow::<View<crate::runtime_props::RuntimePropMeleeCharge>>()
+        .is_ok_and(|charges| {
+            charges
+                .get(entity)
+                .is_ok_and(|charge| charge.held_seconds.is_some())
+        })
+    {
+        return Effect::NoEffect;
+    }
     let effect = play_environmental_sound(
         world,
         entity,
@@ -257,6 +269,38 @@ mod sound_tests {
         }
         assert!(!gate.update(Some(0.0), 0.3));
         assert!(gate.update(Some(threshold), 0.016));
+    }
+
+    #[test]
+    fn charging_smasher_is_silent_until_released() {
+        use crate::runtime_props::{RuntimePropMeleeCharge, RuntimePropTransform};
+        use cgmath::{Matrix4, SquareMatrix};
+        use dark::properties::{PropClassTag, PropLimbModel};
+        let mut world = shipyard::World::new();
+        let weapon = world.add_entity((
+            PropLimbModel("wrench_h".into()),
+            PropClassTag::from_string("WeaponType Wrench"),
+            RuntimePropTransform(Matrix4::identity()),
+            RuntimePropMeleeCharge {
+                fraction: 1.0,
+                held_seconds: Some(1.0),
+            },
+        ));
+        assert!(matches!(
+            super::sound_effect(&world, weapon),
+            crate::scripts::Effect::NoEffect
+        ));
+        world.add_component(
+            weapon,
+            RuntimePropMeleeCharge {
+                fraction: 1.0,
+                held_seconds: None,
+            },
+        );
+        assert!(matches!(
+            super::sound_effect(&world, weapon),
+            crate::scripts::Effect::PlayEnvironmentalSoundWithFallback { .. }
+        ));
     }
 
     #[test]
