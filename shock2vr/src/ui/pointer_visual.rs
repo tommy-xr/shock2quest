@@ -54,12 +54,14 @@ const DEVICE_BEAM: BeamColors = [vec3(0.02, 1.0, 0.15), vec3(0.25, 1.0, 0.35)];
 struct PointerStyle {
     colors: BeamColors,
     dot_size: f32,
+    passive_beams: bool,
 }
 
 impl PointerStyle {
     fn with_dev_dot(colors: BeamColors) -> Self {
         Self {
             colors,
+            passive_beams: false,
             dot_size: crate::dev_params::get(crate::dev_params::VR_POINTER_DOT_SIZE),
         }
     }
@@ -260,6 +262,7 @@ pub fn pointer_beams(
     panel: &WorldPanel,
     panel_layers: usize,
     seconds: f32,
+    passive_beams: bool,
 ) -> Vec<SceneObject> {
     let mut objects = render_pointer_rays(
         None,
@@ -269,7 +272,10 @@ pub fn pointer_beams(
         panel,
         panel_layers,
         None,
-        PointerStyle::with_dev_dot(DEVICE_BEAM),
+        PointerStyle {
+            passive_beams,
+            ..PointerStyle::with_dev_dot(DEVICE_BEAM)
+        },
         seconds,
     );
     crate::util::tag_render_source(&mut objects, crate::util::render_source::USE_MODE_POINTER);
@@ -293,10 +299,10 @@ fn render_pointer_rays(
 ) -> Vec<SceneObject> {
     let mut objects = Vec::new();
     for (index, ray) in pass.rays.iter().enumerate() {
-        // Only the ray the menu is reading: a beam from an ignored hand would
-        // end on a button that will not hover or click.
-        let end = pass
-            .is_active(index)
+        // Inventory shows both aiming hands; the subdued passive beam has no
+        // hit dot. Only the active ray promises hover/click feedback.
+        let active = pass.is_active(index);
+        let end = (active || style.passive_beams)
             .then(|| pointer_beam_end(ray, canvas_size, panel, panel_layers))
             .flatten();
         if let Some(end) = end {
@@ -305,7 +311,11 @@ fn render_pointer_rays(
                 ray.origin,
                 along,
                 along.magnitude(),
-                style.colors,
+                if active {
+                    style.colors
+                } else {
+                    style.colors.map(|color| color * 0.3)
+                },
                 seconds,
             ));
         }
@@ -348,7 +358,7 @@ fn render_pointer_rays(
             }
         }
 
-        if let Some(end) = end.filter(|_| style.dot_size > 0.0) {
+        if let Some(end) = end.filter(|_| active && style.dot_size > 0.0) {
             objects.push(dot_object(end, panel, style.colors[1], style.dot_size));
         }
     }
@@ -370,6 +380,7 @@ mod tests {
     const STYLE: PointerStyle = PointerStyle {
         colors: MENU_BEAM,
         dot_size: 0.05,
+        passive_beams: false,
     };
 
     fn pass(right: Hand, left: Hand) -> FrontendPointerPass {
@@ -494,6 +505,48 @@ mod tests {
         assert_eq!(pass.rays.len(), 2);
         // Two proxies, plus one halo, core and dot.
         assert_eq!(rays(true, &pass, &test_panel(), None).len(), 2 + 3);
+    }
+
+    #[test]
+    fn inventory_shows_both_beams_but_only_one_hit_dot() {
+        let pass = pass(
+            hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
+            hand_aimed_at(CANVAS, vec2(100.0, 100.0), 0.0),
+        );
+        let objects = render_pointer_rays(
+            None,
+            false,
+            &pass,
+            CANVAS,
+            &test_panel(),
+            LAYERS,
+            None,
+            PointerStyle {
+                passive_beams: true,
+                ..STYLE
+            },
+            0.0,
+        );
+        // Two halo/core pairs, one active hit dot, no duplicate gloves.
+        assert_eq!(objects.len(), 5);
+        let missing = pass.remap_hits(|_| None);
+        assert!(
+            render_pointer_rays(
+                None,
+                false,
+                &missing,
+                CANVAS,
+                &test_panel(),
+                LAYERS,
+                None,
+                PointerStyle {
+                    passive_beams: true,
+                    ..STYLE
+                },
+                0.0
+            )
+            .is_empty()
+        );
     }
 
     #[test]

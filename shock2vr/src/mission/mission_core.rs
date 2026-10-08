@@ -16421,6 +16421,7 @@ impl MissionCore {
                 &panel,
                 panel_layers,
                 seconds,
+                true,
             ));
         }
         objects
@@ -17362,6 +17363,7 @@ impl MissionCore {
                     &panel,
                     panel_layers,
                     seconds,
+                    false,
                 ));
             }
             for object in &mut objects {
