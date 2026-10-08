@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod effect;
+pub mod item_psi;
 pub(crate) mod proximity_grenade;
 pub mod speech_registry;
 pub mod speech_util;

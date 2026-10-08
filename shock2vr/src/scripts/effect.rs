@@ -221,6 +221,13 @@ pub enum AIPropertyUpdate {
 
 #[derive(Clone, Debug)]
 pub enum Effect {
+    BeginItemUse {
+        request: super::item_psi::ItemUse,
+    },
+    ApplyItemUse {
+        request: super::item_psi::ItemUse,
+        target: EntityId,
+    },
     SetPsiSword {
         amp: EntityId,
         enabled: bool,

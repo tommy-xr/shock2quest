@@ -96,6 +96,7 @@ pub enum FlatUiDragAction {
         tool: EntityId,
         target: EntityId,
     },
+    ApplyItemUse(crate::scripts::item_psi::ItemUse, EntityId),
     /// One of the AMMOFULL readout's controls was clicked (fire-mode setting,
     /// reload, ammo cycle, psi selector). Not tied to a cursor item - the
     /// target is the entity in the last drawn readout, never a hand lookup.
@@ -249,6 +250,7 @@ pub struct FlatUiHost {
     /// The item lifted onto the cursor (the original's "cursor IS the item"
     /// drag, §2.4). `Some` between a lift and the place/throw that clears it.
     cursor_item: Option<CursorItem>,
+    item_use: Option<crate::scripts::item_psi::ItemUse>,
     /// Resolved inventory destination, drawn by the shared canvas in both presentations.
     placement_preview: Option<PlacementPreview>,
     /// The most recent lift, for double-click (wield) detection. Counts down
@@ -358,6 +360,7 @@ impl FlatUiHost {
             components: Vec::new(),
             strip: None,
             cursor_item: None,
+            item_use: None,
             placement_preview: None,
             last_lift: None,
             readouts: None,
@@ -506,9 +509,27 @@ impl FlatUiHost {
             .then(|| crate::item_tools::preview(world, tool, target))
     }
 
+    pub fn begin_item_use(&mut self, request: crate::scripts::item_psi::ItemUse) {
+        self.cursor_item = None;
+        self.last_lift = None;
+        self.item_use = Some(request);
+        self.guard_held_press();
+    }
+
+    pub fn cancel_item_use(&mut self) {
+        self.item_use = None;
+    }
+
     /// Set the mini-frame's name line (already resolved to a display name).
     pub fn set_name_strip(&mut self, name: Option<String>) {
-        self.name_strip = name;
+        self.name_strip = if let Some(request) = self.item_use {
+            Some(match name {
+                Some(name) => format!("{} {name}", request.prompt()),
+                None => request.prompt().to_owned(),
+            })
+        } else {
+            name
+        };
     }
 
     pub(crate) fn set_shoulder_weapons(&mut self, weapons: [Option<EntityId>; 2]) {
@@ -1165,6 +1186,32 @@ impl FlatUiHost {
         };
         let canvas_pos = pointer.canvas_pos;
         self.cursor_canvas = canvas_pos;
+        if self.item_use.is_some_and(|request| !request.valid(world)) {
+            self.item_use = None;
+        }
+        if let (Some(request), Some(pos)) = (self.item_use, canvas_pos) {
+            if pressed_edge {
+                // Socket clicks select the equipped implant while a cast is
+                // pending; they must not fall through to its ordinary Frob
+                // action and unequip it instead.
+                let implant = self.strip_rect().and_then(|rect| {
+                    implant_readout_rects(rect)
+                        .iter()
+                        .position(|rect| rect.contains(pos))
+                        .and_then(|slot| self.implant_items[slot].as_ref().map(|item| item.entity))
+                });
+                if let Some(target) = implant
+                    .or_else(|| self.strip_item_at(pos))
+                    .or_else(|| self.panel_item_at(pos))
+                {
+                    self.item_use = None;
+                    return (
+                        Vec::new(),
+                        vec![FlatUiDragAction::ApplyItemUse(request, target)],
+                    );
+                }
+            }
+        }
         if canvas_pos.is_none() {
             self.hover_close = false;
         }
