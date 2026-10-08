@@ -3,13 +3,14 @@ use std::{collections::HashSet, ops::Rem};
 use cgmath::{InnerSpace, Vector3, Zero};
 use dark::properties::{Link, PropPosition, PropTemplateId, TPathData};
 use engine::audio::AudioHandle;
+use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, View, World};
 use tracing::{info, trace};
 
 use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
-    Effect, MessagePayload, Script,
+    Effect, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
     script_util::{get_first_link_of_type, get_first_link_with_data},
 };
 
@@ -17,6 +18,20 @@ use super::{
 /// occupying a station. Use the same tolerance when reconstructing script
 /// state from a save-restored moving-terrain position.
 const ELEVATOR_STATION_TOLERANCE: f32 = 0.1;
+
+const SCRIPT_STATE_KEY: &str = "shock2vr.base_elevator";
+
+/// Runtime waypoint IDs are rebuilt from the restored TPath links. Only the
+/// dispatch state belongs in the script envelope.
+#[derive(Serialize, Deserialize)]
+struct ElevatorState {
+    path_offset: Vector3<f32>,
+    current_index: u32,
+    current_position: Vector3<f32>,
+    desired_position: Vector3<f32>,
+    speed: f32,
+    is_moving: bool,
+}
 
 pub struct BaseElevator {
     path_offset: Vector3<f32>,
@@ -126,6 +141,57 @@ impl BaseElevator {
     }
 }
 impl Script for BaseElevator {
+    fn script_state_key(&self) -> Option<&'static str> {
+        Some(SCRIPT_STATE_KEY)
+    }
+
+    fn save_state(&self) -> Result<ScriptState, ScriptStateError> {
+        ScriptState::encode(
+            1,
+            &ElevatorState {
+                path_offset: self.path_offset,
+                current_index: self.current_index,
+                current_position: self.current_position,
+                desired_position: self.desired_position,
+                speed: self.speed,
+                is_moving: self.is_moving,
+            },
+            SCRIPT_STATE_KEY,
+        )
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &ScriptState,
+        _context: &ScriptRestoreContext<'_>,
+    ) -> Result<(), ScriptStateError> {
+        let saved: ElevatorState = state.decode(1, SCRIPT_STATE_KEY)?;
+        self.path_offset = saved.path_offset;
+        self.current_index = saved.current_index;
+        self.current_position = saved.current_position;
+        self.desired_position = saved.desired_position;
+        self.speed = saved.speed;
+        self.is_moving = saved.is_moving;
+        Ok(())
+    }
+
+    fn initialize_after_hydration(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        hydrated: bool,
+    ) -> Effect {
+        if !hydrated {
+            return self.initialize(entity_id, world);
+        }
+        // Initialization normally resets the destination to the platform's
+        // position. A loaded platform must continue its saved leg instead.
+        // Resolve path handles anew so no pre-save runtime entity ID survives.
+        let first = get_first_link_of_type(world, entity_id, Link::TPathInit).unwrap_or(entity_id);
+        self.path = get_elevator_path(first, world);
+        Effect::NoEffect
+    }
+
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
         let v_position = world.borrow::<View<PropPosition>>().unwrap();
         let initial_path = get_first_link_of_type(world, entity_id, Link::TPathInit);
@@ -381,6 +447,66 @@ mod tests {
             "elevator never stopped: at {:?}, target {:?}",
             elevator.current_position, elevator.desired_position
         );
+    }
+
+    #[test]
+    fn parked_and_moving_elevators_round_trip_their_dispatch_state() {
+        for moving in [false, true] {
+            for continuous in [false, true] {
+                let (world, entity_id, nodes) = four_stop_world(0.0);
+                let physics = PhysicsWorld::new();
+                let mut before = if continuous {
+                    BaseElevator::continuous()
+                } else {
+                    BaseElevator::new()
+                };
+                before.initialize(entity_id, &world);
+                before.reroute_to(nodes[2]);
+                if moving {
+                    for _ in 0..37 {
+                        before.update(entity_id, &world, &physics, &frame());
+                    }
+                } else {
+                    // Park at the noninitial station, including the continuous
+                    // variant's just-arrived state before dispatching again.
+                    before.current_position = before.desired_position;
+                    before.is_moving = false;
+                }
+                let state = before
+                    .save_state()
+                    .expect("elevator must persist dispatch state");
+                let mut after = if continuous {
+                    BaseElevator::continuous()
+                } else {
+                    BaseElevator::new()
+                };
+                after
+                    .restore_state(
+                        &state,
+                        &super::super::ScriptRestoreContext::new(&std::collections::HashMap::new()),
+                    )
+                    .unwrap();
+                after.initialize_after_hydration(entity_id, &world, true);
+                assert_eq!(after.current_index, before.current_index);
+                assert_eq!(after.current_position, before.current_position);
+                assert_eq!(after.desired_position, before.desired_position);
+                assert_eq!(after.speed, before.speed);
+                assert_eq!(after.is_moving, before.is_moving);
+                if !moving {
+                    before.move_to_next_target(&world);
+                    after.move_to_next_target(&world);
+                    assert_eq!(after.current_index, 3);
+                }
+                // Follow through arrival and (for DontStopElevator) the next
+                // leg. Restore must rebuild the runtime waypoint references.
+                for _ in 0..600 {
+                    let expected = before.update(entity_id, &world, &physics, &frame());
+                    let actual = after.update(entity_id, &world, &physics, &frame());
+                    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+                    assert_eq!(after.current_index, before.current_index);
+                }
+            }
+        }
     }
 
     #[test]
