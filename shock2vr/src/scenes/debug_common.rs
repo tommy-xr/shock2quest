@@ -20,7 +20,10 @@ use shipyard::EntityId;
 
 use crate::{
     GameOptions, dev_params,
-    game_scene::{DebugPlayerStatsRequest, DebugSkillLevelsRequest, DebuggableScene, GameScene},
+    game_scene::{
+        AmbientAudioState, DebugPlayerStatsRequest, DebugSkillLevelsRequest, DebuggableScene,
+        GameScene,
+    },
     input_context::InputContext,
     mission::{
         AbstractMission, AlwaysVisible, GlobalContext, SpawnLocation,
@@ -378,6 +381,10 @@ impl GameScene for DebugScene {
         self.core.scene_name()
     }
 
+    fn ambient_audio_state(&self) -> Option<AmbientAudioState> {
+        self.core.ambient_audio_state()
+    }
+
     fn queue_entity_trigger(&mut self, entity_name: String) {
         self.core.queue_entity_trigger(entity_name)
     }
@@ -623,6 +630,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn scene_name(&self) -> &str {
         self.core.scene_name()
+    }
+
+    fn ambient_audio_state(&self) -> Option<AmbientAudioState> {
+        self.core.ambient_audio_state()
     }
 
     fn queue_entity_trigger(&mut self, entity_name: String) {
