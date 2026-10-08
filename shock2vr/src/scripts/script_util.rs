@@ -560,7 +560,7 @@ pub fn can_cycle_gun_setting(world: &World, weapon: EntityId) -> bool {
 }
 
 /// The player's effective skill. Authored factory skills are a mission-local
-/// floor (Earth's training guns), reconstructed on load without granting
+/// floor (Earth's weapons and technical lessons), reconstructed on load without granting
 /// permanent career upgrades. Dark stores both in its player property; our
 /// split runtime/persistent sheet combines them here. Missing data means zero.
 pub(crate) fn player_skill_level(world: &World, skill: crate::player_stats::Skill) -> i32 {
@@ -568,26 +568,49 @@ pub(crate) fn player_skill_level(world: &World, skill: crate::player_stats::Skil
         .map(|stats| stats.skill_level(skill))
         .unwrap_or(0);
     use crate::player_stats::Skill;
-    let index = match skill {
-        Skill::StandardWeapons => 0,
-        Skill::EnergyWeapons => 1,
-        Skill::HeavyWeapons => 2,
-        Skill::ExoticWeapons => 3,
-        _ => return trained,
-    };
     let authored = world
         .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
         .ok()
-        .and_then(|player| {
-            world
-                .borrow::<View<dark::properties::PropBaseWeaponDesc>>()
-                .ok()
-                .and_then(|skills| {
-                    skills
-                        .get(player.entity_id)
-                        .ok()
-                        .map(|skills| skills.0[index])
-                })
+        .and_then(|player| match skill {
+            Skill::StandardWeapons
+            | Skill::EnergyWeapons
+            | Skill::HeavyWeapons
+            | Skill::ExoticWeapons => {
+                let index = match skill {
+                    Skill::StandardWeapons => 0,
+                    Skill::EnergyWeapons => 1,
+                    Skill::HeavyWeapons => 2,
+                    _ => 3,
+                };
+                world
+                    .borrow::<View<dark::properties::PropBaseWeaponDesc>>()
+                    .ok()
+                    .and_then(|skills| {
+                        skills
+                            .get(player.entity_id)
+                            .ok()
+                            .map(|skills| skills.0[index])
+                    })
+            }
+            _ => {
+                let index = match skill {
+                    Skill::Hack => 0,
+                    Skill::Repair => 1,
+                    Skill::Modify => 2,
+                    Skill::Maintenance => 3,
+                    Skill::Research => 4,
+                    _ => unreachable!(),
+                };
+                world
+                    .borrow::<View<dark::properties::PropBaseTechDesc>>()
+                    .ok()
+                    .and_then(|skills| {
+                        skills
+                            .get(player.entity_id)
+                            .ok()
+                            .map(|skills| skills.0.0[index])
+                    })
+            }
         })
         .unwrap_or(0);
     trained.max(authored)
