@@ -114,7 +114,10 @@ mod tests {
     fn factory_skills_allow_training_without_upgrading_the_persistent_sheet() {
         let mut world = World::new();
         world.add_unique(QuestInfo::new());
-        let player = world.add_entity(PropBaseWeaponDesc([1, 2, 0, 0]));
+        let player = world.add_entity((
+            PropBaseWeaponDesc([1, 2, 0, 0]),
+            dark::properties::PropBaseTechDesc(dark::properties::TechSkillValues([3, 3, 0, 5, 0])),
+        ));
         world.add_unique(crate::mission::PlayerInfo {
             pos: cgmath::vec3(0.0, 0.0, 0.0),
             rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
@@ -127,6 +130,20 @@ mod tests {
         let laser = world.add_entity(PropBaseWeaponDesc([0, 2, 0, 0]));
         assert!(unmet_weapon_skill(&world, pistol).is_none());
         assert!(unmet_weapon_skill(&world, laser).is_none());
+        assert_eq!(player_skill_level(&world, Skill::Maintenance), 5);
+        assert_eq!(player_skill_level(&world, Skill::Hack), 3);
+        assert_eq!(player_skill_level(&world, Skill::Repair), 3);
+        assert_eq!(player_skill_level(&world, Skill::Modify), 0);
+        assert_eq!(
+            world
+                .borrow::<shipyard::UniqueView<QuestInfo>>()
+                .unwrap()
+                .player_stats()
+                .skills
+                .maintenance,
+            0
+        );
+
         assert_eq!(
             world
                 .borrow::<shipyard::UniqueView<QuestInfo>>()
@@ -145,8 +162,9 @@ mod tests {
         assert_eq!(player_skill_level(&world, Skill::StandardWeapons), 4);
         // A new mission rederives the player component instead of carrying
         // training allowances into the recruit's persistent career.
-        world.remove::<(PropBaseWeaponDesc,)>(player);
+        world.remove::<(PropBaseWeaponDesc, dark::properties::PropBaseTechDesc)>(player);
         assert_eq!(player_skill_level(&world, Skill::EnergyWeapons), 0);
+        assert_eq!(player_skill_level(&world, Skill::Maintenance), 0);
     }
 
     #[test]

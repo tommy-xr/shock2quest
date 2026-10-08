@@ -3947,25 +3947,31 @@ impl MissionCore {
             &template_to_entity_id,
         );
 
-        // Dark clones the PlayerFactory marker onto its new player. Earth
-        // authors Standard 1 / Energy 2 there for training. Keep this allowance
-        // on the nonserialized runtime player, not the persistent career sheet;
-        // reconstruct it even when a saved position overrides the spawn pose.
+        // Dark clones the PlayerFactory marker onto its new player. Keep its
+        // training skills on the nonserialized runtime player, not the career
+        // sheet; reconstruct them even when a save overrides the spawn pose.
         // MapDefault uses the last instantiated factory for its spawn, too.
-        let factory_weapon_skills = abstract_mission
+        let factory = abstract_mission
             .entity_info
             .link_playerfactories
             .iter()
             .rev()
-            .find_map(|link| template_to_entity_id.get(&link.src))
-            .and_then(|factory| {
-                world
-                    .borrow::<View<dark::properties::PropBaseWeaponDesc>>()
-                    .ok()
-                    .and_then(|skills| skills.get(factory.0).ok().copied())
-            });
-        if let Some(skills) = factory_weapon_skills {
-            world.add_component(player_entity, skills);
+            .find_map(|link| template_to_entity_id.get(&link.src));
+        if let Some(factory) = factory {
+            let weapons = world
+                .borrow::<View<dark::properties::PropBaseWeaponDesc>>()
+                .ok()
+                .and_then(|skills| skills.get(factory.0).ok().copied());
+            let tech = world
+                .borrow::<View<dark::properties::PropBaseTechDesc>>()
+                .ok()
+                .and_then(|skills| skills.get(factory.0).ok().copied());
+            if let Some(skills) = weapons {
+                world.add_component(player_entity, skills);
+            }
+            if let Some(skills) = tech {
+                world.add_component(player_entity, skills);
+            }
         }
 
         if world
