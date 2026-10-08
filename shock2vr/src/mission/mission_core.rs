@@ -6011,14 +6011,14 @@ impl MissionCore {
                 }),
             );
         }
-        // The hand a VR panel is listening to eases into a point.
+        // Both inventory pointers pose their empty hands toward the UI.
         let mut ui_point = [false; 2];
-        if let Some(ray) = self
-            .vr_use_mode_pointer
-            .as_ref()
-            .and_then(|p| p.active_ray())
-        {
-            ui_point[hand_slot(ray.handedness)] = true;
+        if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
+            for (index, ray) in pass.rays.iter().enumerate() {
+                if ray.canvas_hit.is_some() && (self.use_mode || pass.is_active(index)) {
+                    ui_point[hand_slot(ray.handedness)] = true;
+                }
+            }
         }
         self.interaction.set_ui_point(ui_point);
         if self.vr_trigger_swallow && !self.use_mode {
@@ -7351,6 +7351,14 @@ impl MissionCore {
             // bound in VR, and running its walk-away / bare-view logic against
             // a pointer that does not exist would be a trap for whatever opens
             // a host slot in VR next.
+            crate::PresentationMode::Vr if self.use_mode && !self.flat_ui.device => {
+                if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
+                    let pointers = super::flat_ui_host::vr_canvas_pointers(pass, input_context);
+                    self.flat_ui.update_vr_canvas(&self.world, pointers)
+                } else {
+                    (Vec::new(), Vec::new())
+                }
+            }
             crate::PresentationMode::Vr if self.use_mode || self.flat_ui.device => {
                 let pointer = self.vr_use_mode_pointer.as_ref().map(|pass| {
                     let mut pointer =
@@ -7425,33 +7433,31 @@ impl MissionCore {
             hand_items,
             [left_holster, right_holster],
         );
-        let placement_preview = self.vr_use_mode_pointer.as_ref().and_then(|pass| {
-            // Use the same per-hand rays as release detection, including a
-            // carrying hand when the other controller owns the UI cursor.
-            pass.active_ray()
-                .into_iter()
-                .chain(pass.rays.iter())
-                .find_map(|ray| {
-                    let item = hand_items[hand_slot(ray.handedness)]?;
-                    let point = ray.canvas_hit?;
-                    if !self.flat_ui.strip_contains(point) {
-                        return None;
-                    }
-                    let container = self.flat_ui.strip_entity()?;
-                    let cell = self
-                        .flat_ui
-                        .strip_cell_at(point, &self.world)
-                        .unwrap_or((usize::MAX, usize::MAX));
-                    Some(container_deposit_preview(
-                        &self.world,
-                        container,
-                        item,
-                        cell,
-                    ))
-                })
+        let placement_previews = std::array::from_fn(|slot| {
+            let pass = self.vr_use_mode_pointer.as_ref()?;
+            let ray = pass
+                .rays
+                .iter()
+                .find(|ray| hand_slot(ray.handedness) == slot)?;
+            let item = hand_items[slot]?;
+            let point = ray.canvas_hit?;
+            if !self.flat_ui.strip_contains(point) {
+                return None;
+            }
+            let container = self.flat_ui.strip_entity()?;
+            let cell = self
+                .flat_ui
+                .strip_cell_at(point, &self.world)
+                .unwrap_or((usize::MAX, usize::MAX));
+            Some(container_deposit_preview(
+                &self.world,
+                container,
+                item,
+                cell,
+            ))
         });
         self.flat_ui
-            .set_placement_preview(&self.world, placement_preview);
+            .set_placement_previews(&self.world, placement_previews);
         self.refresh_readouts();
         if !self.flat_ui.device
             && self.weapon_settings_gun.is_some_and(|gun| {

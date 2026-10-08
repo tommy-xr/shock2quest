@@ -208,6 +208,29 @@ pub fn vr_canvas_pointer(
     }
 }
 
+/// One cursor per controller, including button levels while off the canvas.
+pub fn vr_canvas_pointers(
+    pass: &crate::ui::FrontendPointerPass,
+    input: &crate::input_context::InputContext,
+) -> [CanvasPointer; 2] {
+    let shared = vr_canvas_pointer(pass, input);
+    [Handedness::Left, Handedness::Right].map(|hand| {
+        let slot = crate::vr_config::hand_slot(hand);
+        let controller = [&input.left_hand, &input.right_hand][slot];
+        CanvasPointer {
+            canvas_pos: pass
+                .rays
+                .iter()
+                .find(|ray| ray.handedness == hand)
+                .and_then(|ray| ray.canvas_hit),
+            pressed: controller.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
+            grabbing: shared.grabbing_hands[slot],
+            hand,
+            ..shared
+        }
+    })
+}
+
 /// The just-lifted item and where/when it was lifted, so a quick second click
 /// on the same slot reads as a double-click (wield) rather than a place.
 struct LiftMark {
@@ -250,7 +273,7 @@ pub struct FlatUiHost {
     /// drag, §2.4). `Some` between a lift and the place/throw that clears it.
     cursor_item: Option<CursorItem>,
     /// Resolved inventory destination, drawn by the shared canvas in both presentations.
-    placement_preview: Option<PlacementPreview>,
+    placement_preview: Vec<PlacementPreview>,
     /// The most recent lift, for double-click (wield) detection. Counts down
     /// each frame and clears when the window elapses.
     last_lift: Option<LiftMark>,
@@ -288,6 +311,7 @@ pub struct FlatUiHost {
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
     last_pointer_pressed: bool,
+    vr_pointer_pressed: [bool; 2],
     /// The pointer of the latest [`update_canvas`](Self::update_canvas), for
     /// `GET /v1/ui` - so a test can see where the VR ray actually landed on the
     /// canvas instead of inferring it from what lit up.
@@ -358,7 +382,7 @@ impl FlatUiHost {
             components: Vec::new(),
             strip: None,
             cursor_item: None,
-            placement_preview: None,
+            placement_preview: Vec::new(),
             last_lift: None,
             readouts: None,
             sticky_panel: false,
@@ -377,6 +401,7 @@ impl FlatUiHost {
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
+            vr_pointer_pressed: [true; 2],
             last_pointer: None,
             last_pointer_grabbing: [false; 2],
             screen_size: CANVAS_SIZE,
@@ -428,28 +453,41 @@ impl FlatUiHost {
         crate::scripts::gui::backpack_cell_at(panel_pos, grid)
     }
 
-    pub(super) fn set_placement_preview(
+    #[cfg(test)]
+    fn set_placement_preview(
         &mut self,
         world: &World,
         preview: Option<(EntityId, (usize, usize), (usize, usize), PlacementStatus)>,
     ) {
-        self.placement_preview = preview.and_then(|(entity, cell, dimensions, status)| {
-            let strip = self.strip.as_ref()?;
-            let rect = self.strip_rect()?;
-            let size = strip.size_px?;
-            let footprint = crate::scripts::gui::backpack_footprint_rect(cell, dimensions);
-            let footprint = Rect::new(
-                rect.x + footprint.x * rect.w / size.x,
-                rect.y + footprint.y * rect.h / size.y,
-                footprint.w * rect.w / size.x,
-                footprint.h * rect.h / size.y,
-            );
-            Some(PlacementPreview {
-                rect: footprint,
-                icon: make_cursor_item(world, entity).icon,
-                status,
+        self.set_placement_previews(world, [preview, None]);
+    }
+
+    pub(super) fn set_placement_previews(
+        &mut self,
+        world: &World,
+        previews: [Option<(EntityId, (usize, usize), (usize, usize), PlacementStatus)>; 2],
+    ) {
+        self.placement_preview = previews
+            .into_iter()
+            .flatten()
+            .filter_map(|(entity, cell, dimensions, status)| {
+                let strip = self.strip.as_ref()?;
+                let rect = self.strip_rect()?;
+                let size = strip.size_px?;
+                let footprint = crate::scripts::gui::backpack_footprint_rect(cell, dimensions);
+                let footprint = Rect::new(
+                    rect.x + footprint.x * rect.w / size.x,
+                    rect.y + footprint.y * rect.h / size.y,
+                    footprint.w * rect.w / size.x,
+                    footprint.h * rect.h / size.y,
+                );
+                Some(PlacementPreview {
+                    rect: footprint,
+                    icon: make_cursor_item(world, entity).icon,
+                    status,
+                })
             })
-        });
+            .collect();
     }
 
     /// The item currently held on the cursor mid-drag (for `/v1/ui` `cursor`).
@@ -680,7 +718,7 @@ impl FlatUiHost {
     /// The mini-frame's current name line, for `GET /v1/ui`.
     pub fn name_strip_debug(&self) -> Option<String> {
         self.placement_preview
-            .as_ref()
+            .first()
             .map(|preview| preview.status.text().to_owned())
             .or_else(|| self.name_strip.clone())
     }
@@ -695,6 +733,7 @@ impl FlatUiHost {
     /// entered under a held button starts "already pressed".
     pub fn guard_held_press(&mut self) {
         self.last_pointer_pressed = true;
+        self.vr_pointer_pressed = [true; 2];
     }
 
     /// Set the use-mode readouts for this frame (`None` outside use mode).
@@ -870,7 +909,7 @@ impl FlatUiHost {
     /// strip just stashes and re-anchors it.
     pub fn set_strip(&mut self, entity: Option<EntityId>) {
         self.utilities = Default::default();
-        self.placement_preview = None;
+        self.placement_preview.clear();
         // The readout belongs to the bar: leaving use mode must not leave a
         // stale name behind for `/v1/ui` (the mission's per-frame update runs
         // before the effect that unbinds the strip).
@@ -900,6 +939,7 @@ impl FlatUiHost {
         // frame - it would instantly close the panel as a bare-view click.
         // Require a release to be observed first.
         self.last_pointer_pressed = true;
+        self.vr_pointer_pressed = [true; 2];
     }
 
     /// Bind the MFD to a panel with no world object behind it (the automap's
@@ -1080,6 +1120,41 @@ impl FlatUiHost {
     /// of pointing, expressed in canvas pixels. VR's cyber-interface panel
     /// enters here directly (its ray is already a canvas point), so both
     /// presentations run one implementation of every gesture.
+    pub fn update_vr_canvas(
+        &mut self,
+        world: &World,
+        pointers: [CanvasPointer; 2],
+    ) -> (Vec<Message>, Vec<FlatUiDragAction>) {
+        let previous_grabs = self.last_pointer_grabbing;
+        let mut messages = Vec::new();
+        let mut actions = Vec::new();
+        let mut hover_close = false;
+        for pointer in pointers {
+            let slot = crate::vr_config::hand_slot(pointer.hand);
+            self.last_pointer_pressed = self.vr_pointer_pressed[slot];
+            // Both hands see the preceding frame, not the other hand's update.
+            self.last_pointer_grabbing = previous_grabs;
+            let (next_messages, next_actions) = self.update_canvas(world, Some(pointer));
+            self.vr_pointer_pressed[slot] = pointer.pressed;
+            hover_close |= self.hover_close;
+            messages.extend(next_messages);
+            actions.extend(next_actions);
+        }
+        self.hover_close = hover_close;
+        // Keep the legacy single-pointer diagnostic/name line as a summary.
+        // Item hover and gestures above are always evaluated for both hands.
+        let summary = pointers
+            .iter()
+            .rev()
+            .find(|p| p.canvas_pos.is_some() && (p.pressed || p.grabbing))
+            .or_else(|| pointers.iter().rev().find(|p| p.canvas_pos.is_some()))
+            .copied()
+            .unwrap_or(pointers[1]);
+        self.last_pointer = Some(summary);
+        self.cursor_canvas = summary.canvas_pos;
+        (messages, actions)
+    }
+
     pub fn update_canvas(
         &mut self,
         world: &World,
@@ -1676,7 +1751,7 @@ impl FlatUiHost {
             // pixels - both presentations map this rect (AGENTS.md 3).
             let (frame, text) = name_strip_rects(rect);
             canvas.image(frame, "frame.pcx");
-            if let Some(preview) = self.placement_preview.as_ref() {
+            if let Some(preview) = self.placement_preview.first() {
                 canvas.text_native_fit(
                     text,
                     preview.status.text(),
@@ -1708,7 +1783,7 @@ impl FlatUiHost {
             );
         }
         if strip_rect.is_some() {
-            if let Some(preview) = self.placement_preview.as_ref() {
+            for preview in &self.placement_preview {
                 let rect = preview.rect;
                 if let Some(icon) = &preview.icon {
                     canvas.fitted_object_icon(rect, icon).opacity(0.45);
@@ -1829,7 +1904,7 @@ impl FlatUiHost {
             (Some(strip), Some(rect)) => {
                 let mut elements =
                     self.elements_for(world, &strip.components, rect, self.held_entity());
-                if let Some(preview) = self.placement_preview.as_ref() {
+                for preview in &self.placement_preview {
                     let footprint = preview.rect;
                     elements.push(crate::game_scene::DebugUiElement {
                         kind: "image".to_owned(),
@@ -3150,7 +3225,7 @@ mod tests {
         let cell = host.strip_cell_at(vec2(preview.rect[0] + 1.0, preview.rect[1] + 1.0), &world);
         assert_eq!(cell, Some((5, 0)));
         host.set_strip(None);
-        assert!(host.placement_preview.is_none());
+        assert!(host.placement_preview.is_empty());
         assert!(host.name_strip_debug().is_none());
     }
 
@@ -4276,6 +4351,32 @@ mod tests {
     /// the panel emit `GrabEntity` into that hand, exactly as a loot panel
     /// does. Without the squeeze/handedness passthrough the message says
     /// "not grabbing, right hand" and the item never leaves the grid.
+    #[test]
+    fn both_inventory_hands_have_independent_grab_edges() {
+        let (world, mut host, _, inventory) = drag_world();
+        let pointers = [Handedness::Left, Handedness::Right].map(|hand| {
+            let mut pointer = vr_pointer(hand, Some((23.5, 34.0)), 0.0, 1.0);
+            pointer.grabbing_hands = [true; 2];
+            pointer
+        });
+        let (messages, _) = host.update_vr_canvas(&world, pointers);
+        assert_eq!(messages.len(), 2);
+        for (message, hand) in messages.iter().zip([Handedness::Left, Handedness::Right]) {
+            assert_eq!(message.to, inventory);
+            assert!(
+                matches!(message.payload, MessagePayload::GUIHover { hand: actual, is_grabbing: true, .. } if actual == hand)
+            );
+        }
+        let (messages, _) = host.update_vr_canvas(&world, pointers);
+        assert!(messages.iter().all(|message| matches!(
+            message.payload,
+            MessagePayload::GUIHover {
+                is_grabbing: false,
+                ..
+            }
+        )));
+    }
+
     #[test]
     fn a_squeeze_on_a_slot_reaches_the_strip_as_a_left_hand_grab() {
         let (world, mut host, _wrench, inventory) = drag_world();
