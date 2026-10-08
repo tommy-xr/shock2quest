@@ -892,9 +892,11 @@ fn main() {
         );
         frame_started = Some(xr_frame_state.predicted_display_time);
 
+        let mut tracking_origin_changed = false;
         if let Some(change_time) = pending_stage_change_time {
             if xr_frame_state.predicted_display_time.as_nanos() >= change_time.as_nanos() {
                 vr_crouch.reset();
+                tracking_origin_changed = true;
                 pending_stage_change_time = None;
                 // The reference space was redefined; drop the latched button
                 // crouch along with the height calibration.
@@ -1167,6 +1169,7 @@ fn main() {
         input_context.head.rotation = head_rotation;
         input_context.head.position = tracking.stage_to_pawn(head_stage);
         input_context.tracking = Some(tracking);
+        input_context.tracking_origin_changed = tracking_origin_changed;
         let tracked_pose_flags = xr::SpaceLocationFlags::POSITION_VALID
             | xr::SpaceLocationFlags::POSITION_TRACKED
             | xr::SpaceLocationFlags::ORIENTATION_VALID
