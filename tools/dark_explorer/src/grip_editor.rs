@@ -240,6 +240,41 @@ fn transfer_grip(
     Ok(())
 }
 
+fn copy_model_poses(library: &GripLibrary, model: &str) -> Result<[ResolvedGrip; 2], String> {
+    let pose = |hand| {
+        library.lookup(model, hand).cloned().ok_or_else(|| {
+            format!("Prepare a valid {hand} pose for {model} before copying both hands")
+        })
+    };
+    Ok([pose("left")?, pose("right")?])
+}
+
+fn paste_model_poses(
+    poses: &[ResolvedGrip; 2],
+    library: &mut GripLibrary,
+    model: &str,
+) -> Result<(), String> {
+    // Stage both transfers so a missing/invalid second hand cannot leave the
+    // first hand modified. Never copy source identity or fitting provenance.
+    let mut replacements = Vec::new();
+    for (hand, pose) in ["left", "right"].into_iter().zip(poses) {
+        let index = library
+            .entries
+            .iter()
+            .position(|e| e.model == model && e.hand == hand)
+            .ok_or_else(|| {
+                format!("Prepare the {hand} draft for {model} before pasting both hands")
+            })?;
+        let mut target = library.entries[index].clone();
+        transfer_grip(pose, &mut target, None)?;
+        replacements.push((index, target));
+    }
+    for (index, target) in replacements {
+        library.entries[index] = target;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum VrSetupMode {
     Hands,
@@ -254,7 +289,7 @@ pub struct GripEditor {
     support_editor: crate::support_grip_editor::SupportEditor,
     support_mode: bool,
     curl_editor: CurlPoseEditor,
-    clipboard: Option<(String, String, ResolvedGrip)>,
+    clipboard: Option<(String, [ResolvedGrip; 2])>,
     document: Result<GripDocument, String>,
     hints: Result<BTreeMap<String, GripHints>, String>,
     model: String,
@@ -922,22 +957,25 @@ impl GripEditor {
             });
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.add_enabled(!busy, egui::Button::new("Copy pose")).clicked() {
-                self.clipboard = Some((self.model.clone(), self.hand.clone(), doc.library.entries[index].grip.clone()));
-                self.message = format!("Copied {} {} pose", self.model, self.hand);
-            }
-            if ui.add_enabled(!busy && self.clipboard.is_some(), egui::Button::new("Paste pose")).clicked() {
-                let (model, source_hand, grip) = self.clipboard.as_ref().unwrap();
-                let mirror = if source_hand != &self.hand { preview.grip_model_mirror(&key).map(Some) } else { Ok(None) };
-                match mirror {
-                    Ok(mirror) => {
-                        self.message = match transfer_grip(grip, &mut doc.library.entries[index], mirror) {
-                            Ok(()) => format!("Pasted {model} {source_hand} pose. Review the fit, then save."),
-                            Err(e) => e,
-                        };
+            if ui.add_enabled(!busy, egui::Button::new("Copy all poses"))
+                .on_hover_text("Copy left and right hands, including each hand's rest and trigger-pressed pose")
+                .clicked() {
+                match copy_model_poses(&doc.library, &self.model) {
+                    Ok(poses) => {
+                        self.clipboard = Some((self.model.clone(), poses));
+                        self.message = format!("Copied {}: both hands, including trigger poses", self.model);
                     }
-                    Err(e) => self.message = e,
+                    Err(error) => self.message = error,
                 }
+            }
+            if ui.add_enabled(!busy && self.clipboard.is_some(), egui::Button::new("Paste all poses"))
+                .on_hover_text("Replace both hands and their trigger poses; left stays left and right stays right")
+                .clicked() {
+                let (model, poses) = self.clipboard.as_ref().unwrap();
+                self.message = match paste_model_poses(poses, &mut doc.library, &self.model) {
+                    Ok(()) => format!("Pasted both hands and trigger poses from {model}. Review the fit, then save."),
+                    Err(error) => error,
+                };
             }
             let opposite = if self.hand == "right" { "left" } else { "right" };
             if ui.add_enabled(!busy, egui::Button::new(format!("Mirror to {opposite} hand"))).clicked() {
@@ -963,7 +1001,7 @@ impl GripEditor {
                     Err(e) => self.message = e,
                 }
             }
-            if let Some((model, hand, _)) = &self.clipboard { ui.small(format!("Copied: {model} · {hand}")); }
+            if let Some((model, _)) = &self.clipboard { ui.small(format!("Copied: {model} · both hands + trigger poses")); }
         });
         egui::CollapsingHeader::new("Automatic fitting").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1308,6 +1346,83 @@ mod tests {
         doc.save().unwrap();
         let loaded = GripDocument::load(doc.path.clone()).unwrap();
         assert_eq!(loaded.library.entries[1].grip, doc.library.entries[1].grip);
+    }
+
+    #[test]
+    fn clipboard_copies_both_hands_and_trigger_poses_through_save() {
+        let (_dir, mut doc) = document();
+        for (index, hand) in ["left", "right"].into_iter().enumerate() {
+            let source = doc
+                .library
+                .entries
+                .iter_mut()
+                .find(|e| e.model == "mug" && e.hand == hand)
+                .unwrap();
+            source.grip.offset.x = 0.1 + index as f32 * 0.2;
+            source.grip.item_scale = 0.55 + index as f32 * 0.1;
+            source.grip.curls = [0.2 + index as f32 * 0.3; 5];
+            source.grip.trigger_curls = (index == 0).then_some([0.8; 5]);
+        }
+        let poses = copy_model_poses(&doc.library, "mug").unwrap();
+        // The clipboard is a snapshot, independent of subsequent source edits.
+        doc.library
+            .entries
+            .iter_mut()
+            .find(|e| e.model == "mug")
+            .unwrap()
+            .grip
+            .curls = [0.9; 5];
+        for target in doc
+            .library
+            .entries
+            .iter_mut()
+            .filter(|e| e.model == "medpatch")
+        {
+            target.grip.trigger_curls = Some([0.1; 5]);
+        }
+        let before = doc.library.entries.clone();
+        paste_model_poses(&poses, &mut doc.library, "medpatch").unwrap();
+        for (old, actual) in before.iter().zip(&doc.library.entries) {
+            let mut expected = old.clone();
+            if old.model == "medpatch" {
+                let index = if old.hand == "left" { 0 } else { 1 };
+                expected.grip = poses[index].clone();
+                expected.grip.contacts = [None; 5];
+                expected.grip.score = 0.0;
+                expected.authored = true;
+            }
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                serde_json::to_value(expected).unwrap()
+            );
+        }
+        doc.save().unwrap();
+        let loaded = GripDocument::load(doc.path.clone()).unwrap();
+        for hand in ["left", "right"] {
+            assert_eq!(
+                loaded.library.lookup("medpatch", hand),
+                doc.library.lookup("medpatch", hand)
+            );
+        }
+    }
+
+    #[test]
+    fn clipboard_requires_both_hands_and_pastes_atomically() {
+        let (_dir, mut doc) = document();
+        let mut poses = copy_model_poses(&doc.library, "mug").unwrap();
+        poses[1].item_scale = -1.0;
+        let before = serde_json::to_value(&doc.library.entries).unwrap();
+        assert!(paste_model_poses(&poses, &mut doc.library, "medpatch").is_err());
+        assert_eq!(serde_json::to_value(&doc.library.entries).unwrap(), before);
+
+        let poses = copy_model_poses(&doc.library, "mug").unwrap();
+        doc.library
+            .entries
+            .retain(|e| !(e.model == "medpatch" && e.hand == "right"));
+        assert!(copy_model_poses(&doc.library, "medpatch").is_err());
+        let before = serde_json::to_value(&doc.library.entries).unwrap();
+        assert!(paste_model_poses(&poses, &mut doc.library, "medpatch").is_err());
+        assert_eq!(serde_json::to_value(&doc.library.entries).unwrap(), before);
     }
 
     #[test]
