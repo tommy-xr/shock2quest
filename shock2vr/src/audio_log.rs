@@ -10,7 +10,7 @@
 //! ids are not stable across runs).
 //!
 //! `still_playing` is derived at *query* time from simulation time
-//! (`sim_time + duration_secs > now`, and not explicitly stopped) rather than
+//! (a loop or `sim_time + duration_secs > now`, and not explicitly stopped) rather than
 //! from live rodio sink state (`engine::audio::AudioContext`'s
 //! `handle_to_sink`, which it retains while `!sink.empty()`): rodio plays on
 //! its own thread against the wall clock, so that state is nondeterministic
@@ -30,7 +30,7 @@ use std::time::Duration;
 use cgmath::Vector3;
 use engine::audio::{
     AudioChannel, AudioClip, AudioContext, AudioHandle, AudioPlaybackSettings,
-    play_audio_with_settings, play_spatial_audio_with_gain,
+    play_audio_with_settings, play_spatial_audio_with_gain, play_spatial_audio_with_settings,
 };
 use serde::Serialize;
 use shipyard::EntityId;
@@ -81,6 +81,8 @@ pub struct PlayedSound {
     pub stopped_at_sim_time: Option<f64>,
     /// Derived at query time - see the module docs.
     pub still_playing: bool,
+    /// Seamless loop: remains audible until explicitly stopped.
+    pub looping: bool,
 }
 
 /// Complete arguments for inserting one entry into the ring buffer.
@@ -93,6 +95,7 @@ struct SoundRecord<'a> {
     pub tags: Vec<(String, String)>,
     pub position: [f32; 3],
     pub duration: Option<Duration>,
+    pub looping: bool,
     pub source_entity: Option<SourceEntity>,
     pub handle: Option<u64>,
 }
@@ -113,6 +116,11 @@ pub struct PlayRecord<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PlayOptions {
     ListenerRelative(AudioPlaybackSettings),
+    SpatialWithSettings {
+        position: Vector3<f32>,
+        source: Option<EntityId>,
+        settings: AudioPlaybackSettings,
+    },
     Spatial {
         position: Vector3<f32>,
         source: Option<EntityId>,
@@ -124,13 +132,17 @@ impl PlayOptions {
     fn recorded_position(self) -> [f32; 3] {
         match self {
             Self::ListenerRelative(_) => [0.0, 0.0, 0.0],
-            Self::Spatial { position, .. } => [position.x, position.y, position.z],
+            Self::Spatial { position, .. } | Self::SpatialWithSettings { position, .. } => {
+                [position.x, position.y, position.z]
+            }
         }
     }
 
     fn recorded_gain(self) -> f32 {
         match self {
-            Self::ListenerRelative(settings) => settings.gain,
+            Self::ListenerRelative(settings) | Self::SpatialWithSettings { settings, .. } => {
+                settings.gain
+            }
             Self::Spatial { gain, .. } => gain,
         }
     }
@@ -174,6 +186,19 @@ pub fn play_and_record(
             PlayOptions::ListenerRelative(settings) => {
                 play_audio_with_settings(audio_context, handle, channel, clip, settings)
             }
+            PlayOptions::SpatialWithSettings {
+                position,
+                source,
+                settings,
+            } => play_spatial_audio_with_settings(
+                audio_context,
+                position,
+                source,
+                handle,
+                channel,
+                clip,
+                settings,
+            ),
             PlayOptions::Spatial {
                 position,
                 source,
@@ -219,6 +244,7 @@ where
         tags: record_args.tags,
         position,
         duration,
+        looping: matches!(options, PlayOptions::ListenerRelative(s) | PlayOptions::SpatialWithSettings { settings: s, .. } if s.looping),
         source_entity: record_args.source_entity,
         handle: Some(handle_id),
     });
@@ -253,6 +279,7 @@ fn record(record: SoundRecord) {
         handle: record.handle,
         stopped_at_sim_time: None,
         still_playing: false,
+        looping: record.looping,
     });
     if entries.len() > MAX_ENTRIES {
         entries.pop_front();
@@ -277,21 +304,23 @@ pub fn record_stop(handle: u64) {
     if let Some(entry) = guard.1.iter_mut().rev().find(|entry| {
         entry.handle == Some(handle)
             && entry.stopped_at_sim_time.is_none()
-            && entry
-                .duration_secs
-                .is_none_or(|duration| entry.sim_time + duration > sim_time)
+            && (entry.looping
+                || entry
+                    .duration_secs
+                    .is_none_or(|duration| entry.sim_time + duration > sim_time))
     }) {
         entry.stopped_at_sim_time = Some(sim_time);
     }
 }
 
 /// Whether an entry is still audible at simulation time `now`: it has a known
-/// duration that has not elapsed, and nothing stopped it early.
+/// duration that has not elapsed (or loops), and nothing stopped it early.
 fn resolve_still_playing(entry: &PlayedSound, now: f64) -> bool {
     entry.stopped_at_sim_time.is_none()
-        && entry
-            .duration_secs
-            .is_some_and(|duration| entry.sim_time + duration > now)
+        && (entry.looping
+            || entry
+                .duration_secs
+                .is_some_and(|duration| entry.sim_time + duration > now))
 }
 
 /// [`recent`], narrowed to samples whose name contains `needle`, ignoring
@@ -342,7 +371,17 @@ mod tests {
             handle: Some(1),
             stopped_at_sim_time: None,
             still_playing: false,
+            looping: false,
         }
+    }
+
+    #[test]
+    fn looping_clip_remains_audible_until_explicitly_stopped() {
+        let mut sound = entry(10.0, Some(0.5));
+        sound.looping = true;
+        assert!(resolve_still_playing(&sound, 100.0));
+        sound.stopped_at_sim_time = Some(11.0);
+        assert!(!resolve_still_playing(&sound, 100.0));
     }
 
     // Deliberately pure: the ring buffer and the simulation clock are
@@ -368,12 +407,13 @@ mod tests {
     }
 
     #[test]
-    fn record_stop_marks_the_latest_unstopped_play_of_a_handle() {
+    fn record_stop_marks_latest_loop_even_after_sample_duration() {
         // A handle unique to this test - the buffer is process-global.
         let handle = 9_000_017;
         set_sim_time(3.0);
         for _ in 0..2 {
             record(SoundRecord {
+                looping: true,
                 sample: "test",
                 volume_millibels: None,
                 gain: 1.0,
@@ -381,7 +421,7 @@ mod tests {
                 pan_applied: false,
                 tags: vec![],
                 position: [0.0, 0.0, 0.0],
-                duration: Some(Duration::from_secs(5)),
+                duration: Some(Duration::ZERO),
                 source_entity: None,
                 handle: Some(handle),
             });

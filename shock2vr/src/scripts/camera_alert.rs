@@ -23,6 +23,7 @@ enum AlarmPhase {
     Armed,
     Latched,
     Resetting,
+    Dead,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -65,6 +66,9 @@ impl Script for CameraAlert {
         _physics: &PhysicsWorld,
         _time: &Time,
     ) -> Effect {
+        if super::ai::ai_util::is_killed(entity_id, world) {
+            return Effect::NoEffect;
+        }
         let high_alert = Self::is_high_alert(world, entity_id);
         match self.phase {
             AlarmPhase::Armed
@@ -102,7 +106,10 @@ impl Script for CameraAlert {
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        if !matches!(msg, MessagePayload::Reset { .. }) {
+        if matches!(msg, MessagePayload::Slay) {
+            self.phase = AlarmPhase::Dead;
+        }
+        if matches!(self.phase, AlarmPhase::Dead) || !matches!(msg, MessagePayload::Reset { .. }) {
             return Effect::NoEffect;
         }
 
@@ -145,6 +152,24 @@ mod tests {
     use shipyard::ViewMut;
 
     use super::*;
+
+    #[test]
+    fn slain_camera_cannot_raise_or_rearm_an_alarm() {
+        let (world, camera, _) = camera_world();
+        let mut script = CameraAlert::new();
+        let physics = PhysicsWorld::new();
+        script.handle_message(camera, &world, &physics, &MessagePayload::Slay);
+        script.handle_message(
+            camera,
+            &world,
+            &physics,
+            &MessagePayload::Reset { from: camera },
+        );
+        assert!(matches!(
+            script.update(camera, &world, &physics, &time()),
+            Effect::NoEffect
+        ));
+    }
 
     fn camera_world() -> (World, EntityId, EntityId) {
         let mut world = World::new();

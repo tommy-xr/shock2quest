@@ -123,6 +123,7 @@ impl WaterFeedback {
                 effects.push(Effect::PlayLoopingSound {
                     handle: handle.clone(),
                     name: "underwater".into(),
+                    source: None,
                 });
                 self.ambience = Some(handle);
             } else if previous == Some(3) {

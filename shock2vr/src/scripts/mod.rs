@@ -18,6 +18,7 @@ mod base_room;
 pub mod berserk;
 mod burst_fire;
 mod camera_alert;
+mod camera_death;
 mod charmable;
 mod chemical;
 mod choose_mission;
@@ -182,6 +183,7 @@ use self::{
     base_light::BaseLight,
     base_monster::BaseMonster,
     camera_alert::CameraAlert,
+    camera_death::CameraDeath,
     core_room::*,
     create_sound::*,
     cs9::{
@@ -1365,7 +1367,7 @@ impl ScriptWorld {
             "baseai" => Box::new(NoopScript::new()),
             "basemonster" => Box::new(BaseMonster::new()),
             "cameraalert" => Box::new(CameraAlert::new()),
-            "cameradeath" => Box::new(UnimplementedScript::new(&script_name)),
+            "cameradeath" => Box::new(CameraDeath::new()),
             "censor" => Box::new(UnimplementedScript::new(&script_name)),
             "censorme" => Box::new(UnimplementedScript::new(&script_name)),
             "creaturecontainer" => gui_script(Box::new(ContainerGui::loot_creature())),

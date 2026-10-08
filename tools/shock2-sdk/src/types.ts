@@ -1282,11 +1282,13 @@ export interface PlayedSound {
   /** Simulation time at which a StopSound cut the play short. */
   stopped_at_sim_time: number | null;
   /**
-   * Derived from simulation time (`sim_time + duration_secs > now`, and not
+   * Derived from simulation time (looping or `sim_time + duration_secs > now`, and not
    * stopped), NOT from live audio-device state - stepping is decoupled from
    * the wall clock. False when the duration is unknown.
    */
   still_playing: boolean;
+  /** Seamless loop; remains audible until explicitly stopped. */
+  looping: boolean;
 }
 
 export interface RecentAudioResult {

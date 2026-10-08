@@ -3,6 +3,7 @@ use dark::properties::{
     AIAlertLevel, InternalPropOriginalModelName, PropAIAlertCap, PropAIAlertness, PropAIAwareDelay,
     PropAICamera, PropAIDevice, PropModelName, PropPosition, PropSpeechVoice, PropVoiceIndex,
 };
+use engine::audio::AudioHandle;
 use num_traits::ToPrimitive;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -90,6 +91,8 @@ pub struct CameraAI {
     /// Pinned (e.g. DebugForceChase): the level neither escalates nor decays
     /// until a non-pinned `SetAlertness` clears it.
     alertness_pinned: bool,
+    dead: bool,
+    motor: Option<AudioHandle>,
 }
 
 impl CameraAI {
@@ -98,6 +101,45 @@ impl CameraAI {
             config: None,
             state: CameraState::default(),
             alertness_pinned: false,
+            dead: false,
+            motor: None,
+        }
+    }
+
+    // Dark's joint scan/rotate actions own the positional rotation loop.
+    // Idle scanning keeps it running through direction reversals; tracking
+    // stops it on arrival. Handles are transient and restart after load.
+    fn motor_sound(&mut self, entity_id: EntityId, moving: bool, stop_click: bool) -> Effect {
+        match (moving, self.motor.take()) {
+            (true, None) => {
+                let handle = AudioHandle::new();
+                self.motor = Some(handle.clone());
+                Effect::PlayLoopingSound {
+                    handle,
+                    name: "camera_lp".into(),
+                    source: Some(entity_id),
+                }
+            }
+            (false, Some(handle)) => {
+                let stop = Effect::StopSound { handle };
+                if stop_click {
+                    Effect::combine(vec![
+                        stop,
+                        Effect::PlaySound {
+                            handle: AudioHandle::new(),
+                            name: "camera_stp".into(),
+                            source: Some(entity_id),
+                            spatial: true,
+                        },
+                    ])
+                } else {
+                    stop
+                }
+            }
+            (_, handle) => {
+                self.motor = handle;
+                Effect::NoEffect
+            }
         }
     }
 
@@ -403,6 +445,10 @@ impl CameraAI {
 
 impl Script for CameraAI {
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        self.dead = ai_util::is_killed(entity_id, world);
+        if self.dead {
+            return Effect::NoEffect;
+        }
         let mut effects = Vec::new();
 
         if let Some((config, state)) = Self::build_config(world, entity_id) {
@@ -433,6 +479,9 @@ impl Script for CameraAI {
         physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
+        if self.dead || ai_util::is_killed(entity_id, world) {
+            return self.motor_sound(entity_id, false, false);
+        }
         let mut effects = Vec::new();
         let delta = time.elapsed.as_secs_f32();
 
@@ -501,6 +550,7 @@ impl Script for CameraAI {
 
         self.state.time_since_last_speech += delta;
 
+        let previous_angle = self.state.view_angle;
         let aim_angle = if let Some(delta_limit) = max_delta {
             self.state.view_angle =
                 move_towards_angle(self.state.view_angle, target_angle, delta_limit);
@@ -509,6 +559,10 @@ impl Script for CameraAI {
             target_angle
         };
 
+        if delta > 0.0 && config_clone.is_some() {
+            let moving = !is_visible || normalize_deg(aim_angle - previous_angle).abs() > 0.001;
+            effects.push(self.motor_sound(entity_id, moving, true));
+        }
         let quat = Quaternion::from_angle_x(Deg(aim_angle));
         effects.push(Effect::SetJointTransform {
             entity_id,
@@ -555,10 +609,17 @@ impl Script for CameraAI {
     fn handle_message(
         &mut self,
         entity_id: EntityId,
-        _world: &World,
+        world: &World,
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        if matches!(msg, MessagePayload::Slay) {
+            self.dead = true;
+            return self.motor_sound(entity_id, false, false);
+        }
+        if self.dead || ai_util::is_killed(entity_id, world) {
+            return Effect::NoEffect;
+        }
         let MessagePayload::SetAlertness { level, pin } = msg else {
             return Effect::NoEffect;
         };
@@ -746,5 +807,75 @@ mod tests {
         let fallback = models("securitycam");
         assert_eq!(models(&idle_model(&fallback.1)), fallback);
         assert_eq!(models(&idle_model(&fallback.2)), fallback);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use dark::properties::PropHitPoints;
+    use std::time::Duration;
+
+    #[test]
+    fn motor_starts_once_stops_on_arrival_and_stays_off_after_death() {
+        let mut world = World::new();
+        let entity = world.add_entity((PropHitPoints { hit_points: 5 },));
+        let mut camera = CameraAI::new();
+        assert!(
+            matches!(camera.motor_sound(entity, true, true), Effect::PlayLoopingSound { source: Some(id), .. } if id == entity)
+        );
+        assert!(matches!(
+            camera.motor_sound(entity, true, true),
+            Effect::NoEffect
+        ));
+        let stopped = Effect::flatten(vec![camera.motor_sound(entity, false, true)]);
+        assert!(
+            stopped
+                .iter()
+                .any(|e| matches!(e, Effect::StopSound { .. }))
+        );
+        assert!(stopped.iter().any(
+            |e| matches!(e, Effect::PlaySound { name, spatial: true, .. } if name == "camera_stp")
+        ));
+        camera.motor_sound(entity, true, true);
+        let physics = PhysicsWorld::new();
+        assert!(matches!(
+            camera.handle_message(entity, &world, &physics, &MessagePayload::Slay),
+            Effect::StopSound { .. }
+        ));
+        // Slay's effects have not landed yet: HP still says alive.
+        let time = Time {
+            elapsed: Duration::from_secs_f32(1.0 / 60.0),
+            total: Duration::from_secs(1),
+        };
+        assert!(matches!(
+            camera.update(entity, &world, &physics, &time),
+            Effect::NoEffect
+        ));
+        assert!(matches!(
+            camera.handle_message(
+                entity,
+                &world,
+                &physics,
+                &MessagePayload::SetAlertness {
+                    level: AIAlertLevel::High,
+                    pin: false
+                }
+            ),
+            Effect::NoEffect
+        ));
+    }
+
+    #[test]
+    fn loading_a_destroyed_camera_does_not_restore_green_model() {
+        let mut world = World::new();
+        let entity = world.add_entity((
+            PropHitPoints { hit_points: 0 },
+            PropModelName("camdam".into()),
+        ));
+        assert!(matches!(
+            CameraAI::new().initialize(entity, &world),
+            Effect::NoEffect
+        ));
     }
 }
