@@ -16,6 +16,7 @@ pub const RANGE: f32 = 12.0;
 pub struct Flight {
     pub item: EntityId,
     pub amp: EntityId,
+    pub hand: Option<usize>,
     pub gravity: f32,
     pub age: f32,
     pub trail_age: f32,
@@ -116,6 +117,17 @@ pub fn resolve(world: &World, physics: &PhysicsWorld, amp: EntityId) -> Option<E
         return None;
     }
     let (origin, forward) = crate::scripts::amp_aim_ray(world, amp)?;
+    resolve_ray(world, physics, amp, origin, forward)
+}
+
+pub(crate) fn resolve_ray(
+    world: &World,
+    physics: &PhysicsWorld,
+    amp: EntityId,
+    origin: cgmath::Point3<f32>,
+    forward: cgmath::Vector3<f32>,
+) -> Option<EntityId> {
+    let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
     // The first obstruction wins: ineligible props and world walls cannot be skipped.
     let hit = physics.ray_cast2_with_entity_filter(
         origin,
