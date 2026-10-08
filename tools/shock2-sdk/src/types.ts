@@ -827,6 +827,7 @@ export interface PlayerSnapshot {
       items: [number | null, number | null];
       retained: [boolean, boolean];
     };
+    rapiers?: { entity_id: number; extension: number; held: boolean; hum_handle: number | null }[];
     /** Per-hand transient haptic requests and monotonic diagnostic counters. */
     haptics?: { pending: [{ amplitude: number; duration_ms: number } | null, { amplitude: number; duration_ms: number } | null]; sequence: [number, number] };
     glove_contacts?: { centers: [Vec3 | null, Vec3 | null]; radius: number };

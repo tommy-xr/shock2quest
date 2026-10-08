@@ -865,6 +865,7 @@ pub fn pmnm_to_scene_objects(
         // vertices and would double-apply each joint's rest transform to a
         // bind-space mesh. `Model::from_ai_bin` bakes the correct rest palette
         // once it has the bind matrices.
+        let first = scene_objects.len();
         scene_objects.push(engine::scene::scene_object::SceneObject::create(
             material, geometry,
         ));
@@ -875,6 +876,9 @@ pub fn pmnm_to_scene_objects(
             diffuse,
             true,
         );
+        for object in &mut scene_objects[first..] {
+            object.material_name = Some(Rc::from(material_name.as_str()));
+        }
     }
     scene_objects
 }

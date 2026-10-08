@@ -152,6 +152,7 @@ impl Script for HeldMeleeWeapon {
                 };
                 // Released weapons use the same capped throw damage as other props.
                 let damage = (is_held
+                    && crate::rapier::ready(world, entity_id)
                     && !self.charge.charging()
                     && self.may_damage(entity_id, owner, physics, *contact, player_velocity))
                 .then(|| authored_contact_damage(world, entity_id, owner, self.charge.bonus()))

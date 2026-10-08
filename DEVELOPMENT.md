@@ -478,6 +478,22 @@ and the per-target damage cooldown still determine whether a hit deals damage.
 Wrench, rapier, and shard use their motion schemas; the psi sword falls back
 to the shard's whoosh. Flatscreen plays the cue once when a swing is accepted.
 
+### VR laser rapier activation
+
+The remaster rapier is hilt-only while stowed or loose. Grabbing it extends the
+blade in 0.18 seconds with a short controller pulse and a quiet positional
+`ES_loop` hum. Releasing it retracts the blade in 0.14 seconds and fades/stops
+the loop. Ownership comes from the existing hands/holsters; quick redraws
+reverse the animation without restarting the hum. The blade must finish
+extending before it can damage or play a damage-speed whoosh. Flatscreen keeps
+its authored blade presentation.
+
+`/v1/info` includes `player.hand_feedback.rapiers` (entity, extension, held,
+hum handle); `/v1/audio/loops` reports the live loop. The model's separate
+`ND-rapier_b` material animates around measured emitter anchors, leaving the
+hilt, grip, and shared cached materials unchanged. Classic meshes without
+that separate material retain their original appearance.
+
 ### VR pipe parries
 
 `cargo dbgr --mission debug_melee --vr --port 0` provides live pipe hybrids and

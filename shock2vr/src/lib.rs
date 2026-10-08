@@ -26,6 +26,7 @@ mod pipe_melee;
 mod psi_amp_readout;
 pub mod psi_amp_selection;
 mod psi_carousel;
+mod rapier;
 pub mod reference_grid;
 pub mod save_load;
 pub mod scenes;

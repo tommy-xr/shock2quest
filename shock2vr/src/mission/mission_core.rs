@@ -3371,6 +3371,7 @@ pub struct MissionCore {
     vr_clip_insert_engaged: [bool; 2],
     shoulder_backpack: super::shoulder_backpack::ShoulderBackpack,
     holsters: super::holsters::Holsters,
+    rapier_feedback: crate::rapier::RapierFeedback,
     debug_body: super::debug_body::DebugBody,
     implant_sockets: super::implant_sockets::Sockets,
     ammo_pouch: super::ammo_pouch::AmmoPouch,
@@ -4314,6 +4315,7 @@ impl MissionCore {
             body_hand_contacts: [None; 2],
             download_release_disarmed: [false; 2],
             holsters: Default::default(),
+            rapier_feedback: Default::default(),
             debug_body: Default::default(),
             implant_sockets: Default::default(),
             ammo_pouch: Default::default(),
@@ -5514,7 +5516,10 @@ impl MissionCore {
                     .is_none_or(|tracking| tracking.head && tracking.hands[hand]);
                 if latch.sound_ready(
                     speed.filter(|_| {
-                        tracked && self.player_controls_enabled && !player_health_depleted
+                        tracked
+                            && self.player_controls_enabled
+                            && !player_health_depleted
+                            && weapon.is_none_or(|entity| crate::rapier::ready(&self.world, entity))
                     }),
                     time.elapsed.as_secs_f32(),
                 ) {
@@ -7565,6 +7570,16 @@ impl MissionCore {
             .borrow::<UniqueViewMut<crate::melee_swing::MeleeSwings>>()
             .unwrap()
             .release_unsupported(|entity| self.interaction.is_supported(entity));
+
+        if game_options.presentation_mode == crate::PresentationMode::Vr {
+            let (left, right) = self.interaction.held_entities();
+            effects.extend(self.rapier_feedback.update(
+                &mut self.world,
+                [left, right],
+                !player_health_depleted,
+                time.elapsed.as_secs_f32(),
+            ));
+        }
 
         // Update scripts
         let mut script_effects = profile!(
@@ -13691,6 +13706,7 @@ impl MissionCore {
                         source,
                         spatial,
                         false,
+                        None,
                     );
                 }
                 Effect::PlayLoopingSound {
@@ -13707,7 +13723,28 @@ impl MissionCore {
                     source,
                     source.is_some(),
                     true,
+                    None,
                 ),
+                Effect::PlaySpatialLoopingSound {
+                    handle,
+                    name,
+                    source,
+                    gain,
+                } => play_schema_sound(
+                    &self.world,
+                    global_context,
+                    asset_cache,
+                    audio_context,
+                    handle,
+                    &name,
+                    Some(source),
+                    true,
+                    true,
+                    Some(gain),
+                ),
+                Effect::SetSoundGain { handle, gain } => {
+                    audio_context.set_sound_gain(&handle, gain)
+                }
                 Effect::PlaySpeech {
                     entity_id,
                     voice_index,
@@ -14301,6 +14338,7 @@ impl MissionCore {
                         None,
                         false,
                         false,
+                        None,
                     );
                 }
 
@@ -16807,7 +16845,7 @@ impl MissionCore {
 
             rendered_model_count += 1;
 
-            let scene_objs = {
+            let mut scene_objs = {
                 if let Some(pose) = self
                     .script_world
                     .stasis(*entity_id, &self.world)
@@ -16820,6 +16858,18 @@ impl MissionCore {
                     objs.to_scene_objects().clone()
                 }
             };
+            if options.presentation_mode == crate::PresentationMode::Vr
+                && crate::rapier::is_rapier(&self.world, *entity_id)
+            {
+                let held_model = v_model_name
+                    .get(*entity_id)
+                    .is_ok_and(|m| m.0.eq_ignore_ascii_case("rapier_h"));
+                crate::rapier::animate(
+                    &mut scene_objs,
+                    crate::rapier::amount(&self.world, *entity_id),
+                    held_model,
+                );
+            }
             let is_animated_model = objs.is_animated();
 
             // Authored/scripted per-entity alpha (Renderer\Transparency (alpha):
@@ -17225,6 +17275,15 @@ impl MissionCore {
                             .pose
                             .model_transform(bounds.min.to_vec(), bounds.max.to_vec());
                     let mut objects = model.to_scene_objects().clone();
+                    if let Some(entity) =
+                        entity.filter(|id| crate::rapier::is_rapier(&self.world, *id))
+                    {
+                        crate::rapier::animate(
+                            &mut objects,
+                            crate::rapier::amount(&self.world, entity),
+                            false,
+                        );
+                    }
                     // Stowed weapons are player gear too: use the same room
                     // lighting and adjustable minimum as a weapon in hand.
                     let lights = object_lights
@@ -18903,8 +18962,7 @@ pub fn make_un_physical2(
 }
 
 /// Resolve `name` (a schema, else a bare sample) and play it. `allow_loop`
-/// repeats a listener-relative play when the schema authors a seamless loop;
-/// spatial plays never loop.
+/// repeats a play when the schema authors a seamless loop.
 #[allow(clippy::too_many_arguments)]
 fn play_schema_sound(
     world: &World,
@@ -18916,6 +18974,7 @@ fn play_schema_sound(
     source: Option<EntityId>,
     spatial: bool,
     allow_loop: bool,
+    gain_override: Option<f32>,
 ) {
     println!("Trying to play sound: {}", name);
     let (resolved, has_schema) = resolve_schema(global_context, name);
@@ -18924,7 +18983,7 @@ fn play_schema_sound(
 
     if let Some(audio_clip) = maybe_audio_clip {
         info!("Playing clip: {} handle: {:?}", name, &handle);
-        let gain = resolved.linear_gain();
+        let gain = gain_override.unwrap_or_else(|| resolved.linear_gain());
         // Spatial emitters (TrapSound narrations anchored at
         // their authored station) play at the source entity,
         // like the original engine's object sounds. Everything
@@ -20082,6 +20141,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     fn hand_feedback(&self) -> serde_json::Value {
         let mut feedback = self.interaction.hand_feedback_diagnostics();
         if let Some(object) = feedback.as_object_mut() {
+            object.insert("rapiers".to_owned(), self.rapier_feedback.diagnostics());
             object.insert("body_gear".to_owned(), serde_json::json!({
                 "personal_card": {
                     "hand": self.personal_card.hand,
@@ -22985,6 +23045,9 @@ impl crate::game_scene::GameScene for MissionCore {
     }
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        for handle in self.rapier_feedback.take_handles() {
+            stop_sound(audio_context, handle);
+        }
         if let Some(handle) = self.water_feedback.take_ambience() {
             stop_sound(audio_context, handle);
         }
