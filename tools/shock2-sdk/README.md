@@ -237,6 +237,54 @@ trigger, squeeze, the raw face buttons, `MenuButton`, `crouch` as a left stick
 click); tracking channels are not. The format and mapping are documented in
 `src/clip-inputs.ts`.
 
+## Simulated floor-relative VR tracking
+
+Existing `head.position` and hand-position channels are pawn-local world units.
+They do not imply a calibrated physical headset. For physical crouch testing,
+launch with `debugFlags: ["--vr"]` and opt in with a complete tracked rig:
+
+```ts
+await game.input.setTracking({
+  enabled: true,
+  head_position: [0, 1.7, 0],
+  left_hand_position: [-0.2, 1.4, -0.3],
+  right_hand_position: [0.2, 1.4, -0.3],
+});
+await game.step({ frames: 3 }); // establish standing calibration
+await game.input.setTracking({ head_position: [0, 1.0, 0] });
+await game.step({ frames: 10 }); // physically crouch
+console.log(await game.input.tracking());
+```
+
+`GET/POST /v1/control/tracking` exposes the same operation over HTTP. All three
+requested positions are **floor-relative meters** in the tracking stage; +Y is
+up and -Z is forward before pawn rotation. Subsequent patches may update any
+subset. While enabled, these stage positions replace the legacy position
+channels; rotations, buttons, sticks, and the explicit `crouch` channel still
+come from `/v1/control/input`. Flat runtimes reject tracking patches.
+
+This uses Quest's shared `VrCrouchDetector` and `TrackingTransform`: tallest
+valid head height calibrates standing, 70%/85% thresholds provide hysteresis,
+and grip climbing freezes physical crouch detection. Explicit crouch is ORed
+with the physical request. Physics may refuse standing under a low ceiling;
+the post-physics head and hands use one transform based on the actual stance.
+`game.input.tracking()` separates requested stage poses, physical/explicit
+crouch requests, and resolved pawn-local head position. `/v1/control/input`
+reports the resolved input poses; `/v1/info` reports the rendered camera.
+
+The simulated stage offset is zero (Quest also supports a configurable eye-height
+offset). `position_tracked` governs the head position; supplied hand positions
+remain current, matching the shipping runtime’s separate controller poses.
+
+Set `position_tracked: false` to simulate head-position tracking loss: the last
+valid head pose and crouch request remain until tracking returns. Set
+`reset: true` after changing reference space to forget calibration and cached
+head pose; the next valid sample starts calibration anew. Resetting while low
+does not assume the player was standing. `enabled: false` disables simulation
+and resets its detector; existing explicit crouch and local inputs persist.
+This runtime tracking state is independent of mission saves and persists across
+level transitions, as a headset reference space does.
+
 ## Notes
 
 - The full e2e and reliability commands check for the required 25th Anniversary
