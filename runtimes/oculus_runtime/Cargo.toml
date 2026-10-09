@@ -92,20 +92,18 @@ ndk-glue = "0.6.2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cargo-apk = "0.9.7"
 gl = "0.14.0"
 khronos-egl = { version = "4.1.0", features = ["dynamic"] }
 libloading = "0.7.3"
 openxr = "0.21.1"
 engine = { path = "../../engine" }
 shock2vr = { path = "../../shock2vr", features = ["ffmpeg"] }
-pcx = "0.2.3"
-dark = { path = "../../dark" }
 ndk = "0.7.0"
 ndk-context = "0.1.1"
+# Configure rodio/CPAL's transitive Android backend to use the shared C++ runtime.
+# This feature-only dependency is intentional even though we do not import oboe.
 oboe = { version = "0.5", features = [ "java-interface", "shared-stdcxx" ] }
 jni = "0.19.0"
-ndk-sys = "0.4.0"
 cgmath = "0.18.0"
 libm = "0.2.5"
 lazy_static = "1.4.0"

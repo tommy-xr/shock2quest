@@ -11,14 +11,8 @@ glfw = "0.56.0"
 engine = { path = "../../engine" }
 dark = { path = "../../dark" }
 cgmath = "0.18.0"
-byteorder = "1.4.3"
-pcx = "0.2.3"
-image = "0.24.5"
-lazy_static = "1.4.0"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
-bitflags = "1.3.2"
-num = "0.4.0"
 clap = { version = "4.3.5", features = ["derive"] }
 
 # FFmpeg is disabled on Windows due to build complexity
