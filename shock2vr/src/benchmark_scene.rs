@@ -1,13 +1,13 @@
 //! Opt-in, data-driven workloads for repeatable renderer measurements.
 //! Setup uses ordinary mission effects; it never writes a save or changes defaults.
-use cgmath::{point3, Matrix4, Quaternion, SquareMatrix, Vector3};
+use cgmath::{Matrix4, Quaternion, SquareMatrix, Vector3, point3};
 use serde::{Deserialize, Serialize};
 use shipyard::EntityId;
 
 use crate::game_scene::DebugEntityMessage;
 use crate::mission::entity_creator::CreateEntityOptions;
 use crate::scripts::Effect;
-use crate::{dev_params, free_camera, Game};
+use crate::{Game, dev_params, free_camera};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
