@@ -7,6 +7,14 @@ pub trait SpatialQueryEngine {
     /// Get the cell index from a world position using BSP tree traversal
     fn get_cell_idx_from_position(&self, position: Vector3<f32>) -> Option<u32>;
 
+    /// Conservative membership for bounds that may cross cells without a corner inside.
+    fn cells_intersecting_box(
+        &self,
+        center: Vector3<f32>,
+        half_size: Vector3<f32>,
+        cells: &mut Vec<u32>,
+    );
+
     /// Get a cell reference from a world position
     fn get_cell_from_position(&self, position: Vector3<f32>) -> Option<&Cell>;
 
@@ -36,6 +44,16 @@ pub struct LevelSpatialData {
 impl SpatialQueryEngine for LevelSpatialData {
     fn get_cell_idx_from_position(&self, position: Vector3<f32>) -> Option<u32> {
         self.bsp_tree.cell_from_position(position)
+    }
+
+    fn cells_intersecting_box(
+        &self,
+        center: Vector3<f32>,
+        half_size: Vector3<f32>,
+        cells: &mut Vec<u32>,
+    ) {
+        self.bsp_tree
+            .cells_intersecting_box(center, half_size, cells);
     }
 
     fn get_cell_from_position(&self, position: Vector3<f32>) -> Option<&Cell> {
@@ -77,6 +95,16 @@ impl LevelSpatialData {
 impl SpatialQueryEngine for SystemShock2Level {
     fn get_cell_idx_from_position(&self, position: Vector3<f32>) -> Option<u32> {
         self.get_cell_idx_from_position(position)
+    }
+
+    fn cells_intersecting_box(
+        &self,
+        center: Vector3<f32>,
+        half_size: Vector3<f32>,
+        cells: &mut Vec<u32>,
+    ) {
+        self.bsp_tree
+            .cells_intersecting_box(center, half_size, cells);
     }
 
     fn get_cell_from_position(&self, position: Vector3<f32>) -> Option<&Cell> {

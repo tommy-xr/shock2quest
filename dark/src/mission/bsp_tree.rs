@@ -61,6 +61,56 @@ impl BspTree {
         Self::cell_from_position_recursive(&self.root_node, position)
     }
 
+    /// Conservative cell coverage for an axis-aligned box. Testing only corners
+    /// misses cells crossed by the middle of a long object. Plane intervals can
+    /// admit extra leaves, but never discard a leaf overlapped by the box.
+    pub fn cells_intersecting_box(
+        &self,
+        center: Vector3<f32>,
+        half_size: Vector3<f32>,
+        cells: &mut Vec<u32>,
+    ) {
+        cells.clear();
+        Self::box_cells(&self.root_node, center, half_size.map(f32::abs), cells);
+    }
+
+    fn box_cells(node: &BspNode, center: Vector3<f32>, half: Vector3<f32>, cells: &mut Vec<u32>) {
+        match node {
+            BspNode::Leaf { cell_idx } => {
+                if *cell_idx >= 0 {
+                    cells.push(*cell_idx as u32);
+                }
+            }
+            BspNode::Split {
+                plane, front, back, ..
+            } => {
+                let n = plane.normal;
+                let distance = n.x * center.x + n.y * center.y + n.z * center.z + plane.w;
+                let radius = n.x.abs() * half.x + n.y.abs() * half.y + n.z.abs() * half.z;
+                // Touching / roundoff at a plane must stay conservative. NaN or
+                // infinity also visits both sides rather than hiding geometry.
+                let tolerance = 8.0
+                    * f32::EPSILON
+                    * ((n.x * center.x).abs()
+                        + (n.y * center.y).abs()
+                        + (n.z * center.z).abs()
+                        + plane.w.abs()
+                        + radius
+                        + 1.0);
+                if !(distance + radius < -tolerance) {
+                    if let Some(front) = front {
+                        Self::box_cells(front, center, half, cells);
+                    }
+                }
+                if !(distance - radius > tolerance) {
+                    if let Some(back) = back {
+                        Self::box_cells(back, center, half, cells);
+                    }
+                }
+            }
+        }
+    }
+
     fn cell_from_position_recursive(node: &BspNode, position: Vector3<f32>) -> Option<u32> {
         match node {
             BspNode::Leaf { cell_idx } => Some(*cell_idx as u32),
@@ -231,5 +281,138 @@ impl BspTree {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+    use cgmath::vec3;
+
+    fn leaf(index: i32) -> Arc<BspNode> {
+        Arc::new(BspNode::Leaf { cell_idx: index })
+    }
+    fn split(
+        normal: Vector3<f32>,
+        w: f32,
+        front: Arc<BspNode>,
+        back: Arc<BspNode>,
+    ) -> Arc<BspNode> {
+        Arc::new(BspNode::Split {
+            cell_idx: -1,
+            plane: Plane { normal, w },
+            front: Some(front),
+            back: Some(back),
+        })
+    }
+    fn strip() -> BspTree {
+        BspTree {
+            root_node: split(
+                vec3(1.0, 0.0, 0.0),
+                -1.0,
+                leaf(2),
+                split(vec3(1.0, 0.0, 0.0), 1.0, leaf(1), leaf(0)),
+            ),
+        }
+    }
+
+    #[test]
+    fn long_skinny_box_covers_middle_cell_even_when_corners_and_center_miss_it() {
+        let tree = strip();
+        let center = vec3(-8.0, 0.0, 0.0);
+        let half = vec3(20.0, 0.001, 0.001);
+        assert_eq!(tree.cell_from_position(center), Some(0));
+        for x in [-half.x, half.x] {
+            for y in [-half.y, half.y] {
+                for z in [-half.z, half.z] {
+                    assert_ne!(tree.cell_from_position(center + vec3(x, y, z)), Some(1));
+                }
+            }
+        }
+        let mut cells = vec![];
+        tree.cells_intersecting_box(center, half, &mut cells);
+        cells.sort_unstable();
+        assert_eq!(cells, [0, 1, 2]);
+    }
+
+    #[test]
+    fn grazing_faces_flat_bounds_and_negative_sizes_stay_conservative() {
+        let tree = strip();
+        for (center, half, expected) in [
+            (vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), vec![1]),
+            (vec3(-2.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0), vec![0, 1]),
+            (vec3(2.0, 0.0, 0.0), vec3(-1.0, 0.0, 0.0), vec![1, 2]),
+            (vec3(2.0 - 1e-6, 0.0, 0.0), vec3(1.0, 1e-7, 0.0), vec![1, 2]),
+            (vec3(2.01, 0.0, 0.0), vec3(1.0, 0.0, 0.0), vec![2]),
+        ] {
+            let mut cells = vec![999];
+            tree.cells_intersecting_box(center, half, &mut cells);
+            cells.sort_unstable();
+            assert_eq!(cells, expected);
+        }
+    }
+
+    #[test]
+    fn oblique_planes_never_drop_sampled_points_inside_bounds() {
+        for angle in [0.001_f32, 0.1, 0.7, 1.2, 1.5707, 2.7] {
+            let n = vec3(angle.cos(), angle.sin(), 0.13);
+            let tree = BspTree {
+                root_node: split(
+                    n,
+                    -0.3,
+                    leaf(2),
+                    split(vec3(-0.2, 0.7, 0.9), 0.2, leaf(1), leaf(0)),
+                ),
+            };
+            for center in [
+                vec3(0.0, 0.0, 0.0),
+                vec3(-1.0, 0.5, 0.2),
+                vec3(100.0, -200.0, 30.0),
+            ] {
+                for half in [
+                    vec3(20.0, 0.001, 0.001),
+                    vec3(0.001, 20.0, 0.001),
+                    vec3(0.2, 0.5, 0.7),
+                ] {
+                    let mut cells = vec![];
+                    tree.cells_intersecting_box(center, half, &mut cells);
+                    for x in -4..=4 {
+                        for y in -4..=4 {
+                            for z in -4..=4 {
+                                let point = center
+                                    + vec3(
+                                        half.x * x as f32 / 4.0,
+                                        half.y * y as f32 / 4.0,
+                                        half.z * z as f32 / 4.0,
+                                    );
+                                if let Some(cell) = tree.cell_from_position(point) {
+                                    assert!(
+                                        cells.contains(&cell),
+                                        "angle={angle}, point={point:?}, cells={cells:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_bounds_do_not_hide_cells_and_invalid_leaves_are_ignored() {
+        let tree = strip();
+        for center in [vec3(f32::NAN, 0.0, 0.0), vec3(f32::INFINITY, 0.0, 0.0)] {
+            let mut cells = vec![];
+            tree.cells_intersecting_box(center, vec3(1.0, 1.0, 1.0), &mut cells);
+            cells.sort_unstable();
+            assert_eq!(cells, [0, 1, 2]);
+        }
+        let tree = BspTree {
+            root_node: split(vec3(1.0, 0.0, 0.0), 0.0, leaf(1), leaf(-1)),
+        };
+        let mut cells = vec![];
+        tree.cells_intersecting_box(vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0), &mut cells);
+        assert_eq!(cells, [1]);
     }
 }

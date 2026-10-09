@@ -39,14 +39,12 @@ pub struct PortalVisibilityEngine {
     is_debug: bool,
 }
 
-/// Lazily cache each corner so moving, visible objects retain the old early exit.
-/// The bounds intentionally match the existing axis-aligned size-only test:
-/// rotation, offsets and radius are not inputs to that visibility calculation.
+/// Cache conservative cell coverage, independently of the current camera.
 struct EntityCells {
     position: Vector3<f32>,
     size: Option<Vector3<f32>>,
-    cells: [Option<u32>; 8],
-    queried: u8,
+    cells: Vec<u32>,
+    valid: bool,
 }
 
 impl EntityCells {
@@ -54,8 +52,8 @@ impl EntityCells {
         Self {
             position,
             size,
-            cells: [None; 8],
-            queried: 0,
+            cells: Vec::new(),
+            valid: false,
         }
     }
 
@@ -64,33 +62,16 @@ impl EntityCells {
         position: Vector3<f32>,
         size: Option<Vector3<f32>>,
         visible_cells: &HashSet<u32>,
-        lookup: &mut impl FnMut(Vector3<f32>) -> Option<u32>,
+        lookup: &mut impl FnMut(Vector3<f32>, Option<Vector3<f32>>, &mut Vec<u32>),
     ) -> bool {
-        if self.position != position || self.size != size {
-            *self = Self::new(position, size);
+        if !self.valid || self.position != position || self.size != size {
+            self.cells.clear();
+            lookup(position, size, &mut self.cells);
+            self.position = position;
+            self.size = size;
+            self.valid = true;
         }
-        for corner in 0..if size.is_some() { 8 } else { 1 } {
-            let bit = 1 << corner;
-            if self.queried & bit == 0 {
-                let point = if let Some(size) = size {
-                    let half = size * 0.5;
-                    position
-                        + vec3(
-                            if corner & 1 == 0 { -half.x } else { half.x },
-                            if corner & 2 == 0 { -half.y } else { half.y },
-                            if corner & 4 == 0 { -half.z } else { half.z },
-                        )
-                } else {
-                    position
-                };
-                self.cells[corner] = lookup(point);
-                self.queried |= bit;
-            }
-            if self.cells[corner].is_some_and(|cell| visible_cells.contains(&cell)) {
-                return true;
-            }
-        }
-        false
+        self.cells.iter().any(|cell| visible_cells.contains(cell))
     }
 }
 
@@ -240,7 +221,7 @@ impl PortalVisibilityEngine {
         &mut self,
         world: &World,
         visible_cells: &HashSet<u32>,
-        mut lookup: impl FnMut(Vector3<f32>) -> Option<u32>,
+        mut lookup: impl FnMut(Vector3<f32>, Option<Vector3<f32>>, &mut Vec<u32>),
     ) {
         let positions = world.borrow::<View<PropPosition>>().unwrap();
         let dimensions = world.borrow::<View<PropPhysDimensions>>().unwrap();
@@ -337,8 +318,12 @@ impl VisibilityEngine for PortalVisibilityEngine {
             visible_cells.len()
         );
 
-        self.update_entities(world, &visible_cells, |position| {
-            spatial_data.get_cell_idx_from_position(position)
+        self.update_entities(world, &visible_cells, |position, size, cells| {
+            if let Some(size) = size {
+                spatial_data.cells_intersecting_box(position, size * 0.5, cells);
+            } else if let Some(cell) = spatial_data.get_cell_idx_from_position(position) {
+                cells.push(cell);
+            }
         });
     }
 
