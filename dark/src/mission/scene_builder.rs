@@ -257,21 +257,31 @@ pub fn to_scene(
         );
         let initial_texture = asset_cache.get(&TEXTURE_IMPORTER, &resolved.name);
 
-        let animated_texture: Rc<dyn TextureTrait> =
-            if let Some(animation_info) = &tex_info.animation_info {
-                let mut additional_textures = load_multiple_textures_for_family(
-                    asset_cache,
-                    &tex_info.family,
-                    &tex_info.texture_filename,
-                );
-                additional_textures.insert(0, initial_texture.clone());
-                Rc::new(AnimatedTexture::new(
-                    additional_textures,
-                    Duration::from_millis(animation_info.rate_in_milliseconds as u64),
-                ))
-            } else {
-                initial_texture.clone()
-            };
+        let animated_texture: Rc<dyn TextureTrait> = if let Some(animation) = &resolved.animation {
+            let frames = animation
+                .frames
+                .iter()
+                .map(|name| asset_cache.get(&TEXTURE_IMPORTER, name))
+                .collect();
+            Rc::new(AnimatedTexture::with_playback(
+                frames,
+                Duration::from_millis(animation.frame_ms as u64),
+                animation.playback,
+            ))
+        } else if let Some(animation_info) = &tex_info.animation_info {
+            let mut additional_textures = load_multiple_textures_for_family(
+                asset_cache,
+                &tex_info.family,
+                &tex_info.texture_filename,
+            );
+            additional_textures.insert(0, initial_texture.clone());
+            Rc::new(AnimatedTexture::new(
+                additional_textures,
+                Duration::from_millis(animation_info.rate_in_milliseconds as u64),
+            ))
+        } else {
+            initial_texture.clone()
+        };
 
         let mesh: Rc<Box<dyn engine::scene::Geometry>> =
             Rc::new(Box::new(engine::scene::mesh::create(vertices)));
