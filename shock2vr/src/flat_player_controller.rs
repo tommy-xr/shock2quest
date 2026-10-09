@@ -258,7 +258,7 @@ impl FlatPlayerController {
         // with no bias. Gun recoil below updates the ray and bias together.
         self.last_aim_bias = vec2(0.0, 0.0);
         let pick = physics
-            .ray_cast2(
+            .ray_cast_interaction(
                 point3(camera_pos.x, camera_pos.y, camera_pos.z),
                 forward,
                 f32::MAX,
@@ -269,6 +269,7 @@ impl FlatPlayerController {
                     | InternalCollisionGroups::RAYCAST,
                 None,
                 true,
+                None,
             )
             .and_then(|hit| {
                 hit.maybe_entity_id.map(|entity| {
