@@ -266,7 +266,8 @@
         }
       },
       "workload_samples": 30,
-      "workload_evidence": "classic-1.telemetry.txt"
+      "workload_evidence": "classic-1.telemetry.txt",
+      "gpu_status": "ok"
     },
     {
       "scene": "many-brain-mixed-crowd",
@@ -516,7 +517,8 @@
         }
       },
       "workload_samples": 30,
-      "workload_evidence": "upgraded-1.telemetry.txt"
+      "workload_evidence": "upgraded-1.telemetry.txt",
+      "gpu_status": "ok"
     },
     {
       "scene": "many-brain-mixed-crowd",
@@ -766,7 +768,8 @@
         }
       },
       "workload_samples": 30,
-      "workload_evidence": "wet-1.telemetry.txt"
+      "workload_evidence": "wet-1.telemetry.txt",
+      "gpu_status": "ok"
     },
     {
       "scene": "many-brain-mixed-crowd",
@@ -1016,7 +1019,8 @@
         }
       },
       "workload_samples": 30,
-      "workload_evidence": "wet-2.telemetry.txt"
+      "workload_evidence": "wet-2.telemetry.txt",
+      "gpu_status": "ok"
     },
     {
       "scene": "many-brain-mixed-crowd",
@@ -1266,7 +1270,8 @@
         }
       },
       "workload_samples": 30,
-      "workload_evidence": "upgraded-2.telemetry.txt"
+      "workload_evidence": "upgraded-2.telemetry.txt",
+      "gpu_status": "ok"
     },
     {
       "scene": "many-brain-mixed-crowd",
@@ -1422,101 +1427,11 @@
         },
         "screenshot": "Captured and inspected locally; first-repeat equivalent linked above."
       },
-      "gpu": {
-        "GPU % Utilization": {
-          "mean": 64.641,
-          "min": 63.789,
-          "p5": 63.789,
-          "p95": 65.242,
-          "max": 65.242
-        },
-        "% Texture Fetch Stall": {
-          "mean": 1.288,
-          "min": 1.263,
-          "p5": 1.263,
-          "p95": 1.309,
-          "max": 1.309
-        },
-        "% Texture L1 Miss": {
-          "mean": 34.475,
-          "min": 34.395,
-          "p5": 34.395,
-          "p95": 34.626,
-          "max": 34.626
-        },
-        "% Texture L2 Miss": {
-          "mean": 0,
-          "min": 0,
-          "p5": 0,
-          "p95": 0,
-          "max": 0
-        },
-        "% Shaders Busy": {
-          "mean": 0,
-          "min": 0,
-          "p5": 0,
-          "p95": 0,
-          "max": 0
-        },
-        "Vertices Shaded / Second": {
-          "mean": 92537453,
-          "min": 91406704,
-          "p5": 91406704,
-          "p95": 94170536,
-          "max": 94170536
-        },
-        "Fragments Shaded / Second": {
-          "mean": -1,
-          "min": -1,
-          "p5": -1,
-          "p95": -1,
-          "max": -1
-        },
-        "Textures / Fragment": {
-          "mean": -1,
-          "min": -1,
-          "p5": -1,
-          "p95": -1,
-          "max": -1
-        },
-        "% Time Shading Fragments": {
-          "mean": 0,
-          "min": 0,
-          "p5": 0,
-          "p95": 0,
-          "max": 0
-        },
-        "% Time Shading Vertices": {
-          "mean": 0,
-          "min": 0,
-          "p5": 0,
-          "p95": 0,
-          "max": 0
-        },
-        "% Shader ALU Capacity Utilized": {
-          "mean": 0,
-          "min": 0,
-          "p5": 0,
-          "p95": 0,
-          "max": 0
-        },
-        "% Texture Pipes Busy": {
-          "mean": 0,
-          "min": 0,
-          "p5": 0,
-          "p95": 0,
-          "max": 0
-        },
-        "% Wave Context Occupancy": {
-          "mean": 0,
-          "min": 0,
-          "p5": 0,
-          "p95": 0,
-          "max": 0
-        }
-      },
+      "gpu": null,
       "workload_samples": 30,
-      "workload_evidence": "classic-2.telemetry.txt"
+      "workload_evidence": "classic-2.telemetry.txt",
+      "gpu_status": "invalid",
+      "gpu_error": "Unavailable counter sentinels (-1); entire GPU interval excluded. FPS/App/memory/workload interval remains valid."
     }
   ]
 }

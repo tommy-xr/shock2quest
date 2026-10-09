@@ -68,3 +68,8 @@ test('GPU output uses metric names and accepts terminal line endings', async () 
   assert.equal(gpu['GPU % Utilization'].mean, 50);
   assert.deepEqual(parseGpuCounters('no permission'), {});
 });
+
+test('rejects unavailable GPU counter sentinels instead of averaging them', async () => {
+  const { parseGpuCounters } = await import('./run.mjs');
+  assert.throws(() => parseGpuCounters('Fragments Shaded / Second : -1.000'), /invalid GPU counter/);
+});
