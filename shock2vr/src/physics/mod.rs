@@ -6981,6 +6981,7 @@ impl PhysicsWorld {
         request: PlayerMoveRequest,
         player_handle: &mut PlayerHandle,
     ) -> (Vector3<f32>, Vec<CollisionEvent>) {
+        let _profile = crate::perf::scope(crate::perf::Phase::Physics);
         // Queue every PhysAttach child at its parent's same next-frame target
         // before Rapier derives kinematic velocities. Moving-terrain assemblies
         // (tram floor + walls/buttons) therefore advance as one physical body,
@@ -6997,6 +6998,7 @@ impl PhysicsWorld {
         // parry panics, the culprit is already named in the log.
         self.report_nonfinite_rigid_body_state();
 
+        let solver_profile = crate::perf::scope(crate::perf::Phase::Solver);
         /* Run the game loop, stepping the simulation once per frame. */
         profile!(scope: "physics", level: TRACE, "physics.step", {
             self.physics_pipeline.step(
@@ -7017,6 +7019,8 @@ impl PhysicsWorld {
                 &self.events,
             )
         });
+        drop(solver_profile);
+        crate::perf::physics_step(self.integration_parameters.dt);
         self.has_stepped = true;
 
         // Update character controller
