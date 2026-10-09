@@ -157,7 +157,7 @@ export async function viewRight(game: Game): Promise<Vec3> {
 }
 
 /** The ladder entities whose faces a column through `near` crosses from `fromY` to `toY`. */
-async function laddersAlong(game: Game, near: Vec3, fromY: number, toY: number): Promise<LadderHolds[]> {
+export async function laddersAlong(game: Game, near: Vec3, fromY: number, toY: number): Promise<LadderHolds[]> {
   const ids = new Set<number>();
   for (let y = fromY; y <= toY; y += 0.2) {
     const grip = (await game.physics.grip([near[0], y, near[2]])).grip;
