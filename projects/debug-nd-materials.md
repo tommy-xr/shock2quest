@@ -82,3 +82,23 @@ leaves the base visible. Compare these models with the explorer lighting rig
 and inspect Worm Goo in Hydro missions before broader rollout. Brain fill/rim,
 other Many items, and lightmapped terrain remain separate work; this experiment
 adds one overlay draw per selected base surface and has no Quest cost estimate.
+
+## Campaign ballistic surfaces
+
+Pistol/rifle, shotgun, hybrid shotgun and turret bullets now select compact
+metal sparks or plasticrete dust/chips from the actual world surface. Fast
+raycasts and physical projectile contacts share the same gamesys-family gate.
+The original impact host owns the replacement, and its existing decal remains
+independent; no second burst entity is added. Unknown materials and missing
+sprite sets keep their legacy effects. Creature and energy-weapon selection
+remain authored.
+
+The recipes use installed `ND-ember`, `NDdbr` and `NDsmk` art with project tuning:
+seven particles for metal and eight for plasticrete, all finished within one
+second. Launch direction follows the outward surface normal; gravity stays in
+world space. These limits apply per pellet, so shotgun volleys still multiply
+the simultaneous work. Quest GPU cost needs device measurement.
+
+`campaign-impacts.e2e.test.ts` fires real shots at named-material MedSci surfaces
+in flat and VR, checking material routing, ammunition, rendered particles and
+cleanup. PR media uses the same real surfaces with fixed simulation stepping.

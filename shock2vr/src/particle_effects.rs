@@ -11,6 +11,83 @@ use engine::{
 };
 use std::{rc::Rc, time::Duration};
 
+/// Material selected at a ballistic world impact. Runtime-only: the host is
+/// already a transient effect and is never restored from a save.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, shipyard::Component)]
+pub enum ImpactSurface {
+    Metal,
+    Plasticrete,
+}
+
+impl ImpactSurface {
+    pub fn from_material(material: &str) -> Option<Self> {
+        match material.to_ascii_lowercase().as_str() {
+            "metal" | "metalbig" | "metaltarget" => Some(Self::Metal),
+            "plasticrete" => Some(Self::Plasticrete),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn build(self, assets: &mut AssetCache) -> Option<ParticleEffect> {
+        let debris = particle_frames(
+            assets,
+            match self {
+                Self::Metal => "ND-ember",
+                Self::Plasticrete => "NDdbr",
+            },
+        );
+        let dust = particle_frames(assets, "NDsmk");
+        if debris.is_empty() || dust.is_empty() {
+            return None;
+        }
+        Some(ParticleEffect {
+            layers: self.layers(debris, dust),
+            replaces_parent_model: false,
+        })
+    }
+
+    fn layers(
+        self,
+        debris: Vec<Rc<dyn TextureTrait>>,
+        dust: Vec<Rc<dyn TextureTrait>>,
+    ) -> Vec<ParticleSystem> {
+        // The impact transform points local -X out of the surface. Keep
+        // particles in world space so gravity does not rotate with the wall.
+        // Small bursts deliberately bound overdraw when every shotgun pellet hits.
+        let base = ParticleSystem::new()
+            .with_one_shot(true)
+            .with_world_space(true)
+            .with_launch_bounding_box(vec3(-0.015, -0.015, -0.015), vec3(0.0, 0.015, 0.015));
+        let metal = self == Self::Metal;
+        vec![
+            base.clone()
+                .with_num_particles(if metal { 6 } else { 5 })
+                .with_lifetime(0.25, 0.65)
+                .with_particle_size(0.035, 0.065)
+                .with_velocity(vec3(-1.8, -0.5, -0.6), vec3(-0.4, 0.7, 0.6))
+                .with_acceleration(vec3(0.0, -2.8, 0.0))
+                .with_color(if metal {
+                    vec3(1.0, 0.7, 0.3)
+                } else {
+                    vec3(0.7, 0.65, 0.55)
+                })
+                .with_alpha(0.9)
+                .with_fade_time(0.2)
+                .with_sprite_animation(debris, Duration::from_millis(50), false),
+            base.with_num_particles(if metal { 1 } else { 3 })
+                .with_lifetime(0.45, 0.8)
+                .with_particle_size(0.12, 0.18)
+                .with_velocity(vec3(-0.3, -0.12, -0.12), vec3(-0.06, 0.12, 0.12))
+                .with_size_velocity(0.25)
+                .with_color(vec3(0.7, 0.65, 0.55))
+                .with_alpha(if metal { 0.12 } else { 0.25 })
+                .with_fade_in_time(0.04)
+                .with_fade_time(0.5)
+                .with_sprite_animation(dust, Duration::from_millis(60), false),
+        ]
+    }
+}
+
 #[derive(Default)]
 pub struct ParticleEffect {
     layers: Vec<ParticleSystem>,
@@ -306,6 +383,32 @@ fn emp_explosion_layers(
 mod tests {
     use super::*;
     use cgmath::SquareMatrix;
+
+    #[test]
+    fn surface_bursts_expire_and_missing_art_preserves_legacy() {
+        let mut assets = AssetCache::new(
+            String::new(),
+            engine::assets::asset_paths::AssetPath::combine(vec![]),
+        );
+        for surface in [ImpactSurface::Metal, ImpactSurface::Plasticrete] {
+            assert!(surface.build(&mut assets).is_none());
+            let mut effect = ParticleEffect {
+                layers: surface.layers(vec![], vec![]),
+                ..Default::default()
+            };
+            effect.update(Duration::ZERO, Matrix4::identity());
+            effect.update(Duration::from_millis(100), Matrix4::identity());
+            assert!(!effect.is_done());
+            effect.update(Duration::from_secs(2), Matrix4::identity());
+            assert!(effect.is_done());
+        }
+        assert_eq!(
+            ImpactSurface::from_material("MetalBig"),
+            Some(ImpactSurface::Metal)
+        );
+        assert_eq!(ImpactSurface::from_material("fleshtarget"), None);
+        assert_eq!(ImpactSurface::from_material("unknown"), None);
+    }
 
     #[test]
     fn replaces_only_named_blood_effects_using_loaded_template_ids() {

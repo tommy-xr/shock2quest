@@ -131,25 +131,32 @@ pub(super) fn terminal_impact_effects(
     // hitbox proxy) queues multiple Collided messages before the
     // slay/destroy effect lands.
     if let Some(template_id) = choose_impact_spang(world, entity_id, with) {
-        // The physics collision event carries no contact normal,
-        // and spang orientation is minor cosmetics, so
-        // approximate the impact facing with the reversed
-        // velocity. This is read post-solve, so it may already be
-        // deflected by the contact; if the solver stopped the
-        // projectile outright, fall back to straight up.
-        let facing = physics
-            .get_velocity(entity_id)
-            .filter(|v| v.magnitude2() > 1e-6)
-            .map(|v| -v.normalize())
-            .unwrap_or(vec3(0.0, 1.0, 0.0));
+        // Prefer the real contact plane; post-solve velocity may be zero or
+        // deflected. Legacy messages without a contact retain the old fallback.
+        let facing = contact.map(|c| -c.normal).unwrap_or_else(|| {
+            physics
+                .get_velocity(entity_id)
+                .filter(|v| v.magnitude2() > 1e-6)
+                .map(|v| -v.normalize())
+                .unwrap_or(vec3(0.0, 1.0, 0.0))
+        });
         effects.push(Effect::CreateEntity {
             template_id,
-            position,
+            position: contact
+                .map(|c| cgmath::Point3::from_vec(c.point))
+                .unwrap_or(position),
             orientation: get_rotation_from_forward_vector(facing)
                 * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0)),
             root_transform: Matrix4::identity(),
             options: CreateEntityOptions {
                 transient_fx: true,
+                impact_surface: super::script_util::ballistic_impact_surface(
+                    world,
+                    entity_id,
+                    contact
+                        .and_then(|c| c.surface_material)
+                        .and_then(|id| physics.surface_material_name(id)),
+                ),
                 ..CreateEntityOptions::default()
             },
         });

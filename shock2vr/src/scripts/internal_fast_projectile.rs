@@ -153,6 +153,11 @@ impl Script for InternalFastProjectileScript {
                     root_transform: Matrix4::identity(),
                     options: CreateEntityOptions {
                         transient_fx: true,
+                        impact_surface: super::script_util::ballistic_impact_surface(
+                            world,
+                            entity_id,
+                            surface_material.and_then(|id| physics.surface_material_name(id)),
+                        ),
                         ..CreateEntityOptions::default()
                     },
                 });

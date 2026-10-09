@@ -252,6 +252,10 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, crate::runtime_props::RuntimePropDoNotSerialize);
     }
 
+    if let Some(surface) = additional_options.impact_surface {
+        world.add_component(entity_id, surface);
+    }
+
     if let Some(origin) = additional_options.projectile_raycast_origin {
         world.add_component(entity_id, RuntimePropProjectileRayOrigin(origin));
     }
@@ -2148,6 +2152,8 @@ pub struct CreateEntityOptions {
     /// impact spangs so they don't accumulate at every bullet hole. Cosmetic
     /// transients are excluded from saves rather than replayed after loading.
     pub transient_fx: bool,
+    /// Cosmetic material recipe for a ballistic impact host.
+    pub impact_surface: Option<crate::particle_effects::ImpactSurface>,
     /// Override the collision-ray origin when this entity resolves as a fast
     /// projectile. Flat firing supplies the camera origin while retaining the
     /// forward spawn clearance needed by slow physics projectiles.
@@ -2187,6 +2193,7 @@ impl Default for CreateEntityOptions {
             ecology_type: None,
             attach_to: None,
             transient_fx: false,
+            impact_surface: None,
             projectile_raycast_origin: None,
             projectile_launch_origin: None,
             projectile_weapon: None,
