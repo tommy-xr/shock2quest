@@ -199,7 +199,7 @@ fn create_foveated(
     };
     let mut handle = xr::sys::Swapchain::NULL;
     // SAFETY: next-chain lives through the synchronous call; session is live.
-    check(unsafe {
+    check("create_swapchain", unsafe {
         (session.instance().fp().create_swapchain)(session.as_raw(), &raw, &mut handle)
     })?;
     let swapchain = unsafe { xr::Swapchain::from_raw(session.clone(), handle) };
@@ -209,34 +209,29 @@ fn create_foveated(
         .fb_swapchain_update_state
         .as_ref()
         .ok_or(xr::sys::Result::ERROR_EXTENSION_NOT_PRESENT)?;
-    let mut state = xr::sys::SwapchainStateFoveationFB {
+    let state = xr::sys::SwapchainStateFoveationFB {
         ty: xr::sys::SwapchainStateFoveationFB::TYPE,
         next: std::ptr::null_mut(),
         flags: xr::SwapchainStateFoveationFlagsFB::EMPTY,
         profile: profile.as_raw(),
     };
     // SAFETY: correctly typed state header, live swapchain and profile.
-    check(unsafe {
+    check("update_swapchain", unsafe {
         (update.update_swapchain)(
             handle,
             (&state as *const xr::sys::SwapchainStateFoveationFB).cast(),
         )
     })?;
-    state.profile = xr::sys::FoveationProfileFB::NULL;
-    check(unsafe {
-        (update.get_swapchain_state)(
-            handle,
-            (&mut state as *mut xr::sys::SwapchainStateFoveationFB).cast(),
-        )
-    })?;
-    if state.profile != profile.as_raw() {
-        return Err(xr::sys::Result::ERROR_RUNTIME_FAILURE);
-    }
+    // Updating copies the configuration: OpenXR even permits destroying the
+    // profile immediately afterwards. Do not require a queried state's handle
+    // to equal the source profile. Benchmarks independently verify the applied
+    // level in the application's VrApi telemetry.
     Ok(swapchain)
 }
 
-fn check(result: xr::sys::Result) -> xr::Result<()> {
+fn check(operation: &str, result: xr::sys::Result) -> xr::Result<()> {
     if result.into_raw() < 0 {
+        println!("SHOCK2QUEST_FFR_CALL_FAILED operation={operation} error={result:?}");
         Err(result)
     } else {
         Ok(())
