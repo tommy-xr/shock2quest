@@ -119,16 +119,9 @@ function sumObserved(lines, name) {
 
 export function parseVrApiTelemetry(text, expectedSamples) {
   const allLines = text.split("\n").filter((line) => line.includes("FPS="));
-  // Current Horizon OS emits a primary-display (`Fov=0D`) record and a second
-  // `Fov=0` record for each interval. Treating both as independent samples
-  // double-counts the window and mixes distinct CPU&GPU values. Prefer the
-  // primary-display series when present, while retaining compatibility with
-  // OS versions that emit only one record class.
-  const primaryDisplayLines = allLines.filter((line) =>
-    line.includes("Fov=0D"),
-  );
-  const sampleLines =
-    primaryDisplayLines.length > 0 ? primaryDisplayLines : allLines;
+  // Collection is scoped to the live app PID. Fov is the foveation level;
+  // its D suffix means dynamic foveation, not a separate display stream.
+  const sampleLines = allLines;
   const lines =
     expectedSamples === undefined
       ? sampleLines.length > 2
@@ -139,6 +132,8 @@ export function parseVrApiTelemetry(text, expectedSamples) {
   return {
     samples: lines.length,
     fps: summarize(valuesFor(lines, "FPS")),
+    foveation_level: summarize(valuesFor(lines, "Fov")),
+    dynamic_foveation_samples: lines.filter(line => /(?:^|,)Fov=\d+D(?:,|$)/.test(line)).length,
     app_ms: summarize(valuesFor(lines, "App")),
     compositor_ms: summarize(valuesFor(lines, "TW")),
     cpu_gpu_ms: summarize(valuesFor(lines, "CPU&GPU")),
@@ -250,12 +245,16 @@ export function assertStableRefreshRate(ready) {
 }
 
 async function collectTelemetry(serial, seconds) {
+  const pid = adb(serial, ["shell", "pidof", PACKAGE]);
+  if (!/^\d+$/.test(pid)) throw new Error(`expected one live app PID, got ${pid}`);
   const child = spawn(
     "adb",
     [
       "-s",
       serial,
       "logcat",
+      "--pid",
+      pid,
       "-v",
       "raw",
       "VrApi:I",
@@ -321,7 +320,7 @@ async function benchmarkMission(serial, mission, options, device) {
   }
   if (!compositorTelemetry || compositorTelemetry.samples !== options.seconds) {
     throw new Error(
-      `expected ${options.seconds} primary-display VrApi samples, got ${compositorTelemetry?.samples ?? 0}`,
+      `expected ${options.seconds} app-PID VrApi samples, got ${compositorTelemetry?.samples ?? 0}`,
     );
   }
   if (
@@ -438,7 +437,7 @@ export function renderMarkdown(results, metadata) {
   }
   lines.push("");
   lines.push(
-    "Engine timings are one-second in-app means. VrApi values use the primary-display (`Fov=0D`) one-second record when Horizon OS emits paired records. VrApi FPS is compositor presentation rate; stale/torn counts identify intervals that were not fresh application frames. Visual paths have passed an automated non-black check only and still require human review. `n/a` means the current OS did not emit that field.",
+    "Engine timings are one-second in-app means. VrApi records are collected from the app PID; Fov reports foveation level and D denotes dynamic foveation. VrApi FPS is compositor presentation rate; stale/torn counts identify intervals that were not fresh application frames. Visual paths have passed an automated non-black check only and still require human review. `n/a` means the current OS did not emit that field.",
   );
   return `${lines.join("\n")}\n`;
 }

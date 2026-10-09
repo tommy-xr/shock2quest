@@ -94,9 +94,10 @@ from draw submission when diagnosing CPU stalls.
 Always report VrApi minimum FPS and stale/torn frame counts beside mean
 presentation FPS. Compositor presentation at the selected refresh rate can
 still reuse an old application frame; it is not evidence that every frame was
-fresh. Current Horizon OS emits paired `Fov=0D` and `Fov=0` records per
-interval; the benchmark uses only the primary-display `Fov=0D` series so the
-compositor and app telemetry cover the same number of one-second windows.
+fresh. Capture telemetry for the application PID only; other XR processes can emit
+interleaved VrApi records. `Fov=3` denotes level 3 and a `D` suffix denotes
+dynamic foveation, not a separate display. Fixed-FFR benchmarks require the
+requested level and no dynamic suffix throughout measurement.
 
 Per-frame logging invalidates CPU measurements. Keep device logs aggregated and
 structured.

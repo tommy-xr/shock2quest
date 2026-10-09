@@ -35,25 +35,14 @@ FPS=88,App=7.0,TW=3.0,CPU&GPU=8.0,GPU%=0.7,CPU%=0.6,Stale=0,Tear=1
   assert.equal(telemetry.torn_frames, 1);
 });
 
-test("uses one primary-display VrApi record per interval", () => {
-  const telemetry = parseVrApiTelemetry(
-    `
-FPS=90,Fov=0D,App=5.0,CPU&GPU=6.0,Stale=0,Tear=0
-FPS=10,Fov=0,App=50.0,CPU&GPU=60.0,Stale=9,Tear=9
-FPS=89,Fov=0D,App=6.0,CPU&GPU=7.0,Stale=1,Tear=0
-FPS=10,Fov=0,App=60.0,CPU&GPU=70.0,Stale=9,Tear=9
-FPS=88,Fov=0D,App=7.0,CPU&GPU=8.0,Stale=0,Tear=1
-FPS=10,Fov=0,App=70.0,CPU&GPU=80.0,Stale=9,Tear=9
-`,
-    2,
-  );
-
-  assert.equal(telemetry.samples, 2);
-  assert.equal(telemetry.fps.mean, 88.5);
-  assert.equal(telemetry.app_ms.mean, 6.5);
-  assert.equal(telemetry.cpu_gpu_ms.mean, 7.5);
-  assert.equal(telemetry.stale_frames, 1);
-  assert.equal(telemetry.torn_frames, 1);
+test("foveation level and dynamic suffix do not select a display stream", () => {
+  for (const fov of ['0', '1', '2', '3', '0D', '3D']) {
+    const telemetry = parseVrApiTelemetry(`FPS=90,Fov=${fov},App=5.0\nFPS=88,Fov=${fov},App=6.0`, 2);
+    assert.equal(telemetry.samples, 2);
+    assert.equal(telemetry.fps.mean, 89);
+    assert.equal(telemetry.foveation_level.mean, Number(fov[0]));
+    assert.equal(telemetry.dynamic_foveation_samples, fov.endsWith('D') ? 2 : 0);
+  }
 });
 
 test("does not report missing compositor freshness fields as zero", () => {
