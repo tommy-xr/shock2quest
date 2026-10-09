@@ -33,7 +33,7 @@ energy use and collision behavior are unchanged. Missing effect art retains
 the legacy visuals. EMP impacts now add an expanding electrical burst, sparks
 and a fading cloud. Spawned EMP explosion hosts and their pulse attachments
 are removed when the burst expires; blast damage and radius remain authored.
-Material-specific terrain routing remains a separate follow-up.
+Ballistic terrain routing and matching decals are described below.
 
 For a repeatable capture, place the free camera at `[8.5, 2, 0]`, looking at
 `[-4, 1.6, 0]`. The six stations run along Z from `5.25` to `-5.25`, spaced
@@ -90,8 +90,8 @@ metal sparks or plasticrete dust/chips from the actual world surface. Fast
 raycasts and physical projectile contacts share the same gamesys-family gate.
 The original impact host owns the replacement, and its existing decal remains
 independent; no second burst entity is added. Unknown materials and missing
-sprite sets keep their legacy effects. Creature and energy-weapon selection
-remain authored.
+sprite sets keep their legacy effects. Damage and specialized projectile routing
+remain authored; additional object material coverage is described below.
 
 The recipes use installed `ND-ember`, `NDdbr` and `NDsmk` art with project tuning:
 seven particles for metal and eight for plasticrete, all finished within one
