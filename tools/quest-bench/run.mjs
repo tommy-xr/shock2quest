@@ -84,6 +84,25 @@ export function validateCpuProfile(text, seconds) {
   return samples;
 }
 
+export function validateFixedClock(samples) {
+  if (!samples?.length || samples.some(s => !Number.isFinite(s.active_elapsed_s) || s.active_elapsed_s <= 0 ||
+      !Number.isFinite(s.physics_elapsed_s) || !Number.isFinite(s.solver_dt_s) ||
+      Math.abs(s.solver_dt_s - 1 / 60) > 1e-7)) {
+    throw new Error('fixed clock lacks active-time evidence or changed solver dt');
+  }
+  const total = key => samples.reduce((sum, sample) => sum + sample[key], 0);
+  const active = total('active_elapsed_s');
+  const simulated = total('physics_elapsed_s');
+  const scene = total('scene_elapsed_s');
+  // One fractional tick can cross either edge of the measured interval.
+  if (!Number.isFinite(scene) || Math.abs(simulated - active) > 1 / 60 + 0.001 ||
+      Math.abs(simulated - scene) > 0.001) {
+    throw new Error('fixed clock does not track active time within one solver step');
+  }
+  return { active_seconds: active, solver_seconds: simulated, scene_seconds: scene,
+    solver_to_active_ratio: simulated / active };
+}
+
 export function runOrder(repeats, lighting) {
   return Array.from({ length: repeats }, (_, repeat) =>
     (lighting === 'both' ? (repeat % 2 ? ['on', 'off'] : ['off', 'on']) : [lighting])
@@ -140,6 +159,7 @@ async function main(argv) {
     'gpu-seconds': { type: 'string', default: '0' },
     terrain: { type: 'string', default: 'fixture' },
     'profile-cpu': { type: 'boolean', default: false },
+    'fixed-simulation': { type: 'boolean', default: false },
     scene: { type: 'string', default: 'all' }, lighting: { type: 'string', default: 'both' },
     repeats: { type: 'string', default: '2' }, warmup: { type: 'string', default: '10' },
     seconds: { type: 'string', default: '30' }, output: { type: 'string' }, serial: { type: 'string' },
@@ -199,7 +219,8 @@ async function main(argv) {
       for (const { repeat, mode, terrain } of terrainRuns(Number(values.repeats), values.lighting, values.terrain)) {
         if (cancellation.signal.aborted) throw new Error('benchmark interrupted');
         const fixture = terrainFixture({ ...base, object_lighting: mode === 'on' }, terrain);
-        fixture.profile_cpu = values['profile-cpu'] || (fixture.profile_cpu ?? false);
+        fixture.fixed_simulation = values['fixed-simulation'] || (fixture.fixed_simulation ?? false);
+        fixture.profile_cpu = fixture.fixed_simulation || values['profile-cpu'] || (fixture.profile_cpu ?? false);
         const directory = resolve(output, `${fixture.name}-${mode}-${terrain}-${repeat}`);
         mkdirSync(directory, { recursive: true });
         const localConfig = resolve(directory, 'fixture.json');
@@ -217,6 +238,7 @@ async function main(argv) {
           const telemetry = readFileSync(resolve(directory, `${fixture.mission.replace(/[^A-Za-z0-9_-]/g, '_')}.telemetry.log`), 'utf8');
           run.workload = validateWorkload(telemetry, fixture, Number(values.seconds));
           if (fixture.profile_cpu) run.cpu_profile = validateCpuProfile(telemetry, Number(values.seconds));
+          if (fixture.fixed_simulation) run.clock = validateFixedClock(run.cpu_profile);
           run.result = result;
           run.status = 'ok';
           if (gpuMetrics) {
