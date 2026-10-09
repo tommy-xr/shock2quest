@@ -870,13 +870,18 @@ impl Holsters {
         rotation: Quaternion<f32>,
     ) -> Vec<engine::scene::SceneObject> {
         use engine::scene::{SceneObject, color_material, lines_mesh};
-        if !crate::dev_params::get_bool(crate::dev_params::VR_HOLSTER_ZONES) {
+        let toggle = if self.chest {
+            crate::dev_params::VR_BODY_INVENTORY_ZONES
+        } else {
+            crate::dev_params::VR_HOLSTER_ZONES
+        };
+        if !crate::dev_params::get_bool(toggle) {
             return vec![];
         }
         let Some(centers) = self.world_centers(position, rotation) else {
             return vec![];
         };
-        let slots = occupants(world);
+        let slots = self.occupants(world);
         let count = SLOT_COUNT;
         let mut objects = Vec::new();
         for slot in 0..2 {
@@ -898,7 +903,12 @@ impl Holsters {
                 &Matrix4::from_scale(1.0),
                 centers[slot],
                 centers[slot],
-                radius(),
+                self.radius()
+                    + if self.chest {
+                        super::body_inventory::hand_radius()
+                    } else {
+                        0.0
+                    },
             );
             objects.push(SceneObject::new(
                 color_material::create(color),

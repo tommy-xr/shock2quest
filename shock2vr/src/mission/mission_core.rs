@@ -17404,7 +17404,11 @@ impl MissionCore {
                 self.holsters
                     .render(&self.world, player.pos, player.rotation),
             );
-            if crate::dev_params::get_bool(crate::dev_params::VR_AMMO_POUCH_ZONES) {
+            scene.extend(
+                self.chest_slots
+                    .render(&self.world, player.pos, player.rotation),
+            );
+            if crate::dev_params::get_bool(crate::dev_params::VR_BODY_INVENTORY_ZONES) {
                 scene.extend(self.ammo_pouch.render_zone(player.pos, player.rotation));
             }
             // The pieces are authored in metres, with independent attachment

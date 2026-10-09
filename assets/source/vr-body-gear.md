@@ -112,15 +112,17 @@ the old pouch indicator is removed; holsters retain their runtime state indicato
 
 ## Ammo pouch interaction
 
-The front pouch supplies the selected ammo type for the gun held in the other
-hand. Reach with an empty hand and squeeze; a held squeeze never draws twice.
+The front pouch prefers the selected ammo type for the gun held in the other
+hand, falling back to another stocked compatible type if its reserve is empty. Reach with an empty hand and squeeze; a held squeeze never draws twice.
 Drawing uses an actual inventory clip, splitting larger stacks at the authored
-clip size. Release a held ammo clip in the pouch to return it to the backpack.
+magazine capacity and available stock. Release a held ammo clip in the pouch to return it to the backpack.
 Matching stacks can merge even when the backpack has no free cells. A refused
-return retains the clip until a deliberate re-grip; empty selected stock gives
+return retains the clip until a deliberate re-grip; no compatible reserve gives
 an audible refusal. Two occupied hands cannot draw until one is freed.
 
-`vr_ammo_pouch_zones` displays the debug reach sphere. The player snapshot's
+`vr_body_inventory_zones` displays the ammo pouch and both chest reach spheres.
+The spheres include glove contact radius, showing the hand-center activation
+boundary. The player snapshot's
 `hand_feedback.ammo_pouch` reports the same center, offers and refusal state used
 by the interaction. Reach offsets still need seated and standing headset review.
 

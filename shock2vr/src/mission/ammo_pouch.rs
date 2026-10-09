@@ -169,7 +169,7 @@ impl AmmoPouch {
             &Matrix4::from_scale(1.0),
             center,
             center,
-            RADIUS,
+            RADIUS + super::body_inventory::hand_radius(),
         );
         let mut objects = vec![SceneObject::new(
             color_material::create(color),

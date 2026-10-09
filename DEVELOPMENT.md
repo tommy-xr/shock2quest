@@ -708,8 +708,10 @@ navigation for the lifetime of the application, including across mission changes
 
 **Visualizations** offers **All on / All off** for all overlays or just a
 subcategory. Individual switches stay editable; counts show how many are on.
-Hands & zones includes gloves, support grips, clip insertion, ammo pouch,
-holsters, and backpack zones. Combat includes creature hitboxes
+Hands & zones includes gloves, support grips, clip insertion, body inventory,
+holsters, and backpack zones. **Body inventory zones** (`vr_body_inventory_zones`)
+shows both chest slots and the ammo pouch. These wireframes include the glove
+contact radius, so they show the hand-center boundary that activates each target. Combat includes creature hitboxes
 (`show_hitboxes`), held melee contact volumes, and damage numbers. Bulk controls
 only change visualization flags, never fit settings or tuning values.
 

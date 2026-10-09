@@ -340,7 +340,7 @@ for (const vr of [false, true]) {
       const back: [number, number] = [309, 436];
       const zoneKeys = [
         "melee_glove_overlay", "vr_backpack_zones", "vr_glove_spheres",
-        "vr_ammo_pouch_zones", "vr_holster_zones", "vr_support_grips", "clip_zone",
+        "vr_body_inventory_zones", "vr_holster_zones", "vr_support_grips", "clip_zone",
       ];
       await game.step({ frames: 10 });
       await press(DEVELOPER_BUTTON);
