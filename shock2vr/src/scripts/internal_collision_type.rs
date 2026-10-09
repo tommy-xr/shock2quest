@@ -150,9 +150,10 @@ pub(super) fn terminal_impact_effects(
             root_transform: Matrix4::identity(),
             options: CreateEntityOptions {
                 transient_fx: true,
-                impact_surface: super::script_util::ballistic_impact_surface(
+                impact_appearance: super::script_util::ballistic_impact_appearance(
                     world,
                     entity_id,
+                    with,
                     contact
                         .and_then(|c| c.surface_material)
                         .and_then(|id| physics.surface_material_name(id)),

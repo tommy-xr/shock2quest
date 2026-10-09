@@ -11,12 +11,21 @@ use engine::{
 };
 use std::{rc::Rc, time::Duration};
 
-/// Material selected at a ballistic world impact. Runtime-only: the host is
-/// already a transient effect and is never restored from a save.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, shipyard::Component)]
+/// Cosmetic surface family selected at a ballistic impact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImpactSurface {
     Metal,
     Plasticrete,
+    Glass,
+    Annelid,
+}
+
+/// Runtime-only appearance of a transient impact. Only world surfaces receive
+/// decals: object hits must not leave a stationary mark floating on a creature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, shipyard::Component)]
+pub struct ImpactAppearance {
+    pub surface: ImpactSurface,
+    pub on_world: bool,
 }
 
 impl ImpactSurface {
@@ -24,45 +33,58 @@ impl ImpactSurface {
         match material.to_ascii_lowercase().as_str() {
             "metal" | "metalbig" | "metaltarget" => Some(Self::Metal),
             "plasticrete" => Some(Self::Plasticrete),
+            "glass" | "ubglass" => Some(Self::Glass),
+            "annelid" => Some(Self::Annelid),
             _ => None,
         }
     }
 
     /// Model variants and scale ranges from 25AE `sq_scripts/impactor.nut`.
     /// Keep the existing decal entity/lifetime; replace only its appearance.
-    pub(crate) fn decal(self, rng: &mut impl rand::Rng) -> (&'static str, f32) {
-        match self {
+    pub(crate) fn decal(self, rng: &mut impl rand::Rng) -> Option<(&'static str, f32)> {
+        Some(match self {
             Self::Metal => ("ND-mtlhit0", rng.gen_range(1.5..1.6)),
             Self::Plasticrete => (
                 ["ND-pcrhit0", "ND-pcrhit1", "ND-pcrhit2", "ND-pcrhit3"][rng.gen_range(0..4)],
                 rng.gen_range(1.3..2.5),
             ),
-        }
+            Self::Glass => ("ND-pcrhit0", rng.gen_range(1.3..2.0)),
+            Self::Annelid => return None,
+        })
     }
 
     pub(crate) fn build(self, assets: &mut AssetCache) -> Option<ParticleEffect> {
-        let debris = particle_frames(
-            assets,
-            match self {
-                Self::Metal => "ND-ember",
-                Self::Plasticrete => "NDdbr",
-            },
-        );
-        let dust = particle_frames(assets, "NDsmk");
-        if debris.is_empty() || dust.is_empty() {
+        let names: &[&str] = match self {
+            Self::Metal => &["ND-ember", "NDsmk"],
+            Self::Plasticrete => &["NDdbr", "NDsmk"],
+            Self::Glass => &["NDgsa", "NDsmk"],
+            Self::Annelid => &["NDbld", "NDsmk", "ND-bsp"],
+        };
+        let frames: Vec<_> = names
+            .iter()
+            .map(|name| particle_frames(assets, name))
+            .collect();
+        if frames.iter().any(Vec::is_empty) {
             return None;
         }
         Some(ParticleEffect {
-            layers: self.layers(debris, dust),
+            layers: self.layers(&frames),
             replaces_parent_model: false,
         })
     }
 
-    fn layers(
-        self,
-        debris: Vec<Rc<dyn TextureTrait>>,
-        dust: Vec<Rc<dyn TextureTrait>>,
-    ) -> Vec<ParticleSystem> {
+    fn layers(self, frames: &[Vec<Rc<dyn TextureTrait>>]) -> Vec<ParticleSystem> {
+        if self == Self::Annelid {
+            let green = vec3(0.28, 0.7, 0.13);
+            let mut layers =
+                blood_layers(EnhancedEffect::BloodDropletsAndMist, &frames[..2], green);
+            layers.extend(blood_layers(
+                EnhancedEffect::BloodSpray,
+                &frames[2..],
+                green,
+            ));
+            return layers;
+        }
         // The impact transform points local -X out of the surface. Keep
         // particles in world space so gravity does not rotate with the wall.
         // Small bursts deliberately bound overdraw when every shotgun pellet hits.
@@ -71,31 +93,40 @@ impl ImpactSurface {
             .with_world_space(true)
             .with_launch_bounding_box(vec3(-0.015, -0.015, -0.015), vec3(0.0, 0.015, 0.015));
         let metal = self == Self::Metal;
+        let glass = self == Self::Glass;
         vec![
             base.clone()
-                .with_num_particles(if metal { 6 } else { 5 })
+                .with_num_particles(if metal {
+                    6
+                } else if glass {
+                    8
+                } else {
+                    5
+                })
                 .with_lifetime(0.25, 0.65)
                 .with_particle_size(0.035, 0.065)
                 .with_velocity(vec3(-1.8, -0.5, -0.6), vec3(-0.4, 0.7, 0.6))
                 .with_acceleration(vec3(0.0, -2.8, 0.0))
                 .with_color(if metal {
                     vec3(1.0, 0.7, 0.3)
+                } else if glass {
+                    vec3(1.0, 1.0, 1.0)
                 } else {
                     vec3(0.7, 0.65, 0.55)
                 })
                 .with_alpha(0.9)
                 .with_fade_time(0.2)
-                .with_sprite_animation(debris, Duration::from_millis(50), false),
-            base.with_num_particles(if metal { 1 } else { 3 })
+                .with_sprite_animation(frames[0].clone(), Duration::from_millis(50), false),
+            base.with_num_particles(if metal || glass { 1 } else { 3 })
                 .with_lifetime(0.45, 0.8)
                 .with_particle_size(0.12, 0.18)
                 .with_velocity(vec3(-0.3, -0.12, -0.12), vec3(-0.06, 0.12, 0.12))
                 .with_size_velocity(0.25)
                 .with_color(vec3(0.7, 0.65, 0.55))
-                .with_alpha(if metal { 0.12 } else { 0.25 })
+                .with_alpha(if metal || glass { 0.12 } else { 0.25 })
                 .with_fade_in_time(0.04)
                 .with_fade_time(0.5)
-                .with_sprite_animation(dust, Duration::from_millis(60), false),
+                .with_sprite_animation(frames[1].clone(), Duration::from_millis(60), false),
         ]
     }
 }
@@ -214,7 +245,9 @@ impl EnhancedEffect {
         }
         Some(ParticleEffect {
             layers: match self {
-                Self::BloodDropletsAndMist | Self::BloodSpray => blood_layers(self, &frames),
+                Self::BloodDropletsAndMist | Self::BloodSpray => {
+                    blood_layers(self, &frames, vec3(0.65, 0.08, 0.06))
+                }
                 Self::EmpExplosion { overload } => emp_explosion_layers(overload, &frames),
                 Self::EmpLegacyPulse => vec![],
                 _ => emp_layers(self, &frames),
@@ -253,12 +286,16 @@ pub(crate) fn particle_frames(assets: &mut AssetCache, name: &str) -> Vec<Rc<dyn
 
 /// The spang orientation places local -X along the impact normal. World-space
 /// simulation preserves that launch direction while gravity always stays down.
-fn blood_layers(kind: EnhancedEffect, frames: &[Vec<Rc<dyn TextureTrait>>]) -> Vec<ParticleSystem> {
+fn blood_layers(
+    kind: EnhancedEffect,
+    frames: &[Vec<Rc<dyn TextureTrait>>],
+    tint: cgmath::Vector3<f32>,
+) -> Vec<ParticleSystem> {
     let base = ParticleSystem::new()
         .with_one_shot(true)
         .with_world_space(true)
         .with_launch_bounding_box(vec3(-0.015, -0.025, -0.025), vec3(0.0, 0.025, 0.025))
-        .with_color(vec3(0.65, 0.08, 0.06))
+        .with_color(tint)
         .with_alpha(0.85);
     match kind {
         EnhancedEffect::BloodDropletsAndMist => vec![
@@ -402,14 +439,18 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let mut models = std::collections::HashSet::new();
         for _ in 0..100 {
-            let (model, scale) = ImpactSurface::Metal.decal(&mut rng);
+            let (model, scale) = ImpactSurface::Metal.decal(&mut rng).unwrap();
             assert_eq!(model, "ND-mtlhit0");
             assert!((1.5..1.6).contains(&scale));
-            let (model, scale) = ImpactSurface::Plasticrete.decal(&mut rng);
+            let (model, scale) = ImpactSurface::Plasticrete.decal(&mut rng).unwrap();
             assert!((1.3..2.5).contains(&scale));
             models.insert(model);
         }
         assert_eq!(models.len(), 4);
+        let (model, scale) = ImpactSurface::Glass.decal(&mut rng).unwrap();
+        assert_eq!(model, "ND-pcrhit0");
+        assert!((1.3..2.0).contains(&scale));
+        assert!(ImpactSurface::Annelid.decal(&mut rng).is_none());
     }
 
     #[test]
@@ -418,10 +459,15 @@ mod tests {
             String::new(),
             engine::assets::asset_paths::AssetPath::combine(vec![]),
         );
-        for surface in [ImpactSurface::Metal, ImpactSurface::Plasticrete] {
+        for surface in [
+            ImpactSurface::Metal,
+            ImpactSurface::Plasticrete,
+            ImpactSurface::Glass,
+            ImpactSurface::Annelid,
+        ] {
             assert!(surface.build(&mut assets).is_none());
             let mut effect = ParticleEffect {
-                layers: surface.layers(vec![], vec![]),
+                layers: surface.layers(&[vec![], vec![], vec![]]),
                 ..Default::default()
             };
             effect.update(Duration::ZERO, Matrix4::identity());
@@ -461,11 +507,19 @@ mod tests {
     fn blood_parent_outlives_spray_and_all_layers_expire() {
         let empty_frames = vec![vec![], vec![]];
         let mut parent = ParticleEffect {
-            layers: blood_layers(EnhancedEffect::BloodDropletsAndMist, &empty_frames),
+            layers: blood_layers(
+                EnhancedEffect::BloodDropletsAndMist,
+                &empty_frames,
+                vec3(0.65, 0.08, 0.06),
+            ),
             ..ParticleEffect::default()
         };
         let mut spray = ParticleEffect {
-            layers: blood_layers(EnhancedEffect::BloodSpray, &empty_frames),
+            layers: blood_layers(
+                EnhancedEffect::BloodSpray,
+                &empty_frames,
+                vec3(0.65, 0.08, 0.06),
+            ),
             ..ParticleEffect::default()
         };
         for effect in [&mut parent, &mut spray] {

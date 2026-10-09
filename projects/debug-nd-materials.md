@@ -111,3 +111,20 @@ plane. Missing models retain the original decal. No additional decal entity
 is created, and the authored ten-second lifetime remains independent of the
 short particle burst. Particle/variant randomness means captures share timing
 and framing, not identical pixels.
+
+Glass/UBGlass now selects eight animated shards plus one dust particle; world
+glass uses the remaster's `ND-pcrhit0` mark. Physical objects use their explicit
+material tag, with the remaster's Grub/Arachnid → annelid and Assassin → metal
+overrides. Annelid hits reuse the blood layer implementation with green tint
+(eight droplets, three mist particles, two spray sprites). Ordinary flesh keeps
+the existing blood path, and unknown objects keep their authored effects.
+
+The runtime impact appearance distinguishes world from object hits, so robots,
+glass props and creatures never receive the new stationary world decals.
+Hitbox proxies resolve to their owning creature before material lookup. The
+same ballistic family gate protects energy weapons and specialized projectiles.
+Campaign regressions cover real glass, a Hydro grub and a MedSci turret.
+
+When a complete object replacement loads, it owns its cosmetic particles and
+suppresses the old riders (notably an assassin's red blood spray). If any
+required sprite is absent, both the original host and its riders remain.

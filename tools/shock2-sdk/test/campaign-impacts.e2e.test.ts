@@ -12,6 +12,7 @@ const enabled = process.env.SHOCK2_E2E === "1";
 const targets: [string, Vec3][] = [
   ["plasticrete", [-34.9676, -3.716, 16.9]],
   ["metal", [-31.18475, -1.2, 24.81524]],
+  ["glass", [-35.6364, -3.716, 16.7]],
 ];
 
 for (const vr of [false, true]) {
@@ -60,7 +61,7 @@ for (const vr of [false, true]) {
         assert.ok(impact, "real projectile must create its terrain effect host");
         const draws = (await game.scene.objects({ entityId: impact.id })).objects
           .filter(o => o.source === "particle");
-        assert.equal(draws.length, material === "metal" ? 7 : 8,
+        assert.equal(draws.length, material === "metal" ? 7 : material === "glass" ? 9 : 8,
           `expected the bounded ${material} burst instead of the generic terrain particles`);
         const decals = (await game.scene.objects({ limit: 10000 })).objects.filter(o =>
           o.model !== null && (material === "metal" ? o.model === "ND-mtlhit0" : /^ND-pcrhit[0-3]$/.test(o.model)));

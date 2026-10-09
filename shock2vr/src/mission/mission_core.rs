@@ -7611,7 +7611,7 @@ impl MissionCore {
             |prop_particle_group: View<PropParticleGroup>,
              prop_particle_launch_info: View<PropParticleLaunchInfo>,
              templates: View<PropTemplateId>,
-             impact_surfaces: View<crate::particle_effects::ImpactSurface>,
+             impact_appearances: View<crate::particle_effects::ImpactAppearance>,
              attachments: View<RuntimePropAttachment>,
              v_transient_fx: View<crate::runtime_props::RuntimePropTransientFx>,
              transform: View<RuntimePropTransform>| {
@@ -7634,10 +7634,10 @@ impl MissionCore {
                     }
                     let particle_system =
                         self.id_to_particle_system.entry(id).or_insert_with(|| {
-                            if let Some(effect) = impact_surfaces
+                            if let Some(effect) = impact_appearances
                                 .get(id)
                                 .ok()
-                                .and_then(|surface| surface.build(asset_cache))
+                                .and_then(|appearance| appearance.surface.build(asset_cache))
                             {
                                 return effect;
                             }
@@ -9745,6 +9745,19 @@ impl MissionCore {
         rider_depth: u32,
         exclude_template: Option<i32>,
     ) {
+        // A complete object-impact recipe owns all its particles. In particular,
+        // an assassin's legacy blood-spray rider must not add red blood to the
+        // new metal burst. If art is missing, keep the entire authored fallback.
+        let impact_appearance = self
+            .world
+            .borrow::<View<crate::particle_effects::ImpactAppearance>>()
+            .ok()
+            .and_then(|appearances| appearances.get(host).ok().copied());
+        if impact_appearance.is_some_and(|appearance| {
+            !appearance.on_world && appearance.surface.build(asset_cache).is_some()
+        }) {
+            return;
+        }
         // Instantiate the particle groups authored to ride this archetype
         // (`ParticleAttachement` links from particle archetypes to this
         // template or an ancestor) - projectile trails, psi bolt visuals.
@@ -9804,11 +9817,8 @@ impl MissionCore {
                 .filter(|t| !excluded.contains(t))
                 .collect()
         };
-        let impact_surface = self
-            .world
-            .borrow::<View<crate::particle_effects::ImpactSurface>>()
-            .ok()
-            .and_then(|surfaces| surfaces.get(host).ok().copied());
+        let impact_surface = impact_appearance
+            .and_then(|appearance| appearance.on_world.then_some(appearance.surface));
         let bullet_hole = self
             .template_name_to_template_id
             .get("bullet hit")
@@ -9818,9 +9828,10 @@ impl MissionCore {
             let mut scale_override = None;
             let mut rider_orientation = orientation;
             if Some(particle_template) == bullet_hole {
-                if let Some(surface) = impact_surface {
+                if let Some((model, scale)) =
+                    impact_surface.and_then(|surface| surface.decal(&mut rand::thread_rng()))
+                {
                     let mut rng = rand::thread_rng();
-                    let (model, scale) = surface.decal(&mut rng);
                     // Missing installed art keeps the entire original decal.
                     if asset_cache
                         .get_opt(&MODELS_IMPORTER, &format!("{model}.bin"))
