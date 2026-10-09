@@ -28,6 +28,18 @@ impl ImpactSurface {
         }
     }
 
+    /// Model variants and scale ranges from 25AE `sq_scripts/impactor.nut`.
+    /// Keep the existing decal entity/lifetime; replace only its appearance.
+    pub(crate) fn decal(self, rng: &mut impl rand::Rng) -> (&'static str, f32) {
+        match self {
+            Self::Metal => ("ND-mtlhit0", rng.gen_range(1.5..1.6)),
+            Self::Plasticrete => (
+                ["ND-pcrhit0", "ND-pcrhit1", "ND-pcrhit2", "ND-pcrhit3"][rng.gen_range(0..4)],
+                rng.gen_range(1.3..2.5),
+            ),
+        }
+    }
+
     pub(crate) fn build(self, assets: &mut AssetCache) -> Option<ParticleEffect> {
         let debris = particle_frames(
             assets,
@@ -383,6 +395,22 @@ fn emp_explosion_layers(
 mod tests {
     use super::*;
     use cgmath::SquareMatrix;
+
+    #[test]
+    fn decal_variants_use_authored_scale_ranges() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let mut models = std::collections::HashSet::new();
+        for _ in 0..100 {
+            let (model, scale) = ImpactSurface::Metal.decal(&mut rng);
+            assert_eq!(model, "ND-mtlhit0");
+            assert!((1.5..1.6).contains(&scale));
+            let (model, scale) = ImpactSurface::Plasticrete.decal(&mut rng);
+            assert!((1.3..2.5).contains(&scale));
+            models.insert(model);
+        }
+        assert_eq!(models.len(), 4);
+    }
 
     #[test]
     fn surface_bursts_expire_and_missing_art_preserves_legacy() {
