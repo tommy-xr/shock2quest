@@ -6692,6 +6692,9 @@ impl MissionCore {
             }
             // Merely passing an unsqueezed hand over a mount must never steal a world trigger.
             if held[i].is_none()
+                && self.interaction.hand_available_for_body_slot(
+                    [crate::Handedness::Left, crate::Handedness::Right][i],
+                )
                 && self.chest_slots.near[i].is_some()
                 && ([
                     body_input.left_hand.squeeze_value,
