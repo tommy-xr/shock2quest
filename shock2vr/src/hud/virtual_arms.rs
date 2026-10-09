@@ -381,6 +381,10 @@ pub(crate) fn get_weapon_ammo_icon(
     weapon: Option<shipyard::EntityId>,
 ) -> Option<String> {
     let template_id = weapon_selected_projectile_template(world, weapon)?;
+    get_projectile_ammo_icon(world, template_id)
+}
+
+pub(crate) fn get_projectile_ammo_icon(world: &World, template_id: i32) -> Option<String> {
     let icons = world
         .borrow::<UniqueView<crate::mission::mission_core::GlobalTemplateObjIcons>>()
         .ok()?;

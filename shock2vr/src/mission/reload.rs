@@ -312,14 +312,15 @@ fn compatible_reserve_items(world: &World, clip_templates: &[i32]) -> Vec<Entity
 /// A read-only offer shared by the pouch preview and atomic withdrawal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PouchClip {
+    pub projectile: i32,
     pub reserve: EntityId,
     pub template: i32,
     pub rounds: i32,
     pub stock: i32,
 }
 
-pub(crate) fn reserve_rounds(world: &World, weapon: EntityId) -> u32 {
-    selected_clip_templates(world, weapon).map_or(0, |templates| {
+pub(crate) fn reserve_rounds(world: &World, projectile: i32) -> u32 {
+    clip_templates_for_projectile(world, projectile).map_or(0, |templates| {
         compatible_reserve_items(world, &templates)
             .iter()
             .fold(0_u32, |total, item| {
@@ -329,10 +330,20 @@ pub(crate) fn reserve_rounds(world: &World, weapon: EntityId) -> u32 {
 }
 
 pub(crate) fn reserve_clip_for_pouch(world: &World, weapon: EntityId) -> Option<PouchClip> {
-    let templates = selected_clip_templates(world, weapon)?;
-    let reserve = compatible_reserve_items(world, &templates)
-        .into_iter()
-        .next()?;
+    // Prefer the selected type, then walk the authored cycle order, skipping
+    // empty/incompatible stock. This is an offer only: the loaded magazine's
+    // selection changes through normal insertion, never by converting rounds.
+    let projectiles = crate::scripts::script_util::ordered_projectile_links(world, weapon);
+    let selected = selected_ammo_index(world, weapon);
+    let (index, projectile, templates, reserve) = (0..projectiles.len()).find_map(|offset| {
+        let index = (selected + offset) % projectiles.len();
+        let projectile = projectiles[index].0;
+        let templates = clip_templates_for_projectile(world, projectile)?;
+        let reserve = compatible_reserve_items(world, &templates)
+            .into_iter()
+            .next()?;
+        Some((index, projectile, templates, reserve))
+    })?;
     let class = crate::scripts::script_util::entity_class_template_id(world, reserve)?;
     let clips = world.borrow::<UniqueView<GlobalProjectileClips>>().ok()?;
     let hierarchy = world
@@ -366,7 +377,7 @@ pub(crate) fn reserve_clip_for_pouch(world: &World, weapon: EntityId) -> Option<
             .and_then(|states| states.get(weapon).ok().map(|state| state.ammo))
             .unwrap_or(0);
         if setting.clip > 0 {
-            let needed = if ammo > 0 && ammo < setting.clip {
+            let needed = if index == selected && ammo > 0 && ammo < setting.clip {
                 setting.clip - ammo
             } else {
                 setting.clip
@@ -375,6 +386,7 @@ pub(crate) fn reserve_clip_for_pouch(world: &World, weapon: EntityId) -> Option<
         }
     }
     (rounds > 0).then_some(PouchClip {
+        projectile,
         reserve,
         template,
         rounds,
@@ -702,6 +714,26 @@ mod tests {
             f.reserve(template, stock);
             let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
             assert_eq!(offer.rounds, expected);
+        }
+    }
+
+    #[test]
+    fn pouch_falls_back_in_both_directions_without_changing_loaded_ammo() {
+        for (selected, fallback, projectile) in
+            [(0, HE_CLIP, HE_PROJECTILE), (1, STD_CLIP, STD_PROJECTILE)]
+        {
+            let mut f = Fixture::new(7, selected);
+            f.reserve(if selected == 0 { STD_CLIP } else { HE_CLIP }, 0);
+            f.reserve(SMALL_PRISM, 30); // Incompatible with this gun.
+            let reserve = f.reserve(fallback, 20);
+            let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
+            assert_eq!(
+                (offer.reserve, offer.projectile, offer.rounds),
+                (reserve, projectile, 12)
+            );
+            assert_eq!(reserve_rounds(&f.world, projectile), 20);
+            assert_eq!(selected_ammo_index(&f.world, f.weapon), selected);
+            assert_eq!(f.ammo(), 7);
         }
     }
 

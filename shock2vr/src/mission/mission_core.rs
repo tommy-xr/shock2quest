@@ -6735,7 +6735,7 @@ impl MissionCore {
                 Some(super::ammo_pouch::Action::Empty) => {
                     self.ammo_pouch.refusal_flash = 0.35;
                     effects.push(Effect::ShowMessage {
-                        text: "No reserve for the selected ammo type".to_owned(),
+                        text: "No compatible ammo in reserve".to_owned(),
                     });
                     effects.push(Effect::PlaySound {
                         handle: AudioHandle::new(),

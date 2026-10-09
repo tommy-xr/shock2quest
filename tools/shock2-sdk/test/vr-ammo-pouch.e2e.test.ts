@@ -171,3 +171,50 @@ test("empty pouch refuses selected ammo without grabbing nearby objects", { skip
   const sounds = (await game.audio.recent()).sounds.filter(s => s.sequence > before);
   assert.ok(sounds.length > 0, "empty pouch must provide audible feedback");
 });
+
+for (const [hand, spent] of [["left", 1], ["right", 12]] as const) {
+  test(`${hand} pouch automatically offers another stocked ammo type`, { skip: !enabled, timeout: 180_000 }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const primary = hand === "left" ? "right" : "left";
+    const gun = (await game.entities.list()).entities.find(e => e.template_id === -17)!;
+    await aimVrHandAt(game, gun.position, .2, 1, 0, { hand: primary });
+    await game.input.set(`${primary}_hand.position`, [primary === "left" ? -.3 : .3, 1, -.5]);
+    await game.input.set(`${primary}_hand.rotation`, [0, 0, 0, 1]);
+    await game.step({ frames: 5 });
+    for (let i = 0; i < spent; i++) {
+      await pullTrigger(game, primary);
+      await game.step({ frames: 60 });
+    }
+    const loaded = ammoOf(await game.entities.detail(gun.id));
+    assert.equal(loaded, 12 - spent);
+    const he = await game.player.spawnItem(-32);
+    await game.step({ frames: 3 });
+    const feedback = (await game.info()).player.hand_feedback!;
+    assert.equal(feedback.body_gear?.pouch.state, "ready", "no standard reserve: automatically offer HE");
+    const icon = feedback.body_gear?.pouch.icon;
+    assert.ok(icon);
+    const stock = Number((await game.entities.detail(he.entity_id)).properties.find(p => p.name === "StackCount")?.value);
+    assert.equal(feedback.body_gear?.pouch.count, stock);
+    const { offer, player, entityId: clip } = await drawPouchAmmo(game, hand);
+    assert.equal(offer.reserve, he.entity_id);
+    assert.equal(offer.rounds, Math.min(stock, 12), "different ammo draws a full replacement, not a one-round top-off");
+    assert.equal(ammoOf(await game.entities.detail(gun.id)), loaded, "offering and drawing cannot convert loaded rounds");
+    const grip = player.hand_grips.find(g => g.entity_id === clip)?.grip;
+    const anchor = (await game.entities.detail(gun.id)).magazine_anchor;
+    assert.ok(grip && anchor);
+    await game.input.set(`${hand}_hand.position`, sub(quatRotate(quatConjugate(player.rotation), sub(anchor, player.position)), [grip.offset.x, grip.offset.y, grip.offset.z]));
+    await game.step({ frames: 5 });
+    assert.equal(ammoOf(await game.entities.detail(gun.id)), offer.rounds);
+    const remaining = (await game.player.inventory()).items;
+    const standard = (await game.entities.list()).entities.find(item => (item.template_id === -31 || item.template_id === -1358) && remaining.some(entry => entry.entity_id === item.id));
+    if (loaded > 0) {
+      assert.ok(standard, "previous loaded rounds return to reserve");
+      assert.equal(Number((await game.entities.detail(standard.id)).properties.find(p => p.name === "StackCount")?.value), loaded);
+      assert.notEqual((await game.info()).player.hand_feedback?.body_gear?.pouch.icon, icon, "exhausted HE now falls back to the returned standard rounds");
+    } else {
+      assert.equal((await game.info()).player.hand_feedback?.body_gear?.pouch.count, 0, "all reserve types are now exhausted");
+      assert.equal(standard, undefined, "an empty magazine creates no returned rounds");
+    }
+  });
+}

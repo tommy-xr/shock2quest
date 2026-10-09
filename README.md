@@ -75,8 +75,10 @@ The **upper face button** (left **Y** / right **B**) acts on what that hand hold
 
 **Weapons and powers.** Reload by taking a clip from the belt's ammo pouch or
 the cyber interface's inventory strip and bringing it to the gun. With a
-partially loaded gun in the other hand, the pouch draws at most the missing
-rounds; the rest stay in your backpack. A full gun still offers a spare clip;
+partially loaded gun in the other hand, matching ammo draws at most the missing
+rounds; the rest stay in your backpack. If the selected reserve runs out, the
+pouch automatically offers another stocked compatible type, showing its icon
+and count. A different type draws a replacement magazine. A full gun still offers a spare clip;
 tap the clip hand's upper button (**B** on the right, **Y** on the left) to
 cycle through compatible ammo carried in your backpack. Inserting another ammo
 type returns the loaded rounds to your backpack. In the amp's power selector, use that hand's

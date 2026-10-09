@@ -1,4 +1,4 @@
-//! A shared belt pouch serves the selected ammo of the opposite hand's gun.
+//! A shared belt pouch serves stocked compatible ammo for the opposite hand's gun.
 use super::{body_inventory::BodyPose, reload::PouchClip};
 use crate::{input_context::InputContext, vr_support::GripPose};
 use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3};
@@ -191,6 +191,7 @@ mod tests {
         let gun = world.add_entity(());
         let reserve = world.add_entity(());
         let offer = PouchClip {
+            projectile: -362,
             reserve,
             template: -31,
             rounds: 12,

@@ -1290,7 +1290,10 @@ entry disables holstering. Eligibility and rendering use this same resource,
 with no separate weapon-category allowlist. The shell is 20% smaller; its size
 is independent of item length and grab radius. The new belt includes the ammo
 pouch; its old separate mesh is removed. The shared body badge shows the
-selected ammo icon and total reserve count above its mouth.
+offered ammo icon and total reserve count above its mouth. When the selected
+reserve is empty, it falls back through the gun’s authored ammo order to the
+next stocked compatible type. Preview/draw never changes loaded rounds; normal
+clip insertion performs the type switch and returns the previous rounds.
 
 ### VR chest quick slots
 

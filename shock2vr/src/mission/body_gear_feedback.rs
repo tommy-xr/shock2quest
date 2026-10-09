@@ -55,8 +55,15 @@ impl PouchReadout {
         };
         Self {
             weapon: weapon.map(|id| id.inner() as i32),
-            icon: crate::hud::get_weapon_ammo_icon(world, weapon),
-            count: weapon.map(|gun| super::reload::reserve_rounds(world, gun)),
+            icon: offer.map_or_else(
+                || crate::hud::get_weapon_ammo_icon(world, weapon),
+                |offer| crate::hud::get_projectile_ammo_icon(world, offer.projectile),
+            ),
+            count: weapon.map(|_| {
+                offer.map_or(0, |offer| {
+                    super::reload::reserve_rounds(world, offer.projectile)
+                })
+            }),
             state,
             near: near[taking],
         }

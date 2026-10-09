@@ -805,7 +805,7 @@ export interface PlayerSnapshot {
         last_scan: number | null;
       };
       shoulder_weapons: [number | null, number | null];
-      pouch: { weapon: number | null; icon: string | null; state: "inactive" | "ready" | "empty" | "refused"; near: boolean };
+      pouch: { weapon: number | null; icon: string | null; count: number | null; state: "inactive" | "ready" | "empty" | "refused"; near: boolean };
       /** Right thigh then left thigh, independently resolved. */
       holsters: { weapon: number | null; ammo: number | null; capacity: number | null; segments: number }[];
     };
