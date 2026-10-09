@@ -278,6 +278,9 @@ pub(super) fn reserve_slots(
         .unwrap();
     requests.map(|request| {
         let entity = request?;
+        // A held item may retain its old backpack cell until the transfer.
+        // Reuse that space rather than refusing a re-dock into a full pack.
+        occupied.remove_entity(entity);
         let (w, h) = dimensions
             .get(entity)
             .map(|d| (d.width as usize, d.height as usize))

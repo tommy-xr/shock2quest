@@ -1,7 +1,7 @@
-//! A shared belt pouch serves the selected ammo of the opposite hand's gun.
+//! A shared belt pouch serves stocked compatible ammo for the opposite hand's gun.
 use super::{body_inventory::BodyPose, reload::PouchClip};
 use crate::{input_context::InputContext, vr_support::GripPose};
-use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3};
+use cgmath::{InnerSpace, Quaternion, Rotation, Vector3};
 use shipyard::EntityId;
 
 pub(super) const RADIUS: f32 = 0.10 / crate::METERS_PER_WORLD_UNIT;
@@ -29,6 +29,8 @@ pub(super) struct AmmoPouch {
     pub blocks_grab: [bool; 2],
     pub offers: [Option<PouchClip>; 2],
     pub refused: [bool; 2],
+    pub incompatible: [bool; 2],
+    pub refusal_flash: f32,
     pub shoulder_priority: [bool; 2],
     consumed: [bool; 2],
     pressed: [bool; 2],
@@ -44,6 +46,8 @@ impl Default for AmmoPouch {
             blocks_grab: [false; 2],
             offers: [None; 2],
             refused: [false; 2],
+            incompatible: [false; 2],
+            refusal_flash: 0.0,
             shoulder_priority: [false; 2],
             consumed: [false; 2],
             pressed: [true; 2],
@@ -89,6 +93,7 @@ impl AmmoPouch {
                     (hand.position - center).magnitude2()
                         <= (RADIUS + super::body_inventory::hand_radius()).powi(2)
                 });
+            self.incompatible[i] = self.near[i] && held[i].is_some() && !ammo[i];
             if tracked && !pressed {
                 self.consumed[i] = false;
             }
@@ -137,6 +142,7 @@ impl AmmoPouch {
         serde_json::json!({
             "center": self.world_center(position, rotation).map(|p| [p.x,p.y,p.z]),
             "radius": RADIUS, "near": self.near, "refused": self.refused,
+            "refusal_flash": self.refusal_flash, "incompatible": self.incompatible,
             "offers": self.offers.map(|o| o.map(|o| serde_json::json!({
                 "reserve": o.reserve.inner() as i32, "template": o.template, "rounds": o.rounds, "stock": o.stock
             })))
@@ -148,31 +154,15 @@ impl AmmoPouch {
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
     ) -> Vec<engine::scene::SceneObject> {
-        use engine::scene::{SceneObject, color_material, lines_mesh};
         let Some(center) = self.world_center(position, rotation) else {
             return vec![];
         };
-        let color = if self.refused.iter().any(|v| *v) {
-            cgmath::vec3(1.0, 0.2, 0.1)
-        } else if (0..2).any(|i| self.near[i] && self.offers[i].is_some()) {
-            cgmath::vec3(0.1, 1.0, 0.3)
-        } else if self.blocks_grab.iter().any(|v| *v) {
-            cgmath::vec3(1.0, 0.65, 0.1)
-        } else {
-            cgmath::vec3(0.1, 0.55, 0.7)
-        };
-        let mut points = Vec::new();
-        dark::hit_box::append_capsule_lines(
-            &mut points,
-            &Matrix4::from_scale(1.0),
-            center,
-            center,
-            RADIUS,
+        let color = super::body_gear_feedback::badge_color(
+            self.near.iter().any(|near| *near),
+            self.incompatible.iter().any(|bad| *bad),
+            self.refusal_flash > 0.0,
         );
-        let mut objects = vec![SceneObject::new(
-            color_material::create(color),
-            Box::new(lines_mesh::create(points)),
-        )];
+        let mut objects = vec![dark::hit_box::draw_debug_wire_sphere(center, RADIUS, color)];
         crate::util::tag_render_source(&mut objects, crate::util::render_source::PLAYER_HANDS);
         objects
     }
@@ -189,6 +179,7 @@ mod tests {
         let gun = world.add_entity(());
         let reserve = world.add_entity(());
         let offer = PouchClip {
+            projectile: -362,
             reserve,
             template: -31,
             rounds: 12,

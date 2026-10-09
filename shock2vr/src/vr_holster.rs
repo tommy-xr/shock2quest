@@ -119,18 +119,24 @@ impl HolsterLibrary {
     }
 
     pub fn for_entity(&self, world: &World, entity: EntityId) -> Option<&HolsterEntry> {
-        let original = world
-            .borrow::<View<InternalPropOriginalModelName>>()
-            .ok()
-            .and_then(|names| names.get(entity).ok().map(|name| name.0.clone()));
-        let model = original.or_else(|| {
+        self.get(&model_for_entity(world, entity)?)
+    }
+}
+
+/// Resolve a held model back to its original inventory model.
+pub(crate) fn model_for_entity(world: &World, entity: EntityId) -> Option<String> {
+    let original = world
+        .borrow::<View<InternalPropOriginalModelName>>()
+        .ok()
+        .and_then(|names| names.get(entity).ok().map(|name| name.0.clone()));
+    original
+        .or_else(|| {
             world
                 .borrow::<View<PropModelName>>()
                 .ok()
                 .and_then(|names| names.get(entity).ok().map(|name| name.0.clone()))
-        })?;
-        self.get(&model)
-    }
+        })
+        .map(|name| model_key(&name))
 }
 
 #[cfg(test)]

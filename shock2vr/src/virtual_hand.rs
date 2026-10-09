@@ -150,6 +150,12 @@ pub enum VirtualHandEffect {
         entity_id: EntityId,
         slot: usize,
     },
+    StoreChestItem {
+        entity_id: EntityId,
+        slot: usize,
+        cell: Option<(usize, usize)>,
+        hand: usize,
+    },
     /// Eject an item into the world (it regains physics + its world model).
     /// This is an explicit drop only: VR opening its hand. Losing an item to a
     /// wield swap is a `StoreItem`, not a drop (#777).

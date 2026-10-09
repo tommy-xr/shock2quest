@@ -805,7 +805,7 @@ export interface PlayerSnapshot {
         last_scan: number | null;
       };
       shoulder_weapons: [number | null, number | null];
-      pouch: { weapon: number | null; icon: string | null; state: "inactive" | "ready" | "empty" | "refused"; near: boolean };
+      pouch: { weapon: number | null; icon: string | null; count: number | null; state: "inactive" | "ready" | "empty" | "refused"; near: boolean };
       /** Right thigh then left thigh, independently resolved. */
       holsters: { weapon: number | null; ammo: number | null; capacity: number | null; segments: number }[];
     };
@@ -823,6 +823,17 @@ export interface PlayerSnapshot {
       locked: [boolean, boolean];
       items: [number | null, number | null];
       near: [boolean, boolean];
+    };
+    chest_slots?: {
+      centers: [Vec3, Vec3] | null;
+      radius: number;
+      enabled_slots: number;
+      near: [number | null, number | null];
+      items: [number | null, number | null];
+      retained: [boolean, boolean];
+      can_store: [boolean, boolean];
+      refusal_flash: [number, number];
+      counts: [number, number];
     };
     holsters?: {
       centers: [Vec3, Vec3] | null;

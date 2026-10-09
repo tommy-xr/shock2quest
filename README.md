@@ -75,8 +75,10 @@ The **upper face button** (left **Y** / right **B**) acts on what that hand hold
 
 **Weapons and powers.** Reload by taking a clip from the belt's ammo pouch or
 the cyber interface's inventory strip and bringing it to the gun. With a
-partially loaded gun in the other hand, the pouch draws at most the missing
-rounds; the rest stay in your backpack. A full gun still offers a spare clip;
+partially loaded gun in the other hand, matching ammo draws at most the missing
+rounds; the rest stay in your backpack. If the selected reserve runs out, the
+pouch automatically offers another stocked compatible type, showing its icon
+and count. A different type draws a replacement magazine. A full gun still offers a spare clip;
 tap the clip hand's upper button (**B** on the right, **Y** on the left) to
 cycle through compatible ammo carried in your backpack. Inserting another ammo
 type returns the loaded rounds to your backpack. In the amp's power selector, use that hand's
@@ -124,6 +126,17 @@ cyber interface is open, including items drawn directly from its inventory.
 access cards, then release anywhere to download them. Draw your personal access
 card from the belt buckle to scan readers, shops, and trainers; release to return
 it to the belt. Scanning opens an interface; select purchases separately.
+
+**Chest quick slots.** Release a held hypo or battery over either chest mount to
+store it; squeeze with either empty hand to retrieve it. Each slot shows a circle
+and the stored item’s icon. Its colour previews the target, and a sound and short
+vibration confirm storage. The count totals matching items across backpack cells.
+Drawing takes one item and refills from remaining stock; returning a matching item merges into its
+reserve. The slots add no inventory capacity. A slot with a different item,
+an incompatible item, or a full backpack with no matching stack keeps the item
+in hand; squeeze again to re-grip before releasing elsewhere. Drawing never uses
+the item; release the trigger before deliberately using it.
+Empty slots let empty-hand grabs of nearby world objects pass through.
 
 **Climbing.** Squeeze an empty hand near a ladder or ledge to grab it, then move
 that hand to pull yourself along. A cyan marker confirms the hold. To climb onto

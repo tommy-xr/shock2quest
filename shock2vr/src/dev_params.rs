@@ -406,7 +406,8 @@ dev_params! {
     VR_HOLSTER_RADIUS = Body::float("vr_holster_radius", "Holster reach radius (m)", 0.15, 0.14, 0.5, 0.01),
     VR_GLOVE_SPHERES = Interaction::bool("vr_glove_spheres", "Glove contact spheres", false),
     VR_GLOVE_RADIUS = Body::float("vr_glove_radius", "Glove contact radius (m)", 0.1, 0.02, 0.1, 0.005),
-    VR_AMMO_POUCH_ZONES = Interaction::bool("vr_ammo_pouch_zones", "Ammo pouch zone", false),
+    /// Base chest and ammo target volumes; show glove spheres separately to see contact.
+    VR_BODY_INVENTORY_ZONES = Interaction::bool("vr_body_inventory_zones", "Body inventory zones", false),
     VR_PLAYER_COLLIDER = Body::bool("vr_player_collider", "Player collision capsule", false),
     VR_HOLSTER_ZONES = Interaction::bool("vr_holster_zones", "Holster zones", false),
     /// Glowing dot where a VR UI pointer beam meets its panel; 0 hides it.
@@ -448,6 +449,9 @@ dev_params! {
     VR_MFD_RIGHT_GRIP_ROLL = TricorderGrips::float("vr_mfd_right_grip_roll", "Right roll (deg)", 0.0, -90.0, 90.0, 5.0),
     /// Optional download visuals; collection, sound and haptics remain active.
     VR_DOWNLOAD_PARTICLES = Body::bool("vr_download_particles", "Download particles", false),
+    VR_CHEST_DROP = Body::float("vr_chest_drop", "Chest below eyes (m)", 0.32, 0.20, 0.55, 0.01),
+    VR_CHEST_SIDE = Body::float("vr_chest_side", "Chest slot side (m)", 0.14, 0.10, 0.24, 0.01),
+    VR_CHEST_FORWARD = Body::float("vr_chest_forward", "Chest forward (m)", 0.20, 0.08, 0.35, 0.01),
     VR_HOLSTER_DROP = Body::float("vr_holster_drop", "Holster below eyes (m)", 0.78, 0.55, 1.1, 0.02),
     VR_HOLSTER_SIDE = Body::float("vr_holster_side", "Holster side (m)", 0.23, 0.16, 0.40, 0.01),
     VR_HOLSTER_FORWARD = Body::float("vr_holster_forward", "Holster forward (m)", -0.16, -0.5, 0.5, 0.01),

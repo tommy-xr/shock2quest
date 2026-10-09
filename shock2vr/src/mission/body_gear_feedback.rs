@@ -16,6 +16,7 @@ pub(super) enum PouchState {
 pub(super) struct PouchReadout {
     pub weapon: Option<i32>,
     pub icon: Option<String>,
+    pub count: Option<u32>,
     pub state: PouchState,
     pub near: bool,
 }
@@ -54,7 +55,15 @@ impl PouchReadout {
         };
         Self {
             weapon: weapon.map(|id| id.inner() as i32),
-            icon: crate::hud::get_weapon_ammo_icon(world, weapon),
+            icon: offer.map_or_else(
+                || crate::hud::get_weapon_ammo_icon(world, weapon),
+                |offer| crate::hud::get_projectile_ammo_icon(world, offer.projectile),
+            ),
+            count: weapon.map(|_| {
+                offer.map_or(0, |offer| {
+                    super::reload::reserve_rounds(world, offer.projectile)
+                })
+            }),
             state,
             near: near[taking],
         }
@@ -94,6 +103,128 @@ fn lit_segments(fraction: f32) -> usize {
     } else {
         0
     }
+}
+
+thread_local! {
+    // Reuse one small annulus geometry; changing state changes only its color.
+    static RING: std::rc::Rc<Box<dyn scene::Geometry>> = {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for i in 0..=48 {
+            let angle = i as f32 * std::f32::consts::TAU / 48.0;
+            for radius in [0.43, 0.5] {
+                vertices.push(scene::VertexPosition { position: vec3(angle.cos()*radius, angle.sin()*radius, 0.0) });
+            }
+            if i < 48 { let a = i*2; indices.extend([a, a+2, a+1, a+1, a+2, a+3]); }
+        }
+        std::rc::Rc::new(Box::new(scene::indexed_mesh::create(vertices, indices)))
+    };
+}
+
+/// Shared by chest storage and the ammo pouch; readiness does not color idle rings.
+pub(super) fn badge_color(
+    targeted: bool,
+    incompatible: bool,
+    refusal_flash: bool,
+) -> cgmath::Vector3<f32> {
+    if incompatible || refusal_flash {
+        vec3(0.7, 0.08, 0.02)
+    } else if targeted {
+        vec3(0.85, 0.85, 0.85)
+    } else {
+        vec3(0.3, 0.3, 0.3)
+    }
+}
+
+/// Body-fixed upward tilt, shared by chest and ammo. No view/camera rotation.
+pub(super) fn badge_frame(
+    center: cgmath::Vector3<f32>,
+    body_rotation: Matrix4<f32>,
+    offset_m: cgmath::Vector3<f32>,
+) -> Matrix4<f32> {
+    Matrix4::from_translation(center)
+        * body_rotation
+        * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT)
+        * Matrix4::from_translation(offset_m)
+        * Matrix4::from_angle_x(Deg(-60.0))
+}
+
+/// `plate` maps metre-local badge coordinates into world space. Its orientation
+/// is supplied by the body mount, never by the viewing camera.
+pub(super) fn item_badge(
+    icon_name: Option<&str>,
+    count: Option<u32>,
+    color: cgmath::Vector3<f32>,
+    plate: Matrix4<f32>,
+    assets: &mut engine::assets::asset_cache::AssetCache,
+) -> Vec<SceneObject> {
+    let mut ring = RING.with(|geometry| {
+        SceneObject::create(
+            std::cell::RefCell::new(scene::color_material::create(color)),
+            geometry.clone(),
+        )
+    });
+    ring.set_transform(plate * Matrix4::from_scale(0.09));
+    let mut objects = vec![ring];
+    if let Some(name) = icon_name {
+        if let Some(texture) = assets.get_ext_opt(
+            &dark::importers::TEXTURE_IMPORTER,
+            name,
+            &engine::texture::TextureOptions {
+                wrap: false,
+                transparent_index_0: true,
+                ..Default::default()
+            },
+        ) {
+            // Keep the complete icon inside the circular rim without cropping.
+            let width = texture.width() as f32;
+            let height = texture.height() as f32;
+            let longest = width.max(height).max(1.0);
+            let texture: std::rc::Rc<dyn engine::texture::TextureTrait> = texture;
+            let mut icon = SceneObject::new(
+                scene::basic_material::create_with_fixed_ambient(texture, 1.0, 0.0),
+                // PCX rows start at the top; retain the outward geometry winding
+                // and reverse V so the complete authored icon reads upright.
+                Box::new(scene::quad::create_with_uv(
+                    cgmath::vec2(0.0, 1.0),
+                    cgmath::vec2(1.0, 0.0),
+                )),
+            );
+            icon.set_transform(
+                plate
+                    * Matrix4::from_translation(vec3(0.0, 0.0, 0.001))
+                    * Matrix4::from_nonuniform_scale(
+                        0.055 * width / longest,
+                        0.055 * height / longest,
+                        1.0,
+                    ),
+            );
+            objects.push(icon);
+        }
+    }
+    if let Some(count) = count {
+        use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
+        // Author the number once in canvas pixels. The shared presenter resolves
+        // glyph placement, including its top/centre anchoring, for both views.
+        // The lower-right corner keeps the complete item icon unobscured.
+        let mut canvas = UiCanvas::new(cgmath::vec2(100.0, 100.0));
+        canvas.text_fit(
+            Rect::new(55.0, 78.0, 43.0, 22.0),
+            &count.to_string(),
+            "mainfont.fon",
+            22.0,
+            HAlign::Right,
+            VAlign::Top,
+        );
+        objects.extend(canvas.render_world_space(
+            assets,
+            plate * Matrix4::from_translation(vec3(0.0, 0.0, 0.002)) * Matrix4::from_scale(0.09),
+            None,
+            None,
+            0.0,
+        ));
+    }
+    objects
 }
 
 pub(super) fn holster(readout: &HolsterReadout, root: Matrix4<f32>) -> Vec<SceneObject> {
@@ -136,6 +267,16 @@ pub(super) fn holster(readout: &HolsterReadout, root: Matrix4<f32>) -> Vec<Scene
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn badge_refusal_overrides_target_brightness_without_tinting_idle() {
+        assert_eq!(badge_color(false, false, false), vec3(0.3, 0.3, 0.3));
+        assert_eq!(badge_color(true, false, false), vec3(0.85, 0.85, 0.85));
+        for targeted in [false, true] {
+            assert_eq!(badge_color(targeted, true, false), vec3(0.7, 0.08, 0.02));
+            assert_eq!(badge_color(targeted, false, true), vec3(0.7, 0.08, 0.02));
+        }
+    }
+
     #[test]
     fn each_holster_reads_its_own_gun_and_dual_wield_has_no_pouch_selection() {
         use dark::properties::{PropBaseGunDesc, PropGunState};

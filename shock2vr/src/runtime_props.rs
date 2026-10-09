@@ -503,6 +503,11 @@ pub struct RuntimePropHolstered {
     pub slot: u8,
 }
 
+/// Chest assignments backed by this inventory reserve: bit 0 right, bit 1 left.
+/// Only live backpack membership makes this assignment available.
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct RuntimePropChestSlot(pub u8);
+
 /// Last weapon stored at a shoulder, still owned by the normal backpack.
 /// 0 is left, 1 is right. Inventory membership gates recall availability.
 #[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
