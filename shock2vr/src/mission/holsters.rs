@@ -1,4 +1,4 @@
-//! Thigh slots own distinct weapon entities, independently of backpack capacity.
+//! Shared body-slot gestures for thigh weapons and backpack-backed chest items.
 use super::body_inventory::{RetainedRelease, followed_yaw};
 use crate::{
     input_context::InputContext, runtime_props::RuntimePropHolstered, vr_support::GripPose,
@@ -30,6 +30,125 @@ mod tests {
             &input, [None; 2], [true; 2], [None; 2], 1, [false; 2], [false; 2], true, 0.016,
         );
         (h, input, ids)
+    }
+
+    #[test]
+    fn chest_tracking_or_modal_recovery_never_invents_a_release() {
+        for invalid in ["head", "hand", "modal"] {
+            let (_, mut input, ids) = setup();
+            let mut slots = Holsters::chest();
+            slots.update(
+                &input, [None; 2], [true; 2], [None; 2], 2, [false; 2], [false; 2], true, 0.016,
+            );
+            input.right_hand.position = slots.centers.unwrap()[0];
+            input.right_hand.squeeze_value = 1.0;
+            let held = [None, Some(ids[0])];
+            slots.update(
+                &input,
+                held,
+                [true; 2],
+                [None; 2],
+                2,
+                [false, true],
+                [false, true],
+                true,
+                0.016,
+            );
+            input.pose_tracking = Some(crate::input_context::PoseTracking {
+                head: invalid != "head",
+                hands: [true, invalid != "hand"],
+            });
+            if invalid == "modal" {
+                slots.disarm_input();
+            }
+            slots.update(
+                &input,
+                held,
+                [true; 2],
+                [None; 2],
+                2,
+                [false, true],
+                [false, true],
+                invalid != "modal",
+                0.016,
+            );
+            input.pose_tracking = None;
+            input.right_hand.squeeze_value = 0.0;
+            assert_eq!(
+                slots.update(
+                    &input,
+                    held,
+                    [true; 2],
+                    [None; 2],
+                    2,
+                    [false, true],
+                    [false, true],
+                    true,
+                    0.016
+                ),
+                [None; 2],
+                "{invalid}"
+            );
+            if invalid != "modal" {
+                assert!(
+                    slots.retained.keep_grip(1),
+                    "tracking loss retains the item"
+                );
+            }
+            input.right_hand.squeeze_value = 1.0;
+            slots.update(
+                &input,
+                held,
+                [true; 2],
+                [None; 2],
+                2,
+                [false, true],
+                [false, true],
+                true,
+                0.016,
+            );
+            input.right_hand.squeeze_value = 0.0;
+            assert_eq!(
+                slots.update(
+                    &input,
+                    held,
+                    [true; 2],
+                    [None; 2],
+                    2,
+                    [false, true],
+                    [false, true],
+                    true,
+                    0.016
+                ),
+                [
+                    None,
+                    Some(Action::Store {
+                        entity: ids[0],
+                        slot: 0
+                    })
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn chest_mounts_share_body_heading_and_ignore_head_pitch() {
+        let mut slots = Holsters::chest();
+        let mut input = InputContext::default();
+        slots.body_pose = Some(super::super::body_inventory::BodyPose {
+            head: input.head.position,
+            yaw: 0.4,
+        });
+        slots.update(
+            &input, [None; 2], [true; 2], [None; 2], 2, [false; 2], [false; 2], true, 0.016,
+        );
+        let original = slots.centers;
+        use cgmath::Rotation3;
+        input.head.rotation = Quaternion::from_angle_x(cgmath::Deg(75.0));
+        slots.update(
+            &input, [None; 2], [true; 2], [None; 2], 2, [false; 2], [false; 2], true, 0.016,
+        );
+        assert_eq!(slots.centers, original);
     }
 
     #[test]
@@ -328,6 +447,10 @@ mod tests {
 }
 
 pub(super) struct Holsters {
+    /// Chest mounts share the grip state machine, but use the belt's heading
+    /// and inventory-backed ownership instead of independent thigh capacity.
+    pub chest: bool,
+    pub can_store: [bool; 2],
     pub poses: crate::vr_holster::HolsterLibrary,
     poses_loaded: bool,
     pub body_pose: Option<super::body_inventory::BodyPose>,
@@ -345,6 +468,8 @@ pub(super) struct Holsters {
 impl Default for Holsters {
     fn default() -> Self {
         Self {
+            chest: false,
+            can_store: [false; 2],
             poses: Default::default(),
             poses_loaded: false,
             body_pose: None,
@@ -377,6 +502,52 @@ pub(super) fn occupants(world: &World) -> [Option<EntityId>; 2] {
 pub(super) const SLOT_COUNT: usize = 2;
 
 impl Holsters {
+    pub fn disarm_input(&mut self) {
+        self.pressed = [true; 2];
+        self.pressed_item = [None; 2];
+        self.near = [None; 2];
+        self.can_store = [false; 2];
+    }
+
+    pub fn chest() -> Self {
+        Self {
+            chest: true,
+            ..Self::default()
+        }
+    }
+
+    fn radius(&self) -> f32 {
+        if self.chest { 0.075 / SCALE } else { radius() }
+    }
+
+    pub fn occupants(&self, world: &World) -> [Option<EntityId>; 2] {
+        if !self.chest {
+            return occupants(world);
+        }
+        let mut slots = [None; 2];
+        let inventory = world
+            .borrow::<shipyard::UniqueView<super::PlayerInfo>>()
+            .unwrap()
+            .inventory_entity_id;
+        let contents = crate::inventory::Inventory::from_container(
+            world,
+            inventory,
+            crate::inventory::grid_for(world, inventory),
+        );
+        let markers = world
+            .borrow::<View<crate::runtime_props::RuntimePropChestSlot>>()
+            .unwrap();
+        use shipyard::Get;
+        for item in contents.all_items() {
+            if let Ok(marker) = markers.get(item.entity) {
+                if let Some(slot) = slots.get_mut(marker.0 as usize) {
+                    *slot = Some(item.entity);
+                }
+            }
+        }
+        slots
+    }
+
     pub fn load_poses(&mut self, assets: &mut engine::assets::asset_cache::AssetCache) {
         if self.poses_loaded {
             return;
@@ -384,7 +555,11 @@ impl Holsters {
         self.poses_loaded = true;
         if let Some(text) = assets.get_opt(
             &engine::assets::text_importer::TEXT_IMPORTER,
-            crate::vr_holster::RESOURCE,
+            if self.chest {
+                "vr-chest-slots.json"
+            } else {
+                crate::vr_holster::RESOURCE
+            },
         ) {
             match crate::vr_holster::HolsterLibrary::parse(&text) {
                 Ok(poses) => self.poses = poses,
@@ -408,12 +583,43 @@ impl Holsters {
         dt: f32,
     ) -> [Option<Action>; 2] {
         let hands = [&input.left_hand, &input.right_hand];
-        self.retained.update(held, hands.map(|h| h.squeeze_value));
         let head = GripPose {
             position: input.head.position,
             rotation: input.head.rotation,
         };
-        if !head.is_tracked() || input.pose_tracking.is_some_and(|p| !p.head) {
+        let head_tracked = head.is_tracked() && input.pose_tracking.is_none_or(|p| p.head);
+        let tracked_hands: [bool; 2] = std::array::from_fn(|i| {
+            head_tracked
+                && GripPose {
+                    position: hands[i].position,
+                    rotation: hands[i].rotation,
+                }
+                .is_tracked()
+                && hands[i].squeeze_value.is_finite()
+                && input.pose_tracking.is_none_or(|p| p.hands[i])
+        });
+        self.retained.update(
+            held,
+            std::array::from_fn(|i| {
+                if tracked_hands[i] {
+                    hands[i].squeeze_value
+                } else {
+                    0.0
+                }
+            }),
+        );
+        // Losing tracking during a chest gesture disarms both storage and the
+        // ordinary world release. A tracked re-grip explicitly unlocks it.
+        if self.chest {
+            for i in 0..2 {
+                if !tracked_hands[i] && self.near[i].is_some() {
+                    if let Some(item) = held[i] {
+                        self.retained.retain(i, item);
+                    }
+                }
+            }
+        }
+        if !head_tracked {
             self.centers = None;
             self.body_pose = None;
             self.near = [None; 2];
@@ -423,12 +629,16 @@ impl Holsters {
             return [None; 2];
         }
         let direction = crate::ui::PanelPlacement::from_head(head.position, head.rotation).forward;
-        let yaw = followed_yaw(
-            self.yaw,
-            direction.x.atan2(-direction.z),
-            self.freeze_heading || self.near.iter().any(Option::is_some),
-            dt,
-        );
+        let yaw = if self.chest && self.body_pose.is_some() {
+            self.body_pose.unwrap().yaw
+        } else {
+            followed_yaw(
+                self.yaw,
+                direction.x.atan2(-direction.z),
+                self.freeze_heading || self.near.iter().any(Option::is_some),
+                dt,
+            )
+        };
         self.yaw = Some(yaw);
         self.body_pose = Some(super::body_inventory::BodyPose {
             head: head.position,
@@ -436,11 +646,22 @@ impl Holsters {
         });
         let forward = vec3(yaw.sin(), 0.0, -yaw.cos());
         let right = forward.cross(Vector3::unit_y());
-        let base = head.position
-            - Vector3::unit_y()
-                * (crate::dev_params::get(crate::dev_params::VR_HOLSTER_DROP) / SCALE)
-            + forward * (crate::dev_params::get(crate::dev_params::VR_HOLSTER_FORWARD) / SCALE);
-        let side = crate::dev_params::get(crate::dev_params::VR_HOLSTER_SIDE) / SCALE;
+        let (below, forward_distance, side) = if self.chest {
+            (
+                crate::dev_params::get(crate::dev_params::VR_CHEST_DROP),
+                crate::dev_params::get(crate::dev_params::VR_CHEST_FORWARD),
+                crate::dev_params::get(crate::dev_params::VR_CHEST_SIDE),
+            )
+        } else {
+            (
+                crate::dev_params::get(crate::dev_params::VR_HOLSTER_DROP),
+                crate::dev_params::get(crate::dev_params::VR_HOLSTER_FORWARD),
+                crate::dev_params::get(crate::dev_params::VR_HOLSTER_SIDE),
+            )
+        };
+        let base = head.position - Vector3::unit_y() * (below / SCALE)
+            + forward * (forward_distance / SCALE);
+        let side = side / SCALE;
         let centers = [base + right * side, base - right * side];
         self.centers = Some(centers);
         if !enabled {
@@ -449,19 +670,14 @@ impl Holsters {
             self.pressed_item = [None; 2];
             return [None; 2];
         }
+        self.can_store = [false; 2];
         let mut actions = [None; 2];
         let mut claimed = [false; 2];
         // Reserve a slot/entity in this snapshot before considering the other
         // hand, so two simultaneous deposits or draws cannot claim it twice.
         for i in 0..2 {
             let hand = hands[i];
-            let tracked = GripPose {
-                position: hand.position,
-                rotation: hand.rotation,
-            }
-            .is_tracked()
-                && hand.squeeze_value.is_finite()
-                && input.pose_tracking.is_none_or(|p| p.hands[i]);
+            let tracked = tracked_hands[i];
             let pressed = hand.squeeze_value >= 0.5;
             // Calibration can put a thigh target over the ammo pouch. An empty
             // hand with an opposite gun uses the pouch there, never both slots.
@@ -480,7 +696,8 @@ impl Holsters {
                         .filter(|s| {
                             (*s < count || slots[*s].is_some())
                                 && (hand.position - centers[*s]).magnitude2()
-                                    <= (radius() + super::body_inventory::hand_radius()).powi(2)
+                                    <= (self.radius() + super::body_inventory::hand_radius())
+                                        .powi(2)
                         })
                         .min_by(|a, b| {
                             (hand.position - centers[*a])
@@ -490,6 +707,8 @@ impl Holsters {
                 })
                 .flatten();
             if let Some(slot) = self.near[i] {
+                self.can_store[i] =
+                    eligible[i] && slot < count && slots[slot].is_none() && !claimed[slot];
                 if let Some(entity) = held[i] {
                     if !pressed && self.pressed_item[i] == Some(entity) {
                         if eligible[i] && slot < count && slots[slot].is_none() && !claimed[slot] {
@@ -535,8 +754,8 @@ impl Holsters {
         rotation: Quaternion<f32>,
     ) -> serde_json::Value {
         serde_json::json!({"centers": self.world_centers(position, rotation).map(|cs| cs.map(|c| [c.x,c.y,c.z])),
-            "radius":radius(), "enabled_slots":SLOT_COUNT, "near":self.near,
-            "items":occupants(world).map(|e| e.map(|id| id.inner() as i32)),
+            "radius":self.radius(), "enabled_slots":SLOT_COUNT, "near":self.near, "can_store":self.can_store,
+            "items":self.occupants(world).map(|e| e.map(|id| id.inner() as i32)),
             "retained":self.retained.0.map(|e| e.is_some())})
     }
 

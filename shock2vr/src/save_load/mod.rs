@@ -318,6 +318,16 @@ pub fn to_save_data_with_scripts(
         .collect();
     let (held_holstered, world_holstered) =
         partition_map(raw_holstered, |id| held_entities.contains(id));
+    let raw_chest_slots: HashMap<u64, crate::runtime_props::RuntimePropChestSlot> = world
+        .borrow::<View<crate::runtime_props::RuntimePropChestSlot>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(id, _)| !entities_to_filter.contains(&id.inner()))
+        .map(|(id, slot)| (id.inner(), *slot))
+        .collect();
+    let (held_chest_slots, world_chest_slots) =
+        partition_map(raw_chest_slots, |id| held_entities.contains(id));
     let raw_shoulders: HashMap<u64, crate::runtime_props::RuntimePropShoulderWeapon> = world
         .borrow::<View<crate::runtime_props::RuntimePropShoulderWeapon>>()
         .unwrap()
@@ -376,6 +386,7 @@ pub fn to_save_data_with_scripts(
         model_bounds_physics: world_model_bounds_physics,
         implant_slots: world_implants,
         holstered: world_holstered,
+        chest_slots: world_chest_slots,
         shoulder_weapons: world_shoulders,
         canonical_template_ids: world_canonical_templates,
         launched_projectiles: world_launched_projectiles,
@@ -402,6 +413,7 @@ pub fn to_save_data_with_scripts(
         model_bounds_physics: held_model_bounds_physics,
         implant_slots: held_implants,
         holstered: held_holstered,
+        chest_slots: held_chest_slots,
         shoulder_weapons: held_shoulders,
         canonical_template_ids: held_canonical_templates,
         launched_projectiles: held_launched_projectiles,

@@ -824,6 +824,15 @@ export interface PlayerSnapshot {
       items: [number | null, number | null];
       near: [boolean, boolean];
     };
+    chest_slots?: {
+      centers: [Vec3, Vec3] | null;
+      radius: number;
+      enabled_slots: number;
+      near: [number | null, number | null];
+      items: [number | null, number | null];
+      retained: [boolean, boolean];
+      can_store: [boolean, boolean];
+    };
     holsters?: {
       centers: [Vec3, Vec3] | null;
       radius: number;

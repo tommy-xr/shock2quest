@@ -1,0 +1,130 @@
+{
+  "entries": [
+    {
+      "model": "medpatch",
+      "label": "Medical hypo",
+      "held_model": null,
+      "pose": {
+        "position_m": [
+          0,
+          0.055,
+          0
+        ],
+        "rotation_degrees": [
+          0,
+          0,
+          -90
+        ],
+        "length_m": 0.2571275
+      }
+    },
+    {
+      "model": "psipatch",
+      "label": "Psi hypo",
+      "held_model": null,
+      "pose": {
+        "position_m": [
+          0,
+          0.055,
+          0
+        ],
+        "rotation_degrees": [
+          0,
+          0,
+          -90
+        ],
+        "length_m": 0.2571275
+      }
+    },
+    {
+      "model": "radpatch",
+      "label": "Anti-radiation hypo",
+      "held_model": null,
+      "pose": {
+        "position_m": [
+          0,
+          0.055,
+          0
+        ],
+        "rotation_degrees": [
+          0,
+          0,
+          -90
+        ],
+        "length_m": 0.2571275
+      }
+    },
+    {
+      "model": "toxpatch",
+      "label": "Anti-toxin hypo",
+      "held_model": null,
+      "pose": {
+        "position_m": [
+          0,
+          0.055,
+          0
+        ],
+        "rotation_degrees": [
+          0,
+          0,
+          -90
+        ],
+        "length_m": 0.2571275
+      }
+    },
+    {
+      "model": "battery",
+      "label": "Charged power cell",
+      "held_model": null,
+      "pose": {
+        "position_m": [
+          0,
+          0.055,
+          0
+        ],
+        "rotation_degrees": [
+          0,
+          0,
+          0
+        ],
+        "length_m": 0.234328
+      }
+    },
+    {
+      "model": "batteryb",
+      "label": "Dead power cell",
+      "held_model": null,
+      "pose": {
+        "position_m": [
+          0,
+          0.055,
+          0
+        ],
+        "rotation_degrees": [
+          0,
+          0,
+          0
+        ],
+        "length_m": 0.234328
+      }
+    },
+    {
+      "model": "portbatt",
+      "label": "Portable battery",
+      "held_model": null,
+      "pose": {
+        "position_m": [
+          0,
+          0.09,
+          0
+        ],
+        "rotation_degrees": [
+          0,
+          90,
+          90
+        ],
+        "length_m": 0.15318212
+      }
+    }
+  ]
+}

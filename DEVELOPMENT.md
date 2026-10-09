@@ -1291,6 +1291,28 @@ with no separate weapon-category allowlist. The shell is 20% smaller; its size
 is independent of item length and grab radius. The new belt includes the ammo
 pouch; its old separate mesh and glowing readout are removed.
 
+### VR chest quick slots
+
+Two chest mounts provide physical quick access to health, psi, anti-radiation,
+and anti-toxin hypos, plus Portable Batteries and charged/dead power cells. They use the same
+fresh-grip/release state machine as thigh holsters, but retain normal backpack
+cells. Each mount holds the exact item or stack, with no automatic refill or
+stack merge during docking. Existing item-use behavior is unchanged.
+
+Developer → Body controls `vr_chest_drop`, `vr_chest_side`, and
+`vr_chest_forward` tune whole-mount reach in metres. Head pitch/roll do not tilt
+the mounts. Verify placement seated and standing on Quest; simulated VR only
+proves the geometry and logic.
+
+`assets/vr-chest-slots.json` uses the existing holster-pose format for eligibility
+and per-item placement. Preview/edit with `cargo dx ui --holster medpatch
+--holster-library assets/vr-chest-slots.json`; the editor previews a thigh shell,
+so verify final chest fit in the runtime. Include this
+resource when deploying. `/v1/info` reports `player.hand_feedback.chest_slots`
+with world centres, per-hand targets, occupants, and refused-release latches.
+
+The design follows [Armature's RE4 Quest developer interview](https://www.unrealengine.com/developer-interviews/how-armature-studio-brought-resident-evil-4-into-vr-using-unreal-engine?lang=en): forgiving grabs, clear physical access to frequent items, and retained inventory management.
+
 ### Belt MFD device
 
 The handheld MFD is enabled by default in VR (`cargo dbgr --mission earth.mis --vr`).

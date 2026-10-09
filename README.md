@@ -125,6 +125,14 @@ access cards, then release anywhere to download them. Draw your personal access
 card from the belt buckle to scan readers, shops, and trainers; release to return
 it to the belt. Scanning opens an interface; select purchases separately.
 
+**Chest quick slots.** Release a held hypo or battery over either chest mount to
+store it; squeeze with either empty hand to retrieve it. A light previews the
+target and a sound and short vibration confirm seating. These slots keep the
+actual item or stack in your backpack and add no inventory capacity. An occupied
+slot, incompatible item, or full backpack refuses the deposit and keeps the item
+in hand; squeeze again to re-grip before releasing elsewhere. Drawing never uses
+the item; release the trigger before deliberately using it.
+
 **Climbing.** Squeeze an empty hand near a ladder or ledge to grab it, then move
 that hand to pull yourself along. A cyan marker confirms the hold. To climb onto
 a deck, keep one hand attached while placing the other on the edge, then pull
