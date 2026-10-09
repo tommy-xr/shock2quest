@@ -213,3 +213,6 @@ use the normal rendered Quest benchmark to validate visual workload and device
 performance. Compare repeated runs on the same host/build, presentation, fixture,
 logging settings, and pacing mode. The optimized development build retains debug
 assertions; the report identifies this explicitly.
+
+[Many host baseline and retained samples](results/2026-10-09-host-update-only.md)
+record two paced runs with upgraded terrain and the fixed simulation clock.
