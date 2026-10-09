@@ -2,7 +2,7 @@
 //! saved schedule; these world screens never inspect or deserialize script state.
 use std::rc::Rc;
 
-use cgmath::{Deg, Matrix4, vec2};
+use cgmath::{Deg, Matrix4, vec2, vec3};
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{SceneObject, SceneObjectDebugTag},
@@ -106,24 +106,29 @@ impl SurvivalStatus {
     }
 }
 
-/// Surveyed Earth wall faces, offset 0.03 along their outward normals to avoid
-/// z-fighting. The sloped face is z = 0.5*y + 27.2, with normal (0,-1,2)/sqrt(5).
+/// Surveyed Earth wall faces; rendering offsets along their outward normals.
+/// The sloped face is z = 0.5*y + 27.2, with normal (0,-1,2)/sqrt(5).
 /// Placement and canvas are shared by desktop and VR; these are ordinary
 /// depth-tested world objects, never a per-eye overlay.
-/// Entries are (center, yaw degrees, pitch degrees, debug name).
+/// Entries are (surface center, yaw degrees, pitch degrees, debug name).
 const SCREENS: [([f32; 3], f32, f32, &str); 4] = [
     // Below the protruding UNN sign, with the bottom still on the wall face.
-    ([11.72, 26.45, 38.77], 180.0, 0.0, "Street status / UNN"),
+    ([11.72, 26.45, 38.8], 180.0, 0.0, "Street status / UNN"),
     (
-        [11.61, 26.656584, 40.561832],
+        [11.61, 26.67, 40.535],
         0.0,
         26.565052,
         "Street status / sloped passage",
     ),
     // Center the full 2.7-wide screen on the pillar spanning x = 5.2..8.4.
-    ([6.8, 24.82, 18.03], 0.0, 0.0, "Street status / pillar"),
-    ([10.88, 5.5, 12.77], 180.0, 0.0, "Subway status"),
+    ([6.8, 24.82, 18.0], 0.0, 0.0, "Street status / pillar"),
+    ([10.88, 5.5, 12.8], 180.0, 0.0, "Subway status"),
 ];
+
+// Keep clearance in panel-local +Z so sloped and vertical screens use the same
+// wall gap. Separate overlapping canvas layers too, especially at a distance.
+const WALL_CLEARANCE: f32 = 0.08;
+const LAYER_CLEARANCE: f32 = 0.005;
 
 pub(crate) fn render(world: &World, assets: &mut AssetCache) -> Vec<SceneObject> {
     let Ok(status) = world.borrow::<UniqueView<SurvivalStatus>>() else {
@@ -136,6 +141,7 @@ pub(crate) fn render(world: &World, assets: &mut AssetCache) -> Vec<SceneObject>
             let root = Matrix4::from_translation(position.into())
                 * Matrix4::from_angle_y(Deg(yaw))
                 * Matrix4::from_angle_x(Deg(pitch))
+                * Matrix4::from_translation(vec3(0.0, 0.0, WALL_CLEARANCE))
                 * Matrix4::from_nonuniform_scale(2.7, 1.65, 1.0);
             let tag = Rc::new(SceneObjectDebugTag {
                 source: Some("survival_status_screen".into()),
@@ -143,7 +149,7 @@ pub(crate) fn render(world: &World, assets: &mut AssetCache) -> Vec<SceneObject>
                 entity_id: None,
                 model: None,
             });
-            let mut objects = canvas.render_world_space(assets, root, None, None, 0.001);
+            let mut objects = canvas.render_world_space(assets, root, None, None, LAYER_CLEARANCE);
             for object in &mut objects {
                 object.set_debug_tag(Some(tag.clone()));
             }
