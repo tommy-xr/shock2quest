@@ -4,8 +4,11 @@ Status: FFR implemented and measured in [PR #2124](https://github.com/tommy-xr/s
 with low selected as the default after wearer review. The [16-run sweep](../benchmarks/results/2026-10-09-quest3-ffr.md)
 shows App-time savings but a warm-run freshness regression requiring isolation.
 High blurred peripheral text; low remained readable with a minor quality loss. [CPU/clock diagnostics](https://github.com/tommy-xr/shock2quest/pull/2126)
-confirm frame-driven solver drift in a synthetic real-physics audit; device
-attribution is next. Refresh and simulation scheduling remain unchanged.
+confirm frame-driven solver drift on-device. [Opt-in clock correction](https://github.com/tommy-xr/shock2quest/pull/2129)
+passes paired Quest timing and pause/resume checks; [results and evidence](../benchmarks/results/2026-10-09-quest3-fixed-clock.md)
+show solver/active time corrected from about 1.35 to 1.00 and update time reduced
+from 6.44 to 4.85 ms, with little FPS change. Normal gameplay retains legacy
+scheduling pending interaction/presentation validation. Refresh remains 90 Hz.
 
 ## Goal and constraints
 
@@ -98,20 +101,21 @@ This is a **prerequisite for raising the measured refresh rate**, regardless of
 FFR's outcome. Initial code inspection found Quest passing wall-clock elapsed
 time into `Game::update`, while `PhysicsWorld::update_player_movement` calls
 Rapier with its fixed internal integration step once per non-paused update.
-That is a suspected clock mismatch, not a verified device-level measurement
-of how much faster physics runs.
+The paired Quest audit measured solver/active ratios of 1.339–1.355 in legacy
+mode and 0.999633–1.000117 with the opt-in fixed scheduler. The existing solver
+timestep is unchanged. See [clock results](../benchmarks/results/2026-10-09-quest3-fixed-clock.md).
 
 - [ ] Instrument elapsed real time, simulation time, physics step count and
   solver dt. Reproduce under synthetic 60/72/90/120 Hz render schedules,
   irregular frame intervals, pauses, and stalls before altering behavior.
-- [ ] Establish one shared simulation clock with a fixed-step accumulator.
+- [x] Establish one shared simulation clock with a fixed-step accumulator (opt-in).
   Advance only complete steps; retain the remainder and document a bounded
   catch-up policy. Do not silently discard simulation time or claim that a
   catch-up cap preserves real-time simulation during sustained overload.
 - [ ] Validate equal simulated time for equal elapsed time, with movement,
   falling/jumping, doors/platforms, ragdolls, held-item contacts, projectiles,
   cooldowns, script timers, animation/root motion, and save round-trips.
-- [ ] Latch discrete input edges until consumed by a simulation tick; zero or
+- [x] Latch sampled discrete input edges until consumed by a simulation tick; zero or
   multiple ticks in one rendered frame must not drop or duplicate actions.
 - [ ] Add rendering interpolation where needed. Preserve authoritative physics
   state; keep presentation transforms separate. Previous/current-state
@@ -223,7 +227,7 @@ Proposed completion criteria:
 ## Tracking
 
 - Completed foundation: [terrain benchmark PR #2120](https://github.com/tommy-xr/shock2quest/pull/2120).
-- Next: milestone 1, fixed FFR off/low/medium/high comparison at 90 Hz.
-- Before any 120 Hz experiment: milestone 2, simulation clock correctness.
+- Current: opt-in clock correction measured at 90 Hz; broaden interaction, lifecycle and presentation checks before promotion.
+- Before any 120 Hz experiment: finish milestone 2 interaction/presentation gates and remeasure full-tick frame tails.
 - Subsequent CPU, multiview, and threading PRs: select from updated measurements.
 - Historical baseline and tooling context: [Quest profiling](quest-profiling.md).

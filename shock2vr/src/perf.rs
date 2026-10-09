@@ -54,6 +54,7 @@ struct State {
     enabled: bool,
     phases: [Aggregate; 12],
     scene_elapsed: Duration,
+    active_elapsed: Duration,
     scene_updates: u64,
     physics_steps: u64,
     physics_seconds: f64,
@@ -69,6 +70,7 @@ impl Default for State {
             enabled: false,
             phases: [Aggregate::default(); 12],
             scene_elapsed: Duration::ZERO,
+            active_elapsed: Duration::ZERO,
             scene_updates: 0,
             physics_steps: 0,
             physics_seconds: 0.0,
@@ -101,6 +103,17 @@ impl Drop for Scope {
             STATE.with(|state| state.borrow_mut().phases[phase as usize].record(elapsed));
         }
     }
+}
+
+/// Active render elapsed time, recorded once per unpaused frame, independently
+/// of how many scene/solver ticks are due.
+pub fn active_elapsed(elapsed: Duration) {
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.enabled {
+            state.active_elapsed += elapsed;
+        }
+    });
 }
 
 pub fn scene_update(elapsed: Duration) {
@@ -156,6 +169,7 @@ pub fn take_report() -> Option<serde_json::Value> {
         let histogram: Vec<_> = sample.cpu_histogram.into_iter().enumerate()
             .filter(|(_, count)| *count > 0).collect();
         Some(serde_json::json!({"phases": phases, "scene_updates": sample.scene_updates,
+            "active_elapsed_s": sample.active_elapsed.as_secs_f64(),
             "scene_elapsed_s": sample.scene_elapsed.as_secs_f64(), "physics_steps": sample.physics_steps,
             "physics_elapsed_s": sample.physics_seconds, "solver_dt_s": sample.solver_dt,
             "cpu_frames": sample.cpu_frames.calls, "cpu_total_ms": sample.cpu_frames.total.as_secs_f64() * 1000.0,

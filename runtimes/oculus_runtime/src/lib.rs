@@ -576,6 +576,9 @@ fn main() {
         "physical_held_items".to_owned(),
         "physical_gun_weight".to_owned(),
     ]);
+    if quest_config::fixed_simulation_enabled() {
+        experimental_features.insert("fixed_simulation".to_owned());
+    }
     // Explicitly provisioned benchmark workloads are opt-in and reset by
     // removing this file. A malformed fixture must never silently measure a
     // different scene.
@@ -730,7 +733,9 @@ fn main() {
                         e.state()
                     );
                     let next_session_focused = e.state() == xr::SessionState::FOCUSED;
+                    game.set_simulation_focus(next_session_focused);
                     if next_session_focused != session_focused {
+                        last_update_time = Instant::now();
                         // Never emit a one-second bucket containing samples from
                         // both sides of a focus transition.
                         frame_profiler.reset();

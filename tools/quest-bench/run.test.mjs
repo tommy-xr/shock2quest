@@ -112,3 +112,14 @@ test('CPU diagnostics require matching windows and complete frame histogram coun
   sample.cpu_histogram_100us[0][1] = 89;
   assert.throws(() => validateCpuProfile(`SHOCK2QUEST_CPU_PROFILE ${JSON.stringify(sample)}\nSHOCK2QUEST_PERF focused=true`, 1), /diagnostics/);
 });
+
+
+test('fixed clock requires wall-time parity and unchanged solver timestep', async () => {
+  const { validateFixedClock } = await import('./run.mjs');
+  const sample = { active_elapsed_s: 1, physics_elapsed_s: 1, scene_elapsed_s: 1, solver_dt_s: 1 / 60 };
+  assert.equal(validateFixedClock([sample]).solver_to_active_ratio, 1);
+  for (const patch of [{ active_elapsed_s: undefined }, { physics_elapsed_s: 1.5 },
+    { solver_dt_s: 1 / 120 }, { scene_elapsed_s: 0.5 }, { physics_elapsed_s: 0.9 }]) {
+    assert.throws(() => validateFixedClock([{ ...sample, ...patch }]));
+  }
+});

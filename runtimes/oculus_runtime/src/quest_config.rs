@@ -5,6 +5,20 @@ use std::fs;
 pub const DEFAULT_MISSION: &str = "main_menu";
 pub const MISSION_CONFIG_PATH: &str = "/sdcard/shock2quest/vr-mission.txt";
 
+/// Explicit opt-in for interaction testing outside a benchmark fixture.
+pub fn fixed_simulation_enabled() -> bool {
+    let path = shock2vr::paths::data_root().join("simulation-clock.txt");
+    match fs::read_to_string(path) {
+        Ok(raw) if raw.trim() == "fixed" => true,
+        Ok(raw) if raw.trim() == "legacy" => false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        other => {
+            println!("SHOCK2QUEST_SIMULATION_CONFIG invalid={other:?} fallback=legacy");
+            false
+        }
+    }
+}
+
 pub fn configured_mission() -> String {
     match fs::read_to_string(MISSION_CONFIG_PATH) {
         Ok(raw) => match parse_mission(&raw) {
