@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
-import { aimVrHandAt, aimVrHandAtCanvas, quatConjugate, quatRotate, sub } from "./helpers/vr-hand.js";
+import { aimVrHandAt, aimVrHandAtCanvas, normalize, quatConjugate, quatFromTo, quatMultiply, quatRotate, sub } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 const launch = (mission = "debug_interactions") => GameServer.launch({ mission, debugFlags: ["--vr"] });
@@ -269,6 +269,37 @@ test("chest counts all matching cells, draws one, refills, and accepts a return"
   assert.equal(new Set([first, second, third]).size, 3);
   assert.deepEqual((await chest()).counts, [0, 0]);
   assert.deepEqual((await chest()).items, [null, null]);
+});
+
+test("an empty chest mount passes world grabs through while an occupied mount owns its draw", { skip: !enabled, timeout: 180_000 }, async () => {
+  await using game = await launch();
+  await game.step({ frames: 30 });
+  const entities = (await game.entities.list()).entities;
+  const hypo = entities.find(e => e.template_id === -52);
+  const other = entities.find(e => e.template_id === -57);
+  assert.ok(hypo && other);
+  const aimThroughMount = async (target: typeof hypo) => {
+    const before = (await game.info()).player;
+    await game.player.teleport({ x: target.position[0] - 0.18, y: before.position[1], z: target.position[2] + 0.6 });
+    await game.step({ frames: 3 });
+    await reach(game, "right", 0);
+    const player = (await game.info()).player;
+    const center = player.hand_feedback!.chest_slots!.centers![0];
+    const rotation = quatMultiply(quatConjugate(player.rotation), quatFromTo([0, 0, -1], normalize(sub(target.position, center))));
+    await game.input.set("right_hand.rotation", rotation);
+    await game.step({ frames: 3 });
+    assert.equal((await game.info()).player.hand_feedback!.chest_slots!.near[1], 0, "world grab starts inside the chest target");
+  };
+  await aimThroughMount(hypo);
+  await game.input.set("right_hand.squeeze", 1);
+  await game.step({ frames: 5 });
+  assert.equal((await game.info()).player.right_hand_entity_id, hypo.id, "empty mount must not swallow the world grab");
+  await stow(game, "right", 0);
+  assert.equal((await game.info()).player.hand_feedback!.chest_slots!.items[0], hypo.id);
+  await aimThroughMount(other);
+  await game.input.set("right_hand.squeeze", 1);
+  await game.step({ frames: 5 });
+  assert.equal((await game.info()).player.right_hand_entity_id, hypo.id, "occupied mount draws its item instead of the world item behind it");
 });
 
 test("shared chest reserves survive saves and refill between simultaneous draws", { skip: !enabled, timeout: 180_000 }, async () => {

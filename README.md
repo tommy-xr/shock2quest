@@ -136,6 +136,7 @@ reserve. The slots add no inventory capacity. A slot with a different item,
 an incompatible item, or a full backpack with no matching stack keeps the item
 in hand; squeeze again to re-grip before releasing elsewhere. Drawing never uses
 the item; release the trigger before deliberately using it.
+Empty slots let empty-hand grabs of nearby world objects pass through.
 
 **Climbing.** Squeeze an empty hand near a ladder or ledge to grab it, then move
 that hand to pull yourself along. A cyan marker confirms the hold. To climb onto

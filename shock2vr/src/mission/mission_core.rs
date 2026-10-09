@@ -6690,16 +6690,19 @@ impl MissionCore {
                     self.vr_trigger_safe_latch[i] = Some(true);
                 }
             }
-            // Merely passing an unsqueezed hand over a mount must never steal a world trigger.
+            // Only an occupied mount owns a draw; empty targets leave world
+            // grabs alone, and another hand interaction keeps its input.
             if held[i].is_none()
                 && self.interaction.hand_available_for_body_slot(
                     [crate::Handedness::Left, crate::Handedness::Right][i],
                 )
-                && self.chest_slots.near[i].is_some()
-                && ([
-                    body_input.left_hand.squeeze_value,
-                    body_input.right_hand.squeeze_value,
-                ][i] >= 0.5
+                && ((self.chest_slots.near[i]
+                    .and_then(|slot| chest_contents[slot])
+                    .is_some()
+                    && [
+                        body_input.left_hand.squeeze_value,
+                        body_input.right_hand.squeeze_value,
+                    ][i] >= 0.5)
                     || matches!(
                         chest_actions[i],
                         Some(super::holsters::Action::Retrieve { .. })
