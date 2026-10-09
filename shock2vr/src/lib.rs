@@ -44,6 +44,7 @@ pub mod dev_params;
 mod developer_mode;
 pub mod difficulty;
 mod emissive_cue;
+pub mod fixed_step;
 mod flat_lean;
 mod flat_player_controller;
 mod flat_turn_sway;
@@ -64,6 +65,7 @@ pub mod paths;
 pub mod pause_menu;
 pub mod perf;
 mod physics;
+mod simulation_input;
 pub use physics::player_collision_shape;
 pub mod item_tools;
 pub mod player_stats;
@@ -756,6 +758,9 @@ pub struct Game {
     /// Wall-clock time spent with the simulation suspended, subtracted from the
     /// clock the scene sees. See [`Game::scene_time`].
     time_suspended: std::time::Duration,
+    simulation_clock: fixed_step::FixedStepClock,
+    simulation_input: simulation_input::TickInput,
+    simulation_focused: bool,
 
     /// The red rim tint shown for a moment after the player takes damage. Like
     /// the pause menu, it lives here because it is a view-locked layer over
@@ -1466,6 +1471,10 @@ impl Game {
         }
 
         perf::set_enabled(options.experimental_features.contains("profile_cpu"));
+        println!(
+            "SHOCK2QUEST_SIMULATION fixed={} step_hz=60 max_catchup_steps=8",
+            options.experimental_features.contains("fixed_simulation")
+        );
         let upgraded_terrain = options.upgraded_terrain_enabled();
         println!("upgraded terrain textures: {upgraded_terrain}");
         let asset_paths = game_asset_mounts_with_terrain(bundle_storage.clone(), upgraded_terrain);
@@ -1609,6 +1618,12 @@ impl Game {
             weapon_buttons: Default::default(),
             menu_hold_ring: scenes::cutscene_skip::RingArt::default(),
             time_suspended: std::time::Duration::ZERO,
+            simulation_clock: fixed_step::FixedStepClock::new(
+                std::num::NonZeroU32::new(60).unwrap(),
+                std::num::NonZeroU32::new(8).unwrap(),
+            ),
+            simulation_input: Default::default(),
+            simulation_focused: true,
             hit_feedback: hit_feedback::HitFeedback::new(),
             head_pose: (
                 vec3(0.0, input_context::DEFAULT_HEAD_HEIGHT, 0.0),
@@ -1662,7 +1677,16 @@ impl Game {
         // Publish the simulation clock for the diagnostics ring buffers
         // (audio log / message trace), so their entries can be stamped
         // without threading `Time` through every record site.
-        audio_log::set_sim_time(self.scene_time(time).total.as_secs_f64());
+        let diagnostic_time = if self
+            .options
+            .experimental_features
+            .contains("fixed_simulation")
+        {
+            self.simulation_clock.total()
+        } else {
+            self.scene_time(time).total
+        };
+        audio_log::set_sim_time(diagnostic_time.as_secs_f64());
 
         // The hit tint decays on *wall* time, ahead of every early return in
         // this function: a hit taken as the player opens the pause menu or
@@ -1722,10 +1746,16 @@ impl Game {
         // scene is not updated at all, so a scene-routed effect could never
         // close the menu again.
         self.update_pause_menu(time, input_context, actions);
-        self.audio_context
-            .set_scene_paused(self.pause_menu.suspends_scene());
+        let scene_suspended = self.pause_menu.suspends_scene()
+            || (self
+                .options
+                .experimental_features
+                .contains("fixed_simulation")
+                && !self.simulation_focused);
+        self.audio_context.set_scene_paused(scene_suspended);
         self.audio_context.reap_finished_sounds();
-        if self.pause_menu.suspends_scene() {
+        if scene_suspended {
+            self.simulation_input.clear();
             self.active_game_scene.cancel_transient_input();
             self.weapon_buttons.cancel(self.active_game_scene.world());
             // Paused: the scene is not updated (nothing simulates, and
@@ -1786,6 +1816,33 @@ impl Game {
             input_context
         };
 
+        perf::active_elapsed(time.elapsed);
+        if self
+            .options
+            .experimental_features
+            .contains("fixed_simulation")
+        {
+            self.simulation_input.push(input_context, action_effects);
+            // Collect at most eight ticks, retaining all excess debt in the clock.
+            // Head tracking, pause/menu input and the free camera ran above even
+            // on a frame that has no complete simulation tick.
+            let ticks: Vec<_> = self.simulation_clock.advance(time.elapsed).collect();
+            for tick in ticks {
+                let (input, effects) = self.simulation_input.next(input_context);
+                self.update_scene_tick(&tick, &input, effects);
+            }
+        } else {
+            self.update_scene_tick(time, input_context, action_effects);
+        }
+    }
+
+    fn update_scene_tick(
+        &mut self,
+        time: &Time,
+        input_context: &input_context::InputContext,
+        action_effects: Vec<Effect>,
+    ) {
+        audio_log::set_sim_time(time.total.as_secs_f64());
         // Update the scene (handles movement, physics, collision, teleport internally)
         let effects = self.active_game_scene.update(
             time,
@@ -1975,6 +2032,24 @@ impl Game {
         }
     }
 
+    /// Freeze the opt-in simulation while the runtime cannot receive input.
+    /// The runtime also resets its elapsed-time origin on focus transitions.
+    pub fn set_simulation_focus(&mut self, focused: bool) {
+        if !self
+            .options
+            .experimental_features
+            .contains("fixed_simulation")
+        {
+            return;
+        }
+        self.simulation_focused = focused;
+        self.simulation_input.clear();
+        if !focused {
+            self.active_game_scene.cancel_transient_input();
+            self.cancel_menu_hold();
+        }
+    }
+
     /// Forget any Menu button press in flight, deciding neither a short press
     /// nor a long one.
     ///
@@ -1984,6 +2059,7 @@ impl Game {
     /// then pause the game on its own the moment focus came back. Releasing it
     /// instead would mint the short press nobody made.
     pub fn cancel_menu_hold(&mut self) {
+        self.simulation_input.clear();
         self.menu_hold.cancel();
         throwing::cancel_tracking(self.active_game_scene.world());
         self.weapon_buttons.cancel(self.active_game_scene.world());
@@ -2600,6 +2676,7 @@ impl Game {
         // it for every other swap means a chain that ends anywhere but a
         // transition cannot leak the old scene's state into a later one.
         self.preserved_scene_state = None;
+        self.simulation_input.clear();
         self.active_game_scene = scene;
         // Whatever hurt the player belongs to the scene being left: a quickload
         // taken mid-fight must not open on a red rim, and the main menu must
@@ -3352,6 +3429,12 @@ impl App {
         match self {
             App::Ready(game) => game.should_quit(),
             App::MissingAssets(_) => false,
+        }
+    }
+
+    pub fn set_simulation_focus(&mut self, focused: bool) {
+        if let App::Ready(game) = self {
+            game.set_simulation_focus(focused);
         }
     }
 

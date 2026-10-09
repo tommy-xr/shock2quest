@@ -589,6 +589,22 @@ opening follows the eye, while the lines remain fixed in tracking space.
 
 ### Developer options
 
+**Fixed simulation clock (experimental).** `--experimental fixed_simulation`
+on the debug/desktop runtime runs scene updates at 60 Hz while keeping the
+solver's existing 1/60-second timestep. Quest benchmark fixtures opt in with
+`"fixed_simulation": true`, or use `tools/quest-bench/run.mjs --fixed-simulation`.
+The benchmark option also enables CPU/clock diagnostics and rejects clock drift.
+For normal Quest play, put `fixed` in `/sdcard/shock2quest/simulation-clock.txt`
+and restart; `legacy` or removing the file restores the current frame-driven
+behavior. Benchmark fixtures override this file in either direction.
+This remains opt-in pending interaction and presentation validation; refresh rate
+is unchanged. Physics/world transforms currently render the most recent tick,
+without interpolation; tracked eye poses and the pause menu still update each
+rendered frame. Expect 60 Hz world/hand motion on faster displays until the
+presentation follow-up. Catch-up is limited to eight ticks per rendered frame,
+retaining all remaining time; sustained overload can therefore lag real time.
+
+
 **Quest fixed foveated rendering (experimental).** FFR uses fixed low by default.
 Put `off`, `low`, `medium`, or `high` in
 `/sdcard/shock2quest/ffr-level.txt` and restart to select a fixed level:

@@ -31,6 +31,8 @@ pub struct BenchmarkScene {
     #[serde(default)]
     pub profile_cpu: bool,
     #[serde(default)]
+    pub fixed_simulation: bool,
+    #[serde(default)]
     pub spotlight: Option<BenchmarkSpotlight>,
     pub expected_subject_meshes: usize,
     #[serde(default)]
@@ -164,6 +166,11 @@ impl BenchmarkScene {
 
     /// Apply before asset mounting so classic and upgraded runs use the same APK.
     pub fn configure(&self, features: &mut std::collections::HashSet<String>) {
+        if self.fixed_simulation {
+            features.insert("fixed_simulation".into());
+        } else {
+            features.remove("fixed_simulation");
+        }
         if self.profile_cpu {
             features.insert("profile_cpu".into());
         } else {
