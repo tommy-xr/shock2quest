@@ -248,18 +248,14 @@ pub fn to_scene(
         }
 
         let tex_info = &level.textures.0[*texture_id as usize];
-        let initial_texture: &Rc<Texture> = {
-            &asset_cache
-                .get(
-                    &TEXTURE_IMPORTER,
-                    &format!(
-                        "{}/{}.PCX",
-                        tex_info.family.to_uppercase(),
-                        tex_info.texture_filename
-                    ),
-                )
-                .clone()
-        };
+        let requested = format!("{}/{}.pcx", tex_info.family, tex_info.texture_filename);
+        let resolved = crate::util::terrain::resolve(
+            asset_cache.asset_paths(),
+            asset_cache.base_path(),
+            &requested,
+            tex_info.animation_info.is_none(),
+        );
+        let initial_texture = asset_cache.get(&TEXTURE_IMPORTER, &resolved.name);
 
         let animated_texture: Rc<dyn TextureTrait> =
             if let Some(animation_info) = &tex_info.animation_info {

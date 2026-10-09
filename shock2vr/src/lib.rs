@@ -327,14 +327,13 @@ pub(crate) const MOD_ARCHIVES: &[&str] = &[
 /// - `strings` from the Nightdive layer: 41 of its 42 tables are `$`-token stubs
 ///   that KEX resolves through `localization/loc_english.txt`, which we do not
 ///   implement, so honouring them renders raw keys like `$PSI6`.
-/// - `fam` (terrain) from any layer: the upgraded terrain textures are
-///   higher-resolution than the originals and carry `terrain_scale` in their
-///   `.mtl`, which we do not read yet. Taking the texture without the scale
-///   tiles the world wrong. Lift this once the `.mtl` scale subset lands.
-fn mod_layer_may_override(family: &str, archive: &str) -> bool {
+/// - `fam` (terrain) upgrades require the opt-in `upgraded_terrain` flag.
+///   Terrain loading resolves material redirects and logical dimensions before
+///   substituting the higher-resolution art.
+fn mod_layer_may_override(family: &str, archive: &str, upgraded_terrain: bool) -> bool {
     match family {
         "strings" => !archive.contains("sshock2ee"),
-        "fam" => false,
+        "fam" => upgraded_terrain,
         _ => true,
     }
 }
@@ -366,23 +365,41 @@ fn mount_family(
 /// layer allowed to override it, then the base archive.
 fn anniversary_family_mounts(
     family: &str,
+    upgraded_terrain: bool,
 ) -> Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> {
     let mut mounts: Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> = Vec::new();
     for archive in MOD_ARCHIVES {
-        if !mod_layer_may_override(family, archive) {
+        if !mod_layer_may_override(family, archive, upgraded_terrain) {
             continue;
         }
         let path = resource_path(archive);
         if Path::new(&path).exists() {
-            mounts.push(mount_family(path, &format!("{family}/"), family));
+            if family == "fam" {
+                // No bare-name aliases: terrain must not replace object textures.
+                mounts.push(ZipAssetPath::with_prefix_namespace_only(
+                    path, "fam/", "fam",
+                ));
+            } else {
+                mounts.push(mount_family(path, &format!("{family}/"), family));
+            }
         }
     }
     // The base archive keeps the original `data/res/<family>/` layout.
-    mounts.push(mount_family(
-        resource_path("sshock2.kpf"),
-        &format!("data/res/{family}/"),
-        family,
-    ));
+    if family == "fam" && upgraded_terrain {
+        // Keep original art addressable even when a replacement is incomplete.
+        mounts.push(ZipAssetPath::with_prefix_opts(
+            resource_path("sshock2.kpf"),
+            "data/res/fam/",
+            true,
+            Some("original_fam"),
+        ));
+    } else {
+        mounts.push(mount_family(
+            resource_path("sshock2.kpf"),
+            &format!("data/res/{family}/"),
+            family,
+        ));
+    }
     mounts
 }
 
@@ -404,7 +421,7 @@ pub fn resource_family_paths(
     family: &str,
 ) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
     let mounts = if is_25th_anniversary_install() {
-        anniversary_family_mounts(family)
+        anniversary_family_mounts(family, false)
     } else {
         // A `.crf` holds one family at its root, so it needs no prefix.
         let archive = resource_path(&format!("res/{family}.crf"));
@@ -426,8 +443,18 @@ pub fn resource_family_paths(
 pub fn game_asset_mounts(
     bundle_storage: Arc<dyn Storage>,
 ) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
+    game_asset_mounts_with_terrain(bundle_storage, false)
+}
+
+fn game_asset_mounts_with_terrain(
+    bundle_storage: Arc<dyn Storage>,
+    upgraded_terrain: bool,
+) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
     if install::probe_data_root().kind == install::InstallKind::Anniversary {
-        AssetPath::combine(build_25th_anniversary_mounts(bundle_storage.clone()))
+        AssetPath::combine(build_25th_anniversary_mounts(
+            bundle_storage.clone(),
+            upgraded_terrain,
+        ))
     } else {
         AssetPath::combine(vec![
             AssetPath::folder(resource_path("res/mesh")),
@@ -500,11 +527,12 @@ pub fn game_asset_mounts(
 
 fn build_25th_anniversary_mounts(
     bundle_storage: Arc<dyn Storage>,
+    upgraded_terrain: bool,
 ) -> Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> {
     let mut mounts: Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> = Vec::new();
 
     for family in RESOURCE_FAMILIES {
-        mounts.extend(anniversary_family_mounts(family));
+        mounts.extend(anniversary_family_mounts(family, upgraded_terrain));
     }
 
     // The gamesys, missions and motiondb - shared with the CLI tools, which
@@ -1434,7 +1462,9 @@ impl Game {
             panic!("cannot load the game: {}", install.summary());
         }
 
-        let asset_paths = game_asset_mounts(bundle_storage.clone());
+        let upgraded_terrain = options.experimental_features.contains("upgraded_terrain");
+        println!("upgraded terrain textures: {upgraded_terrain}");
+        let asset_paths = game_asset_mounts_with_terrain(bundle_storage.clone(), upgraded_terrain);
         // Global items
         let base_path = paths::data_root().to_string_lossy().into_owned();
         let mut asset_cache = AssetCache::new(base_path, asset_paths);

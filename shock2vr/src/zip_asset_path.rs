@@ -19,6 +19,21 @@ pub struct ZipAssetPath {
 }
 
 impl ZipAssetPath {
+    /// Expose only qualified keys, so opt-in terrain cannot shadow legacy
+    /// water/animation lookups or a model's same-named texture.
+    pub fn with_prefix_namespace_only(
+        zip_path: String,
+        prefix: &str,
+        namespace: &str,
+    ) -> Box<Self> {
+        let mut mount = Self::with_prefix_opts(zip_path, prefix, false, Some(namespace));
+        let qualified = format!("{namespace}/");
+        mount
+            .asset_to_path
+            .retain(|key, _| key.starts_with(&qualified));
+        mount
+    }
+
     pub fn new(zip_path: String) -> Box<ZipAssetPath> {
         Self::with_prefix_opts(zip_path, "", true, None)
     }
@@ -170,6 +185,29 @@ mod tests {
     use super::*;
     use crate::test_support::write_archive;
     use engine::assets::asset_paths::AssetPath;
+
+    #[test]
+    fn terrain_mounts_do_not_shadow_legacy_or_model_texture_names() {
+        let root = crate::test_support::TempDir::new("qualified-terrain");
+        let archive = root.path().join("terrain.zip");
+        write_archive(&archive, &[("fam/med/black.dds", b"terrain")]);
+        let mount = ZipAssetPath::with_prefix_namespace_only(
+            archive.to_string_lossy().into_owned(),
+            "fam/",
+            "fam",
+        );
+        assert!(mount.exists(String::new(), "fam/med/black.dds".into()));
+        for name in ["black.dds", "med/black.dds", "txt16/black.dds"] {
+            assert!(!mount.exists(String::new(), name.into()));
+        }
+        assert!(!crate::mod_layer_may_override("fam", "mods/400.kpf", false));
+        assert!(crate::mod_layer_may_override("fam", "mods/400.kpf", true));
+        assert!(!crate::mod_layer_may_override(
+            "strings",
+            "mods/sshock2ee.kpf",
+            true
+        ));
+    }
 
     #[test]
     fn model_family_mounts_expose_qualified_material_keys() {
