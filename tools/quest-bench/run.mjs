@@ -88,7 +88,13 @@ export function parseGpuCounters(text) {
   const counters = {};
   for (const line of text.split('\n')) {
     const match = line.trim().match(/^(.+?)\s*:\s*([0-9.eE+-]+)$/);
-    if (match && Number.isFinite(Number(match[2]))) (counters[match[1].trim()] ??= []).push(Number(match[2]));
+    if (match && Number.isFinite(Number(match[2]))) {
+      const value = Number(match[2]);
+      // The selected utilization/work counters cannot be negative. The driver
+      // emits -1 when a counter is unavailable; never average that as data.
+      if (value < 0) throw new Error(`invalid GPU counter ${match[1].trim()}: ${value}`);
+      (counters[match[1].trim()] ??= []).push(value);
+    }
   }
   return Object.fromEntries(Object.entries(counters).map(([name, values]) => [name, summarize(values)]));
 }

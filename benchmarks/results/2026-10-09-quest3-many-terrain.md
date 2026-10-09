@@ -50,11 +50,13 @@ Battery snapshots are retained alongside telemetry. The headset stayed connected
 
 ## GPU counters
 
+The second classic GPU interval contains unavailable `-1` counters and is excluded in full. Classic GPU values therefore use one interval; upgraded/wet use two. This correction does not change the separately measured FPS, App, CPU, or memory results. The runner now rejects negative counter sentinels.
+
 Counters use names discovered from this OS; the numbered IDs differ from older profiling notes. These are device-wide samples, including compositor work, and were collected after FPS measurement.
 
 | Terrain | Fragment share | Shaders busy | Texture fetch stall | Textures / fragment | Fragments / second |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| classic | 44.6% | 43.1% | 1.27% | 0.332 | 0.741 billion |
+| classic (run 1 only) | 89.1% | 86.1% | 1.25% | 1.664 | 1.481 billion |
 | upgraded | 89.9% | 86.3% | 2.82% | 1.656 | 1.464 billion |
 | wet | 91.2% | 87.9% | 7.82% | 2.552 | 1.554 billion |
 
@@ -86,4 +88,4 @@ node tools/quest-bench/run.mjs --scene many-brain-mixed-crowd \
 
 [Machine results and per-second workload evidence](2026-10-09-quest3-many-terrain/results.json), [counter mapping](2026-10-09-quest3-many-terrain/gpu-metrics.txt), and per-run fixture/telemetry/GPU/battery text files live in the adjacent directory. Device serial identifiers are omitted.
 
-Validation: release APK build/install, three Rust fixture tests, 24 Node tests covering device/telemetry/runner behavior, workspace formatting check, six valid hardware samples, and matched desktop GIF/PNG captures. The runner stopped the app and restored benchmark config, mission selection, log buffer, Guardian/proximity settings; detailed GPU mode was not enabled.
+Validation: release APK build/install, three Rust fixture tests, 25 Node tests covering device/telemetry/runner behavior, workspace formatting check, six valid hardware samples, and matched desktop GIF/PNG captures. The runner stopped the app and restored benchmark config, mission selection, log buffer, Guardian/proximity settings; detailed GPU mode was not enabled.
