@@ -1297,22 +1297,7 @@ fn process_command(
                     ignore_sensors: normalize_raycast_ignore_sensors(request.ignore_sensors),
                 };
 
-                // Perform the raycast
-                let hit = debug_scene.raycast(start, end, mask);
-
-                // Convert result
-                RayCastResult {
-                    hit: hit.hit,
-                    hit_point: hit.hit_point,
-                    hit_normal: hit.hit_normal,
-                    distance: hit.distance,
-                    entity_id: hit.entity_id,
-                    entity_name: hit.entity_name,
-                    body_id: hit.body_id,
-                    collision_group: hit.collision_group,
-                    is_sensor: hit.is_sensor,
-                    surface_material: hit.surface_material,
-                }
+                debug_scene.raycast(start, end, mask)
             } else {
                 tracing::error!("No debug scene available for raycast");
                 RayCastResult {
@@ -1621,19 +1606,7 @@ fn process_command(
         RuntimeCommand::ListTransitions { reply } => {
             let transitions: Vec<commands::TransitionEntry> = game
                 .debug_scene()
-                .map(|scene| {
-                    scene
-                        .list_transitions()
-                        .into_iter()
-                        .map(|t| commands::TransitionEntry {
-                            entity_id: t.entity_id,
-                            name: t.name,
-                            dest_level: t.dest_level,
-                            dest_loc: t.dest_loc,
-                            position: t.position,
-                        })
-                        .collect()
-                })
+                .map(|scene| scene.list_transitions())
                 .unwrap_or_default();
             let result = commands::TransitionsResult {
                 count: transitions.len(),
@@ -1832,19 +1805,7 @@ fn process_command(
                 let result = EntityListResult {
                     total_count: entities.len(),
                     player_position: [player_pos.x, player_pos.y, player_pos.z],
-                    entities: entities
-                        .into_iter()
-                        .map(|e| EntitySummary {
-                            id: e.id,
-                            name: e.name,
-                            template_id: e.template_id,
-                            location: e.location,
-                            position: e.position,
-                            distance: e.distance,
-                            script_count: e.script_count,
-                            link_count: e.link_count,
-                        })
-                        .collect(),
+                    entities,
                 };
                 if let Err(_) = reply.send(result) {
                     tracing::warn!("Failed to send entity list - receiver dropped");
@@ -1884,38 +1845,10 @@ fn process_command(
                                 value: p.value,
                             })
                             .collect(),
-                        outgoing_links: detail
-                            .outgoing_links
-                            .into_iter()
-                            .map(|l| LinkInfo {
-                                link_type: l.link_type,
-                                target_id: l.target_id,
-                                target_name: l.target_name,
-                                contains_ordinal: l.contains_ordinal,
-                            })
-                            .collect(),
-                        incoming_links: detail
-                            .incoming_links
-                            .into_iter()
-                            .map(|l| LinkInfo {
-                                link_type: l.link_type,
-                                target_id: l.target_id,
-                                target_name: l.target_name,
-                                contains_ordinal: l.contains_ordinal,
-                            })
-                            .collect(),
+                        outgoing_links: detail.outgoing_links,
+                        incoming_links: detail.incoming_links,
                         contained_by: detail.contained_by,
-                        aim_points: detail
-                            .aim_points
-                            .into_iter()
-                            .map(|point| AimPointInfo {
-                                proxy_entity_id: point.proxy_entity_id,
-                                body_id: point.body_id,
-                                joint_id: point.joint_id,
-                                classification: point.classification,
-                                position: point.position,
-                            })
-                            .collect(),
+                        aim_points: detail.aim_points,
                         selection_bounds: detail.selection_bounds,
                         magazine_anchor: detail.magazine_anchor,
                     })
@@ -1996,26 +1929,7 @@ fn process_command(
                 let result = PhysicsBodyListResult {
                     total_count,
                     player_position: [player_pos.x, player_pos.y, player_pos.z],
-                    bodies: bodies
-                        .into_iter()
-                        .map(|b| PhysicsBodySummary {
-                            body_id: b.body_id,
-                            entity_id: b.entity_id,
-                            entity_name: b.entity_name,
-                            body_type: b.body_type,
-                            position: b.position,
-                            rotation: b.rotation,
-                            mass: b.mass,
-                            velocity: b.velocity,
-                            angular_velocity: b.angular_velocity,
-                            collision_groups: b.collision_groups,
-                            blocks_player: b.blocks_player,
-                            blocks_actor: b.blocks_actor,
-                            is_sensor: b.is_sensor,
-                            is_enabled: b.is_enabled,
-                            is_sleeping: b.is_sleeping,
-                        })
-                        .collect(),
+                    bodies,
                 };
                 if let Err(_) = reply.send(result) {
                     tracing::warn!("Failed to send physics body list - receiver dropped");
@@ -2081,32 +1995,7 @@ fn process_command(
         }
         RuntimeCommand::PhysicsBodyDetail { id, reply } => {
             let result = if let Some(debug_scene) = game.debug_scene() {
-                debug_scene
-                    .physics_body_detail(id)
-                    .map(|detail| PhysicsBodyDetailResult {
-                        body_id: detail.body_id,
-                        entity_id: detail.entity_id,
-                        entity_name: detail.entity_name,
-                        body_type: detail.body_type,
-                        position: detail.position,
-                        rotation: detail.rotation,
-                        linear_velocity: detail.linear_velocity,
-                        angular_velocity: detail.angular_velocity,
-                        mass: detail.mass,
-                        center_of_mass: detail.center_of_mass,
-                        moment_of_inertia: detail.moment_of_inertia,
-                        gravity_scale: detail.gravity_scale,
-                        linear_damping: detail.linear_damping,
-                        angular_damping: detail.angular_damping,
-                        collision_groups: detail.collision_groups,
-                        blocks_player: detail.blocks_player,
-                        blocks_actor: detail.blocks_actor,
-                        is_sensor: detail.is_sensor,
-                        is_enabled: detail.is_enabled,
-                        is_sleeping: detail.is_sleeping,
-                        contact_count: detail.contact_count,
-                        contacts: detail.contacts,
-                    })
+                debug_scene.physics_body_detail(id)
             } else {
                 None
             };
@@ -2118,21 +2007,7 @@ fn process_command(
         RuntimeCommand::RagdollMetrics { reply } => {
             let ragdolls = game
                 .debug_scene()
-                .map(|scene| {
-                    scene
-                        .ragdoll_metrics()
-                        .into_iter()
-                        .map(|m| commands::RagdollMetricsEntry {
-                            entity_id: m.entity_id,
-                            body_count: m.body_count,
-                            max_linear_speed: m.max_linear_speed,
-                            max_angular_speed: m.max_angular_speed,
-                            min_y: m.min_y,
-                            max_nonadjacent_overlap: m.max_nonadjacent_overlap,
-                            max_drift: m.max_drift,
-                        })
-                        .collect()
-                })
+                .map(|scene| scene.ragdoll_metrics())
                 .unwrap_or_default();
             if let Err(_) = reply.send(commands::RagdollMetricsResult { ragdolls }) {
                 tracing::warn!("Failed to send ragdoll metrics - receiver dropped");
@@ -2141,20 +2016,7 @@ fn process_command(
         RuntimeCommand::AuditColliders { reply } => {
             let issues: Vec<commands::ColliderIssueEntry> = game
                 .debug_scene()
-                .map(|scene| {
-                    scene
-                        .audit_colliders()
-                        .into_iter()
-                        .map(|iss| commands::ColliderIssueEntry {
-                            entity_id: iss.entity_id,
-                            entity_name: iss.entity_name,
-                            kind: iss.kind,
-                            aabb_min: iss.aabb_min,
-                            aabb_max: iss.aabb_max,
-                            is_sensor: iss.is_sensor,
-                        })
-                        .collect()
-                })
+                .map(|scene| scene.audit_colliders())
                 .unwrap_or_default();
             if reply
                 .send(commands::ColliderAuditResult {
@@ -2169,24 +2031,7 @@ fn process_command(
         RuntimeCommand::ListPhysicsJoints { reply } => {
             let joints = game
                 .debug_scene()
-                .map(|scene| {
-                    scene
-                        .list_physics_joints()
-                        .into_iter()
-                        .map(|j| commands::PhysicsJointEntry {
-                            body1_id: j.body1_id,
-                            body2_id: j.body2_id,
-                            joint_type: j.joint_type,
-                            bone1: j.bone1,
-                            bone2: j.bone2,
-                            anchor1: j.anchor1,
-                            anchor2: j.anchor2,
-                            separation: j.separation,
-                            linear_impulse: j.linear_impulse,
-                            angular_impulse: j.angular_impulse,
-                        })
-                        .collect()
-                })
+                .map(|scene| scene.list_physics_joints())
                 .unwrap_or_default();
             if let Err(_) = reply.send(commands::PhysicsJointsResult { joints }) {
                 tracing::warn!("Failed to send physics joints - receiver dropped");

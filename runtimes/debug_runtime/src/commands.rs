@@ -6,6 +6,16 @@
 use cgmath::Vector3;
 use serde::{Deserialize, Serialize};
 use shock2vr::input::InputAction;
+// These responses already have their HTTP wire shape in the game layer.
+// Re-export them so adding a field never needs a second declaration or conversion.
+pub use shock2vr::game_scene::{
+    DebugAimPoint as AimPointInfo, DebugColliderIssue as ColliderIssueEntry,
+    DebugEntitySummary as EntitySummary, DebugLinkInfo as LinkInfo,
+    DebugPhysicsBodyDetail as PhysicsBodyDetailResult,
+    DebugPhysicsBodySummary as PhysicsBodySummary, DebugPhysicsJoint as PhysicsJointEntry,
+    DebugRagdollMetrics as RagdollMetricsEntry, DebugRayHit as RayCastResult,
+    DebugTransition as TransitionEntry,
+};
 use tokio::sync::oneshot;
 
 /// Commands that can be sent from HTTP handlers to the game loop
@@ -318,22 +328,6 @@ pub struct RayCastRequest {
     pub ignore_sensors: Option<bool>,
 }
 
-/// Result of physics raycast
-#[derive(Debug, Serialize)]
-pub struct RayCastResult {
-    pub hit: bool,
-    pub hit_point: Option<[f32; 3]>,
-    pub hit_normal: Option<[f32; 3]>,
-    pub distance: Option<f32>,
-    pub entity_id: Option<i32>,
-    pub entity_name: Option<String>,
-    pub body_id: Option<u32>,
-    pub collision_group: Option<String>,
-    pub is_sensor: bool,
-    /// Sound-schema material of the world surface hit, when level geometry.
-    pub surface_material: Option<String>,
-}
-
 /// Scene objects submitted on the last rendered frame
 #[derive(Debug, Serialize)]
 pub struct SceneListResult {
@@ -412,44 +406,10 @@ pub struct PhysicsBodyListResult {
     pub player_position: [f32; 3],
 }
 
-/// Summary information about a physics body
-#[derive(Debug, Serialize)]
-pub struct PhysicsBodySummary {
-    pub body_id: u32,
-    pub entity_id: Option<i32>,
-    pub entity_name: Option<String>,
-    pub body_type: String, // "dynamic", "static", "kinematic"
-    pub position: [f32; 3],
-    pub rotation: [f32; 4], // quaternion
-    pub mass: Option<f32>,
-    pub velocity: [f32; 3],
-    pub angular_velocity: [f32; 3],
-    pub collision_groups: Vec<String>,
-    /// Whether this body stops the player capsule (the collider's filter),
-    /// which `collision_groups` - membership only - cannot show.
-    pub blocks_player: bool,
-    /// Whether this body stops a living creature capsule.
-    pub blocks_actor: bool,
-    pub is_sensor: bool,
-    pub is_enabled: bool,
-    pub is_sleeping: bool,
-}
-
 /// Per-ragdoll quality/settle metrics
 #[derive(Debug, Serialize)]
 pub struct RagdollMetricsResult {
     pub ragdolls: Vec<RagdollMetricsEntry>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct RagdollMetricsEntry {
-    pub entity_id: i32,
-    pub body_count: usize,
-    pub max_linear_speed: f32,
-    pub max_angular_speed: f32,
-    pub min_y: f32,
-    pub max_nonadjacent_overlap: f32,
-    pub max_drift: f32,
 }
 
 /// What a hand at the queried point can hold onto - `grip` is null when
@@ -491,21 +451,6 @@ pub struct PhysicsJointsResult {
     pub joints: Vec<PhysicsJointEntry>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct PhysicsJointEntry {
-    pub body1_id: u32,
-    pub body2_id: u32,
-    /// `"impulse"` or `"multibody"` - which joint set this came from.
-    pub joint_type: String,
-    pub bone1: Option<u32>,
-    pub bone2: Option<u32>,
-    pub anchor1: [f32; 3],
-    pub anchor2: [f32; 3],
-    pub separation: f32,
-    pub linear_impulse: f32,
-    pub angular_impulse: f32,
-}
-
 /// Result of the collider-health audit: colliders with malformed AABBs.
 /// `total_count` is the number of issues; an empty `issues` list means the
 /// level's collider geometry is clean.
@@ -513,47 +458,6 @@ pub struct PhysicsJointEntry {
 pub struct ColliderAuditResult {
     pub total_count: usize,
     pub issues: Vec<ColliderIssueEntry>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ColliderIssueEntry {
-    pub entity_id: Option<i32>,
-    pub entity_name: Option<String>,
-    pub kind: String,
-    pub aabb_min: [f32; 3],
-    pub aabb_max: [f32; 3],
-    pub is_sensor: bool,
-}
-
-/// Detailed information about a physics body
-#[derive(Debug, Serialize)]
-pub struct PhysicsBodyDetailResult {
-    pub body_id: u32,
-    pub entity_id: Option<i32>,
-    pub entity_name: Option<String>,
-    pub body_type: String,
-    pub position: [f32; 3],
-    pub rotation: [f32; 4], // quaternion
-    pub linear_velocity: [f32; 3],
-    pub angular_velocity: [f32; 3],
-    pub mass: Option<f32>,
-    pub center_of_mass: [f32; 3],
-    pub moment_of_inertia: Option<[f32; 3]>,
-    pub gravity_scale: f32,
-    pub linear_damping: f32,
-    pub angular_damping: f32,
-    pub collision_groups: Vec<String>,
-    /// See `PhysicsBodySummary::blocks_player`.
-    pub blocks_player: bool,
-    /// See `PhysicsBodySummary::blocks_actor`.
-    pub blocks_actor: bool,
-    pub is_sensor: bool,
-    pub is_enabled: bool,
-    pub is_sleeping: bool,
-    pub contact_count: usize,
-    /// `body_id` of every body this one is touching. Level geometry has no
-    /// body behind it, so it raises `contact_count` without appearing here.
-    pub contacts: Vec<u32>,
 }
 
 /// Input channel modifications
@@ -782,17 +686,6 @@ pub struct PlayerInventoryResult {
     pub count: usize,
 }
 
-/// A level-transition trigger and where it leads.
-#[derive(Debug, Serialize)]
-pub struct TransitionEntry {
-    pub entity_id: i32,
-    pub name: Option<String>,
-    /// Destination mission (no ".mis" suffix, e.g. "eng1").
-    pub dest_level: String,
-    pub dest_loc: Option<i32>,
-    pub position: [f32; 3],
-}
-
 /// All level-transition triggers in the current scene.
 #[derive(Debug, Serialize)]
 pub struct TransitionsResult {
@@ -815,20 +708,6 @@ pub struct EntityListResult {
     pub entities: Vec<EntitySummary>,
     pub total_count: usize,
     pub player_position: [f32; 3],
-}
-
-/// Summary information about an entity
-#[derive(Debug, Serialize)]
-pub struct EntitySummary {
-    pub id: i32,
-    pub name: String,
-    pub template_id: i32,
-    /// "world", "inventory", "left_hand", or "right_hand".
-    pub location: String,
-    pub position: [f32; 3],
-    pub distance: f32,
-    pub script_count: usize,
-    pub link_count: usize,
 }
 
 /// Detailed information about an entity
@@ -855,30 +734,11 @@ pub struct EntityDetailResult {
     pub magazine_anchor: Option<[f32; 3]>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct AimPointInfo {
-    pub proxy_entity_id: i32,
-    pub body_id: u32,
-    pub joint_id: u32,
-    pub classification: String,
-    pub position: [f32; 3],
-}
-
 /// Property information
 #[derive(Debug, Serialize)]
 pub struct PropertyInfo {
     pub name: String,
     pub value: String,
-}
-
-/// Link information
-#[derive(Debug, Serialize)]
-pub struct LinkInfo {
-    pub link_type: String,
-    /// The target for an outgoing link and the source for an incoming link.
-    pub target_id: i32,
-    pub target_name: String,
-    pub contains_ordinal: Option<u32>,
 }
 
 /// The free (debug) camera's state, as `GET /v1/camera` reports it.
