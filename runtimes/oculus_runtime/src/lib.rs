@@ -1640,6 +1640,7 @@ fn main() {
             ready_reported = true;
         }
 
+        shock2vr::perf::cpu_frame(current.elapsed());
         if let Some(report) = frame_profiler.record(frame_profiler::FrameTimings {
             frame: elapsed_time,
             update: update_elapsed,
@@ -1729,6 +1730,9 @@ fn main() {
 }
 
 fn print_frame_report(mission: &str, focused: bool, report: frame_profiler::FrameReport) {
+    if let Some(profile) = shock2vr::perf::take_report() {
+        println!("SHOCK2QUEST_CPU_PROFILE {profile}");
+    }
     println!(
         "SHOCK2QUEST_PERF mission={} focused={} samples={} skipped={} fps={:.3} frame_ms={:.3} update_ms={:.3} scene_ms={:.3} left_eye_ms={:.3} right_eye_ms={:.3} finish_ms={:.3} submit_ms={:.3}",
         mission,

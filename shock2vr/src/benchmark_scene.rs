@@ -29,6 +29,8 @@ pub struct BenchmarkScene {
     #[serde(default = "default_ffr")]
     pub ffr: String,
     #[serde(default)]
+    pub profile_cpu: bool,
+    #[serde(default)]
     pub spotlight: Option<BenchmarkSpotlight>,
     pub expected_subject_meshes: usize,
     #[serde(default)]
@@ -162,6 +164,11 @@ impl BenchmarkScene {
 
     /// Apply before asset mounting so classic and upgraded runs use the same APK.
     pub fn configure(&self, features: &mut std::collections::HashSet<String>) {
+        if self.profile_cpu {
+            features.insert("profile_cpu".into());
+        } else {
+            features.remove("profile_cpu");
+        }
         if self.upgraded_terrain {
             features.insert("upgraded_terrain".into());
             features.remove("no_upgraded_terrain");

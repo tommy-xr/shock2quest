@@ -68,6 +68,21 @@ export function validateWorkload(text, fixture, seconds) {
   return samples;
 }
 
+export function validateCpuProfile(text, seconds) {
+  const reports = [];
+  let pending = null;
+  for (const line of text.split('\n')) {
+    if (line.startsWith('SHOCK2QUEST_CPU_PROFILE ')) pending = JSON.parse(line.slice('SHOCK2QUEST_CPU_PROFILE '.length));
+    else if (line.includes('SHOCK2QUEST_PERF')) { reports.push(pending); pending = null; }
+  }
+  const samples = reports.slice(-seconds);
+  if (samples.length !== seconds || samples.some(sample => !sample || sample.cpu_frames <= 0 ||
+      !sample.phases?.game_update || sample.cpu_histogram_100us.reduce((sum, [, count]) => sum + count, 0) !== sample.cpu_frames)) {
+    throw new Error('measured interval lacks complete CPU/clock diagnostics');
+  }
+  return samples;
+}
+
 export function runOrder(repeats, lighting) {
   return Array.from({ length: repeats }, (_, repeat) =>
     (lighting === 'both' ? (repeat % 2 ? ['on', 'off'] : ['off', 'on']) : [lighting])
@@ -143,6 +158,7 @@ async function main(argv) {
     'gpu-seconds': { type: 'string', default: '0' },
     terrain: { type: 'string', default: 'fixture' },
     ffr: { type: 'string', default: 'fixture' },
+    'profile-cpu': { type: 'boolean', default: false },
     scene: { type: 'string', default: 'all' }, lighting: { type: 'string', default: 'both' },
     repeats: { type: 'string', default: '2' }, warmup: { type: 'string', default: '10' },
     seconds: { type: 'string', default: '30' }, output: { type: 'string' }, serial: { type: 'string' },
@@ -209,6 +225,7 @@ async function main(argv) {
         if (cancellation.signal.aborted) throw new Error('benchmark interrupted');
         const fixture = terrainFixture({ ...base, object_lighting: mode === 'on' }, terrain);
         fixture.ffr = ffr === 'fixture' ? (fixture.ffr ?? 'off') : ffr;
+        fixture.profile_cpu = values['profile-cpu'] || (fixture.profile_cpu ?? false);
         const directory = resolve(output, `${fixture.name}-${mode}-${terrain}-ffr-${fixture.ffr}-${repeat}`);
         mkdirSync(directory, { recursive: true });
         const localConfig = resolve(directory, 'fixture.json');
@@ -226,6 +243,7 @@ async function main(argv) {
           const telemetry = readFileSync(resolve(directory, `${fixture.mission.replace(/[^A-Za-z0-9_-]/g, '_')}.telemetry.log`), 'utf8');
           run.workload = validateWorkload(telemetry, fixture, Number(values.seconds));
           validateFoveation(result.vrapi, fixture.ffr);
+          if (fixture.profile_cpu) run.cpu_profile = validateCpuProfile(telemetry, Number(values.seconds));
           run.result = result;
           run.status = 'ok';
           if (gpuMetrics) {

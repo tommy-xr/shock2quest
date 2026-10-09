@@ -148,3 +148,24 @@ level; app-PID VrApi telemetry must confirm the same fixed level with no
 `D` (dynamic) suffix. Unsupported fallback, absent evidence, or configured
 OS foveation overrides invalidate the comparison. Timing and optional
 `--gpu-seconds 10` hardware counters are separate intervals.
+
+## CPU and simulation-clock diagnostics
+
+Add `--profile-cpu` to the fixture runner to collect opt-in
+`SHOCK2QUEST_CPU_PROFILE` records alongside each one-second timing window.
+These report inclusive phase totals/call counts/maxima, scene elapsed time,
+actual Rapier step count and accumulated solver time, and a sparse per-frame
+CPU wall-time histogram (100 µs bins, bin 500 is overflow at >=50 ms).
+Phase timings are nested; do not sum parent and child phases. The CPU interval
+runs after `wait_frame` through `end_frame`, including swapchain waits; it is
+neither pure CPU execution time nor GPU time. Merge histogram counts across
+windows to estimate percentiles; bin upper bounds are conservative, and an
+overflow percentile has no finite upper bound.
+
+The diagnostics do not change scheduling, solver dt, refresh rate, or gameplay.
+Use scene elapsed versus solver elapsed to audit the existing clock before
+raising refresh. A synthetic free-fall audit can be run with:
+
+```sh
+cargo test -p shock2vr --lib clock_audit_counts_actual_solver_steps -- --nocapture
+```

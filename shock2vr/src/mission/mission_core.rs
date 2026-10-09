@@ -4665,6 +4665,8 @@ impl MissionCore {
         game_options: &GameOptions,
         command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
+        let _profile = crate::perf::scope(crate::perf::Phase::MissionUpdate);
+        crate::perf::scene_update(time.elapsed);
         let _ = self.world.remove_unique::<Time>();
         self.world.add_unique(time.clone());
         if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
@@ -5736,8 +5738,12 @@ impl MissionCore {
         self.debug_lines
             .retain(|p| p.remaining_life_in_seconds > 0.0);
 
-        self.update_animations(time);
+        {
+            let _profile = crate::perf::scope(crate::perf::Phase::Animation);
+            self.update_animations(time);
+        }
 
+        let hitbox_profile = crate::perf::scope(crate::perf::Phase::Hitboxes);
         self.hit_boxes.update(
             &mut self.world,
             &mut self.physics,
@@ -5746,6 +5752,8 @@ impl MissionCore {
             &mut self.id_to_physics,
         );
 
+        drop(hitbox_profile);
+        let interaction_profile = crate::perf::scope(crate::perf::Phase::Interaction);
         if !time.elapsed.is_zero() {
             effects.extend(crate::pipe_melee::resolve(
                 &mut self.world,
@@ -7552,12 +7560,15 @@ impl MissionCore {
             .unwrap()
             .release_unsupported(|entity| self.interaction.is_supported(entity));
 
+        drop(interaction_profile);
+        let script_profile = crate::perf::scope(crate::perf::Phase::Scripts);
         // Update scripts
         let mut script_effects = profile!(
             scope: "game", level: DEBUG, "script_world.update",
             self.script_world.update(&self.world, &self.physics, time)
         );
         effects.append(&mut script_effects);
+        drop(script_profile);
 
         // Any load-restored entity that did not overlap a tripwire still only
         // needs the marker for the first physics-backed script update. Paused
@@ -7745,6 +7756,7 @@ impl MissionCore {
     /// Populate the PropPosition and RuntimePropTransform components,
     /// based on the current values in the physics engine
     fn synchronize_physics_positions(&mut self) {
+        let _profile = crate::perf::scope(crate::perf::Phase::PhysicsSync);
         {
             let v_scale = self
                 .world
@@ -16457,6 +16469,7 @@ impl MissionCore {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) {
+        let _profile = crate::perf::scope(crate::perf::Phase::Visibility);
         let culling_info = CullingInfo {
             view,
             projection,
