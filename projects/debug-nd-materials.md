@@ -102,3 +102,12 @@ the simultaneous work. Quest GPU cost needs device measurement.
 `campaign-impacts.e2e.test.ts` fires real shots at named-material MedSci surfaces
 in flat and VR, checking material routing, ammunition, rendered particles and
 cleanup. PR media uses the same real surfaces with fixed simulation stepping.
+
+Ballistic metal/plasticrete impacts also replace the existing `Bullet Hit`
+rider's model with the installed material-specific mark: `ND-mtlhit0` (including
+its existing incidence-shine pass) or one of four `ND-pcrhit` models. Scale
+ranges follow `impactor.nut`; a small random roll is confined to the surface
+plane. Missing models retain the original decal. No additional decal entity
+is created, and the authored ten-second lifetime remains independent of the
+short particle burst. Particle/variant randomness means captures share timing
+and framing, not identical pixels.

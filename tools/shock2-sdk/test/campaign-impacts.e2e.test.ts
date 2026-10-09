@@ -62,10 +62,26 @@ for (const vr of [false, true]) {
           .filter(o => o.source === "particle");
         assert.equal(draws.length, material === "metal" ? 7 : 8,
           `expected the bounded ${material} burst instead of the generic terrain particles`);
+        const decals = (await game.scene.objects({ limit: 10000 })).objects.filter(o =>
+          o.model !== null && (material === "metal" ? o.model === "ND-mtlhit0" : /^ND-pcrhit[0-3]$/.test(o.model)));
+        assert.ok(decals.length > 0, `expected the material-specific ${material} bullet hole`);
+        // PlanarDecal renders a base and separate incidence-shine overlay,
+        // rather than the generic material-stack pass list.
+        if (material === "metal") {
+          assert.equal(decals.length, 2, "metal bullet hole renders base plus shine");
+          assert.equal(decals[0].entity_id, decals[1].entity_id);
+          assert.ok(decals.every(o => !o.depth_write));
+        }
+        const decalIds = new Set(decals.map(o => o.entity_id));
         await game.step({ frames: 120 });
+        assert.ok((await game.scene.objects({ limit: 10000 })).objects.some(o => decalIds.has(o.entity_id)),
+          "bullet holes outlast the short particle burst");
         assert.equal((await game.entities.list({ filter: "Spang", limit: 50 })).entities.length, 0,
           "the burst host expires instead of accumulating");
         assert.equal((await game.scene.objects({ entityId: impact.id })).objects.length, 0);
+        await game.step({ frames: 540 });
+        assert.ok(!(await game.scene.objects({ limit: 10000 })).objects.some(o => decalIds.has(o.entity_id)),
+          "bullet holes retain their authored ten-second lifetime");
       }
     });
 }

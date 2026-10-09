@@ -9804,7 +9804,39 @@ impl MissionCore {
                 .filter(|t| !excluded.contains(t))
                 .collect()
         };
+        let impact_surface = self
+            .world
+            .borrow::<View<crate::particle_effects::ImpactSurface>>()
+            .ok()
+            .and_then(|surfaces| surfaces.get(host).ok().copied());
+        let bullet_hole = self
+            .template_name_to_template_id
+            .get("bullet hit")
+            .map(|m| m.template_id);
         for particle_template in riders {
+            let mut model_override = None;
+            let mut scale_override = None;
+            let mut rider_orientation = orientation;
+            if Some(particle_template) == bullet_hole {
+                if let Some(surface) = impact_surface {
+                    let mut rng = rand::thread_rng();
+                    let (model, scale) = surface.decal(&mut rng);
+                    // Missing installed art keeps the entire original decal.
+                    if asset_cache
+                        .get_opt(&MODELS_IMPORTER, &format!("{model}.bin"))
+                        .is_some()
+                    {
+                        model_override = Some(model.to_owned());
+                        scale_override = Some(vec3(scale, scale, scale));
+                        // Local X is the impact normal; roll within the wall plane.
+                        rider_orientation = orientation
+                            * Quaternion::from_axis_angle(
+                                vec3(1.0, 0.0, 0.0),
+                                cgmath::Deg(rng.gen_range(-5.0..5.0)),
+                            );
+                    }
+                }
+            }
             // vhot/joint offsets are not applied yet - the particle rides the
             // host origin (attach type "object" covers the shipped projectile
             // trails).
@@ -9812,10 +9844,12 @@ impl MissionCore {
                 asset_cache,
                 particle_template,
                 position,
-                orientation,
+                rider_orientation,
                 root_transform,
                 CreateEntityOptions {
                     attach_to: Some(host),
+                    model_override,
+                    scale_override,
                     transient_fx,
                     ..CreateEntityOptions::default()
                 },

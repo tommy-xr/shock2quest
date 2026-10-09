@@ -121,6 +121,10 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, InternalPropOriginalModelName(model_name.clone()));
     }
 
+    if let Some(scale) = additional_options.scale_override {
+        world.add_component(entity_id, PropScale(scale));
+    }
+
     if let Some(name) = &additional_options.name_override {
         world.add_component(
             entity_id,
@@ -2137,6 +2141,8 @@ pub struct CreateEntityOptions {
     /// Instance-specific appearance, for archetypes whose model is assigned
     /// by a mission rather than the gamesys. Applied before visuals/physics.
     pub model_override: Option<String>,
+    /// Instance scale, applied before model/physics creation.
+    pub scale_override: Option<Vector3<f32>>,
     /// Instance labels and durability, installed before scripts/physics initialize.
     pub name_override: Option<String>,
     pub hit_points_override: Option<i32>,
@@ -2188,6 +2194,7 @@ impl Default for CreateEntityOptions {
             force_visible: false,
             snap_to_floor: false,
             model_override: None,
+            scale_override: None,
             name_override: None,
             hit_points_override: None,
             ecology_type: None,
