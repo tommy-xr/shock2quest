@@ -170,7 +170,7 @@ fn tiny_screen_overlap_is_kept_but_zero_area_contact_is_rejected() {
 fn oblique_long_portals_retain_their_visible_middle() {
     use cgmath::{Deg, Transform, perspective};
     use dark::mission::CellPortal;
-    let projection = perspective(Deg(90.0), 1.0, 0.1, 100.0);
+    let projection: Matrix4<f32> = perspective(Deg(90.0), 1.0, 0.1, 100.0);
     let screen = Aabb2::new(point2(0.0, 0.0), point2(1000.0, 1000.0));
     for angle in [0.0, 30.0, 60.0, 85.0] {
         // Very thin doorway strip, oblique in the image plane. Every corner
