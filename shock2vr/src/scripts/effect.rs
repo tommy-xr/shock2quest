@@ -995,6 +995,16 @@ pub enum Effect {
         /// A world emitter, or None for listener-relative ambience.
         source: Option<EntityId>,
     },
+    PlaySpatialLoopingSound {
+        handle: AudioHandle,
+        name: String,
+        source: EntityId,
+        gain: f32,
+    },
+    SetSoundGain {
+        handle: AudioHandle,
+        gain: f32,
+    },
     PlaySpeech {
         entity_id: EntityId,
         voice_index: usize,

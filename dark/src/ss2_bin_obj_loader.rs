@@ -250,6 +250,9 @@ pub fn to_scene_objects(
                     &mut objects, asset_cache, &format!("obj/txt16/{tex_path}"), texture, is_skinned,
                 );
             }
+            for object in &mut objects {
+                object.material_name = Some(Rc::from(material.name.as_str()));
+            }
             Some(objects)
         })
         .flatten()

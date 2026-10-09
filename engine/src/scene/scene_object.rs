@@ -134,6 +134,8 @@ impl MaterialStack {
 
 #[derive(Clone)]
 pub struct SceneObject {
+    /// Authored material identity, retained for per-instance part animation.
+    pub material_name: Option<Rc<str>>,
     pub material: Rc<RefCell<Box<dyn Material>>>,
     pub material_stack: Option<Rc<MaterialStack>>,
     pub geometry: Rc<Box<dyn Geometry>>,
@@ -403,6 +405,7 @@ impl SceneObject {
         let transform: Matrix4<f32> = Matrix4::identity();
         SceneObject {
             material: Rc::new(material),
+            material_name: None,
             material_stack: None,
             geometry,
             transform,
@@ -680,6 +683,7 @@ impl SceneObject {
     pub fn new(material: Box<dyn Material>, geometry: Box<dyn Geometry>) -> SceneObject {
         SceneObject {
             material: Rc::new(RefCell::new(material)),
+            material_name: None,
             material_stack: None,
             geometry: Rc::new(geometry),
             transform: Matrix4::identity(),
@@ -704,6 +708,7 @@ impl SceneObject {
         SceneObject {
             lights: self.lights.clone(),
             material: self.material.clone(),
+            material_name: self.material_name.clone(),
             material_stack: self.material_stack.clone(),
             geometry: self.geometry.clone(),
             transform: self.transform,

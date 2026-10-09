@@ -417,6 +417,20 @@ where
         }
     }
 
+    /// Fade a live source without restarting its playback cursor.
+    pub fn set_sound_gain(&mut self, handle: &AudioHandle, gain: f32) {
+        let gain = if gain.is_finite() {
+            gain.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        match self.handle_to_sink.get(&handle.id) {
+            Some(SinkAdapter::StaticSink { sink, .. }) => sink.set_volume(gain),
+            Some(SinkAdapter::PositionalSink { sink, .. }) => sink.set_volume(gain),
+            None => {}
+        }
+    }
+
     pub fn active_loops(&self) -> Vec<ActiveLoop<TAmbientKey>> {
         let mut loops = Vec::new();
         for (handle, playback) in &self.handle_loops {
@@ -1067,6 +1081,48 @@ mod tests {
             "stop must leave no queued audio"
         );
         assert!(audio.background_music_player.is_none());
+    }
+
+    #[test]
+    #[ignore = "requires an audio output device"]
+    fn spatial_loop_fades_tracks_pauses_and_stops_without_restarting() {
+        use super::*;
+        let mut audio = AudioContext::<u32, String>::new();
+        let handle = AudioHandle::new();
+        let clip = Rc::new(AudioClip::from_raw(1, 8000, vec![0; 8000]));
+        play_spatial_audio_with_settings(
+            &mut audio,
+            vec3(0.0, 0.0, 0.0),
+            Some(7),
+            handle.clone(),
+            None,
+            clip,
+            AudioPlaybackSettings {
+                gain: 0.05,
+                looping: true,
+                ..Default::default()
+            },
+        );
+        audio.set_sound_gain(&handle, 0.02);
+        audio.update(
+            vec3(-0.1, 0.0, 0.0),
+            vec3(0.1, 0.0, 0.0),
+            vec![],
+            |entity| (entity == 7).then_some(vec3(1.0, 2.0, 3.0)),
+        );
+        let SinkAdapter::PositionalSink { sink, emitter } = &audio.handle_to_sink[&handle.id]
+        else {
+            panic!("expected spatial sink")
+        };
+        assert!((sink.volume() - 0.02).abs() < 1e-6);
+        assert_eq!(emitter.position(), vec3(1.0, 2.0, 3.0));
+        assert_eq!(audio.active_loops().len(), 1);
+        audio.set_scene_paused(true);
+        assert!(audio.active_loops()[0].paused);
+        audio.set_scene_paused(false);
+        assert!(!audio.active_loops()[0].paused);
+        stop_audio(&mut audio, handle);
+        assert!(audio.active_loops().is_empty());
     }
 
     #[test]
