@@ -28,6 +28,7 @@ use tracing::info;
 mod commands;
 mod hand_targets;
 mod lifecycle;
+mod update_benchmark;
 use commands::*;
 use lifecycle::{DEFAULT_IDLE_TIMEOUT_SECS, IDLE_POLL_INTERVAL, IdleWatchdog};
 
@@ -95,6 +96,8 @@ where
 #[command(name = "debug_runtime")]
 #[command(about = "HTTP-controlled game runtime for LLM testing and automation")]
 struct Args {
+    #[command(flatten)]
+    update_benchmark: update_benchmark::Options,
     /// Load the same fixed-camera workload used by Quest benchmarks.
     #[arg(long)]
     benchmark_scene: Option<std::path::PathBuf>,
@@ -279,6 +282,12 @@ fn main() -> anyhow::Result<()> {
         "Starting debug runtime on port {} with mission: {}",
         args.port, args.mission
     );
+
+    // One-shot benchmarks own no HTTP server and exit after writing their report.
+    if args.update_benchmark.benchmark_updates.is_some() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        return run_game_blocking(args, rx);
+    }
 
     // Create a tokio runtime for the HTTP server
     let rt = tokio::runtime::Runtime::new()?;
@@ -621,6 +630,10 @@ fn run_game_blocking(
     if let Some(benchmark) = &benchmark_config {
         benchmark.configure(&mut experimental_features);
     }
+    if args.update_benchmark.benchmark_updates.is_some() {
+        experimental_features.insert("profile_cpu".into());
+        experimental_features.insert("fixed_simulation".into());
+    }
     // A replay must run with the settings it was recorded under.
     let mut sorted_experimental: Vec<String> = experimental_features.iter().cloned().collect();
     sorted_experimental.sort();
@@ -711,6 +724,17 @@ fn run_game_blocking(
         current_input.right_hand.rotation = aim_forward;
         current_input.left_hand.position = vec3(-0.55, 1.4, 0.2);
         current_input.left_hand.rotation = aim_forward;
+    }
+    if args.update_benchmark.benchmark_updates.is_some() {
+        return update_benchmark::run(
+            &mut game,
+            &mut benchmark_run,
+            &current_input,
+            &args.update_benchmark,
+            &mission,
+            &sorted_experimental,
+            args.vr,
+        );
     }
     let mut hand_targets = hand_targets::HandTargets::new(args.vr);
 

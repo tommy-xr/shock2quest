@@ -177,3 +177,42 @@ legacy/fixed/fixed/legacy timing, independent active-time validation and a
 device pause/resume probe. Add `--fixed-simulation` to the Quest runner to opt
 in; it enables CPU profiling and rejects solver-clock drift or a changed
 solver timestep. Refresh remains 90 Hz and the normal runtime remains legacy.
+
+## Host update-only benchmark
+
+Run full game updates without scene preparation, visibility, eye rendering, or
+frame submission:
+
+```sh
+CARGO_INCREMENTAL=0 cargo dbgr --vr \
+  --benchmark-scene benchmarks/scenes/many-brain-mixed-crowd.json \
+  --benchmark-updates 1800 --benchmark-warmup 600 \
+  --benchmark-output /tmp/many-updates.json
+```
+
+This one-shot mode opens a hidden GL context for asset initialization, starts no
+HTTP server, writes JSON, and exits. It enables the existing opt-in fixed clock
+and CPU phase timers even when the fixture disables them. The solver timestep
+and complete physics/script/animation/effect sequence are unchanged. It supplies
+neutral input using the debug runtime's normal flat or `--vr` rest poses.
+`Game::update` still includes audio and any lazy asset work triggered by gameplay;
+this mode does not establish that the entire call can safely run on a worker.
+
+The default paces updates at 60 Hz; sleeping and fixture setup are outside the
+measured `Game::update` interval. An overrun delays subsequent ticks instead of
+bursting catch-up work. `--benchmark-unpaced` is a throughput experiment: it gives
+the asynchronous pathfinding worker different scheduling and is not equivalent
+to ordinary gameplay. Neither mode measures Quest FPS or render overlap.
+
+JSON contains every update sample, mean/p50/p95/p99/max, inclusive subsystem
+aggregates, scene/solver step counts, effective feature flags, fixture, and
+before/after animation evidence. Warmup (minimum 180 ticks) is excluded. Runs
+fail on transitions, incomplete fixture setup, missing simulation steps, or
+visibility work during measurement. Rendering-dependent mesh counts are absent;
+use the normal rendered Quest benchmark to validate visual workload and device
+performance. Compare repeated runs on the same host/build, presentation, fixture,
+logging settings, and pacing mode. The optimized development build retains debug
+assertions; the report identifies this explicitly.
+
+[Many host baseline and retained samples](results/2026-10-09-host-update-only.md)
+record two paced runs with upgraded terrain and the fixed simulation clock.
