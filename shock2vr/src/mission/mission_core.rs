@@ -6304,7 +6304,6 @@ impl MissionCore {
                 && self.player_controls_enabled,
             time.elapsed.as_secs_f32(),
         );
-        self.chest_slots.load_poses(asset_cache);
         self.chest_slots.body_pose = self.holsters.body_pose;
         self.chest_slots.shoulder_priority = std::array::from_fn(|i| {
             self.shoulder_backpack.near[i] || self.holsters.near[i].is_some()
@@ -6318,7 +6317,9 @@ impl MissionCore {
             super::holsters::SLOT_COUNT,
             held.map(|item| item.is_some()),
             held.map(|item| {
-                item.is_some_and(|id| self.chest_slots.poses.for_entity(&self.world, id).is_some())
+                item.is_some_and(|id| {
+                    super::holsters::Holsters::accepts_chest_item(&self.world, id)
+                })
             }),
             game_options.presentation_mode == crate::PresentationMode::Vr
                 && self.player_is_alive()
@@ -17397,7 +17398,6 @@ impl MissionCore {
                 if let Some(centers) = self.chest_slots.world_centers(player.pos, player.rotation) {
                     let contents = self.chest_slots.occupants(&self.world);
                     for (slot, center) in centers.into_iter().enumerate() {
-                        parts.push(("holster.glb", center, Matrix4::from_scale(0.95)));
                         let touching = self
                             .chest_slots
                             .near
@@ -17417,18 +17417,24 @@ impl MissionCore {
                         } else {
                             vec3(0.025, 0.12, 0.15)
                         };
-                        let mut indicator = SceneObject::new(
-                            engine::scene::color_material::create(color),
-                            Box::new(engine::scene::cube::create()),
+                        let icon = contents[slot].and_then(|entity| {
+                            self.world
+                                .borrow::<View<dark::properties::PropObjIcon>>()
+                                .ok()
+                                .and_then(|icons| {
+                                    icons.get(entity).ok().map(|icon| format!("{}.pcx", icon.0))
+                                })
+                        });
+                        let plate = Matrix4::from_translation(center)
+                            * root_rotation
+                            * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT)
+                            * Matrix4::from_angle_x(cgmath::Deg(-60.0));
+                        let mut indicator = super::body_gear_feedback::item_badge(
+                            icon.as_deref(),
+                            color,
+                            plate,
+                            asset_cache,
                         );
-                        indicator.set_transform(
-                            Matrix4::from_translation(center)
-                                * root_rotation
-                                * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT)
-                                * Matrix4::from_translation(vec3(0.0, -0.02, -0.045))
-                                * Matrix4::from_nonuniform_scale(0.035, 0.004, 0.004),
-                        );
-                        let mut indicator = vec![indicator];
                         crate::util::tag_render_source(
                             &mut indicator,
                             crate::util::render_source::PLAYER_HANDS,
@@ -17474,51 +17480,49 @@ impl MissionCore {
                     }
                 }
             }
-            for mounts in [&self.holsters, &self.chest_slots] {
-                if let Some(centers) = mounts.world_centers(player.pos, player.rotation) {
-                    for (slot, entity) in mounts.occupants(&self.world).into_iter().enumerate() {
-                        let Some(model) = entity.and_then(|entity| self.id_to_model.get(&entity))
-                        else {
-                            continue;
-                        };
-                        let Some(bounds) = model.bounding_box() else {
-                            continue;
-                        };
-                        let Some(entry) =
-                            entity.and_then(|id| mounts.poses.for_entity(&self.world, id))
-                        else {
-                            continue;
-                        };
-                        let root = Matrix4::from_translation(centers[slot])
-                            * mounts.world_rotation(player.rotation)
-                            * entry
-                                .pose
-                                .model_transform(bounds.min.to_vec(), bounds.max.to_vec());
-                        let mut objects = model.to_scene_objects().clone();
-                        if let Some(entity) =
-                            entity.filter(|id| crate::rapier::is_rapier(&self.world, *id))
-                        {
-                            crate::rapier::animate(
-                                &mut objects,
-                                crate::rapier::amount(&self.world, entity),
-                                false,
-                            );
-                        }
-                        // Stowed weapons are player gear too: use the same room
-                        // lighting and adjustable minimum as a weapon in hand.
-                        let lights = object_lights
-                            .as_ref()
-                            .map(|lighting| lighting.at_player_position(centers[slot]));
-                        for object in &mut objects {
-                            object.set_transform(root);
-                            object.set_lights(lights.clone());
-                        }
-                        crate::util::tag_render_source(
+            if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
+                for (slot, entity) in self.holsters.occupants(&self.world).into_iter().enumerate() {
+                    let Some(model) = entity.and_then(|entity| self.id_to_model.get(&entity))
+                    else {
+                        continue;
+                    };
+                    let Some(bounds) = model.bounding_box() else {
+                        continue;
+                    };
+                    let Some(entry) =
+                        entity.and_then(|id| self.holsters.poses.for_entity(&self.world, id))
+                    else {
+                        continue;
+                    };
+                    let root = Matrix4::from_translation(centers[slot])
+                        * self.holsters.world_rotation(player.rotation)
+                        * entry
+                            .pose
+                            .model_transform(bounds.min.to_vec(), bounds.max.to_vec());
+                    let mut objects = model.to_scene_objects().clone();
+                    if let Some(entity) =
+                        entity.filter(|id| crate::rapier::is_rapier(&self.world, *id))
+                    {
+                        crate::rapier::animate(
                             &mut objects,
-                            crate::util::render_source::PLAYER_HANDS,
+                            crate::rapier::amount(&self.world, entity),
+                            false,
                         );
-                        scene.extend(objects);
                     }
+                    // Stowed weapons are player gear too: use the same room
+                    // lighting and adjustable minimum as a weapon in hand.
+                    let lights = object_lights
+                        .as_ref()
+                        .map(|lighting| lighting.at_player_position(centers[slot]));
+                    for object in &mut objects {
+                        object.set_transform(root);
+                        object.set_lights(lights.clone());
+                    }
+                    crate::util::tag_render_source(
+                        &mut objects,
+                        crate::util::render_source::PLAYER_HANDS,
+                    );
+                    scene.extend(objects);
                 }
             }
         }

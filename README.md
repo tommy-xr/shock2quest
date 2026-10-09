@@ -126,8 +126,9 @@ card from the belt buckle to scan readers, shops, and trainers; release to retur
 it to the belt. Scanning opens an interface; select purchases separately.
 
 **Chest quick slots.** Release a held hypo or battery over either chest mount to
-store it; squeeze with either empty hand to retrieve it. A light previews the
-target and a sound and short vibration confirm seating. These slots keep the
+store it; squeeze with either empty hand to retrieve it. Each slot shows a circle
+and the stored item’s icon. Its colour previews the target, and a sound and short
+vibration confirm storage. These slots keep the
 actual item or stack in your backpack and add no inventory capacity. An occupied
 slot, incompatible item, or full backpack refuses the deposit and keeps the item
 in hand; squeeze again to re-grip before releasing elsewhere. Drawing never uses

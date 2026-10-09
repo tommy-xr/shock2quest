@@ -96,6 +96,76 @@ fn lit_segments(fraction: f32) -> usize {
     }
 }
 
+thread_local! {
+    // Reuse one small annulus geometry; changing state changes only its color.
+    static RING: std::rc::Rc<Box<dyn scene::Geometry>> = {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for i in 0..=48 {
+            let angle = i as f32 * std::f32::consts::TAU / 48.0;
+            for radius in [0.43, 0.5] {
+                vertices.push(scene::VertexPosition { position: vec3(angle.cos()*radius, angle.sin()*radius, 0.0) });
+            }
+            if i < 48 { let a = i*2; indices.extend([a, a+2, a+1, a+1, a+2, a+3]); }
+        }
+        std::rc::Rc::new(Box::new(scene::indexed_mesh::create(vertices, indices)))
+    };
+}
+
+/// `root` maps metre-local part coordinates into world space.
+pub(super) fn item_badge(
+    icon_name: Option<&str>,
+    color: cgmath::Vector3<f32>,
+    plate: Matrix4<f32>,
+    assets: &mut engine::assets::asset_cache::AssetCache,
+) -> Vec<SceneObject> {
+    let mut ring = RING.with(|geometry| {
+        SceneObject::create(
+            std::cell::RefCell::new(scene::color_material::create(color)),
+            geometry.clone(),
+        )
+    });
+    ring.set_transform(plate * Matrix4::from_scale(0.09));
+    let mut objects = vec![ring];
+    if let Some(name) = icon_name {
+        if let Some(texture) = assets.get_ext_opt(
+            &dark::importers::TEXTURE_IMPORTER,
+            name,
+            &engine::texture::TextureOptions {
+                wrap: false,
+                transparent_index_0: true,
+                ..Default::default()
+            },
+        ) {
+            // Keep the complete icon inside the circular rim without cropping.
+            let width = texture.width() as f32;
+            let height = texture.height() as f32;
+            let longest = width.max(height).max(1.0);
+            let texture: std::rc::Rc<dyn engine::texture::TextureTrait> = texture;
+            let mut icon = SceneObject::new(
+                scene::basic_material::create_with_fixed_ambient(texture, 1.0, 0.0),
+                // PCX rows start at the top; retain the outward geometry winding
+                // and reverse V so the complete authored icon reads upright.
+                Box::new(scene::quad::create_with_uv(
+                    cgmath::vec2(0.0, 1.0),
+                    cgmath::vec2(1.0, 0.0),
+                )),
+            );
+            icon.set_transform(
+                plate
+                    * Matrix4::from_translation(vec3(0.0, 0.0, 0.001))
+                    * Matrix4::from_nonuniform_scale(
+                        0.055 * width / longest,
+                        0.055 * height / longest,
+                        1.0,
+                    ),
+            );
+            objects.push(icon);
+        }
+    }
+    objects
+}
+
 pub(super) fn holster(readout: &HolsterReadout, root: Matrix4<f32>) -> Vec<SceneObject> {
     if readout.weapon.is_none() {
         return vec![];

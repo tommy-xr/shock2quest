@@ -548,6 +548,21 @@ impl Holsters {
         slots
     }
 
+    pub fn accepts_chest_item(world: &World, item: EntityId) -> bool {
+        crate::vr_holster::model_for_entity(world, item).is_some_and(|model| {
+            matches!(
+                model.as_str(),
+                "medpatch"
+                    | "psipatch"
+                    | "radpatch"
+                    | "toxpatch"
+                    | "portbatt"
+                    | "battery"
+                    | "batteryb"
+            )
+        })
+    }
+
     pub fn load_poses(&mut self, assets: &mut engine::assets::asset_cache::AssetCache) {
         if self.poses_loaded {
             return;
@@ -555,11 +570,7 @@ impl Holsters {
         self.poses_loaded = true;
         if let Some(text) = assets.get_opt(
             &engine::assets::text_importer::TEXT_IMPORTER,
-            if self.chest {
-                "vr-chest-slots.json"
-            } else {
-                crate::vr_holster::RESOURCE
-            },
+            crate::vr_holster::RESOURCE,
         ) {
             match crate::vr_holster::HolsterLibrary::parse(&text) {
                 Ok(poses) => self.poses = poses,

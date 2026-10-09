@@ -448,7 +448,7 @@ dev_params! {
     VR_MFD_RIGHT_GRIP_ROLL = TricorderGrips::float("vr_mfd_right_grip_roll", "Right roll (deg)", 0.0, -90.0, 90.0, 5.0),
     /// Optional download visuals; collection, sound and haptics remain active.
     VR_DOWNLOAD_PARTICLES = Body::bool("vr_download_particles", "Download particles", false),
-    VR_CHEST_DROP = Body::float("vr_chest_drop", "Chest below eyes (m)", 0.42, 0.20, 0.55, 0.01),
+    VR_CHEST_DROP = Body::float("vr_chest_drop", "Chest below eyes (m)", 0.32, 0.20, 0.55, 0.01),
     VR_CHEST_SIDE = Body::float("vr_chest_side", "Chest slot side (m)", 0.14, 0.10, 0.24, 0.01),
     VR_CHEST_FORWARD = Body::float("vr_chest_forward", "Chest forward (m)", 0.20, 0.08, 0.35, 0.01),
     VR_HOLSTER_DROP = Body::float("vr_holster_drop", "Holster below eyes (m)", 0.78, 0.55, 1.1, 0.02),

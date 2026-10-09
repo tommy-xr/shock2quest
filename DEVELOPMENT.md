@@ -1304,12 +1304,11 @@ Developer → Body controls `vr_chest_drop`, `vr_chest_side`, and
 the mounts. Verify placement seated and standing on Quest; simulated VR only
 proves the geometry and logic.
 
-`assets/vr-chest-slots.json` uses the existing holster-pose format for eligibility
-and per-item placement. Preview/edit with `cargo dx ui --holster medpatch
---holster-library assets/vr-chest-slots.json`; the editor previews a thigh shell,
-so verify final chest fit in the runtime. Include this
-resource when deploying. `/v1/info` reports `player.hand_feedback.chest_slots`
-with world centres, per-hand targets, occupants, and refused-release latches.
+The mounts use compact circular indicators with the stored item's inventory icon.
+Their colours show nearby acceptance/refusal; an empty circle marks a free slot.
+Held-item models and grip scales are unchanged. `/v1/info` reports
+`player.hand_feedback.chest_slots` with world centres, per-hand targets,
+occupants, and refused-release latches.
 
 The design follows [Armature's RE4 Quest developer interview](https://www.unrealengine.com/developer-interviews/how-armature-studio-brought-resident-evil-4-into-vr-using-unreal-engine?lang=en): forgiving grabs, clear physical access to frequent items, and retained inventory management.
 
