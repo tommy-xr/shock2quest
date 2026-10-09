@@ -638,6 +638,19 @@ impl<'a> ScriptRestoreContext<'a> {
 }
 
 pub trait Script {
+    /// Produce presentation data for one GUI instance. This is separate from
+    /// gameplay update so unopened panels do no layout work; handle identity
+    /// distinguishes multiple GUI scripts on one entity.
+    fn build_gui(
+        &mut self,
+        _entity_id: EntityId,
+        _world: &World,
+        _handle: crate::gui::GuiHandle,
+        _input: &crate::gui::GuiFrameInput,
+    ) -> Option<Effect> {
+        None
+    }
+
     fn initialize(&mut self, _entity_id: EntityId, _world: &World) -> Effect {
         Effect::NoEffect
     }
@@ -804,6 +817,18 @@ impl CompositeScript {
 }
 
 impl Script for CompositeScript {
+    fn build_gui(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        handle: crate::gui::GuiHandle,
+        input: &crate::gui::GuiFrameInput,
+    ) -> Option<Effect> {
+        self.scripts
+            .iter_mut()
+            .find_map(|instance| instance.script.build_gui(entity_id, world, handle, input))
+    }
+
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
         let effects = self
             .scripts
@@ -984,6 +1009,19 @@ pub struct ScriptWorld {
 }
 
 impl ScriptWorld {
+    pub fn build_gui(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        handle: crate::gui::GuiHandle,
+        input: &crate::gui::GuiFrameInput,
+    ) -> Option<Effect> {
+        self.entity_to_scripts
+            .get_mut(&entity_id)?
+            .iter_mut()
+            .find_map(|instance| instance.script.build_gui(entity_id, world, handle, input))
+    }
+
     /// The floating damage readouts recorded so far, for the render pass to
     /// draw and age out.
     pub(crate) fn damage_popups(&mut self) -> &mut Vec<crate::damage_overlay::DamagePopup> {

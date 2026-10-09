@@ -1382,6 +1382,14 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// Defer pure panel layout until preceding effects have selected its host.
+    /// Hidden panels discard this request without creating text or components.
+    BuildUI {
+        parent_entity: EntityId,
+        handle: GuiHandle,
+        input: crate::gui::GuiFrameInput,
+    },
+
     SetUI {
         parent_entity: EntityId,
         handle: GuiHandle,
