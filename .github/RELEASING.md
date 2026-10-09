@@ -5,9 +5,14 @@
 - **v0.0.1:** signed Quest APK, installation instructions, checksums, release badge.
 - **v0.0.2:** versioned `dark_explorer`, `dark_runtime`, and `dark_query` archives
   across Linux, Windows, and macOS, with `--version` verification.
-- **v0.0.3:** automatic changelog listing all commits since the previous release.
 
-The initial workflow uses static release notes; it does not generate a changelog.
+The release workflow appends a complete commit changelog with associated merged
+PR links. It uses the latest published, non-prerelease ancestor as its baseline
+and the exact source commit being built as its endpoint. A separate `notes` job
+runs on both build-only and publish runs, tests the release scripts, and uploads
+`changelog.md` and `sources.json` as the **release-notes** Actions artifact
+(retained for 14 days). Publication waits for both APK and notes jobs and appends
+that generated changelog to the release's installation notes.
 
 ## One-time signing setup
 
@@ -103,3 +108,31 @@ The build uses Rust 1.98.0, cargo-apk 0.9.7, NDK 24.0.8215888, Android platform
 python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 actionlint .github/workflows/release.yml .github/workflows/build-android.yml
 ```
+
+## Changelog and visual highlights
+
+Preview the next release locally with authenticated `gh` and a full checkout
+(fetch tags/history first if your clone is shallow):
+
+```sh
+python3 .github/scripts/release-notes.py --since v0.0.1 --until HEAD
+```
+
+This writes `target/release-notes/changelog.md` and `sources.json`. Every commit
+in the exact range is retained, including direct commits and merge commits;
+PR associations come from GitHub, not commit-title guesses. PR bodies are saved
+once per PR as source material for image curation. API errors abort generation
+rather than producing a silently incomplete changelog. Omit `--since` to use the
+same automatic baseline as CI; `--output` selects a different output directory.
+Generation only reads Git/GitHub and writes local files; it never publishes.
+
+Next, invoke the [release-highlights skill](../.claude/skills/release-highlights/SKILL.md)
+to inspect existing PR media, select up to three player-facing visual highlights,
+and write `highlights.md`, `selection.md`, and `release-description.md` beside
+the changelog. Before/after captions refer to each PR's baseline unless verified
+against the prior release. Image selection is editorial and stays outside CI.
+
+The publish workflow appends only the mechanical changelog. Add the reviewed
+visual highlights to the release description separately, preserving its install
+instructions and provenance. Local previews can be rerun as more PRs land; rerun
+curation for the final release SHA so the highlights match the shipped range.
