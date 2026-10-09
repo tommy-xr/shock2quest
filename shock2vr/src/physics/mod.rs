@@ -6834,7 +6834,10 @@ impl PhysicsWorld {
     /// This reuses the scripted mover/reversal without requiring a standing
     /// capsule to fit at the hanging start or choosing a different floor ahead.
     pub fn plan_hand_top_out(&mut self, grip: ClimbGrip, player: &mut PlayerHandle) -> bool {
-        if player.top_out.is_some() || grip.kind != ClimbGripKind::Ledge {
+        if player.top_out.is_some()
+            || grip.kind != ClimbGripKind::Ledge
+            || !is_walkable_normal(grip.normal.y)
+        {
             return false;
         }
         // The next physics step consumes the last hand pull before advancing
@@ -6871,7 +6874,14 @@ impl PhysicsWorld {
             // Bounded inset search: a fist can hold an edge that cannot support
             // the body, so prove the landing capsule fits and stays supported.
             for inset in [0.4, 0.8] {
-                let above = vec_to_nvec(grip.point) + direction * inset + Vector::y() * 0.3;
+                // Follow the held plane uphill/downhill instead of requiring
+                // every landing to be level with the hand (which rejects ramps).
+                let slope_rise = -(grip.normal.x * direction.x + grip.normal.z * direction.z)
+                    * inset
+                    / grip.normal.y;
+                let expected_y = grip.point.y + slope_rise;
+                let above =
+                    vec_to_nvec(grip.point) + direction * inset + Vector::y() * (slope_rise + 0.3);
                 let ray = Ray::new(Point::from(above), -Vector::y());
                 let Some((handle, hit)) = route_queries.cast_ray_and_get_normal(&ray, 0.6, true)
                 else {
@@ -6879,13 +6889,19 @@ impl PhysicsWorld {
                 };
                 let floor = ray.point_at(hit.time_of_impact).coords;
                 if !is_walkable_normal(hit.normal.y)
-                    || (floor.y - grip.point.y).abs() > 0.1
+                    || (floor.y - expected_y).abs() > 0.1
                     || EntityId::from_inner(self.collider_set[handle].user_data as u64)
                         != grip.entity_id
                 {
                     continue;
                 }
-                let landing = floor + Vector::y() * player_center_above_floor(!stand_on_completion);
+                // The rounded capsule bottom touches a slope uphill of the
+                // center ray. Lift by that geometric difference to avoid
+                // embedding it in the ramp before clearance/support checks.
+                let slope_clearance = final_shape.radius * (1.0 / hit.normal.y - 1.0);
+                let landing = floor
+                    + Vector::y()
+                        * (player_center_above_floor(!stand_on_completion) + slope_clearance);
                 if !capsule_pose_is_clear(&queries, landing, &final_shape)
                     || !shape_has_stable_support(
                         &player.controller,
@@ -6897,7 +6913,12 @@ impl PhysicsWorld {
                 {
                     continue;
                 }
-                let raised = vector![start.x, start.y.max(landing.y), start.z];
+                // A downhill landing can be lower than the lip. Carry the
+                // tucked body over the held edge before descending onto it.
+                let lip_clearance =
+                    player_center_above_floor(true) + crouched.radius * (1.0 / grip.normal.y - 1.0);
+                let cross_y = start.y.max(landing.y).max(grip.point.y + lip_clearance);
+                let raised = vector![start.x, cross_y, start.z];
                 let crossed = vector![landing.x, raised.y, landing.z];
                 if !shape_sweep_is_clear(&route_queries, start, raised, &crouched)
                     || !shape_sweep_is_clear(&route_queries, raised, crossed, &crouched)
@@ -7340,43 +7361,55 @@ impl PhysicsWorld {
             return None;
         }
         let mut lip: Option<(f32, ClimbGrip)> = None;
-        for x in [-1.0, 0.0, 1.0] {
-            for z in [-1.0, 0.0, 1.0] {
-                let offset = vector![x * CLIMB_LIP_REACH / 2.0, 0.0, z * CLIMB_LIP_REACH / 2.0];
-                let distance = offset.norm();
-                if distance > 0.0
-                    && queries
-                        .cast_ray(&Ray::new(raised, offset / distance), distance, true)
-                        .is_some()
-                {
-                    continue;
-                }
-                let ray = Ray::new(raised + offset, -Vector::y());
-                let Some((handle, hit)) =
-                    queries.cast_ray_and_get_normal(&ray, 2.0 * CLIMB_LIP_REACH, true)
-                else {
-                    continue;
-                };
-                let collider = &self.collider_set[handle];
-                if !collider_is_not_climbable(collider) || !is_walkable_normal(hit.normal.y) {
-                    continue;
-                }
-                let top = ray.point_at(hit.time_of_impact);
-                let distance = (top - hand).norm();
-                if top.y <= min_ledge_height || distance > CLIMB_LIP_REACH {
-                    continue;
-                }
-                if lip.as_ref().is_none_or(|(nearest, _)| distance < *nearest) {
-                    lip = Some((
-                        distance,
-                        ClimbGrip {
-                            kind: ClimbGripKind::Ledge,
-                            entity_id: EntityId::from_inner(collider.user_data as u64),
-                            point: nvec_to_cgmath(top.coords),
-                            normal: nvec_to_cgmath(hit.normal),
-                        },
-                    ));
-                }
+        // Preserve the close probes and add an outer ring for corners. Leave
+        // a little vertical reach at that ring; the final 3D distance check
+        // still bounds the grab. Only eight extra probes per free hand/frame.
+        let offsets = [-1.0, 0.0, 1.0]
+            .into_iter()
+            .flat_map(|x| {
+                [-1.0, 0.0, 1.0].into_iter().map(move |z| {
+                    vector![x * CLIMB_LIP_REACH / 2.0, 0.0, z * CLIMB_LIP_REACH / 2.0]
+                })
+            })
+            .chain(
+                directions
+                    .into_iter()
+                    .map(|direction| direction * CLIMB_LIP_REACH * 0.95),
+            );
+        for offset in offsets {
+            let distance = offset.norm();
+            if distance > 0.0
+                && queries
+                    .cast_ray(&Ray::new(raised, offset / distance), distance, true)
+                    .is_some()
+            {
+                continue;
+            }
+            let ray = Ray::new(raised + offset, -Vector::y());
+            let Some((handle, hit)) =
+                queries.cast_ray_and_get_normal(&ray, 2.0 * CLIMB_LIP_REACH, true)
+            else {
+                continue;
+            };
+            let collider = &self.collider_set[handle];
+            if !collider_is_not_climbable(collider) || !is_walkable_normal(hit.normal.y) {
+                continue;
+            }
+            let top = ray.point_at(hit.time_of_impact);
+            let distance = (top - hand).norm();
+            if top.y <= min_ledge_height || distance > CLIMB_LIP_REACH {
+                continue;
+            }
+            if lip.as_ref().is_none_or(|(nearest, _)| distance < *nearest) {
+                lip = Some((
+                    distance,
+                    ClimbGrip {
+                        kind: ClimbGripKind::Ledge,
+                        entity_id: EntityId::from_inner(collider.user_data as u64),
+                        point: nvec_to_cgmath(top.coords),
+                        normal: nvec_to_cgmath(hit.normal),
+                    },
+                ));
             }
         }
         lip.map(|(_, grip)| grip)
@@ -13678,6 +13711,41 @@ mod tests {
     }
 
     #[test]
+    fn hand_top_out_follows_a_walkable_slope() {
+        for rise in [-0.5, 0.5, 1.0] {
+            for crouched in [false, true] {
+                let (mut world, mut player) = grip_world();
+                add_ramp(&mut world, (-2.0, 3.0 + 4.0 * rise), (2.0, 3.0), 3.0);
+                step(&mut world, &mut player, 1);
+                world.set_player_crouch(crouched, &mut player);
+                world.set_player_translation(vec3(HANG_X, 2.4, 0.0), &mut player);
+                let grip = world
+                    .climbable_grip_at(vec3(1.9, 3.08 + 0.1 * rise, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                    .expect("walkable ramp edge offers a hand hold");
+                assert!(
+                    world.plan_hand_top_out(grip, &mut player),
+                    "slope {rise}, crouched {crouched}"
+                );
+                for _ in 0..240 {
+                    step(&mut world, &mut player, 1);
+                    if !player.is_topping_out() {
+                        break;
+                    }
+                }
+                assert!(!player.is_topping_out());
+                assert_eq!(player.is_crouched(), crouched);
+                let landed = world.get_player_translation(&player);
+                assert!(landed.x < 1.7, "must finish on the slope: {landed:?}");
+                step(&mut world, &mut player, 30);
+                assert!(
+                    (world.get_player_translation(&player) - landed).magnitude() < 0.05,
+                    "landing must remain supported on the slope"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn hand_vault_does_not_expand_through_a_one_sided_ceiling() {
         let (mut world, mut player) = grip_world();
         let block = EntityId::from_inner(2025).unwrap();
@@ -13867,6 +13935,10 @@ mod tests {
             vec3(-2.05, 2.99, 0.0),
             vec3(0.0, 2.99, 2.05),
             vec3(0.0, 2.99, -2.05),
+            vec3(2.18, 2.99, 2.18),
+            vec3(-2.18, 2.99, 2.18),
+            vec3(2.18, 2.99, -2.18),
+            vec3(-2.18, 2.99, -2.18),
         ] {
             let lip = world
                 .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 0.0)
@@ -13876,7 +13948,11 @@ mod tests {
             assert!((lip.point.y - 3.0).abs() < 1e-4);
             assert!((lip.point - hand).magnitude() <= CLIMB_LIP_REACH);
         }
-        for hand in [vec3(2.05, 2.5, 0.0), vec3(2.5, 2.99, 0.0)] {
+        for hand in [
+            vec3(2.05, 2.5, 0.0),
+            vec3(2.5, 2.99, 0.0),
+            vec3(2.25, 2.99, 2.25),
+        ] {
             assert!(
                 world
                     .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 0.0)
