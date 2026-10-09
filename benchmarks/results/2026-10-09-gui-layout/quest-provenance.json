@@ -1,0 +1,10 @@
+{
+  "quest-many-before.png": {
+    "source": "/tmp/gui-demand-quest-baseline-1/many-brain-mixed-crowd-on-upgraded-ffr-low-1/many_mis.png",
+    "sha256": "5ef2671cb1f1d4ccfba418a3bc4acdfe7488491fca6e1ca864e4f95843908c75"
+  },
+  "quest-many-after.png": {
+    "source": "/tmp/gui-demand-quest-optimized/many-brain-mixed-crowd-on-upgraded-ffr-low-1/many_mis.png",
+    "sha256": "a58b2dcfab8bc8115ca1ca5c8f2b6341ad74ca8ea49516bdd32ce564c1e650e7"
+  }
+}

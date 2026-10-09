@@ -1,0 +1,156 @@
+{
+  "status": "ok",
+  "mission": "many.mis",
+  "device": {
+    "serial": "[redacted]",
+    "model": "Quest 3",
+    "android": "14",
+    "apk_sha256": "56378ae1155ce15df6d1eba58779413858689fa33fb190915801aabee3c03955"
+  },
+  "sample": {
+    "warmup_seconds": 10,
+    "duration_seconds": 30
+  },
+  "startup": {
+    "game_init_ms": 5289.854,
+    "launch_to_focused_ms": 6239
+  },
+  "ready": {
+    "target_refresh_hz": 90,
+    "requested_refresh_hz": 90,
+    "refresh_hz": 90,
+    "eye_width": 1680,
+    "eye_height": 1760,
+    "refresh_rate_changes": []
+  },
+  "engine": {
+    "samples": 30,
+    "focused_samples": 30,
+    "unfocused_samples": 0,
+    "skipped_frames": 0,
+    "fps": {
+      "mean": 86.72,
+      "min": 83.944,
+      "p5": 83.978,
+      "p95": 89.028,
+      "max": 90.151
+    },
+    "frame_ms": {
+      "mean": 11.534,
+      "min": 11.092,
+      "p5": 11.232,
+      "p95": 11.908,
+      "max": 11.913
+    },
+    "update_ms": {
+      "mean": 3.784,
+      "min": 3.638,
+      "p5": 3.656,
+      "p95": 3.987,
+      "max": 4.157
+    },
+    "scene_ms": {
+      "mean": 1.12,
+      "min": 1.066,
+      "p5": 1.07,
+      "p95": 1.214,
+      "max": 1.223
+    },
+    "left_eye_ms": {
+      "mean": 1.437,
+      "min": 1.393,
+      "p5": 1.397,
+      "p95": 1.5,
+      "max": 1.544
+    },
+    "right_eye_ms": {
+      "mean": 1.259,
+      "min": 1.207,
+      "p5": 1.207,
+      "p95": 1.326,
+      "max": 1.365
+    },
+    "finish_ms": {
+      "mean": 1.589,
+      "min": 1.542,
+      "p5": 1.543,
+      "p95": 1.652,
+      "max": 1.695
+    },
+    "submit_ms": {
+      "mean": 0.36,
+      "min": 0.34,
+      "p5": 0.343,
+      "p95": 0.369,
+      "max": 0.37
+    }
+  },
+  "vrapi": {
+    "samples": 30,
+    "fps": {
+      "mean": 87.233,
+      "min": 84,
+      "p5": 85,
+      "p95": 90,
+      "max": 90
+    },
+    "foveation_level": {
+      "mean": 1,
+      "min": 1,
+      "p5": 1,
+      "p95": 1,
+      "max": 1
+    },
+    "dynamic_foveation_samples": 0,
+    "app_ms": {
+      "mean": 7.956,
+      "min": 7.31,
+      "p5": 7.4,
+      "p95": 8.24,
+      "max": 8.32
+    },
+    "compositor_ms": {
+      "mean": 0.831,
+      "min": 0.69,
+      "p5": 0.69,
+      "p95": 1.09,
+      "max": 1.11
+    },
+    "cpu_gpu_ms": {
+      "mean": 19.631,
+      "min": 18.2,
+      "p5": 18.26,
+      "p95": 20.89,
+      "max": 21.33
+    },
+    "gpu_load": {
+      "mean": 0.802,
+      "min": 0.78,
+      "p5": 0.79,
+      "p95": 0.81,
+      "max": 0.82
+    },
+    "cpu_load": {
+      "mean": 0.354,
+      "min": 0.32,
+      "p5": 0.33,
+      "p95": 0.4,
+      "max": 0.44
+    },
+    "temperature_c": {
+      "mean": 35.133,
+      "min": 33,
+      "p5": 33,
+      "p95": 37,
+      "max": 37
+    },
+    "stale_frames": 142,
+    "torn_frames": 0
+  },
+  "memory": {
+    "total_pss_mib": 635.7,
+    "total_rss_mib": 769.9,
+    "graphics_pss_mib": 388.1
+  },
+  "screenshot": "/tmp/gui-demand-quest-optimized/many-brain-mixed-crowd-on-upgraded-ffr-low-1/many_mis.png"
+}

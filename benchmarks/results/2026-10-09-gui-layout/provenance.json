@@ -1,0 +1,17 @@
+{
+  "baseline": {
+    "source": "ae7fa5a3",
+    "apk_sha256": "5e407422c71ca5c13b8dab7714abaaabfb107d076bf16f6a72552f5e7fc535d4"
+  },
+  "optimized": {
+    "source": "93afc347",
+    "apk_sha256": "56378ae1155ce15df6d1eba58779413858689fa33fb190915801aabee3c03955"
+  },
+  "note": "Runner metadata commit identifies the benchmark harness checkout, not necessarily the installed APK. Both APKs are release builds. Serial numbers redacted.",
+  "order": [
+    "A1",
+    "B1",
+    "B2",
+    "A2"
+  ]
+}
