@@ -402,9 +402,16 @@ impl SceneObject {
         material: RefCell<Box<dyn Material>>,
         geometry: Rc<Box<dyn Geometry>>,
     ) -> SceneObject {
+        Self::create_with_shared_material(Rc::new(material), geometry)
+    }
+
+    pub fn create_with_shared_material(
+        material: Rc<RefCell<Box<dyn Material>>>,
+        geometry: Rc<Box<dyn Geometry>>,
+    ) -> SceneObject {
         let transform: Matrix4<f32> = Matrix4::identity();
         SceneObject {
-            material: Rc::new(material),
+            material,
             material_name: None,
             material_stack: None,
             geometry,
