@@ -609,9 +609,13 @@ in the shipping flag set.
 Terrain material includes, diffuse redirects, and square/rectangular
 `terrain_scale` / `tile_factor` values preserve the authored world tiling while increasing
 image detail. Missing art or incomplete/invalid sizing falls back to the
-original image **and** its dimensions. Water, existing animated terrain, and
-materials requiring UV effects retain their original art; this flag does not add material animation, UV
-scrolling, emissive passes, or new lighting. Classic installs are unchanged.
+original image **and** its dimensions. Single-pass numbered texture sequences now honor `ani_rate` (milliseconds) and
+`ani_mode PINGPONG`, including the Many's eight-frame `OMW` surface. Playback
+uses simulation time and turns around without duplicating endpoint frames.
+All frames must resolve before replacing the original material. Water and
+materials requiring UV or layered effects retain their original art; this
+flag does not add UV scrolling, emissive passes, or new lighting. Classic
+installs are unchanged.
 
 The main menu's bottom-left build label shows `dev | <commit>` for local builds
 and `v<version> | <commit>` for release builds. Click it three times to enable

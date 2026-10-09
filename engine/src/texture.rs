@@ -36,35 +36,98 @@ impl TextureTrait for Texture {
     }
 }
 
+/// Texture sequences use the simulation render clock, including deterministic
+/// debug stepping and pauses. Ping-pong turns around without holding endpoints.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlaybackMode {
+    #[default]
+    Loop,
+    PingPong,
+}
+
+impl PlaybackMode {
+    pub fn frame_index(self, time: f32, frame_time: f32, count: usize) -> usize {
+        if count <= 1 || !time.is_finite() || !frame_time.is_finite() || frame_time <= 0.0 {
+            return 0;
+        }
+        let period = match self {
+            Self::Loop => count,
+            Self::PingPong => 2 * (count - 1),
+        };
+        let phase = ((time.max(0.0) as f64 / frame_time as f64).floor() % period as f64) as usize;
+        if phase < count { phase } else { period - phase }
+    }
+}
+
 pub struct AnimatedTexture {
     textures: Vec<Rc<Texture>>,
     time_per_frame: f32,
+    playback: PlaybackMode,
 }
 
 impl AnimatedTexture {
     pub fn new(textures: Vec<Rc<Texture>>, duration_per_frame: Duration) -> AnimatedTexture {
-        AnimatedTexture {
+        Self::with_playback(textures, duration_per_frame, PlaybackMode::Loop)
+    }
+
+    pub fn with_playback(
+        textures: Vec<Rc<Texture>>,
+        duration_per_frame: Duration,
+        playback: PlaybackMode,
+    ) -> Self {
+        assert!(
+            !textures.is_empty(),
+            "animated textures require at least one frame"
+        );
+        Self {
             textures,
             time_per_frame: duration_per_frame.as_secs_f32(),
+            playback,
         }
+    }
+
+    fn current_frame(&self, context: &EngineRenderContext) -> &Texture {
+        &self.textures[self.playback.frame_index(
+            context.time,
+            self.time_per_frame,
+            self.textures.len(),
+        )]
     }
 }
 
 impl TextureTrait for AnimatedTexture {
     fn bind0(&self, render_context: &EngineRenderContext) {
-        let frame = (render_context.time / self.time_per_frame) as usize;
-        let frame = frame % self.textures.len();
-        bind0(&self.textures[frame]);
+        bind0(self.current_frame(render_context));
     }
     fn bind1(&self, render_context: &EngineRenderContext) {
-        let frame = (render_context.time / self.time_per_frame) as usize;
-        let frame = frame % self.textures.len();
-        bind1(&self.textures[frame]);
+        bind1(self.current_frame(render_context));
     }
     fn bind_to(&self, render_context: &EngineRenderContext, unit: u32) {
-        let frame = (render_context.time / self.time_per_frame) as usize;
-        let frame = frame % self.textures.len();
-        bind_to(&self.textures[frame], unit);
+        bind_to(self.current_frame(render_context), unit);
+    }
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::PlaybackMode;
+    #[test]
+    fn ping_pong_visits_every_frame_without_duplicate_endpoints() {
+        let frames: Vec<_> = (0..15)
+            .map(|tick| PlaybackMode::PingPong.frame_index(tick as f32 * 0.25, 0.25, 8))
+            .collect();
+        assert_eq!(frames, [0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0]);
+        assert_eq!(PlaybackMode::PingPong.frame_index(0.249, 0.25, 8), 0);
+        assert_eq!(PlaybackMode::Loop.frame_index(2.0, 0.25, 8), 0);
+    }
+    #[test]
+    fn degenerate_and_large_clocks_are_defined() {
+        for count in [0, 1] {
+            assert_eq!(PlaybackMode::PingPong.frame_index(7.0, 0.25, count), 0);
+        }
+        assert_eq!(PlaybackMode::PingPong.frame_index(-1.0, 0.25, 8), 0);
+        assert_eq!(PlaybackMode::PingPong.frame_index(f32::NAN, 0.25, 8), 0);
+        assert_eq!(PlaybackMode::PingPong.frame_index(1.0, 0.0, 8), 0);
+        assert!(PlaybackMode::PingPong.frame_index(f32::MAX, 0.25, 8) < 8);
     }
 }
 
