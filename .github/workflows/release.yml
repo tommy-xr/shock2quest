@@ -20,6 +20,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  notes:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Test release scripts
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: Generate changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/release-notes.py --repo "$GITHUB_REPOSITORY" --until "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: target/release-notes/
+          if-no-files-found: error
+          retention-days: 14
+
   apk:
     # Only reviewed code on main may access the signing secrets.
     if: github.ref == 'refs/heads/main'
@@ -87,7 +110,7 @@ jobs:
           retention-days: 14
 
   publish:
-    needs: apk
+    needs: [apk, notes]
     if: inputs.publish
     runs-on: ubuntu-24.04
     permissions:
@@ -121,6 +144,10 @@ jobs:
           test -s SHA256SUMS
           test "$(find . -type f | wc -l)" -eq 3
           sha256sum --check SHA256SUMS
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: target/release-notes
       - name: Publish release
         run: |
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF
@@ -132,6 +159,8 @@ jobs:
 
           Built from commit $GITHUB_SHA.
           EOF
+          printf '\n' >> "$RUNNER_TEMP/release-notes.md"
+          cat target/release-notes/changelog.md >> "$RUNNER_TEMP/release-notes.md"
           gh release create "$RELEASE_TAG" \
             --target "$GITHUB_SHA" --title "Shock2Quest $RELEASE_VERSION" --draft \
             --notes-file "$RUNNER_TEMP/release-notes.md" \
