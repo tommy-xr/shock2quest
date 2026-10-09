@@ -1,13 +1,13 @@
 //! Opt-in, data-driven workloads for repeatable renderer measurements.
 //! Setup uses ordinary mission effects; it never writes a save or changes defaults.
-use cgmath::{Matrix4, Quaternion, SquareMatrix, Vector3, point3};
+use cgmath::{point3, Matrix4, Quaternion, SquareMatrix, Vector3};
 use serde::{Deserialize, Serialize};
 use shipyard::EntityId;
 
 use crate::game_scene::DebugEntityMessage;
 use crate::mission::entity_creator::CreateEntityOptions;
 use crate::scripts::Effect;
-use crate::{Game, dev_params, free_camera};
+use crate::{dev_params, free_camera, Game};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -18,6 +18,15 @@ pub struct BenchmarkScene {
     pub camera_eye: [f32; 3],
     pub camera_look_at: [f32; 3],
     pub subject_model: String,
+    /// Additional models in a mixed crowd; counts are validated separately.
+    #[serde(default)]
+    pub additional_subjects: Vec<BenchmarkSubject>,
+    #[serde(default)]
+    pub upgraded_terrain: bool,
+    #[serde(default)]
+    pub terrain_wetness: f32,
+    #[serde(default)]
+    pub spotlight: Option<BenchmarkSpotlight>,
     pub expected_subject_meshes: usize,
     #[serde(default)]
     pub subject_templates: Vec<i32>,
@@ -35,9 +44,32 @@ pub struct BenchmarkScene {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct BenchmarkSubject {
+    pub model: String,
+    pub expected_meshes: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkSpotlight {
+    pub position: [f32; 3],
+    pub look_at: [f32; 3],
+    pub intensity: f32,
+    pub range: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BenchmarkSpawn {
     pub template_id: i32,
+    /// Static egg props still count as meshes but have no skeletal animation.
+    #[serde(default = "default_animated")]
+    pub animated: bool,
     pub position: [f32; 3],
+}
+
+fn default_animated() -> bool {
+    true
 }
 
 pub struct BenchmarkRun {
@@ -82,7 +114,69 @@ impl BenchmarkScene {
         {
             return Err("benchmark camera must have a nonzero look direction".into());
         }
+        if !scene.terrain_wetness.is_finite()
+            || !(0.0..=4.0).contains(&scene.terrain_wetness)
+            || (scene.terrain_wetness > 0.0 && !scene.upgraded_terrain)
+        {
+            return Err("wetness requires upgraded terrain and a strength in 0..=4".into());
+        }
+        let mut models = std::collections::HashSet::from([scene.subject_model.to_lowercase()]);
+        for subject in &scene.additional_subjects {
+            if subject.model.is_empty()
+                || subject.expected_meshes == 0
+                || !models.insert(subject.model.to_lowercase())
+            {
+                return Err(
+                    "benchmark subject models must be unique and have positive mesh counts".into(),
+                );
+            }
+        }
+        if let Some(light) = &scene.spotlight {
+            if !light
+                .position
+                .iter()
+                .chain(&light.look_at)
+                .all(|x| x.is_finite())
+                || free_camera::look_at_rotation(light.position.into(), light.look_at.into())
+                    .is_none()
+                || !light.intensity.is_finite()
+                || !(0.0..=10.0).contains(&light.intensity)
+                || !light.range.is_finite()
+                || !(0.1..=100.0).contains(&light.range)
+            {
+                return Err("invalid benchmark spotlight".into());
+            }
+        }
         Ok(scene)
+    }
+
+    /// Apply before asset mounting so classic and upgraded runs use the same APK.
+    pub fn configure(&self, features: &mut std::collections::HashSet<String>) {
+        if self.upgraded_terrain {
+            features.insert("upgraded_terrain".into());
+        } else {
+            features.remove("upgraded_terrain");
+        }
+        dev_params::set(
+            dev_params::OBJECT_LIGHTING,
+            if self.object_lighting { 1.0 } else { 0.0 },
+        );
+        dev_params::set(dev_params::TERRAIN_WETNESS, self.terrain_wetness);
+    }
+
+    pub fn spotlight(&self) -> Option<engine::scene::light::SpotLight> {
+        self.spotlight.as_ref().map(|light| {
+            let position: Vector3<f32> = light.position.into();
+            let target: Vector3<f32> = light.look_at.into();
+            let mut spot = engine::scene::light::SpotLight::new(
+                position,
+                target - position,
+                Vector3::new(1.0, 1.0, 1.0),
+                light.intensity,
+            );
+            spot.range = light.range;
+            spot
+        })
     }
 
     pub fn apply(self, game: &mut Game) -> Result<BenchmarkRun, String> {
@@ -151,19 +245,34 @@ impl BenchmarkScene {
         );
         let debug = game.debug_scene().unwrap();
         let prefix = format!("benchmark-{}-", self.name);
-        let subjects = debug
+        let spawned = debug
             .list_entities(None, Some(&prefix))
             .iter()
             .filter_map(|e| debug.resolve_entity_id(e.id))
             .collect::<Vec<_>>();
-        if subjects.len() != self.spawns.len() {
+        if spawned.len() != self.spawns.len() {
             return Err("benchmark spawn count mismatch".into());
         }
-        let subject_entities = subjects
+        let subject_entities = spawned
             .iter()
             .chain(&authored_subjects)
             .map(|id| id.inner())
             .collect();
+        let named = debug.list_entities(None, Some(&prefix));
+        let subjects = self
+            .spawns
+            .iter()
+            .enumerate()
+            .filter(|(_, spawn)| spawn.animated)
+            .map(|(index, _)| {
+                let name = format!("{prefix}{index}");
+                named
+                    .iter()
+                    .find(|entity| entity.name == name)
+                    .and_then(|entity| debug.resolve_entity_id(entity.id))
+                    .ok_or_else(|| format!("missing animated benchmark subject {name}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         dev_params::set(dev_params::FREE_CAMERA, 1.0);
         dev_params::set(dev_params::FREE_CAMERA_CULL_FROM_CAMERA, 1.0);
         Ok(BenchmarkRun {
@@ -240,6 +349,27 @@ impl BenchmarkRun {
                 })
             })
             .collect();
+        let additional_subjects: Vec<_> =
+            self.scene
+                .additional_subjects
+                .iter()
+                .map(|subject| {
+                    let matching: Vec<_> = scene
+                        .iter()
+                        .filter(|object| {
+                            object.debug_tag().is_some_and(|tag| {
+                                tag.entity_id
+                                    .is_some_and(|id| self.subject_entities.contains(&id))
+                                    && tag.model.as_ref().is_some_and(|model| {
+                                        model.eq_ignore_ascii_case(&subject.model)
+                                    })
+                            })
+                        })
+                        .collect();
+                    serde_json::json!({"model":subject.model,"meshes":matching.len(),
+                "lit_meshes":matching.iter().filter(|object| object.lights().is_some()).count()})
+                })
+                .collect();
         let animations: Vec<_> = self.subjects.iter().filter_map(|id| game.debug_scene()?.animation_state(*id))
             .map(|a| serde_json::json!({"entity":a.entity_id,"clip":a.clip,"frame":a.frame,"position":a.position})).collect();
         let lamp_intensities: Vec<_> = self
@@ -257,7 +387,9 @@ impl BenchmarkRun {
                     .and_then(|property| property.value.parse::<f32>().ok())
             })
             .collect();
-        serde_json::json!({"name":self.scene.name,"object_lighting":self.scene.object_lighting,
+        serde_json::json!({"name":self.scene.name,"object_lighting":dev_params::get_bool(dev_params::OBJECT_LIGHTING),
+            "upgraded_terrain":game.options.experimental_features.contains("upgraded_terrain"),
+            "terrain_wetness":dev_params::get(dev_params::TERRAIN_WETNESS),"additional_subjects":additional_subjects,
             "subject_meshes":meshes.len(),"expected_subject_meshes":self.scene.expected_subject_meshes,
             "lit_subject_meshes":meshes.iter().filter(|o| o.lights().is_some()).count(),
             "scene_objects":scene.len(),"animations":animations,"lamp_intensities":lamp_intensities,"setup_complete":self.setup_remaining.is_zero()})
@@ -284,8 +416,38 @@ mod tests {
     }
 
     #[test]
+    fn mixed_workload_rejects_invalid_modes_models_and_lights() {
+        let value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../benchmarks/scenes/many-brain-mixed-crowd.json"
+        ))
+        .unwrap();
+        for (field, invalid) in [
+            ("terrain_wetness", serde_json::json!(1.5)),
+            ("terrain_wetness", serde_json::json!(-1)),
+            (
+                "additional_subjects",
+                serde_json::json!([{"model":"RUMBLER","expected_meshes":1}]),
+            ),
+            (
+                "spotlight",
+                serde_json::json!({"position":[0,0,0],"look_at":[0,0,0],"intensity":1,"range":10}),
+            ),
+        ] {
+            let mut invalid_scene = value.clone();
+            invalid_scene[field] = invalid;
+            assert!(BenchmarkScene::parse(&invalid_scene.to_string()).is_err());
+        }
+        let scene = BenchmarkScene::parse(&value.to_string()).unwrap();
+        assert_eq!(
+            scene.spawns.iter().filter(|spawn| spawn.animated).count(),
+            6
+        );
+    }
+
+    #[test]
     fn checked_in_fixtures_have_explicit_subjects() {
         for json in [
+            include_str!("../../benchmarks/scenes/many-brain-mixed-crowd.json"),
             include_str!("../../benchmarks/scenes/rec1-court-lit.json"),
             include_str!("../../benchmarks/scenes/rec1-court-dark.json"),
             include_str!("../../benchmarks/scenes/rec1-six-hybrids.json"),

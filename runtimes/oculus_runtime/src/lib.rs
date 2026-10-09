@@ -570,7 +570,7 @@ fn main() {
     // Quest has no launch-flag UI: ship the physical gun path, including
     // recoil/contact feedback and downward weight. Handling can be compared
     // live through the Developer panel's Strength/Agility overrides.
-    let experimental_features = HashSet::from([
+    let mut experimental_features = HashSet::from([
         "physical_held_items".to_owned(),
         "physical_gun_weight".to_owned(),
     ]);
@@ -587,10 +587,7 @@ fn main() {
             Err(error) => panic!("cannot read benchmark-scene.json: {error}"),
         };
     if let Some(benchmark) = &benchmark_config {
-        shock2vr::dev_params::set(
-            shock2vr::dev_params::OBJECT_LIGHTING,
-            if benchmark.object_lighting { 1.0 } else { 0.0 },
-        );
+        benchmark.configure(&mut experimental_features);
     }
     let mission = benchmark_config
         .as_ref()
@@ -1509,6 +1506,7 @@ fn main() {
                 tracking,
                 true,
                 &scene,
+                benchmark_run.as_ref(),
                 false,
             )
         );
@@ -1526,6 +1524,7 @@ fn main() {
                 tracking,
                 true,
                 &scene,
+                benchmark_run.as_ref(),
                 true,
             )
         );
@@ -1928,6 +1927,7 @@ fn render_swapchain(
     tracking: shock2vr::vr_tracking::TrackingTransform,
     _log: bool,
     scene: &Vec<SceneObject>,
+    benchmark: Option<&shock2vr::benchmark_scene::BenchmarkRun>,
     is_last: bool,
 ) -> xr::Result<(Duration, Duration)> {
     let eye_started = Instant::now();
@@ -1990,7 +1990,11 @@ fn render_swapchain(
         let mut scene_for_render = Scene::from_objects(all_scene_objs);
 
         // Add hand spotlights (`hand_spotlights` dev param)
-        let hand_spotlights = game.get_hand_spotlights();
+        let hand_spotlights = if let Some(benchmark) = benchmark {
+            benchmark.scene.spotlight().into_iter().collect()
+        } else {
+            game.get_hand_spotlights()
+        };
         for spotlight in hand_spotlights {
             scene_for_render.lights_mut().add_light(spotlight);
         }

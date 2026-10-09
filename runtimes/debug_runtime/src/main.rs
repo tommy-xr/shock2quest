@@ -95,6 +95,9 @@ where
 #[command(name = "debug_runtime")]
 #[command(about = "HTTP-controlled game runtime for LLM testing and automation")]
 struct Args {
+    /// Load the same fixed-camera workload used by Quest benchmarks.
+    #[arg(long)]
+    benchmark_scene: Option<std::path::PathBuf>,
     /// Mission file to load (e.g., medsci1.mis), a debug scene name, or
     /// "main_menu". Defaults to the main menu, the same entry point the flat
     /// desktop runtime boots into - automation passes this explicitly anyway.
@@ -602,18 +605,32 @@ fn run_game_blocking(
     info!("Engine initialized successfully");
 
     info!("Step 5: Setting up game options...");
-    let experimental_features: HashSet<String> = args
+    let mut experimental_features: HashSet<String> = args
         .experimental
         .unwrap_or_default()
         .split(',')
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .collect();
+    let benchmark_config = args.benchmark_scene.as_ref().map(|path| {
+        shock2vr::benchmark_scene::BenchmarkScene::parse(
+            &std::fs::read_to_string(path).expect("cannot read benchmark scene"),
+        )
+        .expect("invalid benchmark scene")
+    });
+    if let Some(benchmark) = &benchmark_config {
+        benchmark.configure(&mut experimental_features);
+    }
     // A replay must run with the settings it was recorded under.
     let mut sorted_experimental: Vec<String> = experimental_features.iter().cloned().collect();
     sorted_experimental.sort();
 
-    let (mission, spawn_location) = parse_mission(&args.mission);
+    let (mission, spawn_location) = parse_mission(
+        benchmark_config
+            .as_ref()
+            .map(|b| b.mission.as_str())
+            .unwrap_or(&args.mission),
+    );
     info!("Mission parsed: {} with spawn location", mission);
 
     // Flatscreen is the default debug presentation (matching desktop_runtime);
@@ -645,6 +662,8 @@ fn run_game_blocking(
     info!("Step 6: Initializing game with mission: {}", mission);
 
     let mut game = Game::init(options, bundle_storage);
+    let mut benchmark_run =
+        benchmark_config.map(|config| config.apply(&mut game).expect("benchmark setup failed"));
 
     info!("Game initialized successfully with mission: {}", mission);
 
@@ -940,6 +959,9 @@ fn run_game_blocking(
             );
             // Use the selected fixed-step, recorded, or free-running clock
             // verbatim; reporting must never choose or advance gameplay time.
+            if let Some(benchmark) = &mut benchmark_run {
+                benchmark.advance_setup(&mut game, game_time.elapsed);
+            }
             snapshot_time = game_time.clone();
             if replay_frame.is_some() {
                 // The recorded frames after a transition were spent on the
@@ -1069,6 +1091,10 @@ fn run_game_blocking(
             accumulated_time // Use accumulated time, not real time
         };
 
+        if let Some(benchmark) = &benchmark_run {
+            let (head_offset, head_rotation) = tracked_head(&game, &current_input);
+            benchmark.place_camera(&mut game, head_offset, head_rotation);
+        }
         // Render the game
         let ratio = scr_width as f32 / scr_height as f32;
         let projection_matrix: cgmath::Matrix4<f32> = cgmath::perspective(
@@ -1108,6 +1134,14 @@ fn run_game_blocking(
         scene.extend(per_eye_scene);
 
         // Snapshot what the renderer is about to be handed, for `/v1/scene`.
+        if frame_counter != last_scene_frame && frame_counter % 60 == 0 {
+            if let Some(benchmark) = &benchmark_run {
+                println!(
+                    "SHOCK2QUEST_BENCHMARK {}",
+                    benchmark.observation(&game, &scene)
+                );
+            }
+        }
         last_scene = summarize_scene(&scene);
         last_scene_frame = frame_counter;
 
@@ -1115,7 +1149,11 @@ fn run_game_blocking(
         let mut scene_for_render = Scene::from_objects(scene);
 
         // Add hand spotlights
-        let hand_spotlights = game.get_hand_spotlights();
+        let hand_spotlights = if let Some(benchmark) = &benchmark_run {
+            benchmark.scene.spotlight().into_iter().collect()
+        } else {
+            game.get_hand_spotlights()
+        };
         for spotlight in hand_spotlights {
             scene_for_render.lights_mut().add_light(spotlight);
         }
