@@ -21,23 +21,34 @@ pub(crate) fn barrel_smoke(
 ) -> Option<ParticleSystem> {
     use crate::{
         runtime_props::{RuntimePropTransform, RuntimePropViewmodelToWorld},
-        weapon_modification::{self, Kind},
+        weapon_modification,
     };
-    use cgmath::{EuclideanSpace, Point3, Transform};
+    use cgmath::{EuclideanSpace, InnerSpace, Point3, Transform};
     use shipyard::{Get, View};
 
-    let laser = match weapon_modification::kind(world, weapon)? {
-        Kind::Pistol => false,
-        Kind::Laser => true,
-        _ => return None,
-    };
+    let kind = weapon_modification::kind(world, weapon)?;
     let frames = particle_frames(assets, "NDsmk");
     if frames.is_empty() {
         return None;
     }
     let transforms = world.borrow::<View<RuntimePropTransform>>().ok()?;
-    let mut frame =
-        crate::weapon_muzzle::resolve(world, weapon).shot_frame(transforms.get(weapon).ok()?.0);
+    let mut muzzle = crate::weapon_muzzle::resolve(world, weapon);
+    if matches!(
+        kind,
+        weapon_modification::Kind::Stasis | weapon_modification::Kind::Viral
+    ) {
+        // These authored projectile vhots sit inside a dish or organic mouth.
+        // Let cosmetic mist escape beyond the mesh's front, preserving the vhot's
+        // lateral position and leaving projectile/flash placement untouched.
+        if let Ok(caps) = world.borrow::<View<crate::weapon_muzzle::MuzzleFallback>>() {
+            if let Ok(cap) = caps.get(weapon) {
+                let axis = muzzle.axis.normalize();
+                let inset = (cap.point - muzzle.point).dot(axis).max(0.0);
+                muzzle.point += axis * (inset + 0.015);
+            }
+        }
+    }
+    let mut frame = muzzle.shot_frame(transforms.get(weapon).ok()?.0);
     if let Ok(mapping) = world.borrow::<View<RuntimePropViewmodelToWorld>>() {
         if let Ok(mapping) = mapping.get(weapon) {
             // Match the visible flat barrel's projection without scaling the
@@ -48,33 +59,113 @@ pub(crate) fn barrel_smoke(
                 .to_homogeneous();
         }
     }
-    let mut smoke = smoke_particles(laser, frames);
+    let mut smoke = smoke_particles(kind, frames);
     smoke.update(Duration::ZERO, frame);
     Some(smoke)
 }
 
-fn smoke_particles(laser: bool, frames: Vec<Rc<dyn TextureTrait>>) -> ParticleSystem {
+/// Small, bounded exhaust profiles. These change the after-shot character,
+/// never the authored muzzle flash or projectile effect.
+struct BarrelSmokeProfile {
+    count: usize,
+    lifetime: (f32, f32),
+    size: (f32, f32),
+    growth: f32,
+    rise: f32,
+    color: cgmath::Vector3<f32>,
+    alpha: f32,
+    fade: f32,
+    forward_speed: (f32, f32),
+}
+
+impl BarrelSmokeProfile {
+    fn for_weapon(kind: crate::weapon_modification::Kind) -> Self {
+        use crate::weapon_modification::Kind;
+        let ballistic = Self {
+            count: 3,
+            lifetime: (0.5, 0.8),
+            size: (0.06, 0.09),
+            growth: 0.2,
+            rise: 0.3,
+            color: vec3(0.65, 0.65, 0.65),
+            alpha: 0.2,
+            fade: 0.55,
+            forward_speed: (0.08, 0.2),
+        };
+        match kind {
+            Kind::Pistol | Kind::Shotgun | Kind::Grenade => ballistic,
+            // A restrained per-round puff keeps automatic fire readable.
+            Kind::Rifle => Self {
+                count: 2,
+                ..ballistic
+            },
+            Kind::Laser | Kind::Emp => Self {
+                count: 2,
+                lifetime: (0.3, 0.5),
+                size: (0.045, 0.07),
+                growth: 0.14,
+                rise: 0.12,
+                color: vec3(0.4, 0.7, 1.0),
+                alpha: 0.16,
+                fade: 0.35,
+                ..ballistic
+            },
+            // A fuller, slower green exhaust for the heavy energy weapon.
+            Kind::Fusion => Self {
+                lifetime: (0.65, 0.95),
+                size: (0.08, 0.12),
+                rise: 0.18,
+                color: vec3(0.35, 0.85, 0.3),
+                fade: 0.65,
+                ..ballistic
+            },
+            // Cold mist expands softly with very little upward acceleration.
+            Kind::Stasis => Self {
+                lifetime: (0.45, 0.7),
+                growth: 0.24,
+                rise: 0.04,
+                color: vec3(0.95, 0.97, 1.0),
+                alpha: 0.14,
+                forward_speed: (0.04, 0.1),
+                ..ballistic
+            },
+            // Both biological guns breathe a slow amber wisp.
+            Kind::Annelid | Kind::Viral => Self {
+                lifetime: (0.6, 0.9),
+                growth: 0.16,
+                rise: 0.1,
+                color: vec3(1.0, 0.65, 0.2),
+                alpha: 0.18,
+                fade: 0.65,
+                forward_speed: (0.035, 0.1),
+                ..ballistic
+            },
+        }
+    }
+}
+
+fn smoke_particles(
+    kind: crate::weapon_modification::Kind,
+    frames: Vec<Rc<dyn TextureTrait>>,
+) -> ParticleSystem {
+    let profile = BarrelSmokeProfile::for_weapon(kind);
     ParticleSystem::new()
         .with_one_shot(true)
         .with_world_space(true)
-        .with_num_particles(if laser { 2 } else { 3 })
+        .with_num_particles(profile.count)
         .with_launch_bounding_box(vec3(-0.008, -0.008, 0.005), vec3(0.008, 0.008, 0.025))
-        .with_lifetime(if laser { 0.3 } else { 0.5 }, if laser { 0.5 } else { 0.8 })
-        .with_particle_size(
-            if laser { 0.045 } else { 0.06 },
-            if laser { 0.07 } else { 0.09 },
+        .with_lifetime(profile.lifetime.0, profile.lifetime.1)
+        .with_particle_size(profile.size.0, profile.size.1)
+        .with_velocity(
+            vec3(-0.035, -0.015, profile.forward_speed.0),
+            vec3(0.035, 0.025, profile.forward_speed.1),
         )
-        .with_velocity(vec3(-0.035, -0.015, 0.08), vec3(0.035, 0.025, 0.2))
-        .with_acceleration(vec3(0.0, if laser { 0.12 } else { 0.3 }, 0.0))
-        .with_size_velocity(if laser { 0.14 } else { 0.2 })
-        .with_color(if laser {
-            vec3(0.4, 0.7, 1.0)
-        } else {
-            vec3(0.65, 0.65, 0.65)
-        })
-        .with_alpha(if laser { 0.16 } else { 0.2 })
+        .with_acceleration(vec3(0.0, profile.rise, 0.0))
+        .with_size_velocity(profile.growth)
+        .with_color(profile.color)
+        .with_alpha(profile.alpha)
         .with_fade_in_time(0.045)
-        .with_fade_time(if laser { 0.35 } else { 0.55 })
+        .with_fade_time(profile.fade)
         .with_sprite_animation(frames, Duration::from_millis(60), false)
 }
 
@@ -502,8 +593,20 @@ mod tests {
 
     #[test]
     fn barrel_smoke_expires_without_relaunching() {
-        for laser in [false, true] {
-            let mut particles = smoke_particles(laser, vec![]);
+        use crate::weapon_modification::Kind;
+        for kind in [
+            Kind::Pistol,
+            Kind::Shotgun,
+            Kind::Rifle,
+            Kind::Laser,
+            Kind::Emp,
+            Kind::Fusion,
+            Kind::Stasis,
+            Kind::Grenade,
+            Kind::Annelid,
+            Kind::Viral,
+        ] {
+            let mut particles = smoke_particles(kind, vec![]);
             particles.update(Duration::ZERO, Matrix4::identity());
             particles.update(Duration::from_millis(100), Matrix4::identity());
             assert!(!particles.is_done());
