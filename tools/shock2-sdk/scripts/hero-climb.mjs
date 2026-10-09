@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  GameServer, ladderHoldPoints, lookQuat, quatMultiply, quatRotate, recordClipInputs,
+  GameServer, ladderHoldPoints, laddersAlong, lookQuat, quatMultiply, quatRotate, recordClipInputs,
   viewRight, vrGrab, vrReach,
 } from "../dist/src/index.js";
 
@@ -96,16 +96,6 @@ async function setHandRotation(game, hand, world) {
   await game.input.set(`${hand}_hand.rotation`, quatMultiply([-x, -y, -z, w], world));
 }
 
-/** Every ladder segment the column through `near` crosses, from its model. */
-async function laddersOnColumn(game, near, fromY, toY) {
-  const ids = new Set();
-  for (let y = fromY; y <= toY; y += 0.2) {
-    const grip = (await game.physics.grip([near[0], y, near[2]])).grip;
-    if (grip?.kind === "ladder" && grip.entity_id !== null) ids.add(grip.entity_id);
-  }
-  return Promise.all([...ids].map((id) => game.physics.ladder(id)));
-}
-
 const game = await GameServer.launch({
   mission: "medsci1.mis",
   debugFlags: ["--vr", "--window-size", "1280x720"],
@@ -138,7 +128,7 @@ try {
   await game.input.lookAtWorldPoint([COLUMN[0], -1.5, 14.4]);
 
   const { player: start } = await game.info();
-  const ladders = await laddersOnColumn(game, COLUMN, start.position[1] - 2, start.position[1] + 5);
+  const ladders = await laddersAlong(game, COLUMN, start.position[1] - 2, start.position[1] + 5);
   assert.ok(ladders.length >= 3, `expected the stacked shaft ladder, found ${ladders.length} segments`);
   const toClimber = ladders[0].normal;
   // A point on the ladder face (its rails), for distances off it.
