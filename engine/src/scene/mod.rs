@@ -93,3 +93,5 @@ pub use clipped_screen_material::ClippedScreenMaterial;
 pub mod self_depth;
 
 pub mod world_wave;
+
+pub mod uv_motion;
