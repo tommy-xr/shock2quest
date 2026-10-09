@@ -589,7 +589,7 @@ opening follows the eye, while the lines remain fixed in tracking space.
 
 ### Developer options
 
-**Quest fixed foveated rendering (experimental).** FFR is off by default.
+**Quest fixed foveated rendering (experimental).** FFR uses fixed low by default.
 Put `off`, `low`, `medium`, or `high` in
 `/sdcard/shock2quest/ffr-level.txt` and restart to select a fixed level:
 
@@ -597,12 +597,12 @@ Put `off`, `low`, `medium`, or `high` in
 adb shell 'echo low > /sdcard/shock2quest/ffr-level.txt'
 ```
 
-Removing the file restores off. Missing OpenXR/GLES support or profile setup
-failure falls back to off for both eyes. `SHOCK2QUEST_FFR` reports requested
+Removing the file restores low. Invalid or unreadable settings fall back to off.
+Missing OpenXR/GLES support or profile setup failure falls back to off for both eyes. `SHOCK2QUEST_FFR` reports requested
 and effective levels. Benchmark fixtures override the file with their `ffr`
 setting (default `off`). This experiment changes neither refresh rate nor
-simulation timing; peripheral detail and text need headset review before
-choosing a shipping default.
+simulation timing. Headset review found low readable with a minor peripheral
+quality loss; use `off` for maximum clarity.
 
 
 **Upgraded terrain textures.** The remaster's wall, floor, and ceiling upgrades

@@ -1,9 +1,9 @@
 # Quest 120 Hz: an 8.33 ms frame budget
 
 Status: FFR implemented and measured in [PR #2124](https://github.com/tommy-xr/shock2quest/pull/2124),
-with default still off. The [16-run sweep](../benchmarks/results/2026-10-09-quest3-ffr.md)
+with low selected as the default after wearer review. The [16-run sweep](../benchmarks/results/2026-10-09-quest3-ffr.md)
 shows App-time savings but a warm-run freshness regression requiring isolation.
-Wearer review is underway. [CPU/clock diagnostics](https://github.com/tommy-xr/shock2quest/pull/2126)
+High blurred peripheral text; low remained readable with a minor quality loss. [CPU/clock diagnostics](https://github.com/tommy-xr/shock2quest/pull/2126)
 confirm frame-driven solver drift in a synthetic real-physics audit; device
 attribution is next. Refresh and simulation scheduling remain unchanged.
 
