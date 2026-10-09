@@ -766,30 +766,57 @@ pub fn get_first_link_with_template_and_data<TData: Clone>(
 
 /// Nightdive's impactor only replaces ballistic projectile families. Resolve
 /// classes from the mounted gamesys, never hardcode archetype/runtime IDs.
-pub(crate) fn ballistic_impact_surface(
+pub(crate) fn ballistic_impact_appearance(
     world: &World,
     projectile: EntityId,
+    victim: EntityId,
     surface_material: Option<&str>,
-) -> Option<crate::particle_effects::ImpactSurface> {
+) -> Option<crate::particle_effects::ImpactAppearance> {
     use crate::mission::mission_core::GlobalEntityMetadata;
-    let surface = crate::particle_effects::ImpactSurface::from_material(surface_material?)?;
+    use crate::particle_effects::{ImpactAppearance, ImpactSurface};
     let template = entity_class_template_id(world, projectile)?;
     let hierarchy = world.borrow::<UniqueView<GlobalTemplateHierarchy>>().ok()?;
     let metadata = world.borrow::<UniqueView<GlobalEntityMetadata>>().ok()?;
-    [
+    let belongs_to = |template, name: &str| {
+        metadata
+            .0
+            .get(name)
+            .is_some_and(|class| hierarchy.is_or_descends_from(template, class.template_id))
+    };
+    if ![
         "pistol & rifle projectiles",
         "shotgun projectiles",
         "grunt shotgun slug",
         "turret slug",
     ]
     .iter()
-    .any(|name| {
-        metadata
-            .0
-            .get(*name)
-            .is_some_and(|class| hierarchy.is_or_descends_from(template, class.template_id))
+    .any(|name| belongs_to(template, name))
+    {
+        return None;
+    }
+    if let Some(material) = surface_material {
+        return ImpactSurface::from_material(material).map(|surface| ImpactAppearance {
+            surface,
+            on_world: true,
+        });
+    }
+    let victim = resolve_proxy_entity(world, victim);
+    let victim_template = entity_class_template_id(world, victim)?;
+    // Explicit remaster overrides, from sq_scripts/impactor.nut. In particular
+    // assassins are metal despite their flesh classification in legacy data.
+    let surface = if belongs_to(victim_template, "grub") || belongs_to(victim_template, "arachnid")
+    {
+        ImpactSurface::Annelid
+    } else if belongs_to(victim_template, "assassin") {
+        ImpactSurface::Metal
+    } else {
+        let materials = world.borrow::<View<PropMaterial>>().ok()?;
+        ImpactSurface::from_material(&materials.get(victim).ok()?.tag()?)?
+    };
+    Some(ImpactAppearance {
+        surface,
+        on_world: false,
     })
-    .then_some(surface)
 }
 
 /// The impact effect (spang) a projectile spawns when it hits `victim`, from
@@ -1671,8 +1698,89 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn object_impacts_resolve_proxy_material_and_remaster_overrides_without_decals() {
+        use super::{
+            GlobalTemplateHierarchy, PropMaterial, PropTemplateId, ballistic_impact_appearance,
+        };
+        use crate::mission::mission_core::{EntityMetadata, GlobalEntityMetadata};
+        use crate::particle_effects::{ImpactAppearance, ImpactSurface};
+        use crate::runtime_props::RuntimePropProxyEntity;
+        use std::collections::HashMap;
+        let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(HashMap::from([
+            (-11, vec![-10]),
+            (-31, vec![-30]),
+        ])));
+        let metadata = [
+            ("pistol & rifle projectiles", -10),
+            ("grub", -30),
+            ("assassin", -40),
+        ]
+        .into_iter()
+        .map(|(name, template_id)| {
+            (
+                name.to_owned(),
+                EntityMetadata {
+                    template_id,
+                    obj_icon: None,
+                    obj_short_name: None,
+                    obj_name: None,
+                },
+            )
+        })
+        .collect();
+        world.add_unique(GlobalEntityMetadata(metadata));
+        let shot = world.add_entity((PropTemplateId { template_id: -11 },));
+        let grub = world.add_entity((
+            PropTemplateId { template_id: -31 },
+            PropMaterial("Material FleshTarget".into()),
+        ));
+        let proxy = world.add_entity((RuntimePropProxyEntity(grub),));
+        let assassin = world.add_entity((
+            PropTemplateId { template_id: -40 },
+            PropMaterial("Material Flesh".into()),
+        ));
+        let metal = world.add_entity((
+            PropTemplateId { template_id: -50 },
+            PropMaterial("Material MetalBig".into()),
+        ));
+        let glass = world.add_entity((
+            PropTemplateId { template_id: -60 },
+            PropMaterial("Material UBGlass".into()),
+        ));
+        for (victim, surface) in [
+            (proxy, ImpactSurface::Annelid),
+            (assassin, ImpactSurface::Metal),
+            (metal, ImpactSurface::Metal),
+            (glass, ImpactSurface::Glass),
+        ] {
+            assert_eq!(
+                ballistic_impact_appearance(&world, shot, victim, None),
+                Some(ImpactAppearance {
+                    surface,
+                    on_world: false
+                })
+            );
+        }
+        let human = world.add_entity((
+            PropTemplateId { template_id: -70 },
+            PropMaterial("Material FleshTarget".into()),
+        ));
+        assert_eq!(
+            ballistic_impact_appearance(&world, shot, human, None),
+            None,
+            "ordinary blood remains authored"
+        );
+        assert_eq!(
+            ballistic_impact_appearance(&world, shot, shot, None),
+            None,
+            "untagged objects must not acquire guessed metal effects"
+        );
+    }
+
+    #[test]
     fn material_bursts_require_a_known_ballistic_family_and_surface() {
-        use super::{GlobalTemplateHierarchy, PropTemplateId, ballistic_impact_surface};
+        use super::{GlobalTemplateHierarchy, PropTemplateId, ballistic_impact_appearance};
         use crate::mission::mission_core::{EntityMetadata, GlobalEntityMetadata};
         use crate::particle_effects::ImpactSurface;
         use std::collections::HashMap;
@@ -1690,16 +1798,22 @@ mod tests {
         let pellet = world.add_entity((PropTemplateId { template_id: -21 },));
         let energy = world.add_entity((PropTemplateId { template_id: -90 },));
         assert_eq!(
-            ballistic_impact_surface(&world, pellet, Some("plasticrete")),
-            Some(ImpactSurface::Plasticrete)
+            ballistic_impact_appearance(&world, pellet, pellet, Some("plasticrete")),
+            Some(crate::particle_effects::ImpactAppearance {
+                surface: ImpactSurface::Plasticrete,
+                on_world: true
+            })
         );
-        assert_eq!(ballistic_impact_surface(&world, pellet, None), None);
         assert_eq!(
-            ballistic_impact_surface(&world, pellet, Some("flesh")),
+            ballistic_impact_appearance(&world, pellet, pellet, None),
             None
         );
         assert_eq!(
-            ballistic_impact_surface(&world, energy, Some("metal")),
+            ballistic_impact_appearance(&world, pellet, pellet, Some("flesh")),
+            None
+        );
+        assert_eq!(
+            ballistic_impact_appearance(&world, energy, pellet, Some("metal")),
             None
         );
     }
