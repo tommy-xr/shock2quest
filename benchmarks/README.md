@@ -123,3 +123,25 @@ timing/visual sample. Counter IDs are discovered by name from the connected OS;
 
 The [Quest 120 Hz project](../projects/quest-120hz.md) tracks the 8.33 ms target,
 starting with FFR at 90 Hz and a physics-clock correctness gate before 120 Hz.
+
+## Fixed foveated rendering
+
+Use one release APK at 90 Hz, with upgraded terrain on and wetness off:
+
+```sh
+node tools/quest-bench/run.mjs --scene many-brain-mixed-crowd \
+  --lighting on --terrain upgraded --ffr all --repeats 4 \
+  --warmup 10 --seconds 30 --output /tmp/quest-ffr
+```
+
+The four repeats form a balanced Latin square: off/low/high/medium,
+low/medium/off/high, medium/high/low/off, high/off/medium/low. Each level
+occupies each order position once and every ordered adjacent pair occurs
+once. `--ffr fixture` honors the fixture (missing `ffr` means off).
+Single levels are also accepted. The fixture overrides `ffr-level.txt`.
+
+Each measured workload record must confirm the requested **and applied**
+level; app-PID VrApi telemetry must confirm the same fixed level with no
+`D` (dynamic) suffix. Unsupported fallback, absent evidence, or configured
+OS foveation overrides invalidate the comparison. Timing and optional
+`--gpu-seconds 10` hardware counters are separate intervals.

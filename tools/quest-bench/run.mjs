@@ -36,6 +36,9 @@ export function validateWorkload(text, fixture, seconds) {
     }
     if ((sample.upgraded_terrain ?? false) !== (fixture.upgraded_terrain ?? false) ||
         (sample.terrain_wetness ?? 0) !== (fixture.terrain_wetness ?? 0)) throw new Error('terrain mode mismatch');
+    if (sample.ffr_requested !== (fixture.ffr ?? 'off') || sample.ffr_effective !== (fixture.ffr ?? 'off')) {
+      throw new Error('FFR requested/effective mismatch or missing evidence');
+    }
     const groups = sample.additional_subjects ?? [];
     if (groups.length !== (fixture.additional_subjects?.length ?? 0)) throw new Error('missing model groups');
     for (const expected of fixture.additional_subjects ?? []) {
@@ -79,6 +82,25 @@ export function terrainRuns(repeats, lighting, terrain) {
   });
 }
 
+export function ffrRuns(repeats, lighting, terrain, ffr) {
+  // Balanced Latin square: each level occupies each position once across four
+  // repeats, with every ordered adjacent pair represented once.
+  const orders = [
+    ['off', 'low', 'high', 'medium'], ['low', 'medium', 'off', 'high'],
+    ['medium', 'high', 'low', 'off'], ['high', 'off', 'medium', 'low'],
+  ];
+  return terrainRuns(repeats, lighting, terrain).flatMap(run =>
+    (ffr === 'all' ? orders[(run.repeat - 1) % 4] : [ffr]).map(ffr => ({ ...run, ffr })));
+}
+
+export function validateFoveation(vrapi, level) {
+  const expected = ['off', 'low', 'medium', 'high'].indexOf(level);
+  if (expected < 0 || vrapi?.foveation_level?.min !== expected ||
+      vrapi?.foveation_level?.max !== expected || vrapi?.dynamic_foveation_samples !== 0) {
+    throw new Error(`VrApi did not confirm fixed FFR ${level}`);
+  }
+}
+
 export function terrainFixture(base, mode) {
   if (mode === 'fixture') return base;
   return { ...base, upgraded_terrain: mode !== 'classic', terrain_wetness: mode === 'wet' ? 1.5 : 0 };
@@ -120,10 +142,12 @@ async function main(argv) {
   const { values } = parseArgs({ args: argv, options: {
     'gpu-seconds': { type: 'string', default: '0' },
     terrain: { type: 'string', default: 'fixture' },
+    ffr: { type: 'string', default: 'fixture' },
     scene: { type: 'string', default: 'all' }, lighting: { type: 'string', default: 'both' },
     repeats: { type: 'string', default: '2' }, warmup: { type: 'string', default: '10' },
     seconds: { type: 'string', default: '30' }, output: { type: 'string' }, serial: { type: 'string' },
   }});
+  if (!['fixture', 'off', 'low', 'medium', 'high', 'all'].includes(values.ffr)) throw new Error('invalid FFR level');
   if (!['fixture', 'classic', 'upgraded', 'wet', 'all'].includes(values.terrain)) throw new Error('invalid terrain variant');
   if (!['off', 'on', 'both'].includes(values.lighting)) throw new Error('lighting must be off, on or both');
   for (const key of ['repeats', 'warmup', 'seconds']) {
@@ -150,11 +174,16 @@ async function main(argv) {
     commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
     dirty: !!execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim(),
     options: values,
+    foveationOverrides: Object.fromEntries(['level', 'dynamic'].map(key =>
+      [key, adb(serial, ['shell', 'getprop', `debug.oculus.foveation.${key}`])])),
     os: adb(serial, ['shell', 'getprop', 'ro.build.fingerprint']),
     // Record the mounted remaster data, not just the APK. Old loose data may
     // coexist on the device but the runtime gives these archives precedence.
     assets: adb(serial, ['shell', 'sha256sum /sdcard/shock2quest/sshock2.kpf /sdcard/shock2quest/mods/*.kpf']),
   };
+  if (Object.values(metadata.foveationOverrides).some(value => value !== '')) {
+    throw new Error('global foveation overrides are set; clear them before benchmarking application profiles');
+  }
   // Counter indices vary between OS versions; resolve the device's own list.
   const gpuMetrics = Number(values['gpu-seconds']) ? adb(serial, ['shell', 'ovrgpuprofiler', '-m']) : '';
   const gpuNames = ['GPU % Utilization', '% Time Shading Vertices', '% Time Shading Fragments',
@@ -176,15 +205,16 @@ async function main(argv) {
     adb(serial, ['logcat', '-b', 'main', '-G', '16M']);
     for (const file of files) {
       const base = JSON.parse(readFileSync(resolve(sceneDir, file), 'utf8'));
-      for (const { repeat, mode, terrain } of terrainRuns(Number(values.repeats), values.lighting, values.terrain)) {
+      for (const { repeat, mode, terrain, ffr } of ffrRuns(Number(values.repeats), values.lighting, values.terrain, values.ffr)) {
         if (cancellation.signal.aborted) throw new Error('benchmark interrupted');
         const fixture = terrainFixture({ ...base, object_lighting: mode === 'on' }, terrain);
-        const directory = resolve(output, `${fixture.name}-${mode}-${terrain}-${repeat}`);
+        fixture.ffr = ffr === 'fixture' ? (fixture.ffr ?? 'off') : ffr;
+        const directory = resolve(output, `${fixture.name}-${mode}-${terrain}-ffr-${fixture.ffr}-${repeat}`);
         mkdirSync(directory, { recursive: true });
         const localConfig = resolve(directory, 'fixture.json');
         writeFileSync(localConfig, JSON.stringify(fixture, null, 2) + '\n');
-        const run = { scene: fixture.name, mode, terrain, repeat, directory, status: 'failed' };
-        process.stdout.write(`Measuring ${fixture.name} lighting=${mode} terrain=${terrain} repeat=${repeat}\n`);
+        const run = { scene: fixture.name, mode, terrain, ffr: fixture.ffr, repeat, directory, status: 'failed' };
+        process.stdout.write(`Measuring ${fixture.name} lighting=${mode} terrain=${terrain} ffr=${fixture.ffr} repeat=${repeat}\n`);
         try {
           adb(serial, ['push', localConfig, configPath]);
           writeFileSync(resolve(directory, 'battery-before.txt'), adb(serial, ['shell', 'dumpsys', 'battery']));
@@ -195,6 +225,7 @@ async function main(argv) {
           if (result.status !== 'ok') throw new Error(result.error ?? result.visual_error ?? result.status);
           const telemetry = readFileSync(resolve(directory, `${fixture.mission.replace(/[^A-Za-z0-9_-]/g, '_')}.telemetry.log`), 'utf8');
           run.workload = validateWorkload(telemetry, fixture, Number(values.seconds));
+          validateFoveation(result.vrapi, fixture.ffr);
           run.result = result;
           run.status = 'ok';
           if (gpuMetrics) {
@@ -226,7 +257,7 @@ async function main(argv) {
           writeFileSync(resolve(output, 'results.json'), JSON.stringify({ metadata, runs }, null, 2) + '\n');
           const report = renderMarkdown(runs.map(run => ({
             ...run.result, status: run.status, error: run.error ?? run.battery_error,
-            mission: `${run.scene} / ${run.mode} / ${run.terrain} / ${run.repeat}`,
+            mission: `${run.scene} / ${run.mode} / ${run.terrain} / FFR ${run.ffr} / ${run.repeat}`,
           })), {
             ...runs.find(run => run.result)?.result.device,
             warmup: Number(values.warmup), seconds: Number(values.seconds),

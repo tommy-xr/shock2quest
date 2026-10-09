@@ -25,6 +25,9 @@ pub struct BenchmarkScene {
     pub upgraded_terrain: bool,
     #[serde(default)]
     pub terrain_wetness: f32,
+    /// Quest-only fixed foveation. Fixtures override the device's opt-in file.
+    #[serde(default = "default_ffr")]
+    pub ffr: String,
     #[serde(default)]
     pub spotlight: Option<BenchmarkSpotlight>,
     pub expected_subject_meshes: usize,
@@ -72,6 +75,10 @@ fn default_animated() -> bool {
     true
 }
 
+fn default_ffr() -> String {
+    "off".into()
+}
+
 pub struct BenchmarkRun {
     pub scene: BenchmarkScene,
     subjects: Vec<EntityId>,
@@ -83,6 +90,9 @@ pub struct BenchmarkRun {
 impl BenchmarkScene {
     pub fn parse(json: &str) -> Result<Self, String> {
         let scene: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        if !matches!(scene.ffr.as_str(), "off" | "low" | "medium" | "high") {
+            return Err("benchmark ffr must be off, low, medium or high".into());
+        }
         if scene.name.is_empty()
             || !scene
                 .name
@@ -424,6 +434,7 @@ mod tests {
         ))
         .unwrap();
         for (field, invalid) in [
+            ("ffr", serde_json::json!("dynamic")),
             ("terrain_wetness", serde_json::json!(1.5)),
             ("terrain_wetness", serde_json::json!(-1)),
             (
@@ -440,6 +451,7 @@ mod tests {
             assert!(BenchmarkScene::parse(&invalid_scene.to_string()).is_err());
         }
         let scene = BenchmarkScene::parse(&value.to_string()).unwrap();
+        assert_eq!(scene.ffr, "off");
         assert_eq!(
             scene.spawns.iter().filter(|spawn| spawn.animated).count(),
             6

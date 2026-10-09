@@ -22,6 +22,7 @@ use tracing;
 
 mod android_permissions;
 mod debug_input;
+mod foveation;
 mod frame_profiler;
 mod passthrough;
 mod quest_config;
@@ -116,6 +117,7 @@ fn main() {
     enabled_extensions.khr_opengl_es_enable = true;
     enabled_extensions.fb_display_refresh_rate = true;
     enabled_extensions.fb_passthrough = available_extensions.fb_passthrough;
+    foveation::enable_extensions(&available_extensions, &mut enabled_extensions);
     #[cfg(target_os = "android")]
     {
         enabled_extensions.khr_android_create_instance = true;
@@ -589,6 +591,11 @@ fn main() {
     if let Some(benchmark) = &benchmark_config {
         benchmark.configure(&mut experimental_features);
     }
+    let requested_ffr = benchmark_config
+        .as_ref()
+        .map(|scene| foveation::Level::parse(&scene.ffr).expect("validated FFR level"))
+        .unwrap_or_else(foveation::configured_level);
+    let mut effective_ffr = foveation::Level::Off;
     let mission = benchmark_config
         .as_ref()
         .map(|b| b.mission.clone())
@@ -1290,25 +1297,13 @@ fn main() {
                 let width = views[0].recommended_image_rect_width;
                 let height = views[0].recommended_image_rect_height;
 
+                let pair = foveation::create(&session, &views, requested_ffr)?;
+                effective_ffr = pair.effective;
+                let profile = pair.profile;
                 let swapchain_handles = views
                     .into_iter()
-                    .map(|view| {
-                        let swapchain = session.create_swapchain(&xr::SwapchainCreateInfo {
-                            create_flags: xr::SwapchainCreateFlags::EMPTY,
-                            usage_flags: xr::SwapchainUsageFlags::COLOR_ATTACHMENT
-                                | xr::SwapchainUsageFlags::SAMPLED,
-                            format: gl::SRGB8_ALPHA8,
-                            // The Vulkan graphics pipeline we create is not set up for multisampling,
-                            // so we hardcode this to 1. If we used a proper multisampling setup, we
-                            // could set this to `views[0].recommended_swapchain_sample_count`.
-                            sample_count: 1,
-                            width: view.recommended_image_rect_width,
-                            height: view.recommended_image_rect_height,
-                            face_count: 1,
-                            array_size: 1,
-                            mip_count: 1,
-                        })?;
-
+                    .zip(pair.handles)
+                    .map(|(view, swapchain)| {
                         let images = swapchain.enumerate_images()?;
 
                         let buffers = images
@@ -1392,6 +1387,7 @@ fn main() {
                             height,
                             view,
                             handle: RefCell::new(swapchain),
+                            _foveation_profile: profile.clone(),
                             framebuffers: buffers,
                             lease: RefCell::new(xr_recovery::ImageLease::default()),
                         })
@@ -1655,10 +1651,10 @@ fn main() {
         }) {
             print_frame_report(&mission, session_focused, report);
             if let (Some(benchmark), App::Ready(game)) = (&benchmark_run, &game) {
-                println!(
-                    "SHOCK2QUEST_BENCHMARK {}",
-                    benchmark.observation(game, &scene)
-                );
+                let mut observation = benchmark.observation(game, &scene);
+                observation["ffr_requested"] = requested_ffr.as_str().into();
+                observation["ffr_effective"] = effective_ffr.as_str().into();
+                println!("SHOCK2QUEST_BENCHMARK {observation}");
             }
         }
 
@@ -2038,6 +2034,7 @@ struct Swapchain {
     height: i32,
     view: xr::ViewConfigurationView,
     handle: RefCell<xr::Swapchain<xr::OpenGlEs>>,
+    _foveation_profile: Option<xr::FoveationProfileFB>,
     framebuffers: Vec<Framebuffer>,
     lease: RefCell<xr_recovery::ImageLease>,
     //     buffers: Vec<Framebuffer>,

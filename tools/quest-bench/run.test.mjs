@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { validateWorkload, runOrder } from './run.mjs';
 
 const fixture = { name: 'stress', object_lighting: true, expected_subject_meshes: 2, spawns: [{}] };
-const sample = frame => ({ name: 'stress', setup_complete: true, object_lighting: true, subject_meshes: 2,
+const sample = frame => ({ name: 'stress', setup_complete: true, object_lighting: true, ffr_requested: 'off', ffr_effective: 'off', subject_meshes: 2,
   lit_subject_meshes: 2, lamp_intensities: [], animations: [{ entity: 12, clip: 'idle', frame }] });
 const logs = samples => samples.map(s => `SHOCK2QUEST_PERF focused=true\nSHOCK2QUEST_BENCHMARK ${JSON.stringify(s)}`).join('\n');
 
@@ -72,4 +72,32 @@ test('GPU output uses metric names and accepts terminal line endings', async () 
 test('rejects unavailable GPU counter sentinels instead of averaging them', async () => {
   const { parseGpuCounters } = await import('./run.mjs');
   assert.throws(() => parseGpuCounters('Fragments Shaded / Second : -1.000'), /invalid GPU counter/);
+});
+
+
+test('FFR matrix balances positions and ordered neighbors across four repeats', async () => {
+  const { ffrRuns } = await import('./run.mjs');
+  const runs = ffrRuns(4, 'on', 'upgraded', 'all');
+  assert.equal(runs.length, 16);
+  for (let position = 0; position < 4; position++) {
+    assert.equal(new Set(runs.filter((_, i) => i % 4 === position).map(run => run.ffr)).size, 4);
+  }
+  const pairs = [];
+  for (let i = 0; i < runs.length; i++) if (i % 4 !== 3) pairs.push(`${runs[i].ffr}/${runs[i + 1].ffr}`);
+  assert.equal(new Set(pairs).size, 12);
+});
+
+test('FFR rejects unsupported fallback, missing evidence and dynamic runtime overrides', async () => {
+  const { validateFoveation } = await import('./run.mjs');
+  const high = { ...fixture, ffr: 'high' };
+  const samples = [sample(1), sample(2)].map(s => ({ ...s, ffr_requested: 'high', ffr_effective: 'high' }));
+  assert.equal(validateWorkload(logs(samples), high, 2).length, 2);
+  for (const ffr_effective of ['off', undefined]) {
+    assert.throws(() => validateWorkload(logs([samples[0], { ...samples[1], ffr_effective }]), high, 2), /FFR/);
+  }
+  validateFoveation({ foveation_level: { min: 3, max: 3 }, dynamic_foveation_samples: 0 }, 'high');
+  for (const value of [undefined, { foveation_level: { min: 0, max: 3 }, dynamic_foveation_samples: 0 },
+    { foveation_level: { min: 3, max: 3 }, dynamic_foveation_samples: 1 }]) {
+    assert.throws(() => validateFoveation(value, 'high'), /FFR/);
+  }
 });
