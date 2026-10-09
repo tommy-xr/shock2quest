@@ -764,6 +764,34 @@ pub fn get_first_link_with_template_and_data<TData: Clone>(
         .map(|(template_id, data)| (*template_id, data.clone()))
 }
 
+/// Nightdive's impactor only replaces ballistic projectile families. Resolve
+/// classes from the mounted gamesys, never hardcode archetype/runtime IDs.
+pub(crate) fn ballistic_impact_surface(
+    world: &World,
+    projectile: EntityId,
+    surface_material: Option<&str>,
+) -> Option<crate::particle_effects::ImpactSurface> {
+    use crate::mission::mission_core::GlobalEntityMetadata;
+    let surface = crate::particle_effects::ImpactSurface::from_material(surface_material?)?;
+    let template = entity_class_template_id(world, projectile)?;
+    let hierarchy = world.borrow::<UniqueView<GlobalTemplateHierarchy>>().ok()?;
+    let metadata = world.borrow::<UniqueView<GlobalEntityMetadata>>().ok()?;
+    [
+        "pistol & rifle projectiles",
+        "shotgun projectiles",
+        "grunt shotgun slug",
+        "turret slug",
+    ]
+    .iter()
+    .any(|name| {
+        metadata
+            .0
+            .get(*name)
+            .is_some_and(|class| hierarchy.is_or_descends_from(template, class.template_id))
+    })
+    .then_some(surface)
+}
+
 /// The impact effect (spang) a projectile spawns when it hits `victim`, from
 /// the projectile's authored spang links:
 /// - a creature hit spawns the `HitSpang` whose victim archetype class the
@@ -1642,6 +1670,40 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn material_bursts_require_a_known_ballistic_family_and_surface() {
+        use super::{GlobalTemplateHierarchy, PropTemplateId, ballistic_impact_surface};
+        use crate::mission::mission_core::{EntityMetadata, GlobalEntityMetadata};
+        use crate::particle_effects::ImpactSurface;
+        use std::collections::HashMap;
+        let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(HashMap::from([(-21, vec![-20])])));
+        world.add_unique(GlobalEntityMetadata(HashMap::from([(
+            "shotgun projectiles".to_owned(),
+            EntityMetadata {
+                template_id: -20,
+                obj_icon: None,
+                obj_short_name: None,
+                obj_name: None,
+            },
+        )])));
+        let pellet = world.add_entity((PropTemplateId { template_id: -21 },));
+        let energy = world.add_entity((PropTemplateId { template_id: -90 },));
+        assert_eq!(
+            ballistic_impact_surface(&world, pellet, Some("plasticrete")),
+            Some(ImpactSurface::Plasticrete)
+        );
+        assert_eq!(ballistic_impact_surface(&world, pellet, None), None);
+        assert_eq!(
+            ballistic_impact_surface(&world, pellet, Some("flesh")),
+            None
+        );
+        assert_eq!(
+            ballistic_impact_surface(&world, energy, Some("metal")),
+            None
+        );
+    }
+
     use super::{
         active_gun_setting, debit_player_nanites, door_blocks_pathfinding, door_is_closed,
         door_open_progress, has_second_fire_mode, is_always_collected, is_nanite_pickup,

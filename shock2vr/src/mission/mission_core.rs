@@ -7611,6 +7611,7 @@ impl MissionCore {
             |prop_particle_group: View<PropParticleGroup>,
              prop_particle_launch_info: View<PropParticleLaunchInfo>,
              templates: View<PropTemplateId>,
+             impact_surfaces: View<crate::particle_effects::ImpactSurface>,
              attachments: View<RuntimePropAttachment>,
              v_transient_fx: View<crate::runtime_props::RuntimePropTransientFx>,
              transform: View<RuntimePropTransform>| {
@@ -7633,6 +7634,13 @@ impl MissionCore {
                     }
                     let particle_system =
                         self.id_to_particle_system.entry(id).or_insert_with(|| {
+                            if let Some(effect) = impact_surfaces
+                                .get(id)
+                                .ok()
+                                .and_then(|surface| surface.build(asset_cache))
+                            {
+                                return effect;
+                            }
                             let enhanced = templates.get(id).ok().and_then(|template| {
                                 let lookup = |name: &str| {
                                     self.template_name_to_template_id
