@@ -589,6 +589,30 @@ opening follows the eye, while the lines remain fixed in tracking space.
 
 ### Developer options
 
+**Upgraded terrain textures (experimental).** Opt into the remaster's static
+wall, floor, and ceiling textures with `--experimental upgraded_terrain` on
+desktop or the debug runtime. It is **off by default**, pending Quest memory
+and performance measurements. Restart to change it; a save does not store the
+flag. For a MedSci comparison:
+
+```bash
+cargo dbgr --mission medsci1.mis --port 8080
+cargo dbgr --mission medsci1.mis --port 8080 --experimental upgraded_terrain
+```
+
+Run these separately and use the same camera and stepping sequence. Add `--vr`
+to either for the VR presentation. Startup prints `upgraded terrain textures:
+true/false`. The Quest runtime can pass the same `upgraded_terrain` entry in
+`GameOptions.experimental_features` for a later A/B build; it remains disabled
+in the shipping flag set.
+
+Terrain material includes, diffuse redirects, and square/rectangular
+`terrain_scale` / `tile_factor` values preserve the authored world tiling while increasing
+image detail. Missing art or incomplete/invalid sizing falls back to the
+original image **and** its dimensions. Water, existing animated terrain, and
+materials requiring UV effects retain their original art; this flag does not add material animation, UV
+scrolling, emissive passes, or new lighting. Classic installs are unchanged.
+
 The main menu's bottom-left build label shows `dev | <commit>` for local builds
 and `v<version> | <commit>` for release builds. Click it three times to enable
 Developer. In VR, point at the label and press/release the trigger three times.
