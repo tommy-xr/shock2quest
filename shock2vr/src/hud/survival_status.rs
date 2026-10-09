@@ -106,12 +106,23 @@ impl SurvivalStatus {
     }
 }
 
-/// Above a payphone on each floor, with the face just in front of its wall.
+/// Surveyed Earth wall faces, offset 0.03 along their outward normals to avoid
+/// z-fighting. The sloped face is z = 0.5*y + 27.2, with normal (0,-1,2)/sqrt(5).
 /// Placement and canvas are shared by desktop and VR; these are ordinary
 /// depth-tested world objects, never a per-eye overlay.
-const SCREENS: [([f32; 3], f32); 2] = [
-    ([21.5558, 4.8, 12.32], 180.0),
-    ([46.7478, 23.8, 20.07], 0.0),
+/// Entries are (center, yaw degrees, pitch degrees, debug name).
+const SCREENS: [([f32; 3], f32, f32, &str); 4] = [
+    // Below the protruding UNN sign, with the bottom still on the wall face.
+    ([11.72, 26.45, 38.77], 180.0, 0.0, "Street status / UNN"),
+    (
+        [11.61, 26.656584, 40.561832],
+        0.0,
+        26.565052,
+        "Street status / sloped passage",
+    ),
+    // Center the full 2.7-wide screen on the pillar spanning x = 5.2..8.4.
+    ([6.8, 24.82, 18.03], 0.0, 0.0, "Street status / pillar"),
+    ([10.88, 5.5, 12.77], 180.0, 0.0, "Subway status"),
 ];
 
 pub(crate) fn render(world: &World, assets: &mut AssetCache) -> Vec<SceneObject> {
@@ -121,21 +132,14 @@ pub(crate) fn render(world: &World, assets: &mut AssetCache) -> Vec<SceneObject>
     let canvas = status.canvas();
     SCREENS
         .into_iter()
-        .enumerate()
-        .flat_map(|(floor, (position, yaw))| {
+        .flat_map(|(position, yaw, pitch, name)| {
             let root = Matrix4::from_translation(position.into())
                 * Matrix4::from_angle_y(Deg(yaw))
+                * Matrix4::from_angle_x(Deg(pitch))
                 * Matrix4::from_nonuniform_scale(2.7, 1.65, 1.0);
             let tag = Rc::new(SceneObjectDebugTag {
                 source: Some("survival_status_screen".into()),
-                name: Some(
-                    if floor == 0 {
-                        "Subway status"
-                    } else {
-                        "Street status"
-                    }
-                    .into(),
-                ),
+                name: Some(name.into()),
                 entity_id: None,
                 model: None,
             });

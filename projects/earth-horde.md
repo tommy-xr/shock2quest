@@ -17,7 +17,10 @@ Validation includes director unit tests for timing, final-wave/endless gating, r
 ## Wave status screens
 
 Dedicated world screens on both the subway and street floors show the same
-readout in flatscreen and VR. During rest, they show the next wave and its
+readout in flatscreen and VR. Three screens serve the upper street floor (the
+UNN sign wall, the sloped passage face, and the narrow pillar); one serves the
+subway. Their placement follows surveyed wall normals, including the passage
+face’s 26.565° tilt. During rest, they show the next wave and its
 countdown, with a progress bar that fills as the rest elapses. During combat,
 they show the current wave, enemies active (alive), and enemies remaining
 (including those not yet spawned); the bar fills as the wave's enemies are
