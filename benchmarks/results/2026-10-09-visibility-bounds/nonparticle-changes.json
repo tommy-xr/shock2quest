@@ -1,0 +1,500 @@
+{
+  "many-flat": {
+    "crowd-0": {
+      "added": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -179,
+            "Midwife"
+          ],
+          "layer": "world",
+          "model": "fembot",
+          "source": "entity"
+        }
+      ],
+      "removed": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -180,
+            "Rumbler"
+          ],
+          "layer": "world",
+          "model": "rumbler",
+          "source": "entity"
+        }
+      ]
+    },
+    "crowd-1": {
+      "added": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -179,
+            "Midwife"
+          ],
+          "layer": "world",
+          "model": "fembot",
+          "source": "entity"
+        }
+      ],
+      "removed": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -180,
+            "Rumbler"
+          ],
+          "layer": "world",
+          "model": "rumbler",
+          "source": "entity"
+        }
+      ]
+    },
+    "crowd-2": {
+      "added": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -179,
+            "Midwife"
+          ],
+          "layer": "world",
+          "model": "fembot",
+          "source": "entity"
+        }
+      ],
+      "removed": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -180,
+            "Rumbler"
+          ],
+          "layer": "world",
+          "model": "rumbler",
+          "source": "entity"
+        }
+      ]
+    },
+    "crowd-3": {
+      "added": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -179,
+            "Midwife"
+          ],
+          "layer": "world",
+          "model": "fembot",
+          "source": "entity"
+        }
+      ],
+      "removed": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -180,
+            "Rumbler"
+          ],
+          "layer": "world",
+          "model": "rumbler",
+          "source": "entity"
+        }
+      ]
+    },
+    "crowd-4": {
+      "added": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -179,
+            "Midwife"
+          ],
+          "layer": "world",
+          "model": "fembot",
+          "source": "entity"
+        }
+      ],
+      "removed": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -180,
+            "Rumbler"
+          ],
+          "layer": "world",
+          "model": "rumbler",
+          "source": "entity"
+        }
+      ]
+    },
+    "crowd-5": {
+      "added": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -179,
+            "Midwife"
+          ],
+          "layer": "world",
+          "model": "fembot",
+          "source": "entity"
+        }
+      ],
+      "removed": [
+        {
+          "backface_culling": null,
+          "depth_write": true,
+          "identity": [
+            -180,
+            "Rumbler"
+          ],
+          "layer": "world",
+          "model": "rumbler",
+          "source": "entity"
+        }
+      ]
+    }
+  },
+  "medsci-flat": {
+    "corpse-0": {
+      "added": [],
+      "removed": []
+    },
+    "corpse-90": {
+      "added": [
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": false,
+          "identity": [
+            464,
+            "UBWin_10x2x4"
+          ],
+          "layer": "world",
+          "model": "wnd_24",
+          "source": "entity"
+        }
+      ],
+      "removed": []
+    },
+    "corpse-180": {
+      "added": [],
+      "removed": []
+    },
+    "corpse-270": {
+      "added": [],
+      "removed": []
+    },
+    "keypad-0": {
+      "added": [],
+      "removed": []
+    },
+    "keypad-90": {
+      "added": [
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": true,
+          "identity": [
+            239,
+            "Railing 4x16"
+          ],
+          "layer": "world",
+          "model": "brail16",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": true,
+          "identity": [
+            250,
+            "Railing 4x16"
+          ],
+          "layer": "world",
+          "model": "brail16",
+          "source": "entity"
+        }
+      ],
+      "removed": []
+    },
+    "keypad-180": {
+      "added": [
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": false,
+          "identity": [
+            1309,
+            "Security Glass"
+          ],
+          "layer": "world",
+          "model": "bulletpr",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": false,
+          "identity": [
+            1309,
+            "Security Glass"
+          ],
+          "layer": "world",
+          "model": "bulletpr",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": false,
+          "identity": [
+            1309,
+            "Security Glass"
+          ],
+          "layer": "world",
+          "model": "bulletpr",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": true,
+          "identity": [
+            250,
+            "Railing 4x16"
+          ],
+          "layer": "world",
+          "model": "brail16",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": true,
+          "identity": [
+            333,
+            "Pipe 16x3"
+          ],
+          "layer": "world",
+          "model": "pipel3",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": true,
+          "identity": [
+            337,
+            "Pipe 16x3"
+          ],
+          "layer": "world",
+          "model": "pipel3",
+          "source": "entity"
+        }
+      ],
+      "removed": []
+    },
+    "keypad-270": {
+      "added": [],
+      "removed": []
+    },
+    "return-0": {
+      "added": [],
+      "removed": []
+    },
+    "return-90": {
+      "added": [
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": false,
+          "identity": [
+            464,
+            "UBWin_10x2x4"
+          ],
+          "layer": "world",
+          "model": "wnd_24",
+          "source": "entity"
+        }
+      ],
+      "removed": []
+    },
+    "return-180": {
+      "added": [],
+      "removed": []
+    },
+    "return-270": {
+      "added": [],
+      "removed": []
+    }
+  },
+  "medsci-vr": {
+    "corpse-0": {
+      "added": [],
+      "removed": []
+    },
+    "corpse-90": {
+      "added": [
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": false,
+          "identity": [
+            464,
+            "UBWin_10x2x4"
+          ],
+          "layer": "world",
+          "model": "wnd_24",
+          "source": "entity"
+        }
+      ],
+      "removed": []
+    },
+    "corpse-180": {
+      "added": [],
+      "removed": []
+    },
+    "corpse-270": {
+      "added": [],
+      "removed": []
+    },
+    "keypad-0": {
+      "added": [],
+      "removed": []
+    },
+    "keypad-90": {
+      "added": [
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": true,
+          "identity": [
+            239,
+            "Railing 4x16"
+          ],
+          "layer": "world",
+          "model": "brail16",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": true,
+          "identity": [
+            250,
+            "Railing 4x16"
+          ],
+          "layer": "world",
+          "model": "brail16",
+          "source": "entity"
+        }
+      ],
+      "removed": []
+    },
+    "keypad-180": {
+      "added": [
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": false,
+          "identity": [
+            1309,
+            "Security Glass"
+          ],
+          "layer": "world",
+          "model": "bulletpr",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": false,
+          "identity": [
+            1309,
+            "Security Glass"
+          ],
+          "layer": "world",
+          "model": "bulletpr",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": false,
+          "identity": [
+            1309,
+            "Security Glass"
+          ],
+          "layer": "world",
+          "model": "bulletpr",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": true,
+          "identity": [
+            250,
+            "Railing 4x16"
+          ],
+          "layer": "world",
+          "model": "brail16",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": true,
+          "identity": [
+            333,
+            "Pipe 16x3"
+          ],
+          "layer": "world",
+          "model": "pipel3",
+          "source": "entity"
+        },
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": true,
+          "identity": [
+            337,
+            "Pipe 16x3"
+          ],
+          "layer": "world",
+          "model": "pipel3",
+          "source": "entity"
+        }
+      ],
+      "removed": []
+    },
+    "keypad-270": {
+      "added": [],
+      "removed": []
+    },
+    "return-0": {
+      "added": [],
+      "removed": []
+    },
+    "return-90": {
+      "added": [
+        {
+          "backface_culling": "Clockwise",
+          "depth_write": false,
+          "identity": [
+            464,
+            "UBWin_10x2x4"
+          ],
+          "layer": "world",
+          "model": "wnd_24",
+          "source": "entity"
+        }
+      ],
+      "removed": []
+    },
+    "return-180": {
+      "added": [],
+      "removed": []
+    },
+    "return-270": {
+      "added": [],
+      "removed": []
+    }
+  }
+}

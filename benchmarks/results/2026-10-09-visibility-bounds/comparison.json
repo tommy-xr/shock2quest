@@ -1,0 +1,460 @@
+{
+  "many-flat": {
+    "crowd-0": {
+      "before": 149,
+      "after": 149,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-180, \"Rumbler\"], \"layer\": \"world\", \"model\": \"rumbler\", \"source\": \"entity\"}"
+      ],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-179, \"Midwife\"], \"layer\": \"world\", \"model\": \"fembot\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        37,
+        321,
+        768,
+        593
+      ]
+    },
+    "crowd-1": {
+      "before": 149,
+      "after": 149,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-180, \"Rumbler\"], \"layer\": \"world\", \"model\": \"rumbler\", \"source\": \"entity\"}"
+      ],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-179, \"Midwife\"], \"layer\": \"world\", \"model\": \"fembot\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        2,
+        226,
+        797,
+        600
+      ]
+    },
+    "crowd-2": {
+      "before": 149,
+      "after": 148,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-180, \"Rumbler\"], \"layer\": \"world\", \"model\": \"rumbler\", \"source\": \"entity\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1521, \"Brainball trail\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-179, \"Midwife\"], \"layer\": \"world\", \"model\": \"fembot\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        26,
+        225,
+        798,
+        600
+      ]
+    },
+    "crowd-3": {
+      "before": 149,
+      "after": 147,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-180, \"Rumbler\"], \"layer\": \"world\", \"model\": \"rumbler\", \"source\": \"entity\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1520, \"Brainball trail\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1522, \"Brainball trail\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-179, \"Midwife\"], \"layer\": \"world\", \"model\": \"fembot\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        24,
+        225,
+        798,
+        600
+      ]
+    },
+    "crowd-4": {
+      "before": 147,
+      "after": 149,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-180, \"Rumbler\"], \"layer\": \"world\", \"model\": \"rumbler\", \"source\": \"entity\"}"
+      ],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-179, \"Midwife\"], \"layer\": \"world\", \"model\": \"fembot\", \"source\": \"entity\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1520, \"Brainball trail\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1520, \"Brainball trail\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "pixel_diff_bbox": [
+        2,
+        238,
+        768,
+        596
+      ]
+    },
+    "crowd-5": {
+      "before": 147,
+      "after": 149,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-180, \"Rumbler\"], \"layer\": \"world\", \"model\": \"rumbler\", \"source\": \"entity\"}"
+      ],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [-179, \"Midwife\"], \"layer\": \"world\", \"model\": \"fembot\", \"source\": \"entity\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1521, \"Brainball trail\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1522, \"Brainball trail\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "pixel_diff_bbox": [
+        19,
+        245,
+        765,
+        596
+      ]
+    }
+  },
+  "medsci-flat": {
+    "corpse-0": {
+      "before": 169,
+      "after": 172,
+      "removed": [],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "pixel_diff_bbox": [
+        560,
+        0,
+        800,
+        406
+      ]
+    },
+    "corpse-90": {
+      "before": 217,
+      "after": 221,
+      "removed": [],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": false, \"identity\": [464, \"UBWin_10x2x4\"], \"layer\": \"world\", \"model\": \"wnd_24\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        0,
+        0,
+        800,
+        600
+      ]
+    },
+    "corpse-180": {
+      "before": 170,
+      "after": 172,
+      "removed": [],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "pixel_diff_bbox": [
+        0,
+        15,
+        742,
+        430
+      ]
+    },
+    "corpse-270": {
+      "before": 170,
+      "after": 172,
+      "removed": [],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "pixel_diff_bbox": null
+    },
+    "keypad-0": {
+      "before": 146,
+      "after": 146,
+      "removed": [],
+      "added": [],
+      "pixel_diff_bbox": [
+        39,
+        6,
+        798,
+        592
+      ]
+    },
+    "keypad-90": {
+      "before": 216,
+      "after": 217,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1783, \"rising steam\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": true, \"identity\": [239, \"Railing 4x16\"], \"layer\": \"world\", \"model\": \"brail16\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": true, \"identity\": [250, \"Railing 4x16\"], \"layer\": \"world\", \"model\": \"brail16\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        0,
+        0,
+        797,
+        600
+      ]
+    },
+    "keypad-180": {
+      "before": 157,
+      "after": 163,
+      "removed": [],
+      "added": [
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": false, \"identity\": [1309, \"Security Glass\"], \"layer\": \"world\", \"model\": \"bulletpr\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": false, \"identity\": [1309, \"Security Glass\"], \"layer\": \"world\", \"model\": \"bulletpr\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": false, \"identity\": [1309, \"Security Glass\"], \"layer\": \"world\", \"model\": \"bulletpr\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": true, \"identity\": [250, \"Railing 4x16\"], \"layer\": \"world\", \"model\": \"brail16\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": true, \"identity\": [333, \"Pipe 16x3\"], \"layer\": \"world\", \"model\": \"pipel3\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": true, \"identity\": [337, \"Pipe 16x3\"], \"layer\": \"world\", \"model\": \"pipel3\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        0,
+        0,
+        800,
+        600
+      ]
+    },
+    "keypad-270": {
+      "before": 190,
+      "after": 190,
+      "removed": [],
+      "added": [],
+      "pixel_diff_bbox": [
+        0,
+        0,
+        792,
+        523
+      ]
+    },
+    "return-0": {
+      "before": 170,
+      "after": 170,
+      "removed": [],
+      "added": [],
+      "pixel_diff_bbox": [
+        560,
+        0,
+        800,
+        406
+      ]
+    },
+    "return-90": {
+      "before": 218,
+      "after": 220,
+      "removed": [],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": false, \"identity\": [464, \"UBWin_10x2x4\"], \"layer\": \"world\", \"model\": \"wnd_24\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        0,
+        0,
+        800,
+        600
+      ]
+    },
+    "return-180": {
+      "before": 170,
+      "after": 171,
+      "removed": [],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "pixel_diff_bbox": [
+        0,
+        15,
+        742,
+        430
+      ]
+    },
+    "return-270": {
+      "before": 170,
+      "after": 172,
+      "removed": [],
+      "added": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "pixel_diff_bbox": null
+    }
+  },
+  "medsci-vr": {
+    "corpse-0": {
+      "before": 240,
+      "after": 238,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [],
+      "pixel_diff_bbox": [
+        560,
+        0,
+        800,
+        406
+      ]
+    },
+    "corpse-90": {
+      "before": 288,
+      "after": 287,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": false, \"identity\": [464, \"UBWin_10x2x4\"], \"layer\": \"world\", \"model\": \"wnd_24\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        0,
+        0,
+        800,
+        598
+      ]
+    },
+    "corpse-180": {
+      "before": 240,
+      "after": 238,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [],
+      "pixel_diff_bbox": [
+        0,
+        49,
+        736,
+        430
+      ]
+    },
+    "corpse-270": {
+      "before": 240,
+      "after": 237,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [],
+      "pixel_diff_bbox": null
+    },
+    "keypad-0": {
+      "before": 214,
+      "after": 214,
+      "removed": [],
+      "added": [],
+      "pixel_diff_bbox": [
+        39,
+        230,
+        102,
+        365
+      ]
+    },
+    "keypad-90": {
+      "before": 288,
+      "after": 286,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1783, \"rising steam\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1783, \"rising steam\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1783, \"rising steam\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1783, \"rising steam\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": true, \"identity\": [239, \"Railing 4x16\"], \"layer\": \"world\", \"model\": \"brail16\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": true, \"identity\": [250, \"Railing 4x16\"], \"layer\": \"world\", \"model\": \"brail16\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        0,
+        248,
+        624,
+        600
+      ]
+    },
+    "keypad-180": {
+      "before": 225,
+      "after": 231,
+      "removed": [],
+      "added": [
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": false, \"identity\": [1309, \"Security Glass\"], \"layer\": \"world\", \"model\": \"bulletpr\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": false, \"identity\": [1309, \"Security Glass\"], \"layer\": \"world\", \"model\": \"bulletpr\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": false, \"identity\": [1309, \"Security Glass\"], \"layer\": \"world\", \"model\": \"bulletpr\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": true, \"identity\": [250, \"Railing 4x16\"], \"layer\": \"world\", \"model\": \"brail16\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": true, \"identity\": [333, \"Pipe 16x3\"], \"layer\": \"world\", \"model\": \"pipel3\", \"source\": \"entity\"}",
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": true, \"identity\": [337, \"Pipe 16x3\"], \"layer\": \"world\", \"model\": \"pipel3\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        0,
+        0,
+        800,
+        600
+      ]
+    },
+    "keypad-270": {
+      "before": 258,
+      "after": 258,
+      "removed": [],
+      "added": [],
+      "pixel_diff_bbox": [
+        0,
+        69,
+        410,
+        404
+      ]
+    },
+    "return-0": {
+      "before": 240,
+      "after": 237,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [],
+      "pixel_diff_bbox": [
+        560,
+        0,
+        800,
+        406
+      ]
+    },
+    "return-90": {
+      "before": 289,
+      "after": 287,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [
+        "{\"backface_culling\": \"Clockwise\", \"depth_write\": false, \"identity\": [464, \"UBWin_10x2x4\"], \"layer\": \"world\", \"model\": \"wnd_24\", \"source\": \"entity\"}"
+      ],
+      "pixel_diff_bbox": [
+        0,
+        0,
+        800,
+        598
+      ]
+    },
+    "return-180": {
+      "before": 240,
+      "after": 238,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [],
+      "pixel_diff_bbox": [
+        0,
+        49,
+        736,
+        430
+      ]
+    },
+    "return-270": {
+      "before": 240,
+      "after": 238,
+      "removed": [
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}",
+        "{\"backface_culling\": null, \"depth_write\": true, \"identity\": [1691, \"steam jet cloud\"], \"layer\": \"world\", \"model\": \"fx_particle\", \"source\": \"particle\"}"
+      ],
+      "added": [],
+      "pixel_diff_bbox": null
+    }
+  }
+}
