@@ -65,6 +65,7 @@ pub mod palette;
 pub mod pathfinding;
 pub mod paths;
 pub mod pause_menu;
+pub mod perf;
 mod physics;
 pub use physics::player_collision_shape;
 pub mod item_tools;
@@ -1470,6 +1471,7 @@ impl Game {
             panic!("cannot load the game: {}", install.summary());
         }
 
+        perf::set_enabled(options.experimental_features.contains("profile_cpu"));
         let upgraded_terrain = options.upgraded_terrain_enabled();
         println!("upgraded terrain textures: {upgraded_terrain}");
         let asset_paths = game_asset_mounts_with_terrain(bundle_storage.clone(), upgraded_terrain);
@@ -1632,6 +1634,7 @@ impl Game {
         input_context: &input_context::InputContext,
         actions: &mut input::InputActionState,
     ) {
+        let _profile = perf::scope(perf::Phase::GameUpdate);
         // Record the raw input first, ahead of every early return, so a
         // replay feeds `update` exactly what the runtime did.
         if actions.just_triggered(input::InputAction::ToggleInputRecording) {
@@ -1798,6 +1801,7 @@ impl Game {
             action_effects,
         );
 
+        let audio_profile = perf::scope(perf::Phase::Audio);
         // Handle ambient audio
         let ambient_state = self.active_game_scene.ambient_audio_state();
         self.environmental_aux.update(
@@ -1870,6 +1874,7 @@ impl Game {
             |entity_id| util::get_entity_position(world, entity_id),
         );
 
+        drop(audio_profile);
         self.apply_scene_effects(effects);
     }
 
@@ -2099,6 +2104,7 @@ impl Game {
     /// `handle_effects` stays callable while the scene's `update` is skipped,
     /// which is what lets the overlay act on the scene underneath it.
     fn apply_scene_effects(&mut self, effects: Vec<Effect>) {
+        let _profile = perf::scope(perf::Phase::Effects);
         let global_effects = self.active_game_scene.handle_effects(
             effects,
             &self.global_context,

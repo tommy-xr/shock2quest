@@ -73,3 +73,14 @@ test('rejects unavailable GPU counter sentinels instead of averaging them', asyn
   const { parseGpuCounters } = await import('./run.mjs');
   assert.throws(() => parseGpuCounters('Fragments Shaded / Second : -1.000'), /invalid GPU counter/);
 });
+
+
+test('CPU diagnostics require matching windows and complete frame histogram counts', async () => {
+  const { validateCpuProfile } = await import('./run.mjs');
+  const sample = { cpu_frames: 90, phases: { game_update: { calls: 90 } }, cpu_histogram_100us: [[80, 90]] };
+  const log = `SHOCK2QUEST_CPU_PROFILE ${JSON.stringify(sample)}\nSHOCK2QUEST_PERF focused=true\n`;
+  assert.equal(validateCpuProfile(log + log, 2).length, 2);
+  assert.throws(() => validateCpuProfile(log + 'SHOCK2QUEST_PERF focused=true\n', 2), /diagnostics/);
+  sample.cpu_histogram_100us[0][1] = 89;
+  assert.throws(() => validateCpuProfile(`SHOCK2QUEST_CPU_PROFILE ${JSON.stringify(sample)}\nSHOCK2QUEST_PERF focused=true`, 1), /diagnostics/);
+});

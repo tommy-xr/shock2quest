@@ -7054,6 +7054,7 @@ impl PhysicsWorld {
         request: PlayerMoveRequest,
         player_handle: &mut PlayerHandle,
     ) -> (Vector3<f32>, Vec<CollisionEvent>) {
+        let _profile = crate::perf::scope(crate::perf::Phase::Physics);
         #[cfg(feature = "physics-profiling")]
         let started = std::time::Instant::now();
         // Queue every PhysAttach child at its parent's same next-frame target
@@ -7072,6 +7073,7 @@ impl PhysicsWorld {
         // parry panics, the culprit is already named in the log.
         self.report_nonfinite_rigid_body_state();
 
+        let solver_profile = crate::perf::scope(crate::perf::Phase::Solver);
         #[cfg(feature = "physics-profiling")]
         let prepared = std::time::Instant::now();
 
@@ -7095,6 +7097,8 @@ impl PhysicsWorld {
                 &self.events,
             )
         });
+        drop(solver_profile);
+        crate::perf::physics_step(self.integration_parameters.dt);
         self.has_stepped = true;
         #[cfg(feature = "lazy-hitboxes")]
         self.query_hitboxes.commit();
