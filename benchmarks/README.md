@@ -169,3 +169,11 @@ raising refresh. A synthetic free-fall audit can be run with:
 ```sh
 cargo test -p shock2vr --lib clock_audit_counts_actual_solver_steps -- --nocapture
 ```
+
+## Fixed scene-clock validation
+
+[Paired Quest clock results](results/2026-10-09-quest3-fixed-clock.md) include
+legacy/fixed/fixed/legacy timing, independent active-time validation and a
+device pause/resume probe. Add `--fixed-simulation` to the Quest runner to opt
+in; it enables CPU profiling and rejects solver-clock drift or a changed
+solver timestep. Refresh remains 90 Hz and the normal runtime remains legacy.

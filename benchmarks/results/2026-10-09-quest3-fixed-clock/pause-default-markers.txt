@@ -1,0 +1,2 @@
+SHOCK2QUEST_SIMULATION fixed=false step_hz=60 max_catchup_steps=8
+SHOCK2QUEST_FFR requested=low effective=low dynamic=false status=applied
