@@ -459,7 +459,7 @@ mod tests {
         );
     }
 
-    use crate::flat_player_controller::is_frobbable;
+    use crate::interaction_selection::is_frobbable;
     use dark::properties::{FrobFlag, ObjectNameType, PropFrobInfo};
 
     fn frob_info() -> PropFrobInfo {
