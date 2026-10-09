@@ -598,6 +598,7 @@ fn main() {
         .unwrap_or_else(quest_config::configured_mission);
     let game_init_started = Instant::now();
     let options: GameOptions = GameOptions {
+        build_label: env!("SHOCK2QUEST_BUILD_LABEL"),
         mission: mission.clone(),
         experimental_features,
         // Projectile orbs/trails are authored particles, not optional polish.

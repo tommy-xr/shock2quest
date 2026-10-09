@@ -561,6 +561,8 @@ pub enum PresentationMode {
 }
 
 pub struct GameOptions {
+    /// Supplied by the runtime so Git/version changes do not rebuild gameplay.
+    pub build_label: &'static str,
     /// Used only when starting a fresh campaign; loaded campaigns retain theirs.
     pub difficulty: dark::gamesys::Difficulty,
     pub mission: String,
@@ -580,6 +582,7 @@ pub struct GameOptions {
 impl Default for GameOptions {
     fn default() -> Self {
         Self {
+            build_label: "dev | unknown",
             difficulty: dark::gamesys::Difficulty::Normal,
             mission: "earth.mis".to_owned(),
             presentation_mode: PresentationMode::Vr,

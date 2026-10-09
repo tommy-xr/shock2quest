@@ -366,6 +366,7 @@ pub fn main() {
     let (mission, spawn_location) = parse_mission(&mission_arg);
 
     let options = GameOptions {
+        build_label: env!("SHOCK2QUEST_BUILD_LABEL"),
         mission,
         presentation_mode,
         spawn_location,

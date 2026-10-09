@@ -626,6 +626,7 @@ fn run_game_blocking(
     info!("Presentation mode: {:?}", presentation_mode);
 
     let options = GameOptions {
+        build_label: env!("SHOCK2QUEST_BUILD_LABEL"),
         mission: mission.clone(),
         difficulty: args.difficulty,
         presentation_mode,

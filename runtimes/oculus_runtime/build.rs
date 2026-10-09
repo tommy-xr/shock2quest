@@ -1,7 +1,12 @@
+#[path = "../../build-support/version.rs"]
+mod version;
+
 use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    version::emit_build_label();
+    println!("cargo:rerun-if-changed=lib/arm64-v8a");
     // For Android builds, just set up linking to our prebuilt ffmpeg libraries
     if env::var("TARGET").unwrap_or_default().contains("android") {
         let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
