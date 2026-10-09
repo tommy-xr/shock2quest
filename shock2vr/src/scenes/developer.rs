@@ -384,14 +384,14 @@ impl DeveloperScene {
 
     /// The screen, described once; presentations differ only in how this
     /// canvas is rendered.
-    fn build_canvas(&self, pointer_canvas: Option<Vector2<f32>>) -> UiCanvas {
+    fn build_canvas(&self, pointer_canvas: Option<Vector2<f32>>, build_label: &str) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
         canvas
             .text(
                 Rect::new(14.0, 448.0, 210.0, 24.0),
-                env!("SHOCK2QUEST_BUILD_LABEL"),
+                build_label,
                 LIST_FONT,
                 12.0,
                 HAlign::Left,
@@ -670,7 +670,7 @@ impl GameScene for DeveloperScene {
 
         // In VR there is no screen to draw on, so the same canvas is presented
         // on a world-space panel in front of the player.
-        let canvas = self.build_canvas(self.menu.pointer_canvas());
+        let canvas = self.build_canvas(self.menu.pointer_canvas(), options.build_label);
         let objects = self
             .menu
             .render_world_space(asset_cache, canvas, options.presentation_mode);
@@ -692,7 +692,7 @@ impl GameScene for DeveloperScene {
             return Vec::new();
         }
         let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
-        let canvas = self.build_canvas(pointer_canvas);
+        let canvas = self.build_canvas(pointer_canvas, options.build_label);
         self.menu
             .render_screen_space(asset_cache, canvas, screen_size, options.presentation_mode)
     }

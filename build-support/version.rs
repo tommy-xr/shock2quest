@@ -1,3 +1,4 @@
+// Shared by runtime build scripts. Keep Git inputs out of the gameplay library.
 use std::{env, path::PathBuf, process::Command};
 
 fn git(args: &[&str]) -> Option<String> {
@@ -8,8 +9,9 @@ fn git(args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn main() {
+pub fn emit_build_label() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../../build-support/version.rs");
     println!("cargo:rerun-if-env-changed=SHOCK2QUEST_RELEASE_VERSION");
     println!("cargo:rerun-if-env-changed=SHOCK2QUEST_GIT_SHA");
     // Follow the actual git paths: .git can be a file in a linked worktree.

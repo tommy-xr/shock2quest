@@ -98,6 +98,13 @@ commits). Bypass in a pinch with `git push --no-verify`.
 - `cd runtimes/desktop_runtime`
 - `cargo run` (the dev profile is optimized; `--release` builds a second tree)
 
+The desktop, debug, and Quest runtimes stamp their build label and pass it to
+`shock2vr` through `GameOptions::build_label`. Git commits and the release
+overrides (`SHOCK2QUEST_RELEASE_VERSION` / `SHOCK2QUEST_GIT_SHA`) rebuild the
+runtime without invalidating the gameplay library. The shared build-script
+helper lives in `build-support/version.rs`; tools and tests use `dev | unknown`
+unless they supply a label.
+
 ##### Quick Start with Cargo Aliases
 
 Alternatively, use the project's cargo aliases from the root directory:

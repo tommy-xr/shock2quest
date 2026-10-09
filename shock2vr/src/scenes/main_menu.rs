@@ -66,7 +66,6 @@ const LAYOUT_FILE: &str = "NETMAINR.BIN";
 const LABELS_FILE: &str = "NETMAIN.STR";
 // The inset footer box below the left panel’s horizontal rule.
 const BUILD_INFO_RECT: Rect = Rect::new(14.0, 448.0, 152.0, 24.0);
-const BUILD_LABEL: &str = env!("SHOCK2QUEST_BUILD_LABEL");
 /// The 4:3 menu art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
@@ -494,6 +493,7 @@ impl MainMenuScene {
         &self,
         asset_cache: &mut AssetCache,
         pointer_canvas: Option<Vector2<f32>>,
+        build_label: &str,
     ) -> UiCanvas {
         if let Some(panel) = &self.options_panel {
             return panel.canvas(asset_cache, pointer_canvas);
@@ -572,7 +572,7 @@ impl MainMenuScene {
             canvas
                 .text(
                     BUILD_INFO_RECT,
-                    BUILD_LABEL,
+                    build_label,
                     "mainfont.fon",
                     12.0,
                     HAlign::Left,
@@ -683,7 +683,8 @@ impl GameScene for MainMenuScene {
         options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
-        let canvas = self.build_canvas(asset_cache, self.menu.pointer_canvas());
+        let canvas =
+            self.build_canvas(asset_cache, self.menu.pointer_canvas(), options.build_label);
         let objects = self
             .menu
             .render_world_space(asset_cache, canvas, options.presentation_mode);
@@ -699,7 +700,7 @@ impl GameScene for MainMenuScene {
         options: &GameOptions,
     ) -> Vec<SceneObject> {
         let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
-        let canvas = self.build_canvas(asset_cache, pointer_canvas);
+        let canvas = self.build_canvas(asset_cache, pointer_canvas, options.build_label);
         self.menu
             .render_screen_space(asset_cache, canvas, screen_size, options.presentation_mode)
     }
