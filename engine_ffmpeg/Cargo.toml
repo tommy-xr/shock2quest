@@ -9,6 +9,4 @@ path = "src/lib.rs"
 
 [dependencies]
 engine = { path = "../engine" }
-cgmath = "0.18.0"
-byteorder = "1.4.3"
 ffmpeg-next = { version = "7.0" }
