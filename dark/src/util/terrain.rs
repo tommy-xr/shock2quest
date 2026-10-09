@@ -35,6 +35,31 @@ pub struct TerrainTexture {
     pub passes: Vec<TerrainPass>,
 }
 
+/// Deliberately selected organic Nightdive surfaces, not every wall in Many.
+/// This is a project-owned wetness experiment, not authored specular metadata.
+pub fn supports_wetness(requested: &str) -> bool {
+    let name = requested.replace('\\', "/").to_ascii_lowercase();
+    let Some(stem) = name
+        .strip_prefix("ovrmnd_1/")
+        .and_then(|n| n.strip_suffix(".pcx"))
+    else {
+        return false;
+    };
+    matches!(
+        stem,
+        "om1"
+            | "om2"
+            | "om6"
+            | "om8"
+            | "omw"
+            | "ovm003"
+            | "ovm005"
+            | "ovm010"
+            | "ovm012"
+            | "ovm015"
+    )
+}
+
 pub fn resolve(
     paths: &dyn AbstractAssetPath,
     base: &str,
@@ -347,6 +372,25 @@ mod tests {
             ),
             ("fam/shared/new_wall.dds".into(), vec![]),
         ]))
+    }
+
+    #[test]
+    fn wetness_is_limited_to_selected_organic_families_and_names() {
+        for name in [
+            "OvrMnd_1/OMW.pcx",
+            "ovrmnd_1/ovm015.pcx",
+            "OVRMND_1\\OVM005.PCX",
+        ] {
+            assert!(supports_wetness(name));
+        }
+        for name in [
+            "medsci/ovm015.pcx",
+            "ovrmnd_1/door.pcx",
+            "ovrmnd_1/ovm015.png",
+            "ovrmnd_1/../medsci/wall.pcx",
+        ] {
+            assert!(!supports_wetness(name));
+        }
     }
 
     #[test]
