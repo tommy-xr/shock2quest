@@ -1,0 +1,7 @@
+SHOCK2QUEST_XR_STATE mission=many.mis state=IDLE
+SHOCK2QUEST_XR_STATE mission=many.mis state=READY
+SHOCK2QUEST_FFR requested=high effective=high dynamic=false status=applied
+SHOCK2QUEST_READY mission=many.mis target_refresh_hz=90.000 requested_refresh_hz=90.000 refresh_hz=90.000 eye_width=1680 eye_height=1760
+SHOCK2QUEST_XR_STATE mission=many.mis state=SYNCHRONIZED
+SHOCK2QUEST_XR_STATE mission=many.mis state=VISIBLE
+SHOCK2QUEST_XR_STATE mission=many.mis state=FOCUSED
