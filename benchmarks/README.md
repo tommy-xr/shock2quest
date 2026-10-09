@@ -96,7 +96,7 @@ node tools/quest-bench/run.mjs --scene many-brain-mixed-crowd \
 
 Two repeats use classic/upgraded/wet/wet/upgraded/classic ordering. All modes
 use the same release APK, object assets, object lighting, camera, crowd, and
-world-space spotlight. `classic` disables only the `upgraded_terrain` feature;
+world-space spotlight. `classic` explicitly sets `no_upgraded_terrain`, overriding the enabled default;
 this is not an original-game-versus-remaster comparison of all assets.
 `upgraded` has wetness zero; `wet` uses 1.5. Default `--terrain fixture` honors
 the fixture without changing existing lighting benchmarks.

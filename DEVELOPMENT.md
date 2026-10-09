@@ -589,22 +589,24 @@ opening follows the eye, while the lines remain fixed in tracking space.
 
 ### Developer options
 
-**Upgraded terrain textures (experimental).** Opt into the remaster's static
-wall, floor, and ceiling textures with `--experimental upgraded_terrain` on
-desktop or the debug runtime. It is **off by default**, pending Quest memory
-and performance measurements. Restart to change it; a save does not store the
-flag. For a MedSci comparison:
+**Upgraded terrain textures.** The remaster's wall, floor, and ceiling upgrades
+are **on by default** on Quest, desktop, and the debug runtime. Supported
+animation, UV effects, and material layers are included. Use
+`--experimental no_upgraded_terrain` on desktop/debug for a classic-terrain
+comparison; the older `upgraded_terrain` flag remains accepted. An explicit
+opt-out wins if both are supplied. Restart to change asset mounts; saves do
+not store this setting.
 
 ```bash
+cargo dbgr --mission medsci1.mis --port 8080 --experimental no_upgraded_terrain
 cargo dbgr --mission medsci1.mis --port 8080
-cargo dbgr --mission medsci1.mis --port 8080 --experimental upgraded_terrain
 ```
 
-Run these separately and use the same camera and stepping sequence. Add `--vr`
-to either for the VR presentation. Startup prints `upgraded terrain textures:
-true/false`. The Quest runtime can pass the same `upgraded_terrain` entry in
-`GameOptions.experimental_features` for a later A/B build; it remains disabled
-in the shipping flag set.
+Run separately with the same camera and stepping sequence; add `--vr` for the
+VR presentation. Startup prints `upgraded terrain textures: true/false`.
+Quest benchmark fixtures explicitly select classic or upgraded terrain, so
+both comparisons remain available in the same APK. See the
+[Quest measurements](benchmarks/results/2026-10-09-quest3-many-terrain.md).
 
 Terrain material includes, diffuse redirects, and square/rectangular
 `terrain_scale` / `tile_factor` values preserve the authored world tiling while increasing
@@ -623,7 +625,8 @@ effects, and other waveforms retain their original art.
 Classic installs are unchanged.
 
 For a separate wet-looking Many terrain experiment, raise Developer → Organic
-shine → `terrain_wetness` from its default **0** while `upgraded_terrain` is on.
+shine → `terrain_wetness` from its default **0** while upgraded terrain is enabled. Wetness remains
+**off by default and opt-in**, independently of the texture upgrade.
 Try 1.5 with a spotlight. This adds a project-owned specular highlight to
 selected flesh surfaces using their own texture as a provisional mask; it does
 not add authored normal maps or reflections. Set it to 0 for an immediate A/B.
