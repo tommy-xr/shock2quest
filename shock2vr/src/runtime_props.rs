@@ -503,7 +503,7 @@ pub struct RuntimePropHolstered {
     pub slot: u8,
 }
 
-/// Chest quick access to an actual backpack item/stack: 0 right, 1 left.
+/// Chest assignments backed by this inventory reserve: bit 0 right, bit 1 left.
 /// Only live backpack membership makes this assignment available.
 #[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct RuntimePropChestSlot(pub u8);

@@ -396,7 +396,7 @@ mod tests {
         data.all_entities.push(weapon.inner());
         data.chest_slots.insert(
             weapon.inner(),
-            crate::runtime_props::RuntimePropChestSlot(1),
+            crate::runtime_props::RuntimePropChestSlot(3),
         );
         data.holstered.insert(
             weapon.inner(),
@@ -420,7 +420,7 @@ mod tests {
                 .get(id)
                 .unwrap()
                 .0,
-            1
+            3
         );
         assert_eq!(
             restored

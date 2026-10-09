@@ -451,6 +451,8 @@ pub(super) struct Holsters {
     /// and inventory-backed ownership instead of independent thigh capacity.
     pub chest: bool,
     pub can_store: [bool; 2],
+    pub matching_slots: [[bool; 2]; 2],
+    pub refusal_flash: [f32; 2],
     pub poses: crate::vr_holster::HolsterLibrary,
     poses_loaded: bool,
     pub body_pose: Option<super::body_inventory::BodyPose>,
@@ -470,6 +472,8 @@ impl Default for Holsters {
         Self {
             chest: false,
             can_store: [false; 2],
+            matching_slots: [[false; 2]; 2],
+            refusal_flash: [0.0; 2],
             poses: Default::default(),
             poses_loaded: false,
             body_pose: None,
@@ -540,12 +544,91 @@ impl Holsters {
         use shipyard::Get;
         for item in contents.all_items() {
             if let Ok(marker) = markers.get(item.entity) {
-                if let Some(slot) = slots.get_mut(marker.0 as usize) {
-                    *slot = Some(item.entity);
+                for (slot, occupant) in slots.iter_mut().enumerate() {
+                    if marker.0 & (1 << slot) != 0 {
+                        *occupant = Some(item.entity);
+                    }
                 }
             }
         }
         slots
+    }
+
+    pub fn same_chest_kind(world: &World, a: EntityId, b: EntityId) -> bool {
+        crate::scripts::script_util::entity_class_template_id(world, a)
+            .zip(crate::scripts::script_util::entity_class_template_id(
+                world, b,
+            ))
+            .is_some_and(|(a, b)| a == b)
+    }
+
+    /// Live backpack stock only: items already in either hand are unavailable.
+    pub fn chest_stock(world: &World, source: EntityId) -> Vec<(EntityId, u32)> {
+        use shipyard::{Get, UniqueView};
+        let player = world.borrow::<UniqueView<super::PlayerInfo>>().unwrap();
+        let inventory = player.inventory_entity_id;
+        let held = [player.left_hand_entity_id, player.right_hand_entity_id];
+        let contents = crate::inventory::Inventory::from_container(
+            world,
+            inventory,
+            crate::inventory::grid_for(world, inventory),
+        );
+        let stacks = world
+            .borrow::<View<dark::properties::PropStackCount>>()
+            .unwrap();
+        contents
+            .all_items()
+            .filter_map(|item| {
+                let count = stacks.get(item.entity).map_or(1, |stack| stack.0).max(0) as u32;
+                (count > 0
+                    && !held.contains(&Some(item.entity))
+                    && Self::same_chest_kind(world, source, item.entity))
+                .then_some((item.entity, count))
+            })
+            .collect()
+    }
+
+    pub fn counts(&self, world: &World) -> [u32; 2] {
+        self.occupants(world).map(|source| {
+            source.map_or(0, |source| {
+                Self::chest_stock(world, source)
+                    .iter()
+                    .fold(0_u32, |total, (_, count)| total.saturating_add(*count))
+            })
+        })
+    }
+
+    /// A reserve can supply both slots without duplicating its inventory owner.
+    pub fn assign_chest_slot(world: &mut World, source: EntityId, slot: usize) {
+        use crate::runtime_props::RuntimePropChestSlot;
+        let bit = 1_u8 << slot;
+        let markers: Vec<_> = world
+            .borrow::<View<RuntimePropChestSlot>>()
+            .unwrap()
+            .iter()
+            .with_id()
+            .map(|(id, marker)| (id, marker.0))
+            .collect();
+        let previous = markers
+            .iter()
+            .find(|(id, _)| *id == source)
+            .map_or(0, |(_, bits)| *bits);
+        for (id, bits) in markers {
+            if id != source && bits & bit != 0 {
+                if bits & !bit == 0 {
+                    world.remove::<RuntimePropChestSlot>(id);
+                } else {
+                    world.add_component(id, RuntimePropChestSlot(bits & !bit));
+                }
+            }
+        }
+        world.add_component(source, RuntimePropChestSlot(previous | bit));
+    }
+
+    pub fn flash_refusal(&mut self, hand: usize) {
+        if let Some(slot) = self.near[hand] {
+            self.refusal_flash[slot] = 0.35;
+        }
     }
 
     pub fn accepts_chest_item(world: &World, item: EntityId) -> bool {
@@ -593,6 +676,9 @@ impl Holsters {
         enabled: bool,
         dt: f32,
     ) -> [Option<Action>; 2] {
+        for remaining in &mut self.refusal_flash {
+            *remaining = (*remaining - dt.max(0.0)).max(0.0);
+        }
         let hands = [&input.left_hand, &input.right_hand];
         let head = GripPose {
             position: input.head.position,
@@ -718,11 +804,17 @@ impl Holsters {
                 })
                 .flatten();
             if let Some(slot) = self.near[i] {
-                self.can_store[i] =
-                    eligible[i] && slot < count && slots[slot].is_none() && !claimed[slot];
+                self.can_store[i] = eligible[i]
+                    && slot < count
+                    && (slots[slot].is_none() || self.matching_slots[i][slot])
+                    && !claimed[slot];
                 if let Some(entity) = held[i] {
                     if !pressed && self.pressed_item[i] == Some(entity) {
-                        if eligible[i] && slot < count && slots[slot].is_none() && !claimed[slot] {
+                        if eligible[i]
+                            && slot < count
+                            && (slots[slot].is_none() || self.matching_slots[i][slot])
+                            && !claimed[slot]
+                        {
                             claimed[slot] = true;
                             slots[slot] = Some(entity);
                             actions[i] = Some(Action::Store { entity, slot });
@@ -765,7 +857,8 @@ impl Holsters {
         rotation: Quaternion<f32>,
     ) -> serde_json::Value {
         serde_json::json!({"centers": self.world_centers(position, rotation).map(|cs| cs.map(|c| [c.x,c.y,c.z])),
-            "radius":self.radius(), "enabled_slots":SLOT_COUNT, "near":self.near, "can_store":self.can_store,
+            "radius":self.radius(), "enabled_slots":SLOT_COUNT, "near":self.near, "can_store":self.can_store, "refusal_flash":self.refusal_flash,
+            "counts":if self.chest { self.counts(world) } else { [0; 2] },
             "items":self.occupants(world).map(|e| e.map(|id| id.inner() as i32)),
             "retained":self.retained.0.map(|e| e.is_some())})
     }

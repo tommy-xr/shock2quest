@@ -128,9 +128,10 @@ it to the belt. Scanning opens an interface; select purchases separately.
 **Chest quick slots.** Release a held hypo or battery over either chest mount to
 store it; squeeze with either empty hand to retrieve it. Each slot shows a circle
 and the stored item’s icon. Its colour previews the target, and a sound and short
-vibration confirm storage. These slots keep the
-actual item or stack in your backpack and add no inventory capacity. An occupied
-slot, incompatible item, or full backpack refuses the deposit and keeps the item
+vibration confirm storage. The count totals matching items across backpack cells.
+Drawing takes one item and refills from remaining stock; returning a matching item merges into its
+reserve. The slots add no inventory capacity. A slot with a different item,
+an incompatible item, or a full backpack with no matching stack keeps the item
 in hand; squeeze again to re-grip before releasing elsewhere. Drawing never uses
 the item; release the trigger before deliberately using it.
 

@@ -153,7 +153,7 @@ pub enum VirtualHandEffect {
     StoreChestItem {
         entity_id: EntityId,
         slot: usize,
-        cell: (usize, usize),
+        cell: Option<(usize, usize)>,
         hand: usize,
     },
     /// Eject an item into the world (it regains physics + its world model).

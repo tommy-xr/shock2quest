@@ -832,6 +832,8 @@ export interface PlayerSnapshot {
       items: [number | null, number | null];
       retained: [boolean, boolean];
       can_store: [boolean, boolean];
+      refusal_flash: [number, number];
+      counts: [number, number];
     };
     holsters?: {
       centers: [Vec3, Vec3] | null;

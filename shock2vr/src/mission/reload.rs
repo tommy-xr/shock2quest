@@ -318,6 +318,16 @@ pub(crate) struct PouchClip {
     pub stock: i32,
 }
 
+pub(crate) fn reserve_rounds(world: &World, weapon: EntityId) -> u32 {
+    selected_clip_templates(world, weapon).map_or(0, |templates| {
+        compatible_reserve_items(world, &templates)
+            .iter()
+            .fold(0_u32, |total, item| {
+                total.saturating_add(clip_rounds(world, *item).max(0) as u32)
+            })
+    })
+}
+
 pub(crate) fn reserve_clip_for_pouch(world: &World, weapon: EntityId) -> Option<PouchClip> {
     let templates = selected_clip_templates(world, weapon)?;
     let reserve = compatible_reserve_items(world, &templates)

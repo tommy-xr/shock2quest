@@ -16,6 +16,7 @@ pub(super) enum PouchState {
 pub(super) struct PouchReadout {
     pub weapon: Option<i32>,
     pub icon: Option<String>,
+    pub count: Option<u32>,
     pub state: PouchState,
     pub near: bool,
 }
@@ -55,6 +56,7 @@ impl PouchReadout {
         Self {
             weapon: weapon.map(|id| id.inner() as i32),
             icon: crate::hud::get_weapon_ammo_icon(world, weapon),
+            count: weapon.map(|gun| super::reload::reserve_rounds(world, gun)),
             state,
             near: near[taking],
         }
@@ -112,9 +114,39 @@ thread_local! {
     };
 }
 
-/// `root` maps metre-local part coordinates into world space.
+/// Shared by chest storage and the ammo pouch; readiness does not color idle rings.
+pub(super) fn badge_color(
+    targeted: bool,
+    incompatible: bool,
+    refusal_flash: bool,
+) -> cgmath::Vector3<f32> {
+    if incompatible || refusal_flash {
+        vec3(0.7, 0.08, 0.02)
+    } else if targeted {
+        vec3(0.85, 0.85, 0.85)
+    } else {
+        vec3(0.3, 0.3, 0.3)
+    }
+}
+
+/// Body-fixed upward tilt, shared by chest and ammo. No view/camera rotation.
+pub(super) fn badge_frame(
+    center: cgmath::Vector3<f32>,
+    body_rotation: Matrix4<f32>,
+    offset_m: cgmath::Vector3<f32>,
+) -> Matrix4<f32> {
+    Matrix4::from_translation(center)
+        * body_rotation
+        * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT)
+        * Matrix4::from_translation(offset_m)
+        * Matrix4::from_angle_x(Deg(-60.0))
+}
+
+/// `plate` maps metre-local badge coordinates into world space. Its orientation
+/// is supplied by the body mount, never by the viewing camera.
 pub(super) fn item_badge(
     icon_name: Option<&str>,
+    count: Option<u32>,
     color: cgmath::Vector3<f32>,
     plate: Matrix4<f32>,
     assets: &mut engine::assets::asset_cache::AssetCache,
@@ -163,6 +195,28 @@ pub(super) fn item_badge(
             objects.push(icon);
         }
     }
+    if let Some(count) = count {
+        use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
+        // Author the number once in canvas pixels. The shared presenter resolves
+        // glyph placement, including its top/centre anchoring, for both views.
+        // The lower-right corner keeps the complete item icon unobscured.
+        let mut canvas = UiCanvas::new(cgmath::vec2(100.0, 100.0));
+        canvas.text_fit(
+            Rect::new(55.0, 78.0, 43.0, 22.0),
+            &count.to_string(),
+            "mainfont.fon",
+            22.0,
+            HAlign::Right,
+            VAlign::Top,
+        );
+        objects.extend(canvas.render_world_space(
+            assets,
+            plate * Matrix4::from_translation(vec3(0.0, 0.0, 0.002)) * Matrix4::from_scale(0.09),
+            None,
+            None,
+            0.0,
+        ));
+    }
     objects
 }
 
@@ -206,6 +260,16 @@ pub(super) fn holster(readout: &HolsterReadout, root: Matrix4<f32>) -> Vec<Scene
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn badge_refusal_overrides_target_brightness_without_tinting_idle() {
+        assert_eq!(badge_color(false, false, false), vec3(0.3, 0.3, 0.3));
+        assert_eq!(badge_color(true, false, false), vec3(0.85, 0.85, 0.85));
+        for targeted in [false, true] {
+            assert_eq!(badge_color(targeted, true, false), vec3(0.7, 0.08, 0.02));
+            assert_eq!(badge_color(targeted, false, true), vec3(0.7, 0.08, 0.02));
+        }
+    }
+
     #[test]
     fn each_holster_reads_its_own_gun_and_dual_wield_has_no_pouch_selection() {
         use dark::properties::{PropBaseGunDesc, PropGunState};

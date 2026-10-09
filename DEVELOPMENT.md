@@ -1289,26 +1289,33 @@ without the `.bin` suffix). Add a world model to author another item; removing i
 entry disables holstering. Eligibility and rendering use this same resource,
 with no separate weapon-category allowlist. The shell is 20% smaller; its size
 is independent of item length and grab radius. The new belt includes the ammo
-pouch; its old separate mesh and glowing readout are removed.
+pouch; its old separate mesh is removed. The shared body badge shows the
+selected ammo icon and total reserve count above its mouth.
 
 ### VR chest quick slots
 
 Two chest mounts provide physical quick access to health, psi, anti-radiation,
 and anti-toxin hypos, plus Portable Batteries and charged/dead power cells. They use the same
 fresh-grip/release state machine as thigh holsters, but retain normal backpack
-cells. Each mount holds the exact item or stack, with no automatic refill or
-stack merge during docking. Existing item-use behavior is unchanged.
+cells. Each draw takes one item using the same atomic stack-withdrawal helper as the
+ammo pouch. Remaining matching backpack stock automatically refills the slot;
+its count includes all matching stacks and cells, excluding held/world items.
+Returning a matching item merges into the assigned reserve. Existing item-use
+behavior is unchanged.
 
 Developer → Body controls `vr_chest_drop`, `vr_chest_side`, and
 `vr_chest_forward` tune whole-mount reach in metres. Head pitch/roll do not tilt
-the mounts. Verify placement seated and standing on Quest; simulated VR only
-proves the geometry and logic.
+the mounts. The desktop debug runtime with `--vr` verifies this interaction and
+its rendering.
 
 The mounts use compact circular indicators with the stored item's inventory icon.
-Their colours show nearby acceptance/refusal; an empty circle marks a free slot.
+Chest and ammo badges share neutral grey rings, brighter targeting, red hover
+for incompatible held items, and a 0.35-second red flash after refused input.
+Both use the same fixed, upward-tilted body frame; they do not billboard toward
+the camera. An empty circle marks a free slot.
 Held-item models and grip scales are unchanged. `/v1/info` reports
 `player.hand_feedback.chest_slots` with world centres, per-hand targets,
-occupants, and refused-release latches.
+occupants, total counts, refusal-flash timers, and refused-release latches.
 
 The design follows [Armature's RE4 Quest developer interview](https://www.unrealengine.com/developer-interviews/how-armature-studio-brought-resident-evil-4-into-vr-using-unreal-engine?lang=en): forgiving grabs, clear physical access to frequent items, and retained inventory management.
 
