@@ -1,7 +1,7 @@
 //! A shared belt pouch serves stocked compatible ammo for the opposite hand's gun.
 use super::{body_inventory::BodyPose, reload::PouchClip};
 use crate::{input_context::InputContext, vr_support::GripPose};
-use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3};
+use cgmath::{InnerSpace, Quaternion, Rotation, Vector3};
 use shipyard::EntityId;
 
 pub(super) const RADIUS: f32 = 0.10 / crate::METERS_PER_WORLD_UNIT;
@@ -154,7 +154,6 @@ impl AmmoPouch {
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
     ) -> Vec<engine::scene::SceneObject> {
-        use engine::scene::{SceneObject, color_material, lines_mesh};
         let Some(center) = self.world_center(position, rotation) else {
             return vec![];
         };
@@ -163,18 +162,7 @@ impl AmmoPouch {
             self.incompatible.iter().any(|bad| *bad),
             self.refusal_flash > 0.0,
         );
-        let mut points = Vec::new();
-        dark::hit_box::append_capsule_lines(
-            &mut points,
-            &Matrix4::from_scale(1.0),
-            center,
-            center,
-            RADIUS + super::body_inventory::hand_radius(),
-        );
-        let mut objects = vec![SceneObject::new(
-            color_material::create(color),
-            Box::new(lines_mesh::create(points)),
-        )];
+        let mut objects = vec![dark::hit_box::draw_debug_wire_sphere(center, RADIUS, color)];
         crate::util::tag_render_source(&mut objects, crate::util::render_source::PLAYER_HANDS);
         objects
     }

@@ -121,8 +121,8 @@ return retains the clip until a deliberate re-grip; no compatible reserve gives
 an audible refusal. Two occupied hands cannot draw until one is freed.
 
 `vr_body_inventory_zones` displays the ammo pouch and both chest reach spheres.
-The spheres include glove contact radius, showing the hand-center activation
-boundary. The player snapshot's
+These are the base zone radii. Enable `vr_glove_spheres` to draw the separate
+glove volumes; an intersection between a glove and zone marks contact. The player snapshot's
 `hand_feedback.ammo_pouch` reports the same center, offers and refusal state used
 by the interaction. Reach offsets still need seated and standing headset review.
 

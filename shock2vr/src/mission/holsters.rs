@@ -869,7 +869,6 @@ impl Holsters {
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
     ) -> Vec<engine::scene::SceneObject> {
-        use engine::scene::{SceneObject, color_material, lines_mesh};
         let toggle = if self.chest {
             crate::dev_params::VR_BODY_INVENTORY_ZONES
         } else {
@@ -897,22 +896,10 @@ impl Holsters {
             } else {
                 vec3(0.1, 0.55, 0.7)
             };
-            let mut points = Vec::new();
-            dark::hit_box::append_capsule_lines(
-                &mut points,
-                &Matrix4::from_scale(1.0),
+            objects.push(dark::hit_box::draw_debug_wire_sphere(
                 centers[slot],
-                centers[slot],
-                self.radius()
-                    + if self.chest {
-                        super::body_inventory::hand_radius()
-                    } else {
-                        0.0
-                    },
-            );
-            objects.push(SceneObject::new(
-                color_material::create(color),
-                Box::new(lines_mesh::create(points)),
+                self.radius(),
+                color,
             ));
         }
         crate::util::tag_render_source(&mut objects, crate::util::render_source::PLAYER_HANDS);

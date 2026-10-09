@@ -17630,6 +17630,7 @@ impl MissionCore {
                     continue;
                 };
                 let touching = self.shoulder_backpack.near[i]
+                    || self.chest_slots.near[i].is_some()
                     || self.holsters.near[i].is_some()
                     || self.ammo_pouch.near[i];
                 let mut objects = vec![dark::hit_box::draw_debug_wire_sphere(
