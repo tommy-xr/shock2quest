@@ -549,7 +549,7 @@ pub fn main() {
         let mut scene_for_render = Scene::from_objects(scene);
 
         // Add hand spotlights (`hand_spotlights` dev param)
-        let hand_spotlights = game.get_hand_spotlights();
+        let hand_spotlights = game.get_hand_lights();
         for spotlight in hand_spotlights {
             scene_for_render.lights_mut().add_light(spotlight);
         }

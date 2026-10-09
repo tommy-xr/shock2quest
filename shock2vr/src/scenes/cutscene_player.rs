@@ -7,7 +7,7 @@ use cgmath::{Matrix3, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec2, vec
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{SceneObject, basic_material, light::SpotLight},
+    scene::{SceneObject, basic_material},
     texture::TextureTrait,
 };
 use shipyard::{EntityId, UniqueViewMut, World};
@@ -478,7 +478,7 @@ impl GameScene for CutscenePlayerScene {
         let _ = audio_context;
     }
 
-    fn get_hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
+    fn get_hand_lights(&self, _options: &GameOptions) -> Vec<engine::scene::light::SceneLight> {
         Vec::new()
     }
 

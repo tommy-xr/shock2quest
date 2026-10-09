@@ -1,9 +1,5 @@
 use cgmath::{Matrix4, Point3, Quaternion, Vector2, Vector3};
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::{SceneObject, light::SpotLight},
-};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, World};
 use std::any::Any;
@@ -240,7 +236,7 @@ pub trait GameScene {
     }
 
     /// Get lighting information for VR enhancement
-    fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight>;
+    fn get_hand_lights(&self, options: &GameOptions) -> Vec<engine::scene::light::SceneLight>;
 
     /// Access to the ECS world (required for most game systems)
     fn world(&self) -> &World;

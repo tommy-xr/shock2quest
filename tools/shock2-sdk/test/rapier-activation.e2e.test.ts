@@ -15,6 +15,7 @@ test("VR rapier extends on draw, fades its attached hum, and retracts in its hol
   assert.equal(p.right_hand_entity_id, item.id);
   let state = p.hand_feedback!.rapiers?.find(r => r.entity_id === item.id);
   assert.ok(state && state.extension > 0 && state.extension < 1, "draw should visibly extend over time");
+  assert.equal((await game.scene.objects()).objects.filter(o => o.material_name === "rapier_blade_glow").length, 1, "partial blade retains its attached glow");
   const handle = state.hum_handle;
   assert.ok(handle != null);
   await game.step({ frames: 15 });
@@ -43,6 +44,7 @@ test("VR rapier extends on draw, fades its attached hum, and retracts in its hol
   await game.step({ frames: 30 });
   p = (await game.info()).player;
   assert.ok(!p.hand_feedback!.rapiers!.some(r => r.entity_id === item.id));
+  assert.equal((await game.scene.objects()).objects.filter(o => o.material_name === "rapier_blade_glow").length, 0, "stowing removes the glow");
   assert.ok(!(await game.audio.loops()).loops.some(loop => loop.handle === handle));
   const stopped = (await game.audio.recent()).sounds.find(s => s.handle === handle)!;
   assert.ok(stopped.stopped_at_sim_time != null, "stowing must stop the hum after fading");

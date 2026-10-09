@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use cgmath::{Deg, Euler, Quaternion, Vector3, vec3};
 use dark::properties::{PropHitPoints, PropMaxHitPoints};
-use engine::{
-    assets::asset_cache::AssetCache,
-    scene::{SceneObject, light::SpotLight},
-};
+use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{UniqueViewMut, World};
 
 use crate::{
@@ -232,7 +229,7 @@ impl GameScene for DebugHudScene {
         (hud_panels, self.player_position, self.player_rotation)
     }
 
-    fn get_hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
+    fn get_hand_lights(&self, _options: &GameOptions) -> Vec<engine::scene::light::SceneLight> {
         Vec::new()
     }
 

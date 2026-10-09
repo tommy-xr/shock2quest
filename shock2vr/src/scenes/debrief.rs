@@ -17,10 +17,7 @@
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
 use dark::importers::STRINGS_IMPORTER;
 use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    measure_text_width,
-    scene::{SceneObject, light::SpotLight},
+    assets::asset_cache::AssetCache, audio::AudioContext, measure_text_width, scene::SceneObject,
 };
 use shipyard::{EntityId, UniqueViewMut, World};
 use tracing::warn;
@@ -295,7 +292,7 @@ impl GameScene for DebriefScene {
         true
     }
 
-    fn get_hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
+    fn get_hand_lights(&self, _options: &GameOptions) -> Vec<engine::scene::light::SceneLight> {
         Vec::new()
     }
 

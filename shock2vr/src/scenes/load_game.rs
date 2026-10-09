@@ -13,11 +13,7 @@ use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
 use dark::importers::STRINGS_IMPORTER;
 #[cfg(test)]
 use dark::map::MapRect;
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::{SceneObject, light::SpotLight},
-};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
 use shipyard::{EntityId, UniqueViewMut, World};
 use std::collections::HashMap;
 
@@ -559,7 +555,7 @@ impl GameScene for LoadGameScene {
         true
     }
 
-    fn get_hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
+    fn get_hand_lights(&self, _options: &GameOptions) -> Vec<engine::scene::light::SceneLight> {
         Vec::new()
     }
 

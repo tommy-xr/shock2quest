@@ -526,7 +526,7 @@ pub fn to_scene_objects(
 
         let material = RefCell::new(engine::scene::SkinnedMaterial::create(
             diffuse_texture.clone(),
-            0.0,
+            crate::util::melee_material_emissivity(&material_name, 0.0),
             0.0,
         ));
 
@@ -840,10 +840,21 @@ pub fn pmnm_to_scene_objects(
     asset_cache: &mut AssetCache,
 ) -> Vec<SceneObject> {
     let mut scene_objects = Vec::new();
+    let mut rapier_glow_added = false;
     for (material_name, vertices) in mesh.to_skinned_vertices() {
         if vertices.is_empty() {
             continue;
         }
+        let glow_joint =
+            if !rapier_glow_added && material_name.eq_ignore_ascii_case("ND-rapier_b.psd") {
+                let joint = vertices[0].bone_indices[0];
+                vertices
+                    .iter()
+                    .all(|v| v.bone_indices[0] == joint && v.bone_weights[0] == 1.0)
+                    .then_some(joint as usize)
+            } else {
+                None
+            };
         let geometry: Rc<Box<dyn engine::scene::Geometry>> =
             Rc::new(Box::new(engine::scene::mesh::create(vertices)));
 
@@ -858,7 +869,7 @@ pub fn pmnm_to_scene_objects(
         let diffuse: Rc<dyn TextureTrait> = texture;
         let material = RefCell::new(engine::scene::SkinnedMaterial::create(
             diffuse.clone(),
-            0.0,
+            crate::util::melee_material_emissivity(&material_name, 0.0),
             0.0,
         ));
         // No palette is baked here: `expand_skinning_palette` assumes joint-local
@@ -878,6 +889,24 @@ pub fn pmnm_to_scene_objects(
         );
         for object in &mut scene_objects[first..] {
             object.material_name = Some(Rc::from(material_name.as_str()));
+        }
+        if let Some(joint) = glow_joint {
+            let mut glow = scene_objects[first].duplicate();
+            let (origin, reach) = crate::util::rapier_blade_bind_segment();
+            glow.material = Rc::new(RefCell::new(engine::scene::laser_material::attached_glow(
+                origin,
+                reach,
+                0.045,
+                cgmath::vec3(0.18, 0.45, 1.0),
+                joint,
+            )));
+            glow.material_stack = None;
+            glow.geometry = Rc::new(Box::new(engine::scene::cylinder::Cylinder));
+            glow.material_name = Some(Rc::from("rapier_blade_glow"));
+            glow.blend_mode = engine::scene::scene_object::BlendMode::AdditiveAlpha;
+            glow.set_depth_write(false);
+            scene_objects.push(glow);
+            rapier_glow_added = true;
         }
     }
     scene_objects

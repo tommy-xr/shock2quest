@@ -26,11 +26,7 @@
 //! (AGENTS.md §3).
 
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::{SceneObject, light::SpotLight},
-};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
 use shipyard::{EntityId, UniqueViewMut, World};
 
 use crate::{
@@ -727,7 +723,7 @@ impl GameScene for DeveloperScene {
         true
     }
 
-    fn get_hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
+    fn get_hand_lights(&self, _options: &GameOptions) -> Vec<engine::scene::light::SceneLight> {
         Vec::new()
     }
 

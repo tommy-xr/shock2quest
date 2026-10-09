@@ -18,6 +18,7 @@ pub mod install;
 pub mod inventory;
 pub mod ladder_holds;
 mod melee_charge_visual;
+mod melee_lighting;
 mod melee_swing;
 pub mod message_trace;
 pub mod object_lighting;
@@ -2599,15 +2600,15 @@ impl Game {
         self.free_camera_view_fixup = None;
     }
 
-    /// Hand spotlights, when the `hand_spotlights` dev param is on.
-    pub fn get_hand_spotlights(&self) -> Vec<engine::scene::light::SpotLight> {
+    /// Lights carried by the player, including flashlights and luminous melee weapons.
+    pub fn get_hand_lights(&self) -> Vec<engine::scene::light::SceneLight> {
         // The lights belong to the hands: with the hands suppressed they would
         // be two pools cast by nothing - and, being world lighting, they light
         // the scene *before* the pause dim and show straight through it.
         if self.pause_menu.is_open() {
             return Vec::new();
         }
-        self.active_game_scene.get_hand_spotlights(&self.options)
+        self.active_game_scene.get_hand_lights(&self.options)
     }
 
     /// Eye (render camera) height above the pawn position returned by
@@ -3311,9 +3312,9 @@ impl App {
         }
     }
 
-    pub fn get_hand_spotlights(&self) -> Vec<engine::scene::light::SpotLight> {
+    pub fn get_hand_lights(&self) -> Vec<engine::scene::light::SceneLight> {
         match self {
-            App::Ready(game) => game.get_hand_spotlights(),
+            App::Ready(game) => game.get_hand_lights(),
             App::MissingAssets(_) => Vec::new(),
         }
     }

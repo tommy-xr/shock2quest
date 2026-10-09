@@ -46,7 +46,7 @@ use cgmath::{Matrix4, Quaternion, Vector2, Vector3};
 use engine::{
     assets::{asset_cache::AssetCache, asset_paths::AbstractAssetPath},
     audio::AudioContext,
-    scene::{SceneObject, light::SpotLight},
+    scene::SceneObject,
 };
 
 use shipyard::World;
@@ -301,8 +301,8 @@ impl crate::game_scene::GameScene for Mission {
         )
     }
 
-    fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
-        self.mission_core.get_hand_spotlights(options)
+    fn get_hand_lights(&self, options: &GameOptions) -> Vec<engine::scene::light::SceneLight> {
+        self.mission_core.get_hand_lights(options)
     }
 
     fn wants_pointer(&self) -> bool {
