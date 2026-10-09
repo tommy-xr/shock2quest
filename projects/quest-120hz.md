@@ -141,6 +141,10 @@ candidate, not an already-approved global rate change.
   animation/pose work, AI/scripts, effects/entity synchronization, and visibility
   preparation. Attribute the 6.3 ms update and 1.5 ms finish costs before choosing
   an algorithm or changing update frequency.
+- [x] Add a one-shot host update-only benchmark using the complete game update,
+  exact 60 Hz simulation intervals, excluded warmup, individual latency samples,
+  and existing inclusive subsystem timers. See [benchmark usage](../benchmarks/README.md#host-update-only-benchmark).
+  Host attribution complements, rather than replaces, rendered Quest measurements.
 - [ ] Separate per-eye scene work, draw submission, swapchain waits, and frame
   submission. Keep logging outside hot loops; collect per-frame histograms or
   bounded samples rather than logging each frame.
@@ -178,7 +182,15 @@ promise of 2.3 ms recoverable work.
 - [ ] Consider full simulation/render overlap only after the fixed-step clock
   and rendering-state boundaries are established. Use immutable render
   snapshots with explicit ownership/publication; keep graphics resources and
-  graphics API calls on their owning thread.
+  graphics API calls on their owning thread. The first candidate is one worker
+  owning physics, scripts/AI, animation controllers, and effect application in
+  their existing order. Scripts have mutable-state exceptions: returned effects
+  alone do not make the live world safe to share with rendering.
+- [ ] Interpolate between two **completed** immutable world snapshots. Never
+  read a worker's in-progress frame. Sample the latest head and controller poses
+  on the render path; do not interpolate tracking with the world snapshots.
+  Specify the bridge for physical hands, held objects, release velocity, and
+  haptics so current visual poses remain consistent with simulation contacts.
 - [ ] Measure snapshot construction/copying, synchronization, queue age, input
   latency and worst-case frame time. A global lock around the existing mutable
   game state would serialize the two threads and defeat the intended benefit.
