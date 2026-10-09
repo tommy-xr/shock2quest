@@ -259,3 +259,65 @@ test(
     );
   },
 );
+
+// Command-to-ending · detailed · 25th Anniversary · VR · seed 20261006.
+// The ordinary jump mantle previously crossed the medical-room ceiling to
+// reach a clear same-height point outside its wall, then fell below the map.
+test(
+  "VR jump against Command2's medical-room wall stays inside the room",
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async (t) => {
+    await using game = await GameServer.launch({
+      mission: "command2.mis",
+      debugFlags: ["--vr"],
+    });
+    // Explicit fresh-map regression staging, not campaign traversal. No prior
+    // door state or saved inventory is necessary to reproduce the escape.
+    await game.player.teleport({ x: 16.977903, y: -9.15612, z: -41.31981 });
+    await game.step({ frames: 5 });
+    const before = await game.player.position();
+    assert.ok(Math.abs(before.y + 9.156) < 0.05, "the pawn must start supported");
+    await game.input.lookAtWorldPoint([17, -8.1, -15.5]);
+    await game.input.setJump(true);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 27 });
+    await game.input.setJump(false);
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 150 });
+    const landed = await game.player.position();
+    await game.step({ frames: 120 });
+    const supported = await game.player.position();
+    assert.ok(
+      Math.abs(landed.y - before.y) < 0.1 &&
+        Math.abs(supported.y - before.y) < 0.1 &&
+        Math.hypot(supported.x - landed.x, supported.y - landed.y, supported.z - landed.z) < 0.05,
+      `a normal jump must land back inside the supported room: ${JSON.stringify({ before, landed, supported })}`,
+    );
+    assert.equal((await game.info()).player.life_state, "alive");
+    t.diagnostic(`Command2 wall jump: ${JSON.stringify({ before, landed, supported })}`);
+  },
+);
+
+// A floor beneath the far side does not authorize crossing a room ceiling.
+// This is the former #708 positive fixture, now correctly a negative case.
+test(
+  "VR jump cannot escape SHODAN's enclosed outer corridor above its ceiling",
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "shodan.mis", debugFlags: ["--vr"] });
+    await game.player.teleport({ x: 28.14371, y: -0.5959, z: 31.63964 });
+    await game.step({ frames: 30 });
+    const before = await game.player.position();
+    await game.input.lookAtWorldPoint([before.x, before.y + 1.04, before.z + 4]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.setJump(true);
+    await game.step({ frames: 1 });
+    await game.input.setJump(false);
+    await game.step({ frames: 59 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 240 });
+    const after = await game.player.position();
+    assert.ok(after.z < 32 && Math.abs(after.y - before.y) < 0.2,
+      `the enclosed corridor is not the shaft entrance: ${JSON.stringify({ before, after })}`);
+  },
+);
