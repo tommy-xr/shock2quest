@@ -1,0 +1,82 @@
+81 metrics supported:
+1	Clocks / Second
+2	GPU Frequency
+3	GPU % Bus Busy
+4	GPU % Utilization
+5	Preemptions / second
+6	Avg Preemption Delay
+7	% Vertex Fetch Stall
+8	% Texture Fetch Stall
+9	% Texture L1 Miss
+10	% Texture L2 Miss
+11	% Stalled on System Memory
+12	Read Total (Bytes/sec)
+13	Write Total (Bytes/sec)
+14	Texture Memory Read BW (Bytes/Second)
+15	Vertex Memory Read (Bytes/Second)
+16	SP Memory Read (Bytes/Second)
+17	% Shaders Busy
+18	% Shaders Stalled
+19	% Shader ALU Capacity Utilized
+20	% Time ALUs Working
+21	% Time EFUs Working
+22	% Texture Pipes Busy
+23	% Wave Context Occupancy
+24	% Instruction Cache Miss
+25	% Time Shading Vertices
+26	Vertices Shaded / Second
+27	Vertex Instructions / Second
+28	Textures / Vertex
+29	Avg Bytes / Vertex
+30	ALU / Vertex
+31	EFU / Vertex
+32	% Time Shading Fragments
+33	Fragments Shaded / Second
+34	Fragment Instructions / Second
+35	Fragment ALU Instructions / Sec (Full)
+36	Fragment ALU Instructions / Sec (Half)
+37	Fragment EFU Instructions / Second
+38	L1 Texture Cache Miss Per Pixel
+39	Textures / Fragment
+40	Avg Bytes / Fragment
+41	ALU / Fragment
+42	EFU / Fragment
+43	% Time Compute
+44	% Kernel Load Cycles
+45	% Global Buffer Read L2 Hit
+46	% Global Buffer Write L2 Hit
+47	Global Memory Load Instructions
+48	Global Memory Atomic Instructions
+49	Global Memory Store Instructions
+50	Global Buffer Data Read Request BW (Bytes/sec)
+51	Global Buffer Data Read BW (Bytes/sec)
+52	Global Image Data Read Request BW (Bytes/sec)
+53	Global Image Uncompressed Data Read BW (Bytes/sec)
+54	Global Image Compressed Data Read BW (Bytes/sec)
+55	% L1 Hit
+56	% Image Read L2 Hit
+57	Local Memory Atomic Instructions
+58	Local Memory Load Instructions
+59	Local Memory Store Instructions
+60	Load-Store Utilization
+61	Avg Load-Store Instructions Per Cycle
+62	Bytes Data Write Requested
+63	Bytes Data Actually Written
+64	Pre-clipped Polygons/Second
+65	% Prims Trivially Rejected
+66	% Prims Clipped
+67	% LRZ Busy
+68	Average Vertices / Polygon
+69	Reused Vertices / Second
+70	Average Polygon Area
+71	% Nearest Filtered
+72	% Linear Filtered
+73	% Anisotropic Filtered
+74	% Non-Base Level Textures
+75	% RTU Busy
+76	% BVH Fetch Stall
+77	Average BVH Fetch Latency Cycles
+78	RTU Ray Box Intersections Per Instruction
+79	RTU Ray Triangle Intersections Per Instruction
+80	LRZ Pixels Killed
+81	LRZ Prims Killed
