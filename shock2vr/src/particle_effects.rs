@@ -11,6 +11,73 @@ use engine::{
 };
 use std::{rc::Rc, time::Duration};
 
+/// A small after-shot wisp using the same animated smoke as surface impacts.
+/// Resolve the visible barrel once, then let the particles drift independently
+/// of recoil, hand movement and weapon switching.
+pub(crate) fn barrel_smoke(
+    world: &shipyard::World,
+    weapon: shipyard::EntityId,
+    assets: &mut AssetCache,
+) -> Option<ParticleSystem> {
+    use crate::{
+        runtime_props::{RuntimePropTransform, RuntimePropViewmodelToWorld},
+        weapon_modification::{self, Kind},
+    };
+    use cgmath::{EuclideanSpace, Point3, Transform};
+    use shipyard::{Get, View};
+
+    let laser = match weapon_modification::kind(world, weapon)? {
+        Kind::Pistol => false,
+        Kind::Laser => true,
+        _ => return None,
+    };
+    let frames = particle_frames(assets, "NDsmk");
+    if frames.is_empty() {
+        return None;
+    }
+    let transforms = world.borrow::<View<RuntimePropTransform>>().ok()?;
+    let mut frame =
+        crate::weapon_muzzle::resolve(world, weapon).shot_frame(transforms.get(weapon).ok()?.0);
+    if let Ok(mapping) = world.borrow::<View<RuntimePropViewmodelToWorld>>() {
+        if let Ok(mapping) = mapping.get(weapon) {
+            // Match the visible flat barrel's projection without scaling the
+            // smoke's world-space size or rise speed along with the viewmodel.
+            frame.w = mapping
+                .0
+                .transform_point(Point3::from_vec(frame.w.truncate()))
+                .to_homogeneous();
+        }
+    }
+    let mut smoke = smoke_particles(laser, frames);
+    smoke.update(Duration::ZERO, frame);
+    Some(smoke)
+}
+
+fn smoke_particles(laser: bool, frames: Vec<Rc<dyn TextureTrait>>) -> ParticleSystem {
+    ParticleSystem::new()
+        .with_one_shot(true)
+        .with_world_space(true)
+        .with_num_particles(if laser { 2 } else { 3 })
+        .with_launch_bounding_box(vec3(-0.008, -0.008, 0.005), vec3(0.008, 0.008, 0.025))
+        .with_lifetime(if laser { 0.3 } else { 0.5 }, if laser { 0.5 } else { 0.8 })
+        .with_particle_size(
+            if laser { 0.045 } else { 0.06 },
+            if laser { 0.07 } else { 0.09 },
+        )
+        .with_velocity(vec3(-0.035, -0.015, 0.08), vec3(0.035, 0.025, 0.2))
+        .with_acceleration(vec3(0.0, if laser { 0.12 } else { 0.3 }, 0.0))
+        .with_size_velocity(if laser { 0.14 } else { 0.2 })
+        .with_color(if laser {
+            vec3(0.4, 0.7, 1.0)
+        } else {
+            vec3(0.65, 0.65, 0.65)
+        })
+        .with_alpha(if laser { 0.16 } else { 0.2 })
+        .with_fade_in_time(0.045)
+        .with_fade_time(if laser { 0.35 } else { 0.55 })
+        .with_sprite_animation(frames, Duration::from_millis(60), false)
+}
+
 /// Cosmetic surface family selected at a ballistic impact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImpactSurface {
@@ -432,6 +499,20 @@ fn emp_explosion_layers(
 mod tests {
     use super::*;
     use cgmath::SquareMatrix;
+
+    #[test]
+    fn barrel_smoke_expires_without_relaunching() {
+        for laser in [false, true] {
+            let mut particles = smoke_particles(laser, vec![]);
+            particles.update(Duration::ZERO, Matrix4::identity());
+            particles.update(Duration::from_millis(100), Matrix4::identity());
+            assert!(!particles.is_done());
+            particles.update(Duration::from_secs(1), Matrix4::identity());
+            assert!(particles.is_done());
+            particles.update(Duration::from_secs(1), Matrix4::identity());
+            assert!(particles.is_done(), "a spent wisp must not emit again");
+        }
+    }
 
     #[test]
     fn decal_variants_use_authored_scale_ranges() {
