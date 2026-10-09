@@ -323,6 +323,14 @@ impl EntityPopulator for HordePopulation {
             [50.0, 23.55, 27.9],
             0.0,
         );
+        // Tucked behind the street wall, facing the opposite approach (+Z).
+        add(
+            60_015,
+            -1192,
+            "Recharging Station",
+            [-6.5, 22.0, 35.6],
+            180.0,
+        );
         // Retail replicators are an assembly: RepBase is only the cabinet.
         // Match the separate RepScreen and its authored local offset.
         for (index, position, yaw) in [

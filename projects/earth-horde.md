@@ -175,6 +175,10 @@ of the large containment cabinet. Five replicators serve the street; their
 separate displays and wall-mounted height follow authored MedSci machines.
 Cabinet backs contact surveyed walls and their outlets face clear approaches.
 
+A recharge station behind the west street wall at `(-6.5, 22, 35.6)`, facing
+the opposite approach (+Z), recharges carried energy weapons, implants, and
+powered armor.
+
 | Location | Normal catalog | Hacked addition |
 | --- | --- | --- |
 | West supplies | Standard clips, med patches, psi boosters, maintenance tools, detox patches, Toxin-A | Auto-repair device replaces med patches |
