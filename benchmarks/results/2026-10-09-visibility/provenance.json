@@ -1,0 +1,12 @@
+{
+  "baseline_code": "93afc347",
+  "optimized_code": "710c812d",
+  "independent_code": "d3c2a4d7",
+  "baseline_apk_sha256": "56378ae1155ce15df6d1eba58779413858689fa33fb190915801aabee3c03955",
+  "optimized_apk_sha256": "af87fa8937430fa00508e09d7dbad0f09bca7d69f72f19e9f93cc64b95f0351a",
+  "native_sha256": {
+    "baseline": "9d5a0b768612afdc55898848b7c3d31c95b298dcfd59cec3a2c52e7956d39a80",
+    "optimized": "bdc45b61238d28ef6643d4a0d7c44349d69395d705125d4890f9daf3bf31a659"
+  },
+  "excluded_run": "A2 lost focus and device disconnected as battery depleted. APK restoration pending recharge."
+}

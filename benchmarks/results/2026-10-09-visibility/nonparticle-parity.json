@@ -1,0 +1,38 @@
+{
+  "medsci-flat": {
+    "corpse-0": true,
+    "corpse-90": true,
+    "corpse-180": true,
+    "corpse-270": true,
+    "keypad-0": true,
+    "keypad-90": true,
+    "keypad-180": true,
+    "keypad-270": true,
+    "return-0": true,
+    "return-90": true,
+    "return-180": true,
+    "return-270": true
+  },
+  "medsci-vr": {
+    "corpse-0": true,
+    "corpse-90": true,
+    "corpse-180": true,
+    "corpse-270": true,
+    "keypad-0": true,
+    "keypad-90": true,
+    "keypad-180": true,
+    "keypad-270": true,
+    "return-0": true,
+    "return-90": true,
+    "return-180": true,
+    "return-270": true
+  },
+  "many-repeat": {
+    "crowd-0": true,
+    "crowd-1": true,
+    "crowd-2": true,
+    "crowd-3": true,
+    "crowd-4": true,
+    "crowd-5": true
+  }
+}
