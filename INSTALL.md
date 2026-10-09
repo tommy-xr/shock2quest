@@ -7,15 +7,14 @@ The APK does not include retail game data.
 
 ## Download and install
 
-1. Open the [latest release](https://github.com/tommy-xr/shock2quest/releases/latest)
-   and download `shock2quest-<version>.apk`. In the commands below, replace
-   `<version>` with the version you downloaded (without the tag's `v` prefix).
+1. Download [shock2quest.apk](https://github.com/tommy-xr/shock2quest/releases/latest/download/shock2quest.apk)
+   from the latest release.
 2. Connect your headset by USB, put it on, and accept the USB debugging prompt.
    Run `adb devices` and confirm the headset is listed as `device`.
 3. Install the downloaded APK from your download directory:
 
    ```sh
-   adb install -r "shock2quest-<version>.apk"
+   adb install -r "shock2quest.apk"
    ```
 
    `-r` updates an existing installation
@@ -24,7 +23,7 @@ The APK does not include retail game data.
 Optionally download `SHA256SUMS` and `INSTALL.md` into the same directory and
 verify with `sha256sum --check SHA256SUMS` (Linux) or
 `shasum -a 256 --check SHA256SUMS` (macOS). On Windows, compare
-`Get-FileHash "shock2quest-<version>.apk" -Algorithm SHA256` with the APK entry.
+`Get-FileHash "shock2quest.apk" -Algorithm SHA256` with the APK entry.
 
 ## Copy your game files
 

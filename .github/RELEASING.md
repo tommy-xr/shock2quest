@@ -71,9 +71,13 @@ signed with a different key requires uninstalling the old app first. Existing
    than any published release, and runs the publish job, which is the only job
    with repository write permission.
    On success, `v0.0.1` points to that exact source commit and the published
-   release contains `shock2quest-0.0.1.apk`, `INSTALL.md`, and `SHA256SUMS`.
+   release contains `shock2quest.apk`, `INSTALL.md`, and `SHA256SUMS`.
    The README badge and latest-release link update automatically. Releases are
    ordinary GitHub releases, described as early development builds in the notes.
+
+Every release uses the asset name `shock2quest.apk`, so the stable download URL is
+`https://github.com/tommy-xr/shock2quest/releases/latest/download/shock2quest.apk`.
+The APK still embeds its release version; the filename does not determine it.
 
 Use increasing MAJOR.MINOR.PATCH versions, with each component in 0..255 and no
 leading zeroes, suffixes, or `v` prefix. cargo-apk 0.9.7 encodes versionCode as

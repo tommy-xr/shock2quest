@@ -66,7 +66,7 @@ jobs:
           mapfile -t apks < <(find target/release/apk -name shock2quest.apk -type f)
           test "${#apks[@]}" -eq 1
           mkdir -p dist
-          apk="dist/shock2quest-$RELEASE_VERSION.apk"
+          apk="dist/shock2quest.apk"
           cp "${apks[0]}" "$apk"
           build_tools="$ANDROID_HOME/build-tools/33.0.0"
           "$build_tools/apksigner" verify --verbose --print-certs "$apk"
@@ -78,7 +78,7 @@ jobs:
             echo 'Release APK must not be debuggable'; exit 1
           fi
           cp INSTALL.md dist/INSTALL.md
-          (cd dist && sha256sum "shock2quest-$RELEASE_VERSION.apk" INSTALL.md > SHA256SUMS)
+          (cd dist && sha256sum "shock2quest.apk" INSTALL.md > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
           name: release-apk
@@ -116,7 +116,7 @@ jobs:
       - name: Check complete release payload
         working-directory: dist
         run: |
-          test -s "shock2quest-$RELEASE_VERSION.apk"
+          test -s "shock2quest.apk"
           test -s INSTALL.md
           test -s SHA256SUMS
           test "$(find . -type f | wc -l)" -eq 3
@@ -126,7 +126,7 @@ jobs:
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF
           Signed Quest APK for Shock2Quest $RELEASE_VERSION (early development build).
 
-          Download **shock2quest-$RELEASE_VERSION.apk** and follow **INSTALL.md** below.
+          Download **shock2quest.apk** and follow **INSTALL.md** below.
           Requires your own System Shock 2: 25th Anniversary Remaster game files.
           SHA256SUMS contains download checksums.
 
@@ -135,5 +135,5 @@ jobs:
           gh release create "$RELEASE_TAG" \
             --target "$GITHUB_SHA" --title "Shock2Quest $RELEASE_VERSION" --draft \
             --notes-file "$RUNNER_TEMP/release-notes.md" \
-            "dist/shock2quest-$RELEASE_VERSION.apk" dist/INSTALL.md dist/SHA256SUMS
+            "dist/shock2quest.apk" dist/INSTALL.md dist/SHA256SUMS
           gh release edit "$RELEASE_TAG" --draft=false --latest
