@@ -65,8 +65,13 @@ for (const vr of [false, true]) {
         const decals = (await game.scene.objects({ limit: 10000 })).objects.filter(o =>
           o.model !== null && (material === "metal" ? o.model === "ND-mtlhit0" : /^ND-pcrhit[0-3]$/.test(o.model)));
         assert.ok(decals.length > 0, `expected the material-specific ${material} bullet hole`);
-        if (material === "metal") assert.ok(decals.some(o => (o.material_passes?.length ?? 0) > 1),
-          "the metal bullet hole includes its authored shine pass");
+        // PlanarDecal renders a base and separate incidence-shine overlay,
+        // rather than the generic material-stack pass list.
+        if (material === "metal") {
+          assert.equal(decals.length, 2, "metal bullet hole renders base plus shine");
+          assert.equal(decals[0].entity_id, decals[1].entity_id);
+          assert.ok(decals.every(o => !o.depth_write));
+        }
         const decalIds = new Set(decals.map(o => o.entity_id));
         await game.step({ frames: 120 });
         assert.ok((await game.scene.objects({ limit: 10000 })).objects.some(o => decalIds.has(o.entity_id)),
