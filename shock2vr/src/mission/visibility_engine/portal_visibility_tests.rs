@@ -145,3 +145,52 @@ fn entity_lifecycle_and_has_refs_are_not_cached() {
     assert!(engine.entity_cell_cache.is_empty());
     assert!(!engine.is_visible(id));
 }
+
+#[test]
+fn tiny_screen_overlap_is_kept_but_zero_area_contact_is_rejected() {
+    let screen = Aabb2::new(point2(0.0, 0.0), point2(1000.0, 1000.0));
+    for portal in [
+        Aabb2::new(point2(-10.0, 499.999), point2(1010.0, 500.001)),
+        Aabb2::new(point2(999.999, -10.0), point2(1001.0, 1010.0)),
+        Aabb2::new(point2(-1.0, 999.999), point2(1001.0, 1000.001)),
+    ] {
+        assert!(intersects(&screen, &portal).is_some());
+        assert!(intersects(&portal, &screen).is_some());
+    }
+    assert!(
+        intersects(
+            &screen,
+            &Aabb2::new(point2(1000.0, 0.0), point2(1001.0, 1000.0))
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn oblique_long_portals_retain_their_visible_middle() {
+    use cgmath::{Deg, Transform, perspective};
+    use dark::mission::CellPortal;
+    let projection = perspective(Deg(90.0), 1.0, 0.1, 100.0);
+    let screen = Aabb2::new(point2(0.0, 0.0), point2(1000.0, 1000.0));
+    for angle in [0.0, 30.0, 60.0, 85.0] {
+        // Very thin doorway strip, oblique in the image plane. Every corner
+        // lies off-screen, but the middle crosses the camera's view.
+        let transform =
+            Matrix4::from_translation(vec3(0.0, 0.0, -5.0)) * Matrix4::from_angle_z(Deg(angle));
+        let vertices = [
+            Point3::new(-20.0, -0.001, 0.0),
+            Point3::new(20.0, -0.001, 0.0),
+            Point3::new(20.0, 0.001, 0.0),
+            Point3::new(-20.0, 0.001, 0.0),
+        ]
+        .map(|p| transform.transform_point(p))
+        .to_vec();
+        for p in &vertices {
+            let clip = projection * p.to_homogeneous();
+            assert!(clip.x.abs() > clip.w || clip.y.abs() > clip.w);
+        }
+        let portal = CellPortal::new(vertices, 1);
+        let bounds = portal.screen_space_squad(projection, 1000.0, 1000.0);
+        assert!(intersects(&screen, &bounds).is_some(), "angle={angle}");
+    }
+}
