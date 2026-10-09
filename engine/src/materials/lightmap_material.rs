@@ -1,6 +1,7 @@
 extern crate gl;
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
+use crate::scene::render_pass::RenderPass;
 use crate::scene::uv_motion::UvMotion;
 use crate::shader_program::ShaderProgram;
 use crate::texture::Texture;
@@ -62,6 +63,9 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform float lightmapIntensity;
         uniform highp vec2 diffuseUvOffset;
         uniform bool unlit;
+        uniform vec4 layerColorAlpha;
+        uniform bool layerEnabled;
+        uniform bool layerAlphaTest;
 
         // Spotlight array uniforms (up to 6 spotlights)
         uniform highp vec3 spotlightPos[6];
@@ -120,10 +124,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 
             vec4 lightmapColor = texture(texture1, wrappedTexCoord) * lightmapIntensity;
             vec4 diffuseColor = texture(texture2, texCoord + diffuseUvOffset);
-            if (unlit) {
-                fragColor = vec4(diffuseColor.rgb, 1.0);
-                return;
-            }
+            if (layerAlphaTest && diffuseColor.a * layerColorAlpha.a < 0.1) discard;
 
             // Dark's mission ambient is a minimum final intensity: preserve
             // brighter authored pixels while keeping unlit surfaces legible.
@@ -135,7 +136,8 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
                 finalColor += calculateSpotlight(i, worldPos, normal, diffuseColor.rgb);
             }
 
-            fragColor = vec4(finalColor, 1.0);
+            fragColor = vec4((unlit ? diffuseColor.rgb : finalColor) * layerColorAlpha.rgb,
+                layerEnabled ? diffuseColor.a * layerColorAlpha.a : 1.0);
         }
 "#;
 
@@ -143,6 +145,9 @@ struct UnifiedUniforms {
     world_wave: crate::scene::world_wave::Uniforms,
     uv_offset_loc: i32,
     unlit_loc: i32,
+    layer_color_alpha_loc: i32,
+    layer_enabled_loc: i32,
+    layer_alpha_test_loc: i32,
     // Basic transformation matrices
     world_loc: i32,
     view_loc: i32,
@@ -166,6 +171,7 @@ struct UnifiedUniforms {
 static UNIFIED_SHADER_PROGRAM: OnceCell<(ShaderProgram, UnifiedUniforms)> = OnceCell::new();
 
 pub struct LightmapMaterial {
+    layer: Option<RenderPass>,
     uv_motion: UvMotion,
     unlit: bool,
     has_initialized: bool,
@@ -197,6 +203,7 @@ impl LightmapMaterial {
         unlit: bool,
     ) -> Box<dyn Material> {
         Box::new(LightmapMaterial {
+            layer: None,
             uv_motion,
             unlit,
             diffuse_texture,
@@ -227,6 +234,22 @@ impl LightmapMaterial {
             let uv = self.uv_motion.offset(render_context.time);
             gl::Uniform2f(uniforms.uv_offset_loc, uv[0], uv[1]);
             gl::Uniform1i(uniforms.unlit_loc, i32::from(self.unlit));
+            let (color, alpha) = self
+                .layer
+                .as_ref()
+                .map_or((Vector3::new(1.0, 1.0, 1.0), 1.0), |p| (p.color, p.alpha));
+            gl::Uniform4f(
+                uniforms.layer_color_alpha_loc,
+                color.x,
+                color.y,
+                color.z,
+                alpha,
+            );
+            gl::Uniform1i(uniforms.layer_enabled_loc, i32::from(self.layer.is_some()));
+            gl::Uniform1i(
+                uniforms.layer_alpha_test_loc,
+                i32::from(self.layer.as_ref().is_some_and(|p| p.alpha_test)),
+            );
 
             let projection = render_context.projection_matrix;
 
@@ -295,6 +318,17 @@ impl LightmapMaterial {
 }
 
 impl Material for LightmapMaterial {
+    fn set_render_pass(&mut self, pass: RenderPass) {
+        // Terrain's resolver admits only this shader's color/alpha subset.
+        debug_assert!(
+            pass.incidence.is_none()
+                && pass.cube.is_none()
+                && !pass.force_opaque
+                && pass.mipmap_bias == 0.0
+        );
+        self.layer = Some(pass);
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -331,6 +365,18 @@ impl Material for LightmapMaterial {
 
                 // Get uniform locations for all shader variables
                 let uniforms = UnifiedUniforms {
+                    layer_color_alpha_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("layerColorAlpha").as_ptr(),
+                    ),
+                    layer_enabled_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("layerEnabled").as_ptr(),
+                    ),
+                    layer_alpha_test_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("layerAlphaTest").as_ptr(),
+                    ),
                     uv_offset_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("diffuseUvOffset").as_ptr(),
