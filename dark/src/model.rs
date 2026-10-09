@@ -861,6 +861,7 @@ mod tests {
             inner: InnerModel::Animated(AnimatedModel {
                 skeleton: Rc::new(Skeleton::create_from_bones(bones)),
                 scene_objects: Vec::new(),
+                interaction_triangles: Rc::new(Vec::new()),
                 hit_boxes: Rc::new(hit_boxes),
                 hit_box_shapes: Rc::new(HashMap::new()),
                 vhots: Vec::new(),
