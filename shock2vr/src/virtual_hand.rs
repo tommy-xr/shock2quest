@@ -18,6 +18,7 @@ use crate::{
     gui::GuiPropProxyEntity,
     hand_feedback::{HandAffordance, HandFeedback, HandTarget},
     input_context::Hand,
+    interaction_selection::{has_hud_select, hud_overlay_target},
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     scripts::{Message, MessagePayload},
     util::{self, point3_to_vec3},
@@ -1030,19 +1031,19 @@ pub(crate) fn interaction_ray_cast(
     let pick_bias = world.borrow::<View<PropPickBias>>().ok();
     let translating_doors = world.borrow::<View<PropTranslatingDoor>>().ok();
     let rotating_doors = world.borrow::<View<PropRotatingDoor>>().ok();
-    let permits_pick = |candidate| {
-        use collision::Union;
-        let entity = util::resolve_proxy_entity(world, candidate);
-        // Retail doorphys.cpp also blocks portal vision through closed doors.
-        // We do not retain its vision_blocking field, so preserve physical door
-        // obstruction rather than expose unseen targets when PickBias shrinks it.
-        if translating_doors
+    let is_door = |entity| {
+        translating_doors
             .as_ref()
             .is_some_and(|v| v.get(entity).is_ok())
             || rotating_doors
                 .as_ref()
                 .is_some_and(|v| v.get(entity).is_ok())
-        {
+    };
+    let permits_pick = |candidate| {
+        use collision::Union;
+        let entity = util::resolve_proxy_entity(world, candidate);
+        // Preserve physical door obstruction even when authored PickBias shrinks it.
+        if is_door(entity) {
             return true;
         }
         let bias = pick_bias.as_ref().and_then(|view| view.get(entity).ok());
@@ -1098,17 +1099,36 @@ pub(crate) fn interaction_ray_cast(
             .map(|result| resolve_hit_proxy_entity(world, result))
             .or(Some(ui_hit))
     } else {
-        physics
-            .ray_cast_interaction(
-                ray_start,
-                forward,
-                FROB_REACH,
-                ordinary_groups | InternalCollisionGroups::UI,
-                entity_to_ignore,
-                true,
-                Some(&permits_pick),
-            )
-            .map(|result| resolve_hit_proxy_entity(world, result))
+        let first = physics.ray_cast_interaction(
+            ray_start,
+            forward,
+            FROB_REACH,
+            ordinary_groups | InternalCollisionGroups::UI,
+            entity_to_ignore,
+            true,
+            Some(&permits_pick),
+        )?;
+        // A HUD-hidden shell can yield only to its co-located control overlay.
+        // Keep the same detailed meshes, pick-bias filter and all blocker groups.
+        if let Some(shell) = first.maybe_entity_id {
+            if has_hud_select(world, shell, false) && !is_door(shell) {
+                let beyond_shell = |candidate| candidate != shell && permits_pick(candidate);
+                if let Some(second) = physics.ray_cast_interaction(
+                    ray_start,
+                    forward,
+                    FROB_REACH,
+                    ordinary_groups | InternalCollisionGroups::UI,
+                    entity_to_ignore,
+                    true,
+                    Some(&beyond_shell),
+                ) {
+                    if hud_overlay_target(world, physics, &first, &second).is_some() {
+                        return Some(resolve_hit_proxy_entity(world, second));
+                    }
+                }
+            }
+        }
+        Some(resolve_hit_proxy_entity(world, first))
     }
 }
 
@@ -1325,6 +1345,63 @@ mod tests {
             ignored,
         )
         .and_then(|hit| hit.maybe_entity_id)
+    }
+
+    #[test]
+    fn hud_hidden_shell_yields_only_to_its_unobstructed_authored_overlay() {
+        use dark::properties::PropHUDSelect;
+        // Exercise the production hand ray, including its held-item exclusion.
+        for case in [
+            "overlay",
+            "unrelated",
+            "no_frob",
+            "hidden",
+            "wall",
+            "entity",
+            "held",
+        ] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let shell = world.add_entity(PropHUDSelect(false));
+            register_kinematic_body(
+                &mut world,
+                &mut physics,
+                shell,
+                vec3(0.0, 0.0, -1.0),
+                vec3(1.0, 1.0, 0.4),
+                CollisionGroup::selectable(),
+            );
+            let overlay = world.add_entity(PropHUDSelect(case != "hidden"));
+            if case != "no_frob" {
+                world.add_component(overlay, scripted_inventory_use());
+            }
+            register_kinematic_body(
+                &mut world,
+                &mut physics,
+                overlay,
+                vec3(0.0, 0.0, if case == "unrelated" { -1.2 } else { -1.0 }),
+                vec3(1.0, 1.0, 0.1),
+                CollisionGroup::selectable(),
+            );
+            if case == "wall" || case == "entity" {
+                add_occluder(
+                    &mut world,
+                    &mut physics,
+                    -0.9,
+                    if case == "wall" {
+                        CollisionGroup::world_for_test()
+                    } else {
+                        CollisionGroup::selectable()
+                    },
+                );
+            }
+            let ignored = (case == "held").then_some(overlay);
+            assert_eq!(
+                cast_at_fixture(&world, &physics, ignored),
+                Some(if case == "overlay" { overlay } else { shell }),
+                "{case}"
+            );
+        }
     }
 
     /// Fluidics authors a non-interactive shell around its invisible button.

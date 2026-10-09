@@ -58,6 +58,7 @@ mod hand_feedback;
 mod hand_glove;
 mod hud;
 mod interaction;
+mod interaction_selection;
 mod listener_sounds;
 mod mission;
 pub mod palette;
