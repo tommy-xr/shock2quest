@@ -5,8 +5,8 @@ use xr::sys::Handle;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Level {
-    #[default]
     Off,
+    #[default]
     Low,
     Medium,
     High,
@@ -52,7 +52,7 @@ pub fn configured_level() -> Level {
             );
             Level::Off
         }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Level::Off,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Level::default(),
         Err(error) => {
             println!("SHOCK2QUEST_FFR_CONFIG error={error} fallback=off");
             Level::Off
