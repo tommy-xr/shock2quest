@@ -1,8 +1,11 @@
 # Quest 120 Hz: an 8.33 ms frame budget
 
-Status: project opened 2026-10-09. First implementation: opt-in fixed foveated
-rendering (FFR), measured at the existing 90 Hz target. No optimization or
-refresh-rate change is enabled by this project document.
+Status: FFR implemented and measured in [PR #2124](https://github.com/tommy-xr/shock2quest/pull/2124),
+with default still off. The [16-run sweep](../benchmarks/results/2026-10-09-quest3-ffr.md)
+shows App-time savings but a warm-run freshness regression requiring isolation.
+Wearer review is underway. [CPU/clock diagnostics](https://github.com/tommy-xr/shock2quest/pull/2126)
+confirm frame-driven solver drift in a synthetic real-physics audit; device
+attribution is next. Refresh and simulation scheduling remain unchanged.
 
 ## Goal and constraints
 
@@ -54,19 +57,19 @@ axis; its fixed-camera highlight is barely visible in this scene.
 
 ### 1. Fixed foveated rendering: first experiment
 
-- [ ] Add an opt-in off/low/medium/high setting; default off during evaluation.
-- [ ] Discover the runtime's foveation and swapchain-update capabilities and
+- [x] Add an opt-in off/low/medium/high setting; default off during evaluation.
+- [x] Discover the runtime's foveation and swapchain-update capabilities and
   create compatible GLES swapchains. Confirm the installed OpenXR binding/API
   requirements before implementation. Missing support falls back to off and
   reports the effective setting; requested and effective settings must both
   appear in benchmark provenance.
-- [ ] Apply the same fixed profile to both eyes and handle profile/swapchain
+- [x] Apply the same fixed profile to both eyes and handle profile/swapchain
   creation, recreation, and destruction correctly. Start with fixed levels;
   defer dynamic foveation until the quality/performance curve is established.
-- [ ] Extend the existing fixture runner to compare all four levels with the
+- [x] Extend the existing fixture runner to compare all four levels with the
   same APK, scene, 1680×1760 eye dimensions, active refresh, assets, and lighting.
   Keep 90 Hz and existing simulation scheduling unchanged for this experiment.
-- [ ] Measure at least three counterbalanced repeats per setting, 10 s warmup
+- [x] Measure at least three counterbalanced repeats per setting, 10 s warmup
   and 30 s timing per run. Collect GPU counters separately; reject unavailable
   counters rather than averaging sentinel values. Compare raw repetitions and
   spread, not only rounded averages.

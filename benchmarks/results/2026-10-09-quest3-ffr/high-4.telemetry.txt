@@ -1,0 +1,674 @@
+--------- beginning of main
+hello from the async block
+Permissions granted!
+after async: /
+Trying to read directory: /sdcard/shock2quest/res/obj/txt16
+Name: /sdcard/shock2quest/res/obj/txt16/HRHGrenB.gif
+Name: /sdcard/shock2quest/res/obj/txt16/_psiamp.pcx
+Name: /sdcard/shock2quest/res/obj/txt16/psi_out.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRHsight.png
+Name: /sdcard/shock2quest/res/obj/txt16/psiamp.png
+Name: /sdcard/shock2quest/res/obj/txt16/psiglow.tga
+Name: /sdcard/shock2quest/res/obj/txt16/HRSRifleB.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRHGrenA.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRHGrenD.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRSPistB.tga
+Name: /sdcard/shock2quest/res/obj/txt16/HRSShotB.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRELaseA.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRSShotA.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRELaseB2.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRPistArm.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRSShotC.gif
+Name: /sdcard/shock2quest/res/obj/txt16/_psiamp.gif
+Name: /sdcard/shock2quest/res/obj/txt16/psiout.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRSPistC.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRELaseC.tga
+Name: /sdcard/shock2quest/res/obj/txt16/HRSWrenchB.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRSRifleA.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRHGrenC.gif
+Name: /sdcard/shock2quest/res/obj/txt16/psihand.pcx
+Name: /sdcard/shock2quest/res/obj/txt16/HRHGrenE.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRSWrenchC.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRSWrenchA.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRELaseB.gif
+Name: /sdcard/shock2quest/res/obj/txt16/HRSPistA.gif
+Name: /sdcard/shock2quest/res/obj/txt16/canb.gif
+Name: /sdcard/shock2quest/res/obj/txt16/blight.GIF
+Name: /sdcard/shock2quest/res/obj/txt16/HRSRifleC.gif
+supported extensions: ExtensionSet {
+    almalence_digital_lens_control: false,
+    android_trackables: false,
+    android_device_anchor_persistence: false,
+    android_face_tracking: false,
+    android_passthrough_camera_state: false,
+    android_raycast: false,
+    android_trackables_object: false,
+    android_anchor_sharing_export: false,
+    android_trackables_marker: false,
+    bd_controller_interaction: false,
+    bd_body_tracking: false,
+    bd_facial_simulation: false,
+    bd_spatial_sensing: false,
+    bd_spatial_anchor: false,
+    bd_spatial_anchor_sharing: false,
+    bd_spatial_scene: false,
+    bd_spatial_mesh: false,
+    bd_future_progress: false,
+    bd_spatial_plane: false,
+    bd_ultra_controller_interaction: false,
+    epic_view_configuration_fov: false,
+    ext_performance_settings: true,
+    ext_thermal_query: false,
+    ext_debug_utils: true,
+    ext_eye_gaze_interaction: false,
+    ext_view_configuration_depth_range: false,
+    ext_conformance_automation: false,
+    ext_hand_tracking: true,
+    ext_dpad_binding: false,
+    ext_hand_joints_motion_range: true,
+    ext_samsung_odyssey_controller: false,
+    ext_hp_mixed_reality_controller: false,
+    ext_palm_pose: true,
+    ext_frame_synthesis: true,
+    ext_uuid: false,
+    ext_render_model: false,
+    ext_interaction_render_model: false,
+    ext_hand_interaction: true,
+    ext_active_action_set_priority: true,
+    ext_local_floor: true,
+    ext_hand_tracking_data_source: true,
+    ext_plane_detection: false,
+    ext_future: true,
+    ext_user_presence: true,
+    ext_composition_layer_inverted_alpha: true,
+    ext_spatial_entity: false,
+    ext_spatial_plane_tracking: false,
+    ext_spatial_marker_tracking: false,
+    ext_spatial_anchor: false,
+    ext_spatial_persistence: false,
+    ext_spatial_persistence_operations: false,
+    ext_loader_init_properties: false,
+    fb_composition_layer_image_layout: true,
+    fb_composition_layer_alpha_blend: true,
+    fb_android_surface_swapchain_create: true,
+    fb_swapchain_update_state: true,
+    fb_composition_layer_secure_content: true,
+    fb_body_tracking: false,
+    fb_display_refresh_rate: true,
+    fb_color_space: true,
+    fb_hand_tracking_mesh: true,
+    fb_hand_tracking_aim: true,
+    fb_hand_tracking_capsules: true,
+    fb_spatial_entity: false,
+    fb_foveation: true,
+    fb_foveation_configuration: true,
+    fb_keyboard_tracking: false,
+    fb_triangle_mesh: true,
+    fb_passthrough: true,
+    fb_render_model: false,
+    fb_spatial_entity_query: false,
+    fb_spatial_entity_storage: false,
+    fb_foveation_vulkan: true,
+    fb_swapchain_update_state_android_surface: true,
+    fb_swapchain_update_state_opengl_es: true,
+    fb_swapchain_update_state_vulkan: true,
+    fb_touch_controller_pro: true,
+    fb_spatial_entity_sharing: false,
+    fb_space_warp: true,
+    fb_haptic_amplitude_envelope: true,
+    fb_scene: false,
+    fb_scene_capture: false,
+    fb_spatial_entity_container: false,
+    fb_face_tracking: false,
+    fb_eye_tracking_social: false,
+    fb_passthrough_keyboard_hands: false,
+    fb_composition_layer_settings: true,
+    fb_touch_controller_proximity: true,
+    fb_haptic_pcm: true,
+    fb_composition_layer_depth_test: true,
+    fb_spatial_entity_storage_batch: false,
+    fb_spatial_entity_user: true,
+    fb_face_tracking2: false,
+    htc_vive_cosmos_controller_interaction: false,
+    htc_facial_tracking: false,
+    htc_vive_focus3_controller_interaction: false,
+    htc_hand_interaction: false,
+    htc_vive_wrist_tracker_interaction: false,
+    htc_passthrough: false,
+    htc_foveation: false,
+    htc_anchor: false,
+    htc_body_tracking: false,
+    huawei_controller_interaction: false,
+    khr_android_thread_settings: true,
+    khr_android_surface_swapchain: true,
+    khr_composition_layer_cube: true,
+    khr_android_create_instance: true,
+    khr_composition_layer_depth: true,
+    khr_vulkan_swapchain_format_list: false,
+    khr_composition_layer_cylinder: true,
+    khr_composition_layer_equirect: false,
+    khr_opengl_enable: false,
+    khr_opengl_es_enable: true,
+    khr_vulkan_enable: true,
+    khr_visibility_mask: true,
+    khr_composition_layer_color_scale_bias: true,
+    khr_convert_timespec_time: true,
+    khr_loader_init: false,
+    khr_loader_init_android: false,
+    khr_vulkan_enable2: true,
+    khr_composition_layer_equirect2: true,
+    khr_binding_modification: false,
+    khr_extended_struct_name_lengths: false,
+    khr_swapchain_usage_input_attachment_bit: false,
+    khr_locate_spaces: false,
+    khr_maintenance1: true,
+    khr_generic_controller: false,
+    logitech_mx_ink_stylus_interaction: true,
+    meta_foveation_eye_tracked: false,
+    meta_local_dimming: false,
+    meta_passthrough_preferences: true,
+    meta_virtual_keyboard: true,
+    meta_vulkan_swapchain_create_info: true,
+    meta_performance_metrics: true,
+    meta_detached_controllers: true,
+    meta_headset_id: true,
+    meta_spatial_entity_discovery: false,
+    meta_hand_tracking_microgestures: true,
+    meta_recommended_layer_resolution: true,
+    meta_spatial_entity_persistence: false,
+    meta_passthrough_color_lut: true,
+    meta_spatial_entity_mesh: false,
+    meta_automatic_layer_filter: true,
+    meta_body_tracking_full_body: false,
+    meta_touch_controller_plus: true,
+    meta_passthrough_layer_resumed_event: true,
+    meta_body_tracking_calibration: false,
+    meta_spatial_entity_sharing: false,
+    meta_environment_depth: false,
+    meta_simultaneous_hands_and_controllers: true,
+    meta_colocation_discovery: false,
+    meta_spatial_entity_group_sharing: false,
+    ml_ml2_controller_interaction: false,
+    ml_frame_end_info: false,
+    ml_global_dimmer: false,
+    ml_compat: false,
+    ml_marker_understanding: false,
+    ml_localization_map: false,
+    ml_spatial_anchors: false,
+    ml_spatial_anchors_storage: false,
+    ml_user_calibration: false,
+    ml_system_notifications: false,
+    ml_world_mesh_detection: false,
+    ml_facial_expression: false,
+    ml_view_configuration_depth_range_change: false,
+    mnd_headless: false,
+    mnd_swapchain_usage_input_attachment_bit: false,
+    msft_unbounded_reference_space: false,
+    msft_spatial_anchor: false,
+    msft_spatial_graph_bridge: false,
+    msft_hand_interaction: true,
+    msft_hand_tracking_mesh: false,
+    msft_secondary_view_configuration: false,
+    msft_first_person_observer: false,
+    msft_controller_model: false,
+    msft_composition_layer_reprojection: false,
+    msft_spatial_anchor_persistence: false,
+    oculus_android_session_state_enable: false,
+    oculus_audio_device_guid: false,
+    oculus_external_camera: false,
+    oppo_controller_interaction: false,
+    qcom_tracking_optimization_settings: false,
+    ultraleap_hand_tracking_forearm: false,
+    valve_analog_threshold: false,
+    varjo_quad_views: false,
+    varjo_foveated_rendering: false,
+    varjo_composition_layer_depth_test: false,
+    varjo_environment_depth_estimation: false,
+    varjo_marker_tracking: false,
+    varjo_view_offset: false,
+    varjo_xr4_controller_interaction: false,
+    yvr_controller_interaction: false,
+    extx_overlay: false,
+    mndx_egl_enable: false,
+    mndx_force_feedback_curl: false,
+    htcx_vive_tracker_interaction: false,
+    other: [
+        [
+            88,
+            82,
+            95,
+            79,
+            67,
+            85,
+            76,
+            85,
+            83,
+            95,
+            99,
+            111,
+            109,
+            109,
+            111,
+            110,
+            95,
+            114,
+            101,
+            102,
+            101,
+            114,
+            101,
+            110,
+            99,
+            101,
+            95,
+            115,
+            112,
+            97,
+            99,
+            101,
+            115,
+            0,
+        ],
+        [
+            88,
+            82,
+            95,
+            70,
+            66,
+            95,
+            99,
+            111,
+            109,
+            109,
+            111,
+            110,
+            95,
+            101,
+            118,
+            101,
+            110,
+            116,
+            115,
+            0,
+        ],
+        [
+            88,
+            82,
+            95,
+            77,
+            69,
+            84,
+            65,
+            95,
+            102,
+            101,
+            97,
+            116,
+            117,
+            114,
+            101,
+            95,
+            102,
+            105,
+            100,
+            101,
+            108,
+            105,
+            116,
+            121,
+            0,
+        ],
+        [
+            88,
+            82,
+            95,
+            77,
+            69,
+            84,
+            65,
+            95,
+            104,
+            97,
+            110,
+            100,
+            95,
+            116,
+            114,
+            97,
+            99,
+            107,
+            105,
+            110,
+            103,
+            95,
+            102,
+            114,
+            101,
+            113,
+            117,
+            101,
+            110,
+            99,
+            121,
+            95,
+            104,
+            105,
+            110,
+            116,
+            0,
+        ],
+        [
+            88,
+            82,
+            95,
+            77,
+            69,
+            84,
+            65,
+            95,
+            104,
+            97,
+            110,
+            100,
+            95,
+            116,
+            114,
+            97,
+            99,
+            107,
+            105,
+            110,
+            103,
+            95,
+            117,
+            110,
+            101,
+            120,
+            116,
+            114,
+            97,
+            112,
+            111,
+            108,
+            97,
+            116,
+            101,
+            100,
+            95,
+            112,
+            111,
+            115,
+            101,
+            115,
+            0,
+        ],
+        [
+            88,
+            82,
+            95,
+            77,
+            69,
+            84,
+            65,
+            95,
+            116,
+            101,
+            109,
+            112,
+            111,
+            114,
+            97,
+            108,
+            95,
+            112,
+            105,
+            120,
+            101,
+            108,
+            95,
+            115,
+            121,
+            110,
+            116,
+            104,
+            101,
+            115,
+            105,
+            115,
+            0,
+        ],
+        [
+            88,
+            82,
+            95,
+            69,
+            88,
+            84,
+            95,
+            104,
+            97,
+            112,
+            116,
+            105,
+            99,
+            95,
+            112,
+            97,
+            114,
+            97,
+            109,
+            101,
+            116,
+            114,
+            105,
+            99,
+            0,
+        ],
+        [
+            88,
+            82,
+            95,
+            77,
+            69,
+            84,
+            65,
+            95,
+            116,
+            105,
+            108,
+            101,
+            95,
+            112,
+            114,
+            111,
+            112,
+            101,
+            114,
+            116,
+            105,
+            101,
+            115,
+            95,
+            104,
+            105,
+            110,
+            116,
+            0,
+        ],
+    ],
+}
+supported layers: []
+loaded OpenXR runtime: Oculus 207.297.0
+selected system 15992298772902969345: Meta Quest 3
+view configuration views: [
+    ViewConfigurationView {
+        recommended_image_rect_width: 1680,
+        max_image_rect_width: 8192,
+        recommended_image_rect_height: 1760,
+        max_image_rect_height: 8192,
+        recommended_swapchain_sample_count: 1,
+        max_swapchain_sample_count: 1,
+    },
+    ViewConfigurationView {
+        recommended_image_rect_width: 1680,
+        max_image_rect_width: 8192,
+        recommended_image_rect_height: 1760,
+        max_image_rect_height: 8192,
+        recommended_swapchain_sample_count: 1,
+        max_swapchain_sample_count: 1,
+    },
+]
+min_supported: 844424930131968 max supported: 844433520066560
+Got display
+Initialized!
+configs: [Config(0x72335cb740), Config(0x72335cbde0), Config(0x72335cbe60), Config(0x72335cb7a0), Config(0x72335cbe40), Config(0x72335cbec0), Config(0x72335cb760), Config(0x72335cbe00), Config(0x72335cbe80), Config(0x72335cb780), Config(0x72335cbe20), Config(0x72335cbea0), Config(0x72335cb940), Config(0x72335cb9a0), Config(0x72335cb960), Config(0x72335cb980), Config(0x72335cbb40), Config(0x72335cbba0), Config(0x72335cbb60), Config(0x72335cbb80), Config(0x72335cb7c0), Config(0x72335cbd60), Config(0x72335cb820), Config(0x72335cbdc0), Config(0x72335cb7e0), Config(0x72335cbd80), Config(0x72335cb800), Config(0x72335cbda0), Config(0x72335cb9c0), Config(0x72335cba20), Config(0x72335cb9e0), Config(0x72335cba00), Config(0x72335cbbc0), Config(0x72335cbc20), Config(0x72335cbbe0), Config(0x72335cbc00), Config(0x72335cb840), Config(0x72335cb8c0), Config(0x72335cb8a0), Config(0x72335cb920), Config(0x72335cb860), Config(0x72335cb8e0), Config(0x72335cb880), Config(0x72335cb900), Config(0x72335cba40), Config(0x72335cbac0), Config(0x72335cbaa0), Config(0x72335cbb20), Config(0x72335cba60), Config(0x72335cbae0), Config(0x72335cba80), Config(0x72335cbb00), Config(0x72335cbc40), Config(0x72335cbce0), Config(0x72335cbca0), Config(0x72335cbd40), Config(0x72335cbc60), Config(0x72335cbd00), Config(0x72335cbc80), Config(0x72335cbd20), Config(0x71a286c100), Config(0x71a286c160), Config(0x71a286c120), Config(0x71a286c140), Config(0x72335cbee0), Config(0x72335cbf60), Config(0x72335cbf20), Config(0x72335cbf40), Config(0x71a286c180), Config(0x71a286c1e0), Config(0x71a286c1a0), Config(0x71a286c1c0), Config(0x72335cbf80), Config(0x71a286c000), Config(0x71a286c080), Config(0x72335cbfe0), Config(0x71a286c060), Config(0x71a286c0e0), Config(0x72335cbfa0), Config(0x71a286c020), Config(0x71a286c0a0), Config(0x72335cbfc0), Config(0x71a286c040), Config(0x71a286c0c0)]
+Got config!
+Created context
+Created surface!
+Major: 3 Minor: 2
+System ID: SystemId(15992298772902969345)
+high-detail (PMNM) meshes: true
+install: 25th Anniversary at /storage/emulated/0/shock2quest (sshock2.kpf, mods/sshock2ee.kpf, mods/400.kpf, mods/shtup.kpf, mods/scp.kpf, mods/patch_ext.kpf)
+upgraded terrain textures: true
+SHOCK2QUEST_STARTUP mission=many.mis init_ms=5053.128
+SHOCK2QUEST_REFRESH_CHANGED from_hz=72.000 to_hz=90.000
+entered state IDLE
+SHOCK2QUEST_XR_STATE mission=many.mis state=IDLE
+entered state READY
+SHOCK2QUEST_XR_STATE mission=many.mis state=READY
+SHOCK2QUEST_REFRESH_RATES target_hz=90.000 available_hz=[72.0, 80.0, 90.0, 120.0]
+handling Effect::Send event: Message { payload: RefreshAIProperties, to: EId(416.0) }
+SHOCK2QUEST_BENCHMARK_CONFIG {"name":"many-brain-mixed-crowd","mission":"many.mis","player_position":[-47.11925,6.333176,-100.730606],"camera_eye":[280.0,16.0,143.0],"camera_look_at":[303.0,10.0,143.0],"subject_model":"rumbler","additional_subjects":[{"model":"overlord","expected_meshes":6},{"model":"eggcl","expected_meshes":8}],"upgraded_terrain":true,"terrain_wetness":0.0,"ffr":"high","spotlight":{"position":[280.0,14.0,143.0],"look_at":[302.0,10.0,143.0],"intensity":1.5,"range":45.0},"expected_subject_meshes":4,"subject_templates":[253,327,316,730,61,507],"object_lighting":true,"lights_on":true,"light_templates":[],"remove_templates":[],"spawns":[{"template_id":-180,"animated":true,"position":[294.0,8.5313,136.0]},{"template_id":-180,"animated":true,"position":[294.0,7.628,140.0]},{"template_id":-180,"animated":true,"position":[294.0,7.628,145.0]},{"template_id":-180,"animated":true,"position":[294.0,8.1693,149.0]},{"template_id":-187,"animated":true,"position":[299.0,9.4,135.0]},{"template_id":-187,"animated":true,"position":[299.0,9.0379,150.0]},{"template_id":-1335,"animated":false,"position":[296.0,7.5,136.5]},{"template_id":-1335,"animated":false,"position":[296.0,6.728,141.5]},{"template_id":-1335,"animated":false,"position":[296.0,6.9,146.5]},{"template_id":-1335,"animated":false,"position":[296.0,7.7,150.5]}]}
+SHOCK2QUEST_FFR requested=high effective=high dynamic=false status=applied
+SHOCK2QUEST_READY mission=many.mis target_refresh_hz=90.000 requested_refresh_hz=90.000 refresh_hz=90.000 eye_width=1680 eye_height=1760
+entered state SYNCHRONIZED
+SHOCK2QUEST_XR_STATE mission=many.mis state=SYNCHRONIZED
+entered state VISIBLE
+SHOCK2QUEST_XR_STATE mission=many.mis state=VISIBLE
+entered state FOCUSED
+SHOCK2QUEST_XR_STATE mission=many.mis state=FOCUSED
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=41 skipped=0 fps=40.744 frame_ms=24.544 update_ms=7.549 scene_ms=1.231 left_eye_ms=2.018 right_eye_ms=1.336 finish_ms=1.540 submit_ms=0.398
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":21,"position":[294.03570556640625,9.07898235321045,136.0777130126953]},{"clip":"rmbidle2","entity":1634,"frame":21,"position":[294.1167907714844,8.390185356140137,140.07923889160156]},{"clip":"rmbidle2","entity":1635,"frame":21,"position":[294.1163024902344,8.390340805053711,145.03213500976562]},{"clip":"rmbidle2","entity":1636,"frame":21,"position":[294.034912109375,8.731698036193848,148.98690795898438]},{"clip":"ovlidle2","entity":1637,"frame":18,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":18,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":173,"setup_complete":false,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=67/90,Prd=38ms,Tear=1,Early=25,Stale=32,Stale2/5/10/max=4/0/1/48,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.68ms,App=7.96ms,GD=0.00ms,CPU&GPU=23.11ms,LCnt=2(DR91,LM2),GPU%=0.63,CPU%=0.50(W0.78),CFL=11.14/16.24,ICFLp95=15.69,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=331,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=74 skipped=0 fps=73.524 frame_ms=13.601 update_ms=7.252 scene_ms=1.238 left_eye_ms=1.580 right_eye_ms=1.348 finish_ms=1.520 submit_ms=0.394
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":55,"position":[294.049560546875,9.074699401855469,136.0826416015625]},{"clip":"rmbidle2","entity":1634,"frame":55,"position":[294.1439514160156,8.381495475769043,140.05267333984375]},{"clip":"rmbidle2","entity":1635,"frame":55,"position":[294.1429748535156,8.381811141967773,145.00518798828125]},{"clip":"rmbidle2","entity":1636,"frame":55,"position":[294.0577087402344,8.714513778686523,148.93348693847656]},{"clip":"ovlidle2","entity":1637,"frame":48,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":48,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":170,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=76/90,Prd=36ms,Tear=0,Early=6,Stale=15,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=7.98ms,GD=0.00ms,CPU&GPU=22.43ms,LCnt=1(DR91,LM0),GPU%=0.68,CPU%=0.38(W0.72),CFL=12.97/16.55,ICFLp95=15.76,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=318,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=77 skipped=0 fps=76.757 frame_ms=13.028 update_ms=6.921 scene_ms=1.171 left_eye_ms=1.497 right_eye_ms=1.280 finish_ms=1.517 submit_ms=0.364
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":89,"position":[294.049560546875,9.074722290039062,136.0826416015625]},{"clip":"rmbidle2","entity":1634,"frame":89,"position":[294.1444396972656,8.381359100341797,140.0508270263672]},{"clip":"rmbidle2","entity":1635,"frame":89,"position":[294.14349365234375,8.38166332244873,145.0033416748047]},{"clip":"rmbidle2","entity":1636,"frame":89,"position":[294.0573425292969,8.712738990783691,148.9253387451172]},{"clip":"ovlidle2","entity":1637,"frame":78,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":78,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=78/90,Prd=36ms,Tear=0,Early=3,Stale=12,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.69ms,App=8.11ms,GD=0.00ms,CPU&GPU=22.50ms,LCnt=1(DR90,LM0),GPU%=0.71,CPU%=0.38(W0.43),CFL=12.76/16.54,ICFLp95=15.63,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=319,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=80 skipped=0 fps=79.331 frame_ms=12.605 update_ms=6.595 scene_ms=1.111 left_eye_ms=1.499 right_eye_ms=1.266 finish_ms=1.519 submit_ms=0.361
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":123,"position":[294.3049011230469,9.062424659729004,135.88157653808594]},{"clip":"rmbidle2","entity":1634,"frame":123,"position":[294.4261779785156,8.291199684143066,140.26513671875]},{"clip":"rmbidle2","entity":1635,"frame":123,"position":[294.4158630371094,8.294517517089844,144.7666473388672]},{"clip":"rmbidle2","entity":1636,"frame":123,"position":[294.3229675292969,8.593524932861328,148.6641082763672]},{"clip":"ovlidle2","entity":1637,"frame":109,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":109,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=80/90,Prd=37ms,Tear=0,Early=3,Stale=11,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=8.29ms,GD=0.00ms,CPU&GPU=21.36ms,LCnt=1(DR90,LM0),GPU%=0.73,CPU%=0.39(W0.53),CFL=12.88/16.56,ICFLp95=15.87,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=335,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=79 skipped=0 fps=78.091 frame_ms=12.806 update_ms=6.681 scene_ms=1.155 left_eye_ms=1.512 right_eye_ms=1.291 finish_ms=1.538 submit_ms=0.358
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":158,"position":[294.34283447265625,8.999641418457031,136.12631225585938]},{"clip":"rmbidle2","entity":1634,"frame":158,"position":[294.43084716796875,8.289701461791992,140.04977416992188]},{"clip":"rmbidle2","entity":1635,"frame":158,"position":[294.4626159667969,8.279540061950684,144.98582458496094]},{"clip":"rmbidle2","entity":1636,"frame":158,"position":[294.3631286621094,8.62734603881836,148.8539276123047]},{"clip":"ovlidle2","entity":1637,"frame":139,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":139,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=78/90,Prd=37ms,Tear=0,Early=5,Stale=12,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.69ms,App=8.05ms,GD=0.00ms,CPU&GPU=21.54ms,LCnt=1(DR90,LM0),GPU%=0.73,CPU%=0.41(W0.46),CFL=12.78/16.49,ICFLp95=15.76,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=328,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=80 skipped=0 fps=79.428 frame_ms=12.590 update_ms=6.494 scene_ms=1.174 left_eye_ms=1.512 right_eye_ms=1.276 finish_ms=1.543 submit_ms=0.362
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":11,"position":[294.34783935546875,8.963056564331055,136.27798461914062]},{"clip":"rmbidle","entity":1634,"frame":11,"position":[294.45306396484375,8.282642364501953,139.9102783203125]},{"clip":"rmbidle","entity":1635,"frame":11,"position":[294.4783935546875,8.274395942687988,145.11935424804688]},{"clip":"rmbidle","entity":1636,"frame":11,"position":[294.37591552734375,8.650331497192383,148.96810913085938]},{"clip":"ovlidle2","entity":1637,"frame":169,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":169,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":173,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=37ms,Tear=0,Early=3,Stale=11,Stale2/5/10/max=1/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=8.04ms,GD=0.00ms,CPU&GPU=21.64ms,LCnt=1(DR90,LM0),GPU%=0.74,CPU%=0.39(W0.89),CFL=12.61/16.48,ICFLp95=15.79,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=340,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=82 skipped=0 fps=81.416 frame_ms=12.283 update_ms=6.249 scene_ms=1.111 left_eye_ms=1.502 right_eye_ms=1.256 finish_ms=1.539 submit_ms=0.360
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":46,"position":[294.362548828125,8.95622444152832,136.2933807373047]},{"clip":"rmbidle","entity":1634,"frame":46,"position":[294.46417236328125,8.279068946838379,139.9019775390625]},{"clip":"rmbidle","entity":1635,"frame":46,"position":[294.4995422363281,8.267590522766113,145.11187744140625]},{"clip":"rmbidle","entity":1636,"frame":46,"position":[294.3934631347656,8.642379760742188,148.9506378173828]},{"clip":"ovlidle2","entity":1637,"frame":20,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":20,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=82/90,Prd=37ms,Tear=0,Early=3,Stale=12,Stale2/5/10/max=3/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=8.12ms,GD=0.00ms,CPU&GPU=21.99ms,LCnt=1(DR91,LM0),GPU%=0.74,CPU%=0.40(W0.50),CFL=12.74/16.47,ICFLp95=15.80,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=341,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.201 frame_ms=12.469 update_ms=6.462 scene_ms=1.164 left_eye_ms=1.494 right_eye_ms=1.275 finish_ms=1.524 submit_ms=0.356
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":80,"position":[294.39764404296875,8.943739891052246,136.31350708007812]},{"clip":"rmbidle","entity":1634,"frame":80,"position":[294.46673583984375,8.278313636779785,139.9077606201172]},{"clip":"rmbidle","entity":1635,"frame":80,"position":[294.5390625,8.255095481872559,145.1201171875]},{"clip":"rmbidle","entity":1636,"frame":80,"position":[294.42425537109375,8.635052680969238,148.9489288330078]},{"clip":"ovlidle2","entity":1637,"frame":51,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":51,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":172,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=79/90,Prd=37ms,Tear=0,Early=5,Stale=11,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.69ms,App=8.07ms,GD=0.00ms,CPU&GPU=21.17ms,LCnt=1(DR90,LM0),GPU%=0.73,CPU%=0.40(W0.52),CFL=12.76/16.53,ICFLp95=15.86,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=332,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=79 skipped=0 fps=78.078 frame_ms=12.808 update_ms=6.522 scene_ms=1.251 left_eye_ms=1.540 right_eye_ms=1.278 finish_ms=1.567 submit_ms=0.360
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":115,"position":[294.43731689453125,8.925704002380371,136.35345458984375]},{"clip":"rmbidle","entity":1634,"frame":115,"position":[294.47235107421875,8.276439666748047,139.92994689941406]},{"clip":"rmbidle","entity":1635,"frame":115,"position":[294.58050537109375,8.241817474365234,145.14508056640625]},{"clip":"rmbidle","entity":1636,"frame":115,"position":[294.45233154296875,8.630721092224121,148.95790100097656]},{"clip":"ovlidle2","entity":1637,"frame":81,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":81,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=79/90,Prd=37ms,Tear=0,Early=7,Stale=12,Stale2/5/10/max=1/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=8.12ms,GD=0.00ms,CPU&GPU=22.09ms,LCnt=1(DR90,LM0),GPU%=0.73,CPU%=0.40(W0.63),CFL=12.74/16.44,ICFLp95=15.71,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=330,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.980 frame_ms=12.349 update_ms=6.303 scene_ms=1.179 left_eye_ms=1.467 right_eye_ms=1.242 finish_ms=1.524 submit_ms=0.359
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":149,"position":[294.43731689453125,8.925704956054688,136.35345458984375]},{"clip":"rmbidle","entity":1634,"frame":149,"position":[294.47235107421875,8.276439666748047,139.92994689941406]},{"clip":"rmbidle","entity":1635,"frame":149,"position":[294.58050537109375,8.2418212890625,145.14508056640625]},{"clip":"rmbidle","entity":1636,"frame":149,"position":[294.4523620605469,8.630708694458008,148.95785522460938]},{"clip":"ovlidle2","entity":1637,"frame":111,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":111,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=82/90,Prd=36ms,Tear=0,Early=3,Stale=11,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.69ms,App=8.13ms,GD=0.00ms,CPU&GPU=21.70ms,LCnt=1(DR91,LM0),GPU%=0.74,CPU%=0.40(W0.60),CFL=12.63/16.48,ICFLp95=15.70,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=340,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.077 frame_ms=12.488 update_ms=6.420 scene_ms=1.162 left_eye_ms=1.474 right_eye_ms=1.278 finish_ms=1.559 submit_ms=0.354
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":183,"position":[294.46734619140625,8.918222427368164,136.3564910888672]},{"clip":"rmbidle","entity":1634,"frame":183,"position":[294.4725036621094,8.276925086975098,139.92994689941406]},{"clip":"rmbidle","entity":1635,"frame":183,"position":[294.6234130859375,8.228117942810059,145.1372528076172]},{"clip":"rmbidle","entity":1636,"frame":183,"position":[294.4893798828125,8.617953300476074,148.9384307861328]},{"clip":"ovlidle2","entity":1637,"frame":141,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":141,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=36ms,Tear=0,Early=1,Stale=11,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=8.19ms,GD=0.00ms,CPU&GPU=21.65ms,LCnt=1(DR90,LM0),GPU%=0.76,CPU%=0.41(W0.70),CFL=12.52/16.51,ICFLp95=15.80,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=344,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.934 frame_ms=12.356 update_ms=6.270 scene_ms=1.151 left_eye_ms=1.493 right_eye_ms=1.257 finish_ms=1.569 submit_ms=0.363
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":217,"position":[294.51336669921875,8.906436920166016,136.3627166748047]},{"clip":"rmbidle","entity":1634,"frame":217,"position":[294.4725036621094,8.2763090133667,139.92994689941406]},{"clip":"rmbidle","entity":1635,"frame":217,"position":[294.68359375,8.208695411682129,145.12696838378906]},{"clip":"rmbidle","entity":1636,"frame":217,"position":[294.5416564941406,8.600354194641113,148.9127960205078]},{"clip":"ovlidle2","entity":1637,"frame":171,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":171,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=80/90,Prd=37ms,Tear=0,Early=3,Stale=11,Stale2/5/10/max=1/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=8.05ms,GD=0.00ms,CPU&GPU=20.90ms,LCnt=1(DR91,LM0),GPU%=0.74,CPU%=0.42(W0.53),CFL=12.69/16.42,ICFLp95=15.73,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=333,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.173 frame_ms=12.473 update_ms=6.345 scene_ms=1.216 left_eye_ms=1.484 right_eye_ms=1.251 finish_ms=1.577 submit_ms=0.364
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":33,"position":[294.4848327636719,8.911225318908691,136.36981201171875]},{"clip":"rmbidle2","entity":1634,"frame":33,"position":[294.5635070800781,8.24726676940918,139.945068359375]},{"clip":"rmbidle2","entity":1635,"frame":33,"position":[294.6629943847656,8.215484619140625,145.11485290527344]},{"clip":"rmbidle2","entity":1636,"frame":33,"position":[294.50531005859375,8.602187156677246,148.88478088378906]},{"clip":"ovlidle2","entity":1637,"frame":23,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":23,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=80/90,Prd=37ms,Tear=0,Early=5,Stale=10,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.71ms,App=8.26ms,GD=0.00ms,CPU&GPU=22.11ms,LCnt=1(DR90,LM0),GPU%=0.74,CPU%=0.39(W0.49),CFL=12.79/16.52,ICFLp95=15.82,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=334,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=78 skipped=0 fps=77.996 frame_ms=12.821 update_ms=6.515 scene_ms=1.203 left_eye_ms=1.534 right_eye_ms=1.288 finish_ms=1.627 submit_ms=0.381
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":67,"position":[294.5528564453125,8.890637397766113,136.39292907714844]},{"clip":"rmbidle2","entity":1634,"frame":67,"position":[294.55572509765625,8.24986457824707,139.9400634765625]},{"clip":"rmbidle2","entity":1635,"frame":67,"position":[294.74200439453125,8.190145492553711,145.12074279785156]},{"clip":"rmbidle2","entity":1636,"frame":67,"position":[294.5750732421875,8.583637237548828,148.8725128173828]},{"clip":"ovlidle2","entity":1637,"frame":53,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":53,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=78/90,Prd=37ms,Tear=0,Early=4,Stale=15,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.73ms,App=8.14ms,GD=0.00ms,CPU&GPU=23.52ms,LCnt=1(DR90,LM0),GPU%=0.73,CPU%=0.40(W0.51),CFL=12.73/16.46,ICFLp95=15.77,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=336,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=76 skipped=0 fps=75.868 frame_ms=13.181 update_ms=6.763 scene_ms=1.282 left_eye_ms=1.528 right_eye_ms=1.328 finish_ms=1.615 submit_ms=0.381
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":101,"position":[294.6417236328125,8.86196231842041,136.43080139160156]},{"clip":"rmbidle2","entity":1634,"frame":101,"position":[294.64080810546875,8.222533226013184,139.8942413330078]},{"clip":"rmbidle2","entity":1635,"frame":101,"position":[294.83367919921875,8.160820960998535,145.15188598632812]},{"clip":"rmbidle2","entity":1636,"frame":101,"position":[294.6614685058594,8.569191932678223,148.89505004882812]},{"clip":"ovlidle2","entity":1637,"frame":83,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":83,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=78/90,Prd=37ms,Tear=0,Early=7,Stale=15,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=7.88ms,GD=0.00ms,CPU&GPU=20.75ms,LCnt=1(DR91,LM0),GPU%=0.72,CPU%=0.43(W0.50),CFL=12.80/16.61,ICFLp95=15.85,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=332,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.683 frame_ms=12.394 update_ms=6.347 scene_ms=1.146 left_eye_ms=1.491 right_eye_ms=1.250 finish_ms=1.560 submit_ms=0.353
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":135,"position":[294.9239501953125,8.783758163452148,136.49415588378906]},{"clip":"rmbidle2","entity":1634,"frame":135,"position":[294.9288024902344,8.130377769470215,139.84326171875]},{"clip":"rmbidle2","entity":1635,"frame":135,"position":[295.12811279296875,8.066587448120117,145.19496154785156]},{"clip":"rmbidle2","entity":1636,"frame":135,"position":[294.94403076171875,8.510165214538574,148.91680908203125]},{"clip":"ovlidle2","entity":1637,"frame":113,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":113,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=37ms,Tear=0,Early=2,Stale=12,Stale2/5/10/max=3/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=8.03ms,GD=0.00ms,CPU&GPU=21.05ms,LCnt=1(DR90,LM0),GPU%=0.74,CPU%=0.38(W0.61),CFL=12.75/16.45,ICFLp95=15.77,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=334,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.596 frame_ms=12.408 update_ms=6.336 scene_ms=1.122 left_eye_ms=1.505 right_eye_ms=1.264 finish_ms=1.582 submit_ms=0.349
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":169,"position":[294.7238464355469,8.752909660339355,136.83058166503906]},{"clip":"rmbidle2","entity":1634,"frame":169,"position":[294.7257385253906,8.195343971252441,139.5634765625]},{"clip":"rmbidle2","entity":1635,"frame":169,"position":[294.9466857910156,8.124634742736816,145.50015258789062]},{"clip":"rmbidle2","entity":1636,"frame":169,"position":[294.7606201171875,8.614192008972168,149.19317626953125]},{"clip":"ovlidle2","entity":1637,"frame":143,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":143,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":172,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=37ms,Tear=0,Early=4,Stale=11,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=8.08ms,GD=0.00ms,CPU&GPU=21.10ms,LCnt=1(DR90,LM0),GPU%=0.75,CPU%=0.40(W0.52),CFL=12.57/16.61,ICFLp95=15.78,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=342,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=82 skipped=0 fps=81.937 frame_ms=12.205 update_ms=6.209 scene_ms=1.135 left_eye_ms=1.458 right_eye_ms=1.253 finish_ms=1.559 submit_ms=0.350
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":23,"position":[294.74066162109375,8.750161170959473,136.82589721679688]},{"clip":"rmbidle","entity":1634,"frame":23,"position":[294.7332458496094,8.192821502685547,139.57009887695312]},{"clip":"rmbidle","entity":1635,"frame":23,"position":[294.97686767578125,8.11491584777832,145.48133850097656]},{"clip":"rmbidle","entity":1636,"frame":23,"position":[294.7892761230469,8.600378036499023,149.16070556640625]},{"clip":"ovlidle2","entity":1637,"frame":173,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":173,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=82/90,Prd=37ms,Tear=0,Early=7,Stale=9,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=8.09ms,GD=0.00ms,CPU&GPU=21.49ms,LCnt=1(DR91,LM0),GPU%=0.75,CPU%=0.38(W0.48),CFL=12.56/16.55,ICFLp95=15.74,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=337,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=82 skipped=0 fps=81.003 frame_ms=12.345 update_ms=6.297 scene_ms=1.113 left_eye_ms=1.487 right_eye_ms=1.267 finish_ms=1.562 submit_ms=0.361
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":57,"position":[294.7456359863281,8.744382858276367,136.84664916992188]},{"clip":"rmbidle","entity":1634,"frame":57,"position":[294.74591064453125,8.188594818115234,139.55953979492188]},{"clip":"rmbidle","entity":1635,"frame":57,"position":[294.98077392578125,8.113448143005371,145.48399353027344]},{"clip":"rmbidle","entity":1636,"frame":57,"position":[294.7906799316406,8.599796295166016,149.15966796875]},{"clip":"ovlidle2","entity":1637,"frame":24,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":24,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=83/90,Prd=37ms,Tear=0,Early=3,Stale=10,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=8.18ms,GD=0.00ms,CPU&GPU=20.96ms,LCnt=1(DR90,LM0),GPU%=0.75,CPU%=0.38(W0.59),CFL=12.83/16.48,ICFLp95=15.78,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=330,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=83 skipped=0 fps=82.385 frame_ms=12.138 update_ms=6.164 scene_ms=1.093 left_eye_ms=1.452 right_eye_ms=1.264 finish_ms=1.569 submit_ms=0.354
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":91,"position":[294.8029479980469,8.730942726135254,136.8485565185547]},{"clip":"rmbidle","entity":1634,"frame":91,"position":[294.7457580566406,8.188825607299805,139.55966186523438]},{"clip":"rmbidle","entity":1635,"frame":91,"position":[295.05224609375,8.090836524963379,145.4689483642578]},{"clip":"rmbidle","entity":1636,"frame":91,"position":[294.854248046875,8.57856273651123,149.1293182373047]},{"clip":"ovlidle2","entity":1637,"frame":55,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":55,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=82/90,Prd=37ms,Tear=0,Early=2,Stale=9,Stale2/5/10/max=1/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3805MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=8.11ms,GD=0.00ms,CPU&GPU=21.64ms,LCnt=1(DR90,LM0),GPU%=0.75,CPU%=0.41(W0.57),CFL=12.79/16.59,ICFLp95=15.74,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=345,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.900 frame_ms=12.361 update_ms=6.317 scene_ms=1.119 left_eye_ms=1.466 right_eye_ms=1.271 finish_ms=1.585 submit_ms=0.349
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":126,"position":[294.82623291015625,8.724447250366211,136.85398864746094]},{"clip":"rmbidle","entity":1634,"frame":126,"position":[294.7456970214844,8.18896198272705,139.5596923828125]},{"clip":"rmbidle","entity":1635,"frame":126,"position":[295.0809020996094,8.08169937133789,145.4679718017578]},{"clip":"rmbidle","entity":1636,"frame":126,"position":[294.87774658203125,8.571600914001465,149.12203979492188]},{"clip":"ovlidle2","entity":1637,"frame":85,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":85,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":173,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=37ms,Tear=0,Early=6,Stale=10,Stale2/5/10/max=1/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=50.0C/0.0C,TW=0.70ms,App=7.98ms,GD=0.00ms,CPU&GPU=21.00ms,LCnt=1(DR90,LM0),GPU%=0.75,CPU%=0.39(W0.79),CFL=12.70/16.33,ICFLp95=15.58,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=332,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.444 frame_ms=12.431 update_ms=6.381 scene_ms=1.145 left_eye_ms=1.473 right_eye_ms=1.266 finish_ms=1.571 submit_ms=0.352
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":160,"position":[294.82623291015625,8.724446296691895,136.85398864746094]},{"clip":"rmbidle","entity":1634,"frame":160,"position":[294.7461242675781,8.188837051391602,139.55963134765625]},{"clip":"rmbidle","entity":1635,"frame":160,"position":[295.0810852050781,8.081624984741211,145.46791076660156]},{"clip":"rmbidle","entity":1636,"frame":160,"position":[294.8795471191406,8.57064437866211,149.1195831298828]},{"clip":"ovlidle2","entity":1637,"frame":115,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":115,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=36ms,Tear=0,Early=3,Stale=12,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.70ms,App=8.08ms,GD=0.00ms,CPU&GPU=20.95ms,LCnt=1(DR91,LM0),GPU%=0.74,CPU%=0.41(W0.53),CFL=12.67/16.22,ICFLp95=15.48,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=338,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=80 skipped=0 fps=79.481 frame_ms=12.582 update_ms=6.462 scene_ms=1.133 left_eye_ms=1.510 right_eye_ms=1.293 finish_ms=1.585 submit_ms=0.353
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":194,"position":[294.837646484375,8.723159790039062,136.8482666015625]},{"clip":"rmbidle","entity":1634,"frame":194,"position":[294.7488708496094,8.187933921813965,139.55313110351562]},{"clip":"rmbidle","entity":1635,"frame":194,"position":[295.11029052734375,8.072299003601074,145.4390106201172]},{"clip":"rmbidle","entity":1636,"frame":194,"position":[294.9078369140625,8.552509307861328,149.06768798828125]},{"clip":"ovlidle2","entity":1637,"frame":145,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":145,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":171,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=80/90,Prd=37ms,Tear=0,Early=4,Stale=12,Stale2/5/10/max=1/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.69ms,App=8.04ms,GD=0.00ms,CPU&GPU=21.44ms,LCnt=1(DR91,LM0),GPU%=0.73,CPU%=0.40(W0.64),CFL=12.61/16.48,ICFLp95=15.67,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=334,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=79 skipped=0 fps=78.759 frame_ms=12.697 update_ms=6.479 scene_ms=1.152 left_eye_ms=1.541 right_eye_ms=1.295 finish_ms=1.606 submit_ms=0.357
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":9,"position":[294.8543395996094,8.718671798706055,136.85140991210938]},{"clip":"rmbidle2","entity":1634,"frame":9,"position":[294.75592041015625,8.185693740844727,139.54904174804688]},{"clip":"rmbidle2","entity":1635,"frame":9,"position":[295.1402587890625,8.062687873840332,145.42401123046875]},{"clip":"rmbidle2","entity":1636,"frame":9,"position":[294.9356994628906,8.540011405944824,149.04043579101562]},{"clip":"ovlidle2","entity":1637,"frame":175,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":175,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=37ms,Tear=0,Early=2,Stale=10,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.70ms,App=8.07ms,GD=0.00ms,CPU&GPU=21.22ms,LCnt=1(DR90,LM0),GPU%=0.75,CPU%=0.39(W0.64),CFL=12.79/16.43,ICFLp95=15.64,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=332,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=83 skipped=0 fps=82.209 frame_ms=12.164 update_ms=6.199 scene_ms=1.092 left_eye_ms=1.471 right_eye_ms=1.248 finish_ms=1.552 submit_ms=0.367
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":44,"position":[294.8580627441406,8.712935447692871,136.87306213378906]},{"clip":"rmbidle2","entity":1634,"frame":44,"position":[294.83599853515625,8.15998649597168,139.5629119873047]},{"clip":"rmbidle2","entity":1635,"frame":44,"position":[295.1533203125,8.058531761169434,145.42494201660156]},{"clip":"rmbidle2","entity":1636,"frame":44,"position":[294.9276428222656,8.536752700805664,149.01788330078125]},{"clip":"ovlidle2","entity":1637,"frame":26,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":26,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=36ms,Tear=0,Early=2,Stale=9,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.70ms,App=8.11ms,GD=0.00ms,CPU&GPU=21.28ms,LCnt=1(DR90,LM0),GPU%=0.75,CPU%=0.38(W0.52),CFL=12.79/16.41,ICFLp95=15.65,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=332,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.390 frame_ms=12.439 update_ms=6.328 scene_ms=1.140 left_eye_ms=1.494 right_eye_ms=1.291 finish_ms=1.565 submit_ms=0.361
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":78,"position":[294.8970947265625,8.702984809875488,136.87803649902344]},{"clip":"rmbidle2","entity":1634,"frame":78,"position":[294.83416748046875,8.160882949829102,139.5625762939453]},{"clip":"rmbidle2","entity":1635,"frame":78,"position":[295.20123291015625,8.043097496032715,145.41932678222656]},{"clip":"rmbidle2","entity":1636,"frame":78,"position":[294.9708557128906,8.52331256866455,149.00169372558594]},{"clip":"ovlidle2","entity":1637,"frame":57,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":57,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":173,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=36ms,Tear=0,Early=3,Stale=12,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.70ms,App=8.12ms,GD=0.00ms,CPU&GPU=21.10ms,LCnt=1(DR91,LM0),GPU%=0.74,CPU%=0.40(W0.55),CFL=12.61/16.63,ICFLp95=15.68,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=338,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=79 skipped=0 fps=78.854 frame_ms=12.682 update_ms=6.473 scene_ms=1.237 left_eye_ms=1.517 right_eye_ms=1.267 finish_ms=1.567 submit_ms=0.363
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":112,"position":[294.9981384277344,8.614622116088867,137.1674346923828]},{"clip":"rmbidle2","entity":1634,"frame":112,"position":[294.9080810546875,8.153810501098633,139.29710388183594]},{"clip":"rmbidle2","entity":1635,"frame":112,"position":[295.30902099609375,8.008687019348145,145.68617248535156]},{"clip":"rmbidle2","entity":1636,"frame":112,"position":[295.07135009765625,8.553900718688965,149.23745727539062]},{"clip":"ovlidle2","entity":1637,"frame":87,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":87,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":173,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=80/90,Prd=37ms,Tear=0,Early=3,Stale=11,Stale2/5/10/max=1/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.70ms,App=8.07ms,GD=0.00ms,CPU&GPU=20.46ms,LCnt=1(DR91,LM0),GPU%=0.74,CPU%=0.40(W0.57),CFL=12.96/16.58,ICFLp95=15.84,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=336,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.879 frame_ms=12.364 update_ms=6.271 scene_ms=1.160 left_eye_ms=1.485 right_eye_ms=1.267 finish_ms=1.572 submit_ms=0.357
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":146,"position":[295.0417175292969,8.5899658203125,137.2327880859375]},{"clip":"rmbidle2","entity":1634,"frame":146,"position":[294.9515075683594,8.149127960205078,139.27134704589844]},{"clip":"rmbidle2","entity":1635,"frame":146,"position":[295.35595703125,7.993662357330322,145.73660278320312]},{"clip":"rmbidle2","entity":1636,"frame":146,"position":[295.107666015625,8.552277565002441,149.2666473388672]},{"clip":"ovlidle2","entity":1637,"frame":117,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":117,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=37ms,Tear=0,Early=7,Stale=11,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.69ms,App=7.96ms,GD=0.00ms,CPU&GPU=20.74ms,LCnt=1(DR90,LM0),GPU%=0.74,CPU%=0.39(W0.51),CFL=12.83/16.52,ICFLp95=15.75,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=332,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.798 frame_ms=12.377 update_ms=6.303 scene_ms=1.170 left_eye_ms=1.474 right_eye_ms=1.254 finish_ms=1.558 submit_ms=0.358
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":0,"position":[294.70709228515625,8.664395332336426,137.238525390625]},{"clip":"rmbidle","entity":1634,"frame":0,"position":[294.6292419433594,8.226240158081055,139.33258056640625]},{"clip":"rmbidle","entity":1635,"frame":0,"position":[295.03851318359375,8.095259666442871,145.72003173828125]},{"clip":"rmbidle","entity":1636,"frame":0,"position":[294.77178955078125,8.619478225708008,149.22764587402344]},{"clip":"ovlidle2","entity":1637,"frame":147,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":147,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=37ms,Tear=0,Early=3,Stale=10,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.70ms,App=8.04ms,GD=0.00ms,CPU&GPU=20.97ms,LCnt=1(DR90,LM0),GPU%=0.74,CPU%=0.38(W0.52),CFL=12.79/16.63,ICFLp95=15.86,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=337,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.205 frame_ms=12.468 update_ms=6.400 scene_ms=1.157 left_eye_ms=1.492 right_eye_ms=1.274 finish_ms=1.565 submit_ms=0.351
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":34,"position":[294.7337341308594,8.656021118164062,137.24887084960938]},{"clip":"rmbidle","entity":1634,"frame":34,"position":[294.63623046875,8.22398853302002,139.34213256835938]},{"clip":"rmbidle","entity":1635,"frame":34,"position":[295.070556640625,8.084997177124023,145.71939086914062]},{"clip":"rmbidle","entity":1636,"frame":34,"position":[294.7967224121094,8.611930847167969,149.21926879882812]},{"clip":"ovlidle2","entity":1637,"frame":177,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":177,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=80/90,Prd=37ms,Tear=0,Early=4,Stale=12,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.70ms,App=8.03ms,GD=0.00ms,CPU&GPU=21.33ms,LCnt=1(DR90,LM0),GPU%=0.73,CPU%=0.39(W0.51),CFL=12.69/16.73,ICFLp95=15.87,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=332,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.075 frame_ms=12.488 update_ms=6.361 scene_ms=1.167 left_eye_ms=1.504 right_eye_ms=1.262 finish_ms=1.569 submit_ms=0.358
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":69,"position":[294.74224853515625,8.650665283203125,137.2640838623047]},{"clip":"rmbidle","entity":1634,"frame":69,"position":[294.6445617675781,8.22119426727295,139.33396911621094]},{"clip":"rmbidle","entity":1635,"frame":69,"position":[295.08282470703125,8.080971717834473,145.71835327148438]},{"clip":"rmbidle","entity":1636,"frame":69,"position":[294.8062438964844,8.6085786819458,149.21392822265625]},{"clip":"ovlidle2","entity":1637,"frame":29,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":29,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=37ms,Tear=0,Early=0,Stale=12,Stale2/5/10/max=3/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.70ms,App=8.10ms,GD=0.00ms,CPU&GPU=21.37ms,LCnt=1(DR91,LM0),GPU%=0.74,CPU%=0.39(W0.78),CFL=12.74/16.72,ICFLp95=15.87,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=337,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.876 frame_ms=12.365 update_ms=6.312 scene_ms=1.151 left_eye_ms=1.496 right_eye_ms=1.265 finish_ms=1.552 submit_ms=0.352
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":103,"position":[294.8115539550781,8.634403228759766,137.26663208007812]},{"clip":"rmbidle","entity":1634,"frame":103,"position":[294.6443176269531,8.221285820007324,139.33409118652344]},{"clip":"rmbidle","entity":1635,"frame":103,"position":[295.1667785644531,8.054204940795898,145.7018585205078]},{"clip":"rmbidle","entity":1636,"frame":103,"position":[294.88140869140625,8.583982467651367,149.1803741455078]},{"clip":"ovlidle2","entity":1637,"frame":59,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":59,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=80/90,Prd=37ms,Tear=0,Early=3,Stale=11,Stale2/5/10/max=1/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.70ms,App=8.11ms,GD=0.00ms,CPU&GPU=21.76ms,LCnt=1(DR90,LM0),GPU%=0.74,CPU%=0.39(W0.50),CFL=12.78/16.80,ICFLp95=15.82,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=336,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.111 frame_ms=12.483 update_ms=6.385 scene_ms=1.156 left_eye_ms=1.497 right_eye_ms=1.272 finish_ms=1.576 submit_ms=0.353
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":137,"position":[294.8123779296875,8.634136199951172,137.2669677734375]},{"clip":"rmbidle","entity":1634,"frame":137,"position":[294.6443176269531,8.22142505645752,139.33409118652344]},{"clip":"rmbidle","entity":1635,"frame":137,"position":[295.1695861816406,8.053299903869629,145.7014923095703]},{"clip":"rmbidle","entity":1636,"frame":137,"position":[294.8838195800781,8.583012580871582,149.1785125732422]},{"clip":"ovlidle2","entity":1637,"frame":89,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":89,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=80/90,Prd=37ms,Tear=0,Early=6,Stale=11,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.69ms,App=8.03ms,GD=0.00ms,CPU&GPU=20.84ms,LCnt=1(DR91,LM0),GPU%=0.74,CPU%=0.41(W0.59),CFL=12.66/16.78,ICFLp95=15.87,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=344,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=80 skipped=0 fps=79.543 frame_ms=12.572 update_ms=6.468 scene_ms=1.253 left_eye_ms=1.450 right_eye_ms=1.257 finish_ms=1.566 submit_ms=0.360
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":171,"position":[294.8123779296875,8.634116172790527,137.2669677734375]},{"clip":"rmbidle","entity":1634,"frame":171,"position":[294.6604919433594,8.21623706817627,139.32814025878906]},{"clip":"rmbidle","entity":1635,"frame":171,"position":[295.1695861816406,8.053313255310059,145.70083618164062]},{"clip":"rmbidle","entity":1636,"frame":171,"position":[294.88323974609375,8.58182144165039,149.17269897460938]},{"clip":"ovlidle2","entity":1637,"frame":119,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":119,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=80/90,Prd=36ms,Tear=0,Early=1,Stale=13,Stale2/5/10/max=3/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.69ms,App=7.97ms,GD=0.00ms,CPU&GPU=22.52ms,LCnt=1(DR90,LM0),GPU%=0.73,CPU%=0.41(W0.58),CFL=12.76/16.61,ICFLp95=15.93,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=328,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=80 skipped=0 fps=79.032 frame_ms=12.653 update_ms=6.508 scene_ms=1.119 left_eye_ms=1.550 right_eye_ms=1.274 finish_ms=1.564 submit_ms=0.360
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":206,"position":[294.8123779296875,8.634135246276855,137.2669677734375]},{"clip":"rmbidle","entity":1634,"frame":206,"position":[294.6839599609375,8.20872688293457,139.29986572265625]},{"clip":"rmbidle","entity":1635,"frame":206,"position":[295.1741943359375,8.051810264587402,145.69039916992188]},{"clip":"rmbidle","entity":1636,"frame":206,"position":[294.88250732421875,8.572441101074219,149.1304168701172]},{"clip":"ovlidle2","entity":1637,"frame":149,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":149,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=79/90,Prd=36ms,Tear=0,Early=2,Stale=15,Stale2/5/10/max=3/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.73ms,App=8.04ms,GD=0.00ms,CPU&GPU=22.40ms,LCnt=1(DR90,LM0),GPU%=0.71,CPU%=0.41(W0.60),CFL=12.79/16.62,ICFLp95=15.87,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=335,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=75 skipped=0 fps=74.352 frame_ms=13.449 update_ms=6.954 scene_ms=1.297 left_eye_ms=1.570 right_eye_ms=1.313 finish_ms=1.658 submit_ms=0.383
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":21,"position":[294.79632568359375,8.629608154296875,137.3029022216797]},{"clip":"rmbidle2","entity":1634,"frame":21,"position":[294.72723388671875,8.19487190246582,139.3335418701172]},{"clip":"rmbidle2","entity":1635,"frame":21,"position":[295.1681213378906,8.053732872009277,145.7069549560547]},{"clip":"rmbidle2","entity":1636,"frame":21,"position":[294.8714294433594,8.573349952697754,149.1235809326172]},{"clip":"ovlidle2","entity":1637,"frame":1,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":1,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":173,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=76/90,Prd=37ms,Tear=0,Early=4,Stale=16,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.69ms,App=8.02ms,GD=0.00ms,CPU&GPU=21.33ms,LCnt=1(DR90,LM0),GPU%=0.71,CPU%=0.40(W0.60),CFL=12.74/16.56,ICFLp95=15.79,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=325,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=79 skipped=0 fps=78.940 frame_ms=12.668 update_ms=6.545 scene_ms=1.184 left_eye_ms=1.487 right_eye_ms=1.258 finish_ms=1.569 submit_ms=0.357
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":55,"position":[294.8540344238281,8.611432075500488,137.32566833496094]},{"clip":"rmbidle2","entity":1634,"frame":55,"position":[294.73681640625,8.191792488098145,139.3400115966797]},{"clip":"rmbidle2","entity":1635,"frame":55,"position":[295.23779296875,8.03150749206543,145.71206665039062]},{"clip":"rmbidle2","entity":1636,"frame":55,"position":[294.9282531738281,8.557879447937012,149.11184692382812]},{"clip":"ovlidle2","entity":1637,"frame":31,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":31,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=80/90,Prd=36ms,Tear=0,Early=3,Stale=13,Stale2/5/10/max=2/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=3196MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.69ms,App=8.07ms,GD=0.00ms,CPU&GPU=20.95ms,LCnt=1(DR91,LM0),GPU%=0.73,CPU%=0.39(W0.58),CFL=12.72/16.54,ICFLp95=15.81,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=332,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=82 skipped=0 fps=81.089 frame_ms=12.332 update_ms=6.281 scene_ms=1.170 left_eye_ms=1.458 right_eye_ms=1.248 finish_ms=1.563 submit_ms=0.363
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":90,"position":[294.86151123046875,8.609792709350586,137.32546997070312]},{"clip":"rmbidle2","entity":1634,"frame":90,"position":[294.73681640625,8.192177772521973,139.3400115966797]},{"clip":"rmbidle2","entity":1635,"frame":90,"position":[295.24957275390625,8.027575492858887,145.7079315185547]},{"clip":"rmbidle2","entity":1636,"frame":90,"position":[294.93927001953125,8.553542137145996,149.10365295410156]},{"clip":"ovlidle2","entity":1637,"frame":61,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":61,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":173,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=37ms,Tear=0,Early=4,Stale=12,Stale2/5/10/max=3/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=2736MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.70ms,App=8.08ms,GD=0.00ms,CPU&GPU=22.25ms,LCnt=1(DR90,LM0),GPU%=0.74,CPU%=0.38(W0.60),CFL=12.85/16.43,ICFLp95=15.68,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=332,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=81 skipped=0 fps=80.195 frame_ms=12.470 update_ms=6.383 scene_ms=1.175 left_eye_ms=1.466 right_eye_ms=1.267 finish_ms=1.574 submit_ms=0.359
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":124,"position":[294.8721618652344,8.602371215820312,137.34988403320312]},{"clip":"rmbidle2","entity":1634,"frame":124,"position":[294.7501220703125,8.187451362609863,139.3446502685547]},{"clip":"rmbidle2","entity":1635,"frame":124,"position":[295.2975158691406,8.012360572814941,146.04031372070312]},{"clip":"rmbidle2","entity":1636,"frame":124,"position":[294.9790344238281,8.608365058898926,149.38589477539062]},{"clip":"ovlidle2","entity":1637,"frame":91,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":91,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=81/90,Prd=37ms,Tear=0,Early=4,Stale=10,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=2736MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.70ms,App=8.16ms,GD=0.00ms,CPU&GPU=21.00ms,LCnt=1(DR90,LM0),GPU%=0.74,CPU%=0.41(W0.60),CFL=12.75/16.39,ICFLp95=15.65,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=328,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=77 skipped=0 fps=76.950 frame_ms=12.995 update_ms=6.648 scene_ms=1.228 left_eye_ms=1.559 right_eye_ms=1.327 finish_ms=1.621 submit_ms=0.366
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle2","entity":1633,"frame":158,"position":[294.7784423828125,8.662936210632324,137.17343139648438]},{"clip":"rmbidle2","entity":1634,"frame":158,"position":[294.6979675292969,8.204221725463867,139.5629119873047]},{"clip":"rmbidle2","entity":1635,"frame":158,"position":[295.21148681640625,8.039895057678223,145.8512420654297]},{"clip":"rmbidle2","entity":1636,"frame":158,"position":[294.8794250488281,8.581656455993652,149.1681671142578]},{"clip":"ovlidle2","entity":1637,"frame":121,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":121,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=76/90,Prd=37ms,Tear=0,Early=8,Stale=14,Stale2/5/10/max=0/0/0/1,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=2736MHz,Free=3803MB,PLS=0,Temp=49.0C/0.0C,TW=0.71ms,App=8.12ms,GD=0.00ms,CPU&GPU=21.90ms,LCnt=1(DR90,LM0),GPU%=0.72,CPU%=0.42(W0.61),CFL=12.74/16.63,ICFLp95=15.91,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=332,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=75 skipped=0 fps=74.567 frame_ms=13.411 update_ms=6.888 scene_ms=1.267 left_eye_ms=1.586 right_eye_ms=1.325 finish_ms=1.685 submit_ms=0.389
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":12,"position":[294.739013671875,8.690179824829102,137.0926971435547]},{"clip":"rmbidle","entity":1634,"frame":12,"position":[294.6578369140625,8.217085838317871,139.65615844726562]},{"clip":"rmbidle","entity":1635,"frame":12,"position":[295.1737060546875,8.05198860168457,145.75283813476562]},{"clip":"rmbidle","entity":1636,"frame":12,"position":[294.8321533203125,8.56610107421875,149.05210876464844]},{"clip":"ovlidle2","entity":1637,"frame":152,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":152,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}
+FPS=75/90,Prd=37ms,Tear=0,Early=3,Stale=17,Stale2/5/10/max=1/0/0/2,VSnc=1,Lat=-4,Fov=3,CPU4/GPU=4/4,2361/545MHz,OC=3F,TA=0/0/0,SP=N/N/N,Mem=2736MHz,Free=3804MB,PLS=0,Temp=49.0C/0.0C,TW=0.71ms,App=8.06ms,GD=0.00ms,CPU&GPU=21.94ms,LCnt=1(DR90,LM0),GPU%=0.70,CPU%=0.40(W0.54),CFL=12.63/16.86,ICFLp95=15.92,LD=0,SF=1.00,DpuScale=1.00,LP=0,DVFS=0,Preempt=314,PoseAgeP95=0.00
+SHOCK2QUEST_PERF mission=many.mis focused=true samples=75 skipped=0 fps=74.081 frame_ms=13.499 update_ms=6.919 scene_ms=1.283 left_eye_ms=1.612 right_eye_ms=1.355 finish_ms=1.670 submit_ms=0.385
+SHOCK2QUEST_BENCHMARK {"additional_subjects":[{"lit_meshes":6,"meshes":6,"model":"overlord"},{"lit_meshes":8,"meshes":8,"model":"eggcl"}],"animations":[{"clip":"rmbidle","entity":1633,"frame":46,"position":[294.75299072265625,8.683130264282227,137.10984802246094]},{"clip":"rmbidle","entity":1634,"frame":46,"position":[294.6759338378906,8.211286544799805,139.6639404296875]},{"clip":"rmbidle","entity":1635,"frame":46,"position":[295.1883544921875,8.047293663024902,145.7628631591797]},{"clip":"rmbidle","entity":1636,"frame":46,"position":[294.8399658203125,8.56489372253418,149.05465698242188]},{"clip":"ovlidle2","entity":1637,"frame":3,"position":[299.0,9.816666603088379,135.0]},{"clip":"ovlidle2","entity":1638,"frame":3,"position":[299.0,9.454566955566406,150.0]}],"expected_subject_meshes":4,"ffr_effective":"high","ffr_requested":"high","lamp_intensities":[],"lit_subject_meshes":4,"name":"many-brain-mixed-crowd","object_lighting":true,"scene_objects":174,"setup_complete":true,"subject_meshes":4,"terrain_wetness":0.0,"upgraded_terrain":true}

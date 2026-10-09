@@ -126,6 +126,9 @@ starting with FFR at 90 Hz and a physics-clock correctness gate before 120 Hz.
 
 ## Fixed foveated rendering
 
+[Quest 3 16-run results and raw evidence](results/2026-10-09-quest3-ffr.md): App-time savings,
+but no demonstrated freshness win; warm-run regression remains under investigation.
+
 Use one release APK at 90 Hz, with upgraded terrain on and wetness off:
 
 ```sh
