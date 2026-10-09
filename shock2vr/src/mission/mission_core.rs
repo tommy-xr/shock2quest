@@ -5492,22 +5492,36 @@ impl MissionCore {
                 .world
                 .borrow::<UniqueViewMut<crate::melee_swing::MeleeSwings>>()
                 .unwrap();
-            for (latch, weapon) in swings
+            for (hand, (latch, weapon)) in swings
                 .0
                 .iter_mut()
                 .zip([left_hand_entity_id, right_hand_entity_id])
+                .enumerate()
             {
-                let hot = weapon
+                let speed = weapon
                     .and_then(|entity| self.physics.held_melee_head_velocity(entity))
-                    .is_some_and(|velocity| {
-                        (velocity - self.physics.player_velocity()).magnitude()
-                            >= crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED)
-                    });
+                    .map(|velocity| (velocity - self.physics.player_velocity()).magnitude());
+                let hot = speed.is_some_and(|speed| {
+                    speed >= crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED)
+                });
                 latch.update(
                     weapon,
                     hot,
                     weapon.is_some_and(|entity| self.interaction.is_supported(entity)),
                 );
+                let tracked = input_context
+                    .pose_tracking
+                    .is_none_or(|tracking| tracking.head && tracking.hands[hand]);
+                if latch.sound_ready(
+                    speed.filter(|_| {
+                        tracked && self.player_controls_enabled && !player_health_depleted
+                    }),
+                    time.elapsed.as_secs_f32(),
+                ) {
+                    if let Some(weapon) = weapon {
+                        effects.push(crate::melee_swing::sound_effect(&self.world, weapon));
+                    }
+                }
             }
         }
 
@@ -12628,7 +12642,8 @@ impl MissionCore {
                         &self.world,
                         entity_id,
                     ));
-                    self.queue_flat_melee_swing(asset_cache, entity_id, bonus_damage);
+                    let sound = self.queue_flat_melee_swing(asset_cache, entity_id, bonus_damage);
+                    effects.push_front(sound);
                 }
 
                 Effect::ArmProximityGrenade { entity_id } => {
@@ -15093,12 +15108,12 @@ impl MissionCore {
         asset_cache: &mut AssetCache,
         entity_id: EntityId,
         bonus_damage: f32,
-    ) {
+    ) -> Effect {
         // Do not let release/pull chatter restart the clip before its authored
         // hit frame (or manufacture extra hits). A new swing is accepted only
         // after the current one returns to idle.
         if self.flat_melee_anim.is_some() {
-            return;
+            return Effect::NoEffect;
         }
         let clip_name = if bonus_damage > 0.0 {
             "highswing"
@@ -15114,7 +15129,9 @@ impl MissionCore {
                 crate::runtime_props::RuntimePropFlatMeleeBonus(bonus_damage),
             );
             self.flat_melee_anim = Some((entity_id, player));
+            return crate::melee_swing::sound_effect(&self.world, entity_id);
         }
+        Effect::NoEffect
     }
 
     /// Begin a reload on `weapon`: consume compatible backpack reserve to refill
