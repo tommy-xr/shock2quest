@@ -119,6 +119,8 @@ Pass an item between hands by squeezing the receiving hand nearby, then releasin
 the carrying hand. Stow a compact gun, melee weapon, or amp at either thigh by
 releasing it there; squeeze again to retrieve it. Holsters also work while the
 cyber interface is open, including items drawn directly from its inventory.
+Empty holsters ignore empty hands, and the ammo pouch ignores them when the
+other hand has no gun, so reaching through these targets can pick up world items.
 
 **Access and pickups.** Grip nanites, cyber modules, software upgrades, or found
 access cards, then release anywhere to download them. Draw your personal access

@@ -33,6 +33,28 @@ mod tests {
     }
 
     #[test]
+    fn empty_hands_ignore_empty_holsters() {
+        let (mut holsters, mut input, _) = setup();
+        input.left_hand.position = holsters.centers.unwrap()[0];
+        input.right_hand.position = holsters.centers.unwrap()[1];
+        for squeeze in [0.0, 1.0, 1.0, 0.0] {
+            input.left_hand.squeeze_value = squeeze;
+            input.right_hand.squeeze_value = squeeze;
+            assert_eq!(
+                holsters.update(
+                    &input, [None; 2], [true; 2], [None; 2], 2, [false; 2], [false; 2], true,
+                    0.016,
+                ),
+                [None; 2]
+            );
+            assert_eq!(
+                holsters.near, [None; 2],
+                "empty slots cannot freeze belt heading"
+            );
+        }
+    }
+
+    #[test]
     fn an_authored_non_weapon_can_use_the_same_release_gesture() {
         let (mut holsters, mut input, ids) = setup();
         input.right_hand.position = holsters.centers.unwrap()[0];
@@ -479,6 +501,8 @@ impl Holsters {
                         // Stored items remain retrievable even when a slot is disabled.
                         .filter(|s| {
                             (*s < count || slots[*s].is_some())
+                                // Empty hands can only interact with occupied holsters.
+                                && (held[i].is_some() || slots[*s].is_some())
                                 && (hand.position - centers[*s]).magnitude2()
                                     <= (radius() + super::body_inventory::hand_radius()).powi(2)
                         })

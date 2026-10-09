@@ -84,6 +84,8 @@ impl AmmoPouch {
                 && input.pose_tracking.is_none_or(|p| p.hands[i]);
             let pressed = hand.squeeze_value >= 0.5;
             self.near[i] = tracked
+                // An inactive pouch must not claim a reach past the belt.
+                && (weapons[i].is_some() || ammo[i])
                 && !self.shoulder_priority[i]
                 && active_center.is_some_and(|center| {
                     (hand.position - center).magnitude2()
@@ -182,6 +184,40 @@ impl AmmoPouch {
 mod tests {
     use super::*;
     use shipyard::World;
+
+    #[test]
+    fn empty_hands_ignore_pouch_without_a_gun() {
+        let mut input = InputContext::default();
+        let body = BodyPose {
+            head: input.head.position,
+            yaw: 0.0,
+        };
+        input.left_hand.position = center_for(body);
+        input.right_hand.position = center_for(body);
+        let mut pouch = AmmoPouch::default();
+        for squeeze in [0.0, 1.0, 1.0, 0.0] {
+            input.left_hand.squeeze_value = squeeze;
+            input.right_hand.squeeze_value = squeeze;
+            assert_eq!(
+                pouch.update(
+                    &input,
+                    Some(body),
+                    [None; 2],
+                    [true; 2],
+                    [None; 2],
+                    [false; 2],
+                    [None; 2],
+                    true,
+                ),
+                [None; 2]
+            );
+            assert_eq!(pouch.blocks_grab, [false; 2]);
+            assert_eq!(
+                pouch.near, [false; 2],
+                "inactive pouch cannot freeze belt heading"
+            );
+        }
+    }
 
     #[test]
     fn draw_requires_fresh_squeeze_tracking_free_hand_and_other_gun() {
