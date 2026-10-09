@@ -1,0 +1,188 @@
+//! A derived readout published by the Survive director. The director owns the
+//! saved schedule; these world screens never inspect or deserialize script state.
+use std::rc::Rc;
+
+use cgmath::{Deg, Matrix4, vec2, vec3};
+use engine::{
+    assets::asset_cache::AssetCache,
+    scene::{SceneObject, SceneObjectDebugTag},
+};
+use shipyard::{Unique, UniqueView, World};
+
+use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
+
+#[derive(Clone, Debug, PartialEq, Unique)]
+pub enum SurvivalStatus {
+    Rest {
+        next_wave: u32,
+        seconds_remaining: f32,
+        progress: f32,
+    },
+    Active {
+        wave: u32,
+        active: u32,
+        remaining: u32,
+        total: u32,
+    },
+    Complete,
+    Failed {
+        wave: u32,
+    },
+}
+
+impl SurvivalStatus {
+    pub(crate) fn progress(&self) -> f32 {
+        match *self {
+            Self::Rest { progress, .. } => progress.clamp(0.0, 1.0),
+            Self::Active {
+                remaining, total, ..
+            } => total.saturating_sub(remaining) as f32 / total.max(1) as f32,
+            Self::Complete => 1.0,
+            Self::Failed { .. } => 0.0,
+        }
+    }
+
+    fn canvas(&self) -> UiCanvas {
+        let mut canvas = UiCanvas::new(vec2(360.0, 220.0));
+        canvas.fill(Rect::new(0.0, 0.0, 360.0, 220.0), [35, 55, 59]);
+        canvas.fill(Rect::new(5.0, 5.0, 350.0, 210.0), [3, 13, 16]);
+        let mut text = |y, h, label: &str, size| {
+            canvas.text(
+                Rect::new(18.0, y, 324.0, h),
+                label,
+                crate::ui::TITLE_FONT,
+                size,
+                HAlign::Center,
+                VAlign::Middle,
+            );
+        };
+        text(12.0, 22.0, "SURVIVE / EARTH", 17.0);
+        match *self {
+            Self::Rest {
+                next_wave,
+                seconds_remaining,
+                ..
+            } => {
+                text(46.0, 30.0, &format!("WAVE {next_wave} / REST"), 25.0);
+                let seconds = seconds_remaining.max(0.0).ceil() as u32;
+                text(
+                    82.0,
+                    48.0,
+                    &format!("{}:{:02}", seconds / 60, seconds % 60),
+                    44.0,
+                );
+                text(137.0, 24.0, "UNTIL NEXT WAVE", 18.0);
+            }
+            Self::Active {
+                wave,
+                active,
+                remaining,
+                ..
+            } => {
+                text(46.0, 32.0, &format!("WAVE {wave} / ACTIVE"), 25.0);
+                text(88.0, 29.0, &format!("ENEMIES ACTIVE: {active}"), 21.0);
+                text(
+                    127.0,
+                    29.0,
+                    &format!("ENEMIES REMAINING: {remaining}"),
+                    21.0,
+                );
+            }
+            Self::Complete => {
+                text(55.0, 40.0, "CONTAINMENT COMPLETE", 23.0);
+                text(118.0, 30.0, "USE READY FOR ENDLESS", 19.0);
+            }
+            Self::Failed { wave } => {
+                text(55.0, 40.0, "CONTAINMENT LOST", 25.0);
+                text(118.0, 30.0, &format!("WAVE {wave}"), 23.0);
+            }
+        }
+        canvas.fill(Rect::new(18.0, 177.0, 324.0, 22.0), [24, 59, 58]);
+        canvas.fill(
+            Rect::new(21.0, 180.0, 318.0 * self.progress(), 16.0),
+            [0, 218, 164],
+        );
+        canvas
+    }
+}
+
+/// Surveyed Earth wall faces; rendering offsets along their outward normals.
+/// The sloped face is z = 0.5*y + 27.2, with normal (0,-1,2)/sqrt(5).
+/// Placement and canvas are shared by desktop and VR; these are ordinary
+/// depth-tested world objects, never a per-eye overlay.
+/// Entries are (surface center, yaw degrees, pitch degrees, debug name).
+const SCREENS: [([f32; 3], f32, f32, &str); 4] = [
+    // Below the protruding UNN sign, with the bottom still on the wall face.
+    ([11.72, 26.45, 38.8], 180.0, 0.0, "Street status / UNN"),
+    (
+        [11.61, 26.67, 40.535],
+        0.0,
+        26.565052,
+        "Street status / sloped passage",
+    ),
+    // Center the full 2.7-wide screen on the pillar spanning x = 5.2..8.4.
+    ([6.8, 24.82, 18.0], 0.0, 0.0, "Street status / pillar"),
+    ([10.88, 5.5, 12.8], 180.0, 0.0, "Subway status"),
+];
+
+// Keep clearance in panel-local +Z so sloped and vertical screens use the same
+// wall gap. Separate overlapping canvas layers too, especially at a distance.
+const WALL_CLEARANCE: f32 = 0.08;
+const LAYER_CLEARANCE: f32 = 0.005;
+
+pub(crate) fn render(world: &World, assets: &mut AssetCache) -> Vec<SceneObject> {
+    let Ok(status) = world.borrow::<UniqueView<SurvivalStatus>>() else {
+        return Vec::new();
+    };
+    let canvas = status.canvas();
+    SCREENS
+        .into_iter()
+        .flat_map(|(position, yaw, pitch, name)| {
+            let root = Matrix4::from_translation(position.into())
+                * Matrix4::from_angle_y(Deg(yaw))
+                * Matrix4::from_angle_x(Deg(pitch))
+                * Matrix4::from_translation(vec3(0.0, 0.0, WALL_CLEARANCE))
+                * Matrix4::from_nonuniform_scale(2.7, 1.65, 1.0);
+            let tag = Rc::new(SceneObjectDebugTag {
+                source: Some("survival_status_screen".into()),
+                name: Some(name.into()),
+                entity_id: None,
+                model: None,
+            });
+            let mut objects = canvas.render_world_space(assets, root, None, None, LAYER_CLEARANCE);
+            for object in &mut objects {
+                object.set_debug_tag(Some(tag.clone()));
+            }
+            objects
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_counts_defeated_enemies_and_elapsed_rest() {
+        assert_eq!(
+            SurvivalStatus::Active {
+                wave: 3,
+                active: 4,
+                remaining: 9,
+                total: 12
+            }
+            .progress(),
+            0.25
+        );
+        assert_eq!(
+            SurvivalStatus::Rest {
+                next_wave: 4,
+                seconds_remaining: 45.0,
+                progress: 0.25
+            }
+            .progress(),
+            0.25
+        );
+        assert_eq!(SurvivalStatus::Complete.progress(), 1.0);
+    }
+}

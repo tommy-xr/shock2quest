@@ -1390,6 +1390,9 @@ pub enum Effect {
         duration: Duration,
     },
 
+    /// Derived Survive readout, refreshed from the director after load.
+    SetSurvivalStatus(crate::hud::SurvivalStatus),
+
     ShowWeaponSkillRequirement {
         entity_id: EntityId,
         requirement: crate::weapon_requirements::WeaponSkillRequirement,

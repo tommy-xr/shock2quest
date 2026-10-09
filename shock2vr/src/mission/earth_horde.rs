@@ -898,11 +898,34 @@ impl HordeDirector {
         // the view for. The periodic `status` line keeps reporting the wave on
         // the message channel from four seconds in.
         effects.push(Effect::ShowBanner {
-            text: format!("Wave {}", self.wave),
+            text: format!("WAVE {} / ACTIVE", self.wave),
             duration: WAVE_CARD_DURATION,
         });
+        effects.push(Effect::SetSurvivalStatus(self.screen_status()));
         Effect::Multiple(effects)
     }
+    fn screen_status(&self) -> crate::hud::SurvivalStatus {
+        use crate::hud::SurvivalStatus;
+        match self.phase {
+            Phase::Rest => SurvivalStatus::Rest {
+                next_wave: self.wave + 1,
+                seconds_remaining: self.clock.max(0.0),
+                progress: 1.0 - self.clock / self.rest_seconds(),
+            },
+            Phase::Assault => {
+                let active = self.enemies.len() as u32;
+                SurvivalStatus::Active {
+                    wave: self.wave,
+                    active,
+                    remaining: self.quota().saturating_sub(self.spawned) + active,
+                    total: self.quota(),
+                }
+            }
+            Phase::Victory => SurvivalStatus::Complete,
+            Phase::Failed => SurvivalStatus::Failed { wave: self.wave },
+        }
+    }
+
     fn status(&self) -> Effect {
         let text = match self.phase {
             Phase::Rest => format!(
@@ -941,6 +964,15 @@ impl HordeDirector {
         self.next_status = 5.0;
         let effects = vec![
             self.music(),
+            Effect::SetSurvivalStatus(self.screen_status()),
+            Effect::ShowBanner {
+                text: if self.phase == Phase::Victory {
+                    "CONTAINMENT COMPLETE".into()
+                } else {
+                    format!("WAVE {} CLEAR / REST", self.wave)
+                },
+                duration: WAVE_CARD_DURATION,
+            },
             Effect::AwardNanites {
                 amount: 30 + self.wave.min(20) as i32 * 5,
             },
@@ -1129,7 +1161,11 @@ impl Script for HordeDirector {
     ) -> Effect {
         let dt = time.elapsed.as_secs_f32();
         if dt <= 0.0 {
-            return Effect::NoEffect;
+            return if self.initialized {
+                Effect::SetSurvivalStatus(self.screen_status())
+            } else {
+                Effect::NoEffect
+            };
         }
         let mut effects = Vec::new();
         if !self.initialized {
@@ -1190,6 +1226,7 @@ impl Script for HordeDirector {
             effects.push(self.status());
         }
         if self.phase == Phase::Failed {
+            effects.push(Effect::SetSurvivalStatus(self.screen_status()));
             return Effect::Multiple(effects);
         }
         if self.phase == Phase::Victory && !self.report_shown {
@@ -1300,6 +1337,7 @@ impl Script for HordeDirector {
             }
             Phase::Victory | Phase::Failed => {}
         }
+        effects.push(Effect::SetSurvivalStatus(self.screen_status()));
         Effect::Multiple(effects)
     }
     fn handle_message(
@@ -1375,6 +1413,48 @@ mod tests {
     }
 
     #[test]
+    fn screen_counts_include_attackers_still_to_spawn_and_survive_save() {
+        use crate::hud::SurvivalStatus;
+        let mut director = HordeDirector {
+            initialized: true,
+            phase: Phase::Assault,
+            wave: 3,
+            spawned: 7,
+            enemies: vec![Enemy::default(); 4],
+            ..Default::default()
+        };
+        let total = director.quota();
+        let expected = SurvivalStatus::Active {
+            wave: 3,
+            active: 4,
+            remaining: total - 7 + 4,
+            total,
+        };
+        assert_eq!(director.screen_status(), expected);
+        let state = director.save_state().unwrap();
+        let mut restored: HordeDirector = state.decode(1, STATE_KEY).unwrap();
+        assert_eq!(restored.screen_status(), expected);
+        // A paused load still republishes its derived screen, without advancing
+        // the saved schedule or requiring a serialized UI component.
+        assert!(matches!(tick(&mut restored, &World::new(), 0.0),
+            Effect::SetSurvivalStatus(status) if status == expected));
+        director.phase = Phase::Rest;
+        director.clock = director.rest_seconds() * 0.75;
+        assert_eq!(
+            director.screen_status(),
+            SurvivalStatus::Rest {
+                next_wave: 4,
+                seconds_remaining: director.clock,
+                progress: 0.25,
+            }
+        );
+        director.phase = Phase::Victory;
+        assert_eq!(director.screen_status(), SurvivalStatus::Complete);
+        director.phase = Phase::Failed;
+        assert_eq!(director.screen_status(), SurvivalStatus::Failed { wave: 3 });
+    }
+
+    #[test]
     fn recovery_requires_sustained_hidden_stalling() {
         let mut enemy = Enemy::default();
         assert!(!enemy.needs_recovery(30.0, true, 1.0));
@@ -1434,7 +1514,7 @@ mod tests {
             }
         }
         let (text, duration) = banner(director.start_wave(&world)).expect("a wave card");
-        assert_eq!(text, "Wave 3");
+        assert_eq!(text, "WAVE 3 / ACTIVE");
         assert_eq!(duration, WAVE_CARD_DURATION);
     }
 
