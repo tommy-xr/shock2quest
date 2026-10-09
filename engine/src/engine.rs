@@ -12,6 +12,8 @@ pub struct EngineRenderContext {
     pub ambient_light_intensity: f32,
     /// Multiplier for baked world lightmaps, applied before the ambient floor.
     pub level_light_intensity: f32,
+    /// Opt-in light-driven gloss on selected upgraded Many terrain.
+    pub terrain_wetness: f32,
 
     pub camera_offset: cgmath::Vector3<f32>,
     pub camera_rotation: cgmath::Quaternion<f32>,
