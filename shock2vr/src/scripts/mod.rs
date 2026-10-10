@@ -61,6 +61,7 @@ mod internal_simple_health;
 pub(crate) mod internal_switch_held_model;
 mod laser_shot;
 mod level_change_button;
+mod light_sound;
 pub mod maintenance;
 mod many_brain;
 mod many_ride;
@@ -276,6 +277,11 @@ pub enum MessagePayload {
     Hazard {
         toxin: bool,
         amount: f32,
+    },
+    /// One visible animated-light transition, shared with the fixture and walls.
+    LightChange {
+        previous_intensity: f32,
+        intensity: f32,
     },
     Frob,
     EquipImplant {
@@ -1314,7 +1320,7 @@ impl ScriptWorld {
             "psikitscript" => Box::new(PsiKitScript::new()),
             "psimine" => Box::new(PsiMine::new()),
             "computer" => gui_script(Box::new(ComputerGui::default())),
-            "lightsoundon" => Box::new(NoopScript::new()),
+            "lightsoundon" => Box::new(light_sound::LightSoundOn),
             "hackablecrate" => gui_script(Box::new(HackableCrateGui::new())),
             "turret" => gui_script(Box::new(ComputerGui::turret())),
             "triggerdestroy" => Box::new(TriggerDestroy::new()),

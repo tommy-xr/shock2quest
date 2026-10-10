@@ -68,8 +68,10 @@ mod tests {
             dim_time_ms: 63,
             min_brightness: 0.0,
             max_brightness: 150.0,
+            brightness: Some(150.0),
             rising: false,
             countdown_ms: 0,
+            countdown_fraction_ms: 0.0,
             inactive: false,
             radius: 50.0,
         }
