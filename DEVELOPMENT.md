@@ -1297,7 +1297,11 @@ The handheld tricorder does not stop a gun in the other hand from firing.
 Author an item's placement with `cargo dx ui --holster atek_w` (or
 `cargo run -p dark_explorer -- ui --holster atek_w`). VR Setup → **Holster**
 previews the item inside the new shell; adjust position in centimetres,
-rotation in degrees, and item length. Hand grips also offers **Edit holster pose**.
+rotation in degrees, item length, and independent **Width X / Height Y / Depth Z**
+shell scale multipliers (0.1–3.0; 1.0 is the default). Each occupied holster uses
+its item’s shell scale; empty holsters return to the default size. Shell scaling
+does not change item placement, item length, or grab radius. Hand grips also
+offers **Edit holster pose**.
 The initial library includes the pistol, laser pistol, wrench, laser rapier /
 electro shock, crystal shard and psi amp. Each has its own pose.
 

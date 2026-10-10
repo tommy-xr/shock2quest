@@ -17549,7 +17549,14 @@ impl MissionCore {
                             parts.push((
                                 "holster.glb",
                                 center,
-                                Matrix4::from_scale(crate::vr_holster::SHELL_SCALE),
+                                occupants[slot]
+                                    .and_then(|item| {
+                                        self.holsters.poses.for_entity(&self.world, item)
+                                    })
+                                    .map(|entry| entry.pose.shell_transform())
+                                    .unwrap_or_else(|| {
+                                        crate::vr_holster::HolsterPose::default().shell_transform()
+                                    }),
                             ));
                         }
                     }

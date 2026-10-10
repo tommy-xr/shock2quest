@@ -491,9 +491,11 @@ impl ModelPreview {
                     .get(&dark::importers::GLB_MODELS_IMPORTER, "holster.glb");
                 let mut objects = shell.clone_scene_objects();
                 for object in &mut objects {
-                    object.set_transform(Matrix4::from_scale(
-                        shock2vr::vr_holster::SHELL_SCALE / shock2vr::METERS_PER_WORLD_UNIT,
-                    ));
+                    object.set_transform(
+                        pose.shell_transform()
+                            * Matrix4::from_scale(1.0 / shock2vr::METERS_PER_WORLD_UNIT)
+                            * object.get_transform(),
+                    );
                 }
                 let bounds = model.bounding_box().ok_or("Item model has no bounds")?;
                 let transform = pose.model_transform(bounds.min.to_vec(), bounds.max.to_vec());
