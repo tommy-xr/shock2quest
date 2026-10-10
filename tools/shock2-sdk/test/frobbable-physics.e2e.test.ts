@@ -13,8 +13,7 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 // The strip between the pod and the east wall is NOT a player route in retail:
 // the authored radius is 1.96 ft and the pod is location-controlled, leaving
 // 1.59 ft to a wall that a 2.4-ft body (crouched or not) cannot pass. A
-// crouched walk along the wall must stop at the pod. (Until #1815 our sphere is
-// half size, and only the controller's contact offset closes the strip.)
+// crouched walk along the wall must stop at the pod.
 test(
   "Command Floor Pod keeps its authored sphere and blocks the strip beside the wall",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -39,6 +38,11 @@ test(
       `stable mission object 1520 should remain beside the reviewed portal, got ` +
         JSON.stringify(pod.position),
     );
+
+    const bounds = (await game.entities.detail(pod.id)).selection_bounds;
+    assert.ok(bounds);
+    assert.ok(Math.abs((bounds[1][0] - bounds[0][0]) / 2 - 1.96 / 2.5) < 0.001,
+      `the pod must retain its authored 1.96-foot radius: ${JSON.stringify(bounds)}`);
 
     // Exercise the real control that admits the player to the ladder route.
     await game.player.teleport({ x: -291.5, y: -0.756, z: 84.4157 });
@@ -80,10 +84,10 @@ test(
     await game.step({ frames: 120 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
     const blocked = await game.player.position();
-    // The render-model box spans z 86.67..88.67, so it would hold the body
-    // short of z 87; the authored sphere lets it reach the pod's side, no further.
+    // The full authored sphere stops the crouched body before it overlaps
+    // the egg. The old half-radius sphere let it reach z > 87.
     assert.ok(
-      blocked.z > 87 && blocked.z < pod.position[2] + 0.3 && blocked.y > -7.9 && blocked.y < -7.6,
+      blocked.z > before.z + 0.2 && blocked.z < 86.9 && blocked.y > -7.9 && blocked.y < -7.6,
       `the crouched body should stop at the pod's side, not pass it ` +
         `(${JSON.stringify(before)} -> ${JSON.stringify(blocked)})`,
     );
@@ -101,14 +105,15 @@ test(
     );
 
     // The surface beside the route is the authored sphere's (centre x -288.22,
-    // r 0.39 here), not the render box's face at x -287.22.
+    // r 0.784), not the render box's face at x -287.22.
     const side = await game.raycast({
       start: [-286.9, -7.7, pod.position[2]],
       end: [-290, -7.7, pod.position[2]],
       collision_groups: ["entity"],
     });
+    const expectedSurface = pod.position[0] + Math.sqrt((1.96 / 2.5) ** 2 - (-7.7 - pod.position[1]) ** 2);
     assert.ok(
-      side.entity_id === pod.id && side.hit_point && side.hit_point[0] < -287.6,
+      side.entity_id === pod.id && side.hit_point && Math.abs(side.hit_point[0] - expectedSurface) < 0.001,
       `the pod's physical surface should be its authored sphere, got ${JSON.stringify(side)}`,
     );
 
@@ -122,3 +127,32 @@ test(
     assert.equal(podBodies[0].blocks_player, true, "the live pod remains solid");
   },
 );
+
+for (const vr of [false, true]) {
+  test(`Command Floor Pod stops a crouched approach in ${vr ? "VR" : "flat"}`, {
+    skip: !e2eEnabled, timeout: 600_000,
+  }, async () => {
+    await using game = await GameServer.launch({
+      mission: "command1.mis", debugFlags: vr ? ["--vr"] : [],
+    });
+    await game.step({ frames: 5 });
+    const [pod] = await game.entities.byTemplate(1520);
+    assert.ok(pod);
+    await game.input.set("crouch", 1);
+    await game.step({ frames: 60 });
+    await game.player.teleport({ x: pod.position[0], y: -7.796, z: 85.8 });
+    await game.step({ frames: 30 });
+    const before = await game.player.position();
+    const eye = (await game.info()).player.camera_offset[1];
+    await game.input.lookAtWorldPoint([before.x, before.y + eye, before.z + 6], { eyeHeight: eye });
+    await game.step({ frames: 15 });
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 105 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    const blocked = await game.player.position();
+    // Negative-first: the half-radius hull let the player slide through the
+    // visible egg and emerge on the far side (z > 91) with identical input.
+    assert.ok(blocked.z > before.z + 0.2 && blocked.z < 87,
+      `the egg must stop the approach: ${JSON.stringify(before)} -> ${JSON.stringify(blocked)}`);
+  });
+}

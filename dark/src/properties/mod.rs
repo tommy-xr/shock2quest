@@ -2932,8 +2932,9 @@ fn read_prop_phys_dimensions<T: io::Read + io::Seek>(
     reader: &mut T,
     _len: u32,
 ) -> PropPhysDimensions {
-    let radius0 = read_single(reader) / SCALE_FACTOR / 2.0;
-    let radius1 = read_single(reader) / SCALE_FACTOR / 2.0;
+    // PhysDims stores radii, unlike the full extents in `size`.
+    let radius0 = read_single(reader) / SCALE_FACTOR;
+    let radius1 = read_single(reader) / SCALE_FACTOR;
     let offset0 = read_vec3(reader) / SCALE_FACTOR;
     let offset1 = read_vec3(reader) / SCALE_FACTOR;
     let size = read_vec3(reader) / SCALE_FACTOR;
@@ -3351,6 +3352,26 @@ pub fn define_link_with_versioned_data<TData: 'static + fmt::Debug + Send + Sync
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn phys_dimensions_imports_true_radii_without_halving() {
+        // Command1's Floor Pod authors a 1.96-foot radius, not diameter.
+        let mut bytes = Vec::new();
+        for value in [1.96_f32, 1.2, 2.5, 5.0, 7.5, 0.0, 2.5, 0.0, 5.0, 7.5, 10.0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        let mut reader = Cursor::new(bytes);
+        let dimensions = read_prop_phys_dimensions(&mut reader, 52);
+        assert!((dimensions.radius0 - 0.784).abs() < 0.00001);
+        assert!((dimensions.radius1 - 0.48).abs() < 0.00001);
+        assert_eq!(dimensions.offset0, vec3(-1.0, 3.0, 2.0));
+        assert_eq!(dimensions.size, vec3(-2.0, 4.0, 3.0));
+        assert_eq!(dimensions.point_vs_terrain, 1);
+        assert_eq!(dimensions.point_vs_not_special, 2);
+        assert_eq!(reader.position(), 52);
+    }
+
     #[test]
     fn authored_stun_reads_integer_multiplier_and_motion_tags() {
         use super::*;
