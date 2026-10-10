@@ -175,8 +175,10 @@ impl BenchmarkScene {
     pub fn configure(&self, features: &mut std::collections::HashSet<String>) {
         if self.upgraded_terrain {
             features.insert("upgraded_terrain".into());
+            features.remove("no_upgraded_terrain");
         } else {
             features.remove("upgraded_terrain");
+            features.insert("no_upgraded_terrain".into());
         }
         dev_params::set(
             dev_params::OBJECT_LIGHTING,
@@ -409,7 +411,7 @@ impl BenchmarkRun {
             })
             .collect();
         serde_json::json!({"name":self.scene.name,"object_lighting":dev_params::get_bool(dev_params::OBJECT_LIGHTING),
-            "upgraded_terrain":game.options.experimental_features.contains("upgraded_terrain"),
+            "upgraded_terrain":game.options.upgraded_terrain_enabled(),
             "terrain_wetness":dev_params::get(dev_params::TERRAIN_WETNESS),"additional_subjects":additional_subjects,
             "subject_meshes":meshes.len(),"expected_subject_meshes":self.scene.expected_subject_meshes,
             "lit_subject_meshes":meshes.iter().filter(|o| o.lights().is_some()).count(),
@@ -499,6 +501,24 @@ mod tests {
             scene.spawns.iter().filter(|spawn| spawn.animated).count(),
             6
         );
+    }
+
+    #[test]
+    fn benchmark_can_force_terrain_and_wetness_modes_despite_the_defaults() {
+        let previous_wetness = dev_params::get(dev_params::TERRAIN_WETNESS);
+        let mut scene = BenchmarkScene::parse(include_str!(
+            "../../benchmarks/scenes/many-brain-mixed-crowd.json"
+        ))
+        .unwrap();
+        let mut options = crate::GameOptions::default();
+        for (enabled, wetness) in [(false, 0.0), (true, 1.5), (true, 0.0), (false, 0.0)] {
+            scene.upgraded_terrain = enabled;
+            scene.terrain_wetness = wetness;
+            scene.configure(&mut options.experimental_features);
+            assert_eq!(options.upgraded_terrain_enabled(), enabled);
+            assert_eq!(dev_params::get(dev_params::TERRAIN_WETNESS), wetness);
+        }
+        dev_params::set(dev_params::TERRAIN_WETNESS, previous_wetness);
     }
 
     #[test]

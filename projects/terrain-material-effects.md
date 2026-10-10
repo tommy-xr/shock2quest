@@ -40,11 +40,12 @@ textures, animation and UV effects, without corresponding specular,
 normal or roughness-map directives.
 
 `terrain_wetness` (Developer → Organic shine) is a **project-owned prototype**,
-not recovered Nightdive terrain metadata. It defaults to **0** and ranges to 4.
-It requires `--experimental upgraded_terrain` and selects only OvrMnd_1's
-OM1/2/6/8, OMW and OVM003/005/010/012/015 surfaces. For a controlled comparison,
-set `game.devParams.set('terrain_wetness', 1.5)` under a fixed spotlight, then
-sweep the light separately. Setting it back to 0 disables the effect live.
+not recovered Nightdive terrain metadata. It defaults to **1.5** and ranges from
+0 to 4. It applies to upgraded terrain (also enabled by default), selecting only
+OvrMnd_1's OM1/2/6/8, OMW and OVM003/005/010/012/015 surfaces. For a controlled
+comparison, set `game.devParams.set('terrain_wetness', 0)` under a fixed spotlight,
+then restore 1.5 and sweep the light separately. Setting it to 0 disables the
+effect live; `no_upgraded_terrain` selects classic art without this effect.
 
 The terrain reuses the egg/grub Blinn–Phong highlight and mask composition.
 Its final layer's own diffuse RGB/alpha supplies the provisional gloss mask,
@@ -58,4 +59,5 @@ This first prototype has no terrain normal/roughness map, procedural veins,
 or environment reflection. Highlights follow the mesh normals and are tinted
 by the diffuse art, so broad highlights can reveal the low-poly surface.
 It needs an active light; the baked lightmap alone supplies no light direction.
-The default is off pending visual review and Quest GPU measurements.
+The default uses the strength reviewed visually and measured in the
+[Quest Many comparison](../benchmarks/results/2026-10-09-quest3-many-terrain.md).
