@@ -7,12 +7,10 @@ use cgmath::{Matrix4, Point3, SquareMatrix, Vector3, point2, vec3};
 use collision::{Aabb2, Contains, Frustum, Relation, Union};
 use dark::{
     mission::Cell,
-    properties::{PropPhysDimensions, PropPosition},
+    properties::{PropHasRefs, PropPhysDimensions, PropPosition},
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
-
-use crate::util::has_refs;
 
 use super::{CullingInfo, VisibilityEngine};
 
@@ -30,18 +28,70 @@ pub struct PortalDebugInfo {
 }
 
 pub struct PortalVisibilityEngine {
-    ///
-    /// Cache of the cell that each entity is in
-    ///
-    /// If the position hasn't changed, no need to recompute the cell position
-    #[allow(dead_code)]
-    entity_cell_cache: HashMap<EntityId, (Vector3<f32>, Option<u32>)>,
+    // Mission-scoped: Mission::load creates this alongside immutable spatial data.
+    // Cache cell membership, never camera-dependent visibility.
+    entity_cell_cache: HashMap<EntityId, EntityCells>,
 
     is_visible: HashMap<EntityId, bool>,
 
     debug_portals: Vec<PortalDebugInfo>,
     #[allow(dead_code)]
     is_debug: bool,
+}
+
+/// Lazily cache each corner so moving, visible objects retain the old early exit.
+/// The bounds intentionally match the existing axis-aligned size-only test:
+/// rotation, offsets and radius are not inputs to that visibility calculation.
+struct EntityCells {
+    position: Vector3<f32>,
+    size: Option<Vector3<f32>>,
+    cells: [Option<u32>; 8],
+    queried: u8,
+}
+
+impl EntityCells {
+    fn new(position: Vector3<f32>, size: Option<Vector3<f32>>) -> Self {
+        Self {
+            position,
+            size,
+            cells: [None; 8],
+            queried: 0,
+        }
+    }
+
+    fn is_visible(
+        &mut self,
+        position: Vector3<f32>,
+        size: Option<Vector3<f32>>,
+        visible_cells: &HashSet<u32>,
+        lookup: &mut impl FnMut(Vector3<f32>) -> Option<u32>,
+    ) -> bool {
+        if self.position != position || self.size != size {
+            *self = Self::new(position, size);
+        }
+        for corner in 0..if size.is_some() { 8 } else { 1 } {
+            let bit = 1 << corner;
+            if self.queried & bit == 0 {
+                let point = if let Some(size) = size {
+                    let half = size * 0.5;
+                    position
+                        + vec3(
+                            if corner & 1 == 0 { -half.x } else { half.x },
+                            if corner & 2 == 0 { -half.y } else { half.y },
+                            if corner & 4 == 0 { -half.z } else { half.z },
+                        )
+                } else {
+                    position
+                };
+                self.cells[corner] = lookup(point);
+                self.queried |= bit;
+            }
+            if self.cells[corner].is_some_and(|cell| visible_cells.contains(&cell)) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 ///
@@ -186,28 +236,31 @@ impl PortalVisibilityEngine {
         }
     }
 
-    #[allow(dead_code)]
-    fn get_cell_from_position(
+    fn update_entities(
         &mut self,
-        spatial_data: &dyn SpatialQueryEngine,
-        entity_id: &EntityId,
-        position: Vector3<f32>,
-    ) -> Option<u32> {
-        let cached_info = self.entity_cell_cache.get(entity_id);
-
-        if cached_info.is_some() {
-            let (cached_position, cached_cell) = cached_info.unwrap();
-            if cached_position == &position {
-                // Position hasn't changed, so we can use the cached cell
-                return *cached_cell;
-            }
-        }
-
-        // Calculate new position for entity, since it moved...
-        let maybe_cell_idx = spatial_data.get_cell_idx_from_position(position);
+        world: &World,
+        visible_cells: &HashSet<u32>,
+        mut lookup: impl FnMut(Vector3<f32>) -> Option<u32>,
+    ) {
+        let positions = world.borrow::<View<PropPosition>>().unwrap();
+        let dimensions = world.borrow::<View<PropPhysDimensions>>().unwrap();
+        let has_refs = world.borrow::<View<PropHasRefs>>().unwrap();
+        // Remove destroyed entities and entities that lost their position.
         self.entity_cell_cache
-            .insert(*entity_id, (position, maybe_cell_idx));
-        maybe_cell_idx
+            .retain(|id, _| positions.get(*id).is_ok());
+        self.is_visible.clear();
+        for (id, pos) in positions.iter().with_id() {
+            let visible = if has_refs.get(id).is_ok_and(|refs| !refs.0) {
+                false
+            } else {
+                let size = dimensions.get(id).ok().map(|dim| dim.size);
+                self.entity_cell_cache
+                    .entry(id)
+                    .or_insert_with(|| EntityCells::new(pos.position, size))
+                    .is_visible(pos.position, size, visible_cells, &mut lookup)
+            };
+            self.is_visible.insert(id, visible);
+        }
     }
 }
 fn camera_position_from_view_matrix(view_matrix: Matrix4<f32>) -> Vector3<f32> {
@@ -233,7 +286,8 @@ impl VisibilityEngine for PortalVisibilityEngine {
         };
 
         let maybe_camera_cell_idx = spatial_data.get_cell_idx_from_position(camera_position);
-        let maybe_camera_cell = spatial_data.get_cell_from_position(camera_position);
+        let maybe_camera_cell =
+            maybe_camera_cell_idx.and_then(|index| spatial_data.get_cell_by_index(index as usize));
 
         render_log!(
             DEBUG,
@@ -283,47 +337,9 @@ impl VisibilityEngine for PortalVisibilityEngine {
             visible_cells.len()
         );
 
-        let v_prop_position = world.borrow::<View<PropPosition>>().unwrap();
-        let v_prop_phys_dimensions = world.borrow::<View<PropPhysDimensions>>().unwrap();
-
-        for (id, pos) in v_prop_position.iter().with_id() {
-            if !has_refs(world, id) {
-                self.is_visible.insert(id, false);
-                continue;
-            }
-
-            // Check if ANY corner of the entity's bounding box is in a visible cell
-            let is_entity_visible = if let Ok(dimensions) = v_prop_phys_dimensions.get(id) {
-                let half_size = dimensions.size * 0.5;
-                let corners = [
-                    pos.position + vec3(-half_size.x, -half_size.y, -half_size.z),
-                    pos.position + vec3(half_size.x, -half_size.y, -half_size.z),
-                    pos.position + vec3(-half_size.x, half_size.y, -half_size.z),
-                    pos.position + vec3(half_size.x, half_size.y, -half_size.z),
-                    pos.position + vec3(-half_size.x, -half_size.y, half_size.z),
-                    pos.position + vec3(half_size.x, -half_size.y, half_size.z),
-                    pos.position + vec3(-half_size.x, half_size.y, half_size.z),
-                    pos.position + vec3(half_size.x, half_size.y, half_size.z),
-                ];
-
-                corners.iter().any(|&corner| {
-                    if let Some(cell_idx) = spatial_data.get_cell_idx_from_position(corner) {
-                        visible_cells.contains(&cell_idx)
-                    } else {
-                        false
-                    }
-                })
-            } else {
-                // Fallback to position-based check for entities without physics dimensions
-                if let Some(cell_idx) = spatial_data.get_cell_idx_from_position(pos.position) {
-                    visible_cells.contains(&cell_idx)
-                } else {
-                    false
-                }
-            };
-
-            self.is_visible.insert(id, is_entity_visible);
-        }
+        self.update_entities(world, &visible_cells, |position| {
+            spatial_data.get_cell_idx_from_position(position)
+        });
     }
 
     fn is_visible(&mut self, entity_id: EntityId) -> bool {
@@ -401,3 +417,7 @@ impl VisibilityEngine for PortalVisibilityEngine {
         // debug_objs
     }
 }
+
+#[cfg(test)]
+#[path = "portal_visibility_tests.rs"]
+mod tests;
