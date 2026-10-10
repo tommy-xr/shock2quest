@@ -1,0 +1,3205 @@
+{
+  "metadata": {
+    "commit": "30bece190459331ce361788fb066f5261b53c70b",
+    "dirty": true,
+    "options": {
+      "scene": "many-brain-mixed-crowd",
+      "lighting": "on",
+      "terrain": "upgraded",
+      "ffr": "all",
+      "repeats": "4",
+      "warmup": "10",
+      "seconds": "30",
+      "gpu-seconds": "10",
+      "output": "/tmp/quest-ffr-20261009"
+    },
+    "foveationOverrides": {
+      "level": "",
+      "dynamic": ""
+    },
+    "os": "oculus/eureka/eureka:14/UP1A.231005.007.A1/52433670048800520:user/abl_signing_keys:release,amss_signing_keys:release,release-keys",
+    "assets": "35597daf68cf3e0c811cd9b9d24a9604d2cffa1d2c793985056b8946c538c6bd  /sdcard/shock2quest/sshock2.kpf\n7436ff552c0bccc040aa29914fd0385ab8e063c59c3f8d9a2c66c3b3c1d471a6  /sdcard/shock2quest/mods/400.kpf\nbe36b80f0bab653ae506d790893fe99cb38e6bb22d42b3f2cd14605f9ef1d0d1  /sdcard/shock2quest/mods/patch_ext.kpf\n44c7383a32a19a2bfc9db494eb1d672440e2c20de89ce79fbf79dbbd1739c5b2  /sdcard/shock2quest/mods/scp.kpf\nf187b5fc3645756c0d29a9e9159b23fb25c8d28082a0ecf722a8828fe5e7cbe9  /sdcard/shock2quest/mods/shtup.kpf\n22663dae9b7118781e7ea6dc4ff329c6ecc2b7436918abff1d85961e7ce72011  /sdcard/shock2quest/mods/sshock2ee.kpf"
+  },
+  "runs": [
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "off",
+      "repeat": 1,
+      "directory": "off-1",
+      "status": "ok",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5182.418,
+          "launch_to_focused_ms": 6158
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 87.553,
+            "min": 82.452,
+            "p5": 82.52,
+            "p95": 89.615,
+            "max": 89.75
+          },
+          "frame_ms": {
+            "mean": 11.426,
+            "min": 11.142,
+            "p5": 11.159,
+            "p95": 12.118,
+            "max": 12.128
+          },
+          "update_ms": {
+            "mean": 6.259,
+            "min": 6.023,
+            "p5": 6.055,
+            "p95": 6.652,
+            "max": 6.696
+          },
+          "scene_ms": {
+            "mean": 0.729,
+            "min": 0.677,
+            "p5": 0.682,
+            "p95": 0.782,
+            "max": 0.804
+          },
+          "left_eye_ms": {
+            "mean": 1.275,
+            "min": 1.24,
+            "p5": 1.24,
+            "p95": 1.322,
+            "max": 1.371
+          },
+          "right_eye_ms": {
+            "mean": 1.072,
+            "min": 1.037,
+            "p5": 1.042,
+            "p95": 1.119,
+            "max": 1.132
+          },
+          "finish_ms": {
+            "mean": 1.557,
+            "min": 1.515,
+            "p5": 1.516,
+            "p95": 1.634,
+            "max": 1.666
+          },
+          "submit_ms": {
+            "mean": 0.307,
+            "min": 0.285,
+            "p5": 0.293,
+            "p95": 0.325,
+            "max": 0.326
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 88.267,
+            "min": 83,
+            "p5": 85,
+            "p95": 90,
+            "max": 90
+          },
+          "foveation_level": {
+            "mean": 0,
+            "min": 0,
+            "p5": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.375,
+            "min": 8.14,
+            "p5": 8.25,
+            "p95": 8.62,
+            "max": 9.11
+          },
+          "compositor_ms": {
+            "mean": 0.669,
+            "min": 0.66,
+            "p5": 0.66,
+            "p95": 0.68,
+            "max": 0.72
+          },
+          "cpu_gpu_ms": {
+            "mean": 20.701,
+            "min": 19.81,
+            "p5": 19.82,
+            "p95": 21.69,
+            "max": 22.59
+          },
+          "gpu_load": {
+            "mean": 0.823,
+            "min": 0.8,
+            "p5": 0.8,
+            "p95": 0.84,
+            "max": 0.85
+          },
+          "cpu_load": {
+            "mean": 0.401,
+            "min": 0.38,
+            "p5": 0.38,
+            "p95": 0.42,
+            "max": 0.43
+          },
+          "temperature_c": {
+            "mean": 36.6,
+            "min": 35,
+            "p5": 35,
+            "p95": 38,
+            "max": 38
+          },
+          "stale_frames": 91,
+          "torn_frames": 2
+        },
+        "memory": {
+          "total_pss_mib": 592,
+          "total_rss_mib": 725.7,
+          "graphics_pss_mib": 349.8
+        },
+        "screenshot": "off-1/many_mis.png"
+      },
+      "gpu": {
+        "GPU % Utilization": {
+          "mean": 67.591,
+          "min": 66.452,
+          "p5": 66.452,
+          "p95": 69.528,
+          "max": 69.528
+        },
+        "% Texture Fetch Stall": {
+          "mean": 2.84,
+          "min": 2.797,
+          "p5": 2.797,
+          "p95": 2.885,
+          "max": 2.885
+        },
+        "% Texture L1 Miss": {
+          "mean": 54.054,
+          "min": 53.921,
+          "p5": 53.921,
+          "p95": 54.151,
+          "max": 54.151
+        },
+        "% Texture L2 Miss": {
+          "mean": 0,
+          "min": 0,
+          "p5": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "% Shaders Busy": {
+          "mean": 86.876,
+          "min": 86.613,
+          "p5": 86.613,
+          "p95": 87.02,
+          "max": 87.02
+        },
+        "Vertices Shaded / Second": {
+          "mean": 98886949,
+          "min": 96793248,
+          "p5": 96793248,
+          "p95": 101560136,
+          "max": 101560136
+        },
+        "Fragments Shaded / Second": {
+          "mean": 1540893632,
+          "min": 1523561984,
+          "p5": 1523561984,
+          "p95": 1560645632,
+          "max": 1560645632
+        },
+        "Textures / Fragment": {
+          "mean": 1.675,
+          "min": 1.67,
+          "p5": 1.67,
+          "p95": 1.682,
+          "max": 1.682
+        },
+        "% Time Shading Fragments": {
+          "mean": 89.786,
+          "min": 89.742,
+          "p5": 89.742,
+          "p95": 89.834,
+          "max": 89.834
+        },
+        "% Time Shading Vertices": {
+          "mean": 10.214,
+          "min": 10.166,
+          "p5": 10.166,
+          "p95": 10.258,
+          "max": 10.258
+        },
+        "% Shader ALU Capacity Utilized": {
+          "mean": 62.095,
+          "min": 61.582,
+          "p5": 61.582,
+          "p95": 62.484,
+          "max": 62.484
+        },
+        "% Texture Pipes Busy": {
+          "mean": 40.234,
+          "min": 40.075,
+          "p5": 40.075,
+          "p95": 40.356,
+          "max": 40.356
+        },
+        "% Wave Context Occupancy": {
+          "mean": 46.024,
+          "min": 45.635,
+          "p5": 45.635,
+          "p95": 46.221,
+          "max": 46.221
+        }
+      },
+      "timing_status": "ok",
+      "gpu_status": "ok",
+      "validated_workload_samples": 30,
+      "workload_evidence": "off-1.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "low",
+      "repeat": 1,
+      "directory": "low-1",
+      "status": "ok",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5094.404,
+          "launch_to_focused_ms": 6069
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 87.029,
+            "min": 79.902,
+            "p5": 80.823,
+            "p95": 88.941,
+            "max": 88.978
+          },
+          "frame_ms": {
+            "mean": 11.497,
+            "min": 11.239,
+            "p5": 11.243,
+            "p95": 12.373,
+            "max": 12.515
+          },
+          "update_ms": {
+            "mean": 6.247,
+            "min": 6.066,
+            "p5": 6.079,
+            "p95": 6.823,
+            "max": 6.86
+          },
+          "scene_ms": {
+            "mean": 0.739,
+            "min": 0.672,
+            "p5": 0.68,
+            "p95": 0.802,
+            "max": 0.808
+          },
+          "left_eye_ms": {
+            "mean": 1.311,
+            "min": 1.25,
+            "p5": 1.255,
+            "p95": 1.39,
+            "max": 1.434
+          },
+          "right_eye_ms": {
+            "mean": 1.087,
+            "min": 1.056,
+            "p5": 1.057,
+            "p95": 1.143,
+            "max": 1.149
+          },
+          "finish_ms": {
+            "mean": 1.546,
+            "min": 1.521,
+            "p5": 1.522,
+            "p95": 1.65,
+            "max": 1.655
+          },
+          "submit_ms": {
+            "mean": 0.355,
+            "min": 0.339,
+            "p5": 0.342,
+            "p95": 0.378,
+            "max": 0.385
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 87.8,
+            "min": 81,
+            "p5": 84,
+            "p95": 89,
+            "max": 90
+          },
+          "foveation_level": {
+            "mean": 1,
+            "min": 1,
+            "p5": 1,
+            "p95": 1,
+            "max": 1
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.427,
+            "min": 8.32,
+            "p5": 8.32,
+            "p95": 8.6,
+            "max": 8.64
+          },
+          "compositor_ms": {
+            "mean": 0.698,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.72,
+            "max": 0.72
+          },
+          "cpu_gpu_ms": {
+            "mean": 20.602,
+            "min": 19.99,
+            "p5": 20.14,
+            "p95": 21.35,
+            "max": 21.56
+          },
+          "gpu_load": {
+            "mean": 0.829,
+            "min": 0.78,
+            "p5": 0.79,
+            "p95": 0.85,
+            "max": 0.85
+          },
+          "cpu_load": {
+            "mean": 0.398,
+            "min": 0.38,
+            "p5": 0.38,
+            "p95": 0.42,
+            "max": 0.42
+          },
+          "temperature_c": {
+            "mean": 39.467,
+            "min": 39,
+            "p5": 39,
+            "p95": 40,
+            "max": 40
+          },
+          "stale_frames": 105,
+          "torn_frames": 5
+        },
+        "memory": {
+          "total_pss_mib": 592.6,
+          "total_rss_mib": 726.4,
+          "graphics_pss_mib": 349.8
+        },
+        "screenshot": "low-1/many_mis.png"
+      },
+      "gpu": {
+        "GPU % Utilization": {
+          "mean": 61.457,
+          "min": 60.732,
+          "p5": 60.732,
+          "p95": 62.382,
+          "max": 62.382
+        },
+        "% Texture Fetch Stall": {
+          "mean": 3.136,
+          "min": 3.111,
+          "p5": 3.111,
+          "p95": 3.163,
+          "max": 3.163
+        },
+        "% Texture L1 Miss": {
+          "mean": 53.621,
+          "min": 53.51,
+          "p5": 53.51,
+          "p95": 53.716,
+          "max": 53.716
+        },
+        "% Texture L2 Miss": {
+          "mean": 0,
+          "min": 0,
+          "p5": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "% Shaders Busy": {
+          "mean": 84.159,
+          "min": 84.041,
+          "p5": 84.041,
+          "p95": 84.367,
+          "max": 84.367
+        },
+        "Vertices Shaded / Second": {
+          "mean": 90480787,
+          "min": 88434808,
+          "p5": 88434808,
+          "p95": 92264528,
+          "max": 92264528
+        },
+        "Fragments Shaded / Second": {
+          "mean": 1621087952,
+          "min": 1601193472,
+          "p5": 1601193472,
+          "p95": 1641417728,
+          "max": 1641417728
+        },
+        "Textures / Fragment": {
+          "mean": 1.539,
+          "min": 1.536,
+          "p5": 1.536,
+          "p95": 1.543,
+          "max": 1.543
+        },
+        "% Time Shading Fragments": {
+          "mean": 89.364,
+          "min": 89.334,
+          "p5": 89.334,
+          "p95": 89.411,
+          "max": 89.411
+        },
+        "% Time Shading Vertices": {
+          "mean": 10.637,
+          "min": 10.589,
+          "p5": 10.589,
+          "p95": 10.666,
+          "max": 10.666
+        },
+        "% Shader ALU Capacity Utilized": {
+          "mean": 60.323,
+          "min": 59.895,
+          "p5": 59.895,
+          "p95": 60.601,
+          "max": 60.601
+        },
+        "% Texture Pipes Busy": {
+          "mean": 40.104,
+          "min": 39.99,
+          "p5": 39.99,
+          "p95": 40.289,
+          "max": 40.289
+        },
+        "% Wave Context Occupancy": {
+          "mean": 46.075,
+          "min": 45.857,
+          "p5": 45.857,
+          "p95": 46.428,
+          "max": 46.428
+        }
+      },
+      "timing_status": "ok",
+      "gpu_status": "ok",
+      "validated_workload_samples": 30,
+      "workload_evidence": "low-1.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "high",
+      "repeat": 1,
+      "directory": "high-1",
+      "status": "ok",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5133.191,
+          "launch_to_focused_ms": 6275
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 87.342,
+            "min": 82.406,
+            "p5": 83.135,
+            "p95": 89.908,
+            "max": 90.36
+          },
+          "frame_ms": {
+            "mean": 11.453,
+            "min": 11.067,
+            "p5": 11.123,
+            "p95": 12.029,
+            "max": 12.135
+          },
+          "update_ms": {
+            "mean": 6.254,
+            "min": 5.946,
+            "p5": 5.991,
+            "p95": 6.57,
+            "max": 6.638
+          },
+          "scene_ms": {
+            "mean": 0.714,
+            "min": 0.665,
+            "p5": 0.667,
+            "p95": 0.776,
+            "max": 0.802
+          },
+          "left_eye_ms": {
+            "mean": 1.304,
+            "min": 1.262,
+            "p5": 1.264,
+            "p95": 1.362,
+            "max": 1.371
+          },
+          "right_eye_ms": {
+            "mean": 1.068,
+            "min": 1.041,
+            "p5": 1.044,
+            "p95": 1.103,
+            "max": 1.114
+          },
+          "finish_ms": {
+            "mean": 1.543,
+            "min": 1.512,
+            "p5": 1.519,
+            "p95": 1.63,
+            "max": 1.638
+          },
+          "submit_ms": {
+            "mean": 0.356,
+            "min": 0.333,
+            "p5": 0.341,
+            "p95": 0.377,
+            "max": 0.378
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 88.067,
+            "min": 86,
+            "p5": 86,
+            "p95": 91,
+            "max": 91
+          },
+          "foveation_level": {
+            "mean": 3,
+            "min": 3,
+            "p5": 3,
+            "p95": 3,
+            "max": 3
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 7.87,
+            "min": 7.67,
+            "p5": 7.73,
+            "p95": 7.97,
+            "max": 8
+          },
+          "compositor_ms": {
+            "mean": 0.696,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.71,
+            "max": 0.71
+          },
+          "cpu_gpu_ms": {
+            "mean": 20.043,
+            "min": 18.84,
+            "p5": 19.36,
+            "p95": 20.48,
+            "max": 20.91
+          },
+          "gpu_load": {
+            "mean": 0.784,
+            "min": 0.75,
+            "p5": 0.77,
+            "p95": 0.81,
+            "max": 0.81
+          },
+          "cpu_load": {
+            "mean": 0.402,
+            "min": 0.37,
+            "p5": 0.38,
+            "p95": 0.42,
+            "max": 0.43
+          },
+          "temperature_c": {
+            "mean": 40.367,
+            "min": 40,
+            "p5": 40,
+            "p95": 41,
+            "max": 41
+          },
+          "stale_frames": 95,
+          "torn_frames": 5
+        },
+        "memory": {
+          "total_pss_mib": 592.2,
+          "total_rss_mib": 725.9,
+          "graphics_pss_mib": 349.6
+        },
+        "screenshot": "high-1/many_mis.png"
+      },
+      "gpu": {
+        "GPU % Utilization": {
+          "mean": 58.599,
+          "min": 57.149,
+          "p5": 57.149,
+          "p95": 60.111,
+          "max": 60.111
+        },
+        "% Texture Fetch Stall": {
+          "mean": 3.264,
+          "min": 3.219,
+          "p5": 3.219,
+          "p95": 3.287,
+          "max": 3.287
+        },
+        "% Texture L1 Miss": {
+          "mean": 56.082,
+          "min": 55.967,
+          "p5": 55.967,
+          "p95": 56.247,
+          "max": 56.247
+        },
+        "% Texture L2 Miss": {
+          "mean": 0,
+          "min": 0,
+          "p5": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "% Shaders Busy": {
+          "mean": 82.521,
+          "min": 82.033,
+          "p5": 82.033,
+          "p95": 82.839,
+          "max": 82.839
+        },
+        "Vertices Shaded / Second": {
+          "mean": 91472643,
+          "min": 89112864,
+          "p5": 89112864,
+          "p95": 93002152,
+          "max": 93002152
+        },
+        "Fragments Shaded / Second": {
+          "mean": 1736214048,
+          "min": 1706170496,
+          "p5": 1706170496,
+          "p95": 1752944384,
+          "max": 1752944384
+        },
+        "Textures / Fragment": {
+          "mean": 1.426,
+          "min": 1.421,
+          "p5": 1.421,
+          "p95": 1.429,
+          "max": 1.429
+        },
+        "% Time Shading Fragments": {
+          "mean": 88.467,
+          "min": 88.394,
+          "p5": 88.394,
+          "p95": 88.528,
+          "max": 88.528
+        },
+        "% Time Shading Vertices": {
+          "mean": 11.533,
+          "min": 11.472,
+          "p5": 11.472,
+          "p95": 11.606,
+          "max": 11.606
+        },
+        "% Shader ALU Capacity Utilized": {
+          "mean": 57.753,
+          "min": 57.496,
+          "p5": 57.496,
+          "p95": 58.121,
+          "max": 58.121
+        },
+        "% Texture Pipes Busy": {
+          "mean": 40.269,
+          "min": 39.776,
+          "p5": 39.776,
+          "p95": 40.508,
+          "max": 40.508
+        },
+        "% Wave Context Occupancy": {
+          "mean": 45.572,
+          "min": 45.372,
+          "p5": 45.372,
+          "p95": 45.803,
+          "max": 45.803
+        }
+      },
+      "timing_status": "ok",
+      "gpu_status": "ok",
+      "validated_workload_samples": 30,
+      "workload_evidence": "high-1.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "medium",
+      "repeat": 1,
+      "directory": "medium-1",
+      "status": "ok",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5117.679,
+          "launch_to_focused_ms": 6102
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 87.932,
+            "min": 83.073,
+            "p5": 86.166,
+            "p95": 89.997,
+            "max": 90.028
+          },
+          "frame_ms": {
+            "mean": 11.375,
+            "min": 11.108,
+            "p5": 11.111,
+            "p95": 11.606,
+            "max": 12.038
+          },
+          "update_ms": {
+            "mean": 6.257,
+            "min": 6.043,
+            "p5": 6.054,
+            "p95": 6.419,
+            "max": 6.647
+          },
+          "scene_ms": {
+            "mean": 0.693,
+            "min": 0.647,
+            "p5": 0.657,
+            "p95": 0.727,
+            "max": 0.731
+          },
+          "left_eye_ms": {
+            "mean": 1.253,
+            "min": 1.21,
+            "p5": 1.215,
+            "p95": 1.3,
+            "max": 1.331
+          },
+          "right_eye_ms": {
+            "mean": 1.045,
+            "min": 1.02,
+            "p5": 1.022,
+            "p95": 1.072,
+            "max": 1.104
+          },
+          "finish_ms": {
+            "mean": 1.555,
+            "min": 1.517,
+            "p5": 1.52,
+            "p95": 1.597,
+            "max": 1.644
+          },
+          "submit_ms": {
+            "mean": 0.346,
+            "min": 0.331,
+            "p5": 0.332,
+            "p95": 0.36,
+            "max": 0.366
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 88.6,
+            "min": 86,
+            "p5": 86,
+            "p95": 91,
+            "max": 91
+          },
+          "foveation_level": {
+            "mean": 2,
+            "min": 2,
+            "p5": 2,
+            "p95": 2,
+            "max": 2
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.223,
+            "min": 8.09,
+            "p5": 8.13,
+            "p95": 8.36,
+            "max": 8.37
+          },
+          "compositor_ms": {
+            "mean": 0.696,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.7,
+            "max": 0.72
+          },
+          "cpu_gpu_ms": {
+            "mean": 20.361,
+            "min": 19.59,
+            "p5": 19.78,
+            "p95": 21.49,
+            "max": 21.54
+          },
+          "gpu_load": {
+            "mean": 0.817,
+            "min": 0.79,
+            "p5": 0.8,
+            "p95": 0.83,
+            "max": 0.84
+          },
+          "cpu_load": {
+            "mean": 0.405,
+            "min": 0.38,
+            "p5": 0.39,
+            "p95": 0.42,
+            "max": 0.43
+          },
+          "temperature_c": {
+            "mean": 42.533,
+            "min": 42,
+            "p5": 42,
+            "p95": 43,
+            "max": 43
+          },
+          "stale_frames": 79,
+          "torn_frames": 9
+        },
+        "memory": {
+          "total_pss_mib": 592,
+          "total_rss_mib": 725.9,
+          "graphics_pss_mib": 349.8
+        },
+        "screenshot": "medium-1/many_mis.png"
+      },
+      "gpu": {
+        "GPU % Utilization": {
+          "mean": 61.148,
+          "min": 59.088,
+          "p5": 59.088,
+          "p95": 62.588,
+          "max": 62.588
+        },
+        "% Texture Fetch Stall": {
+          "mean": 3.29,
+          "min": 3.261,
+          "p5": 3.261,
+          "p95": 3.306,
+          "max": 3.306
+        },
+        "% Texture L1 Miss": {
+          "mean": 54.932,
+          "min": 54.719,
+          "p5": 54.719,
+          "p95": 55.05,
+          "max": 55.05
+        },
+        "% Texture L2 Miss": {
+          "mean": 0,
+          "min": 0,
+          "p5": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "% Shaders Busy": {
+          "mean": 83.465,
+          "min": 83.088,
+          "p5": 83.088,
+          "p95": 83.873,
+          "max": 83.873
+        },
+        "Vertices Shaded / Second": {
+          "mean": 92165089,
+          "min": 88106480,
+          "p5": 88106480,
+          "p95": 94853040,
+          "max": 94853040
+        },
+        "Fragments Shaded / Second": {
+          "mean": 1709391360,
+          "min": 1664788608,
+          "p5": 1664788608,
+          "p95": 1740990592,
+          "max": 1740990592
+        },
+        "Textures / Fragment": {
+          "mean": 1.489,
+          "min": 1.481,
+          "p5": 1.481,
+          "p95": 1.496,
+          "max": 1.496
+        },
+        "% Time Shading Fragments": {
+          "mean": 89.047,
+          "min": 88.988,
+          "p5": 88.988,
+          "p95": 89.102,
+          "max": 89.102
+        },
+        "% Time Shading Vertices": {
+          "mean": 10.953,
+          "min": 10.898,
+          "p5": 10.898,
+          "p95": 11.012,
+          "max": 11.012
+        },
+        "% Shader ALU Capacity Utilized": {
+          "mean": 59.266,
+          "min": 58.846,
+          "p5": 58.846,
+          "p95": 59.54,
+          "max": 59.54
+        },
+        "% Texture Pipes Busy": {
+          "mean": 40.46,
+          "min": 40.096,
+          "p5": 40.096,
+          "p95": 40.606,
+          "max": 40.606
+        },
+        "% Wave Context Occupancy": {
+          "mean": 45.675,
+          "min": 45.253,
+          "p5": 45.253,
+          "p95": 45.957,
+          "max": 45.957
+        }
+      },
+      "timing_status": "ok",
+      "gpu_status": "ok",
+      "validated_workload_samples": 30,
+      "workload_evidence": "medium-1.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "low",
+      "repeat": 2,
+      "directory": "low-2",
+      "status": "ok",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5074.947,
+          "launch_to_focused_ms": 6302
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 86.989,
+            "min": 81.344,
+            "p5": 81.508,
+            "p95": 89.639,
+            "max": 89.942
+          },
+          "frame_ms": {
+            "mean": 11.502,
+            "min": 11.118,
+            "p5": 11.156,
+            "p95": 12.269,
+            "max": 12.294
+          },
+          "update_ms": {
+            "mean": 6.246,
+            "min": 5.985,
+            "p5": 5.996,
+            "p95": 6.685,
+            "max": 6.702
+          },
+          "scene_ms": {
+            "mean": 0.729,
+            "min": 0.685,
+            "p5": 0.688,
+            "p95": 0.8,
+            "max": 0.818
+          },
+          "left_eye_ms": {
+            "mean": 1.328,
+            "min": 1.262,
+            "p5": 1.268,
+            "p95": 1.41,
+            "max": 1.436
+          },
+          "right_eye_ms": {
+            "mean": 1.095,
+            "min": 1.047,
+            "p5": 1.057,
+            "p95": 1.146,
+            "max": 1.155
+          },
+          "finish_ms": {
+            "mean": 1.539,
+            "min": 1.49,
+            "p5": 1.505,
+            "p95": 1.629,
+            "max": 1.63
+          },
+          "submit_ms": {
+            "mean": 0.351,
+            "min": 0.326,
+            "p5": 0.332,
+            "p95": 0.367,
+            "max": 0.372
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 87.633,
+            "min": 82,
+            "p5": 85,
+            "p95": 90,
+            "max": 90
+          },
+          "foveation_level": {
+            "mean": 1,
+            "min": 1,
+            "p5": 1,
+            "p95": 1,
+            "max": 1
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.047,
+            "min": 7.9,
+            "p5": 7.94,
+            "p95": 8.2,
+            "max": 8.29
+          },
+          "compositor_ms": {
+            "mean": 0.699,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.71,
+            "max": 0.72
+          },
+          "cpu_gpu_ms": {
+            "mean": 20.322,
+            "min": 19.39,
+            "p5": 19.51,
+            "p95": 21.01,
+            "max": 21.27
+          },
+          "gpu_load": {
+            "mean": 0.794,
+            "min": 0.76,
+            "p5": 0.77,
+            "p95": 0.81,
+            "max": 0.81
+          },
+          "cpu_load": {
+            "mean": 0.397,
+            "min": 0.37,
+            "p5": 0.38,
+            "p95": 0.42,
+            "max": 0.42
+          },
+          "temperature_c": {
+            "mean": 42.667,
+            "min": 42,
+            "p5": 42,
+            "p95": 43,
+            "max": 43
+          },
+          "stale_frames": 117,
+          "torn_frames": 5
+        },
+        "memory": {
+          "total_pss_mib": 592.3,
+          "total_rss_mib": 726,
+          "graphics_pss_mib": 349.7
+        },
+        "screenshot": "low-2/many_mis.png"
+      },
+      "gpu": {
+        "GPU % Utilization": {
+          "mean": 60.029,
+          "min": 59.224,
+          "p5": 59.224,
+          "p95": 60.905,
+          "max": 60.905
+        },
+        "% Texture Fetch Stall": {
+          "mean": 3.028,
+          "min": 2.997,
+          "p5": 2.997,
+          "p95": 3.065,
+          "max": 3.065
+        },
+        "% Texture L1 Miss": {
+          "mean": 54.048,
+          "min": 53.968,
+          "p5": 53.968,
+          "p95": 54.106,
+          "max": 54.106
+        },
+        "% Texture L2 Miss": {
+          "mean": 0,
+          "min": 0,
+          "p5": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "% Shaders Busy": {
+          "mean": 83.074,
+          "min": 82.958,
+          "p5": 82.958,
+          "p95": 83.268,
+          "max": 83.268
+        },
+        "Vertices Shaded / Second": {
+          "mean": 97714507,
+          "min": 96710816,
+          "p5": 96710816,
+          "p95": 99292576,
+          "max": 99292576
+        },
+        "Fragments Shaded / Second": {
+          "mean": 1545017088,
+          "min": 1534920064,
+          "p5": 1534920064,
+          "p95": 1555613056,
+          "max": 1555613056
+        },
+        "Textures / Fragment": {
+          "mean": 1.512,
+          "min": 1.508,
+          "p5": 1.508,
+          "p95": 1.517,
+          "max": 1.517
+        },
+        "% Time Shading Fragments": {
+          "mean": 88.05,
+          "min": 87.985,
+          "p5": 87.985,
+          "p95": 88.108,
+          "max": 88.108
+        },
+        "% Time Shading Vertices": {
+          "mean": 11.95,
+          "min": 11.892,
+          "p5": 11.892,
+          "p95": 12.015,
+          "max": 12.015
+        },
+        "% Shader ALU Capacity Utilized": {
+          "mean": 58.003,
+          "min": 57.6,
+          "p5": 57.6,
+          "p95": 58.312,
+          "max": 58.312
+        },
+        "% Texture Pipes Busy": {
+          "mean": 38.55,
+          "min": 38.258,
+          "p5": 38.258,
+          "p95": 38.722,
+          "max": 38.722
+        },
+        "% Wave Context Occupancy": {
+          "mean": 45.128,
+          "min": 44.819,
+          "p5": 44.819,
+          "p95": 45.42,
+          "max": 45.42
+        }
+      },
+      "timing_status": "ok",
+      "gpu_status": "ok",
+      "validated_workload_samples": 30,
+      "workload_evidence": "low-2.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "medium",
+      "repeat": 2,
+      "directory": "medium-2",
+      "status": "failed",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5031.59,
+          "launch_to_focused_ms": 6087
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 87.02,
+            "min": 81.08,
+            "p5": 81.992,
+            "p95": 89.32,
+            "max": 89.421
+          },
+          "frame_ms": {
+            "mean": 11.497,
+            "min": 11.183,
+            "p5": 11.196,
+            "p95": 12.196,
+            "max": 12.334
+          },
+          "update_ms": {
+            "mean": 6.28,
+            "min": 6.046,
+            "p5": 6.055,
+            "p95": 6.694,
+            "max": 6.727
+          },
+          "scene_ms": {
+            "mean": 0.704,
+            "min": 0.663,
+            "p5": 0.665,
+            "p95": 0.746,
+            "max": 0.821
+          },
+          "left_eye_ms": {
+            "mean": 1.305,
+            "min": 1.242,
+            "p5": 1.263,
+            "p95": 1.363,
+            "max": 1.41
+          },
+          "right_eye_ms": {
+            "mean": 1.088,
+            "min": 1.041,
+            "p5": 1.042,
+            "p95": 1.125,
+            "max": 1.144
+          },
+          "finish_ms": {
+            "mean": 1.556,
+            "min": 1.527,
+            "p5": 1.528,
+            "p95": 1.655,
+            "max": 1.657
+          },
+          "submit_ms": {
+            "mean": 0.354,
+            "min": 0.339,
+            "p5": 0.339,
+            "p95": 0.375,
+            "max": 0.379
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 87.667,
+            "min": 82,
+            "p5": 85,
+            "p95": 90,
+            "max": 90
+          },
+          "foveation_level": {
+            "mean": 2,
+            "min": 2,
+            "p5": 2,
+            "p95": 2,
+            "max": 2
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 7.957,
+            "min": 7.81,
+            "p5": 7.83,
+            "p95": 8.1,
+            "max": 8.11
+          },
+          "compositor_ms": {
+            "mean": 0.695,
+            "min": 0.68,
+            "p5": 0.69,
+            "p95": 0.71,
+            "max": 0.71
+          },
+          "cpu_gpu_ms": {
+            "mean": 20.224,
+            "min": 18.92,
+            "p5": 19.62,
+            "p95": 21,
+            "max": 21.87
+          },
+          "gpu_load": {
+            "mean": 0.788,
+            "min": 0.75,
+            "p5": 0.75,
+            "p95": 0.81,
+            "max": 0.81
+          },
+          "cpu_load": {
+            "mean": 0.401,
+            "min": 0.38,
+            "p5": 0.38,
+            "p95": 0.42,
+            "max": 0.42
+          },
+          "temperature_c": {
+            "mean": 44.1,
+            "min": 43,
+            "p5": 43,
+            "p95": 45,
+            "max": 45
+          },
+          "stale_frames": 112,
+          "torn_frames": 5
+        },
+        "memory": {
+          "total_pss_mib": 592.2,
+          "total_rss_mib": 726,
+          "graphics_pss_mib": 350.2
+        },
+        "screenshot": "medium-2/many_mis.png"
+      },
+      "error": "invalid GPU counter Fragments Shaded / Second: -1",
+      "timing_status": "ok",
+      "gpu_status": "invalid",
+      "validated_workload_samples": 30,
+      "workload_evidence": "medium-2.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "off",
+      "repeat": 2,
+      "directory": "off-2",
+      "status": "failed",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5022.436,
+          "launch_to_focused_ms": 6385
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 79.99,
+            "min": 74.141,
+            "p5": 74.156,
+            "p95": 82.722,
+            "max": 83.088
+          },
+          "frame_ms": {
+            "mean": 12.51,
+            "min": 12.035,
+            "p5": 12.089,
+            "p95": 13.485,
+            "max": 13.488
+          },
+          "update_ms": {
+            "mean": 6.457,
+            "min": 6.198,
+            "p5": 6.251,
+            "p95": 6.974,
+            "max": 7.011
+          },
+          "scene_ms": {
+            "mean": 1.201,
+            "min": 1.095,
+            "p5": 1.103,
+            "p95": 1.333,
+            "max": 1.35
+          },
+          "left_eye_ms": {
+            "mean": 1.457,
+            "min": 1.395,
+            "p5": 1.401,
+            "p95": 1.567,
+            "max": 1.568
+          },
+          "right_eye_ms": {
+            "mean": 1.257,
+            "min": 1.225,
+            "p5": 1.228,
+            "p95": 1.321,
+            "max": 1.331
+          },
+          "finish_ms": {
+            "mean": 1.576,
+            "min": 1.545,
+            "p5": 1.548,
+            "p95": 1.654,
+            "max": 1.676
+          },
+          "submit_ms": {
+            "mean": 0.306,
+            "min": 0.294,
+            "p5": 0.295,
+            "p95": 0.332,
+            "max": 0.334
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 80.533,
+            "min": 73,
+            "p5": 76,
+            "p95": 83,
+            "max": 83
+          },
+          "foveation_level": {
+            "mean": 0,
+            "min": 0,
+            "p5": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 9.042,
+            "min": 8.92,
+            "p5": 8.93,
+            "p95": 9.16,
+            "max": 9.17
+          },
+          "compositor_ms": {
+            "mean": 0.704,
+            "min": 0.69,
+            "p5": 0.7,
+            "p95": 0.73,
+            "max": 0.74
+          },
+          "cpu_gpu_ms": {
+            "mean": 22.42,
+            "min": 21.31,
+            "p5": 21.66,
+            "p95": 23.58,
+            "max": 23.88
+          },
+          "gpu_load": {
+            "mean": 0.819,
+            "min": 0.77,
+            "p5": 0.77,
+            "p95": 0.84,
+            "max": 0.84
+          },
+          "cpu_load": {
+            "mean": 0.4,
+            "min": 0.38,
+            "p5": 0.38,
+            "p95": 0.42,
+            "max": 0.43
+          },
+          "temperature_c": {
+            "mean": 45.2,
+            "min": 45,
+            "p5": 45,
+            "p95": 46,
+            "max": 46
+          },
+          "stale_frames": 333,
+          "torn_frames": 0
+        },
+        "memory": {
+          "total_pss_mib": 631.6,
+          "total_rss_mib": 765.2,
+          "graphics_pss_mib": 387.2
+        },
+        "screenshot": "off-2/many_mis.png"
+      },
+      "error": "invalid GPU counter Fragments Shaded / Second: -1",
+      "timing_status": "ok",
+      "gpu_status": "invalid",
+      "validated_workload_samples": 30,
+      "workload_evidence": "off-2.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "high",
+      "repeat": 2,
+      "directory": "high-2",
+      "status": "failed",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5041.013,
+          "launch_to_focused_ms": 6387
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 79.983,
+            "min": 74.221,
+            "p5": 75.512,
+            "p95": 81.911,
+            "max": 82.063
+          },
+          "frame_ms": {
+            "mean": 12.509,
+            "min": 12.186,
+            "p5": 12.208,
+            "p95": 13.243,
+            "max": 13.473
+          },
+          "update_ms": {
+            "mean": 6.4,
+            "min": 6.15,
+            "p5": 6.152,
+            "p95": 6.835,
+            "max": 6.857
+          },
+          "scene_ms": {
+            "mean": 1.171,
+            "min": 1.039,
+            "p5": 1.086,
+            "p95": 1.265,
+            "max": 1.359
+          },
+          "left_eye_ms": {
+            "mean": 1.492,
+            "min": 1.442,
+            "p5": 1.455,
+            "p95": 1.569,
+            "max": 1.604
+          },
+          "right_eye_ms": {
+            "mean": 1.261,
+            "min": 1.234,
+            "p5": 1.234,
+            "p95": 1.327,
+            "max": 1.333
+          },
+          "finish_ms": {
+            "mean": 1.582,
+            "min": 1.55,
+            "p5": 1.55,
+            "p95": 1.68,
+            "max": 1.683
+          },
+          "submit_ms": {
+            "mean": 0.355,
+            "min": 0.341,
+            "p5": 0.341,
+            "p95": 0.379,
+            "max": 0.38
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 80.767,
+            "min": 77,
+            "p5": 78,
+            "p95": 83,
+            "max": 83
+          },
+          "foveation_level": {
+            "mean": 3,
+            "min": 3,
+            "p5": 3,
+            "p95": 3,
+            "max": 3
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.065,
+            "min": 7.91,
+            "p5": 7.93,
+            "p95": 8.33,
+            "max": 8.39
+          },
+          "compositor_ms": {
+            "mean": 0.695,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.72,
+            "max": 0.73
+          },
+          "cpu_gpu_ms": {
+            "mean": 21.349,
+            "min": 20.31,
+            "p5": 20.42,
+            "p95": 22.07,
+            "max": 22.57
+          },
+          "gpu_load": {
+            "mean": 0.74,
+            "min": 0.71,
+            "p5": 0.72,
+            "p95": 0.76,
+            "max": 0.76
+          },
+          "cpu_load": {
+            "mean": 0.396,
+            "min": 0.37,
+            "p5": 0.38,
+            "p95": 0.42,
+            "max": 0.42
+          },
+          "temperature_c": {
+            "mean": 46,
+            "min": 46,
+            "p5": 46,
+            "p95": 46,
+            "max": 46
+          },
+          "stale_frames": 332,
+          "torn_frames": 0
+        },
+        "memory": {
+          "total_pss_mib": 611,
+          "total_rss_mib": 744.8,
+          "graphics_pss_mib": 366.4
+        },
+        "screenshot": "high-2/many_mis.png"
+      },
+      "error": "invalid GPU counter Fragments Shaded / Second: -1",
+      "timing_status": "ok",
+      "gpu_status": "invalid",
+      "validated_workload_samples": 30,
+      "workload_evidence": "high-2.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "medium",
+      "repeat": 3,
+      "directory": "medium-3",
+      "status": "failed",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5004.237,
+          "launch_to_focused_ms": 6259
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 80.494,
+            "min": 74.43,
+            "p5": 75.113,
+            "p95": 82.937,
+            "max": 83.871
+          },
+          "frame_ms": {
+            "mean": 12.432,
+            "min": 11.923,
+            "p5": 12.057,
+            "p95": 13.313,
+            "max": 13.435
+          },
+          "update_ms": {
+            "mean": 6.335,
+            "min": 6.052,
+            "p5": 6.142,
+            "p95": 6.758,
+            "max": 6.866
+          },
+          "scene_ms": {
+            "mean": 1.172,
+            "min": 1.051,
+            "p5": 1.071,
+            "p95": 1.337,
+            "max": 1.351
+          },
+          "left_eye_ms": {
+            "mean": 1.506,
+            "min": 1.425,
+            "p5": 1.433,
+            "p95": 1.611,
+            "max": 1.622
+          },
+          "right_eye_ms": {
+            "mean": 1.255,
+            "min": 1.221,
+            "p5": 1.229,
+            "p95": 1.334,
+            "max": 1.335
+          },
+          "finish_ms": {
+            "mean": 1.56,
+            "min": 1.531,
+            "p5": 1.534,
+            "p95": 1.653,
+            "max": 1.657
+          },
+          "submit_ms": {
+            "mean": 0.355,
+            "min": 0.337,
+            "p5": 0.343,
+            "p95": 0.38,
+            "max": 0.383
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 81.1,
+            "min": 74,
+            "p5": 77,
+            "p95": 84,
+            "max": 84
+          },
+          "foveation_level": {
+            "mean": 2,
+            "min": 2,
+            "p5": 2,
+            "p95": 2,
+            "max": 2
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.149,
+            "min": 7.96,
+            "p5": 8.01,
+            "p95": 8.25,
+            "max": 8.34
+          },
+          "compositor_ms": {
+            "mean": 0.698,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.71,
+            "max": 0.73
+          },
+          "cpu_gpu_ms": {
+            "mean": 21.388,
+            "min": 20.45,
+            "p5": 20.59,
+            "p95": 22.84,
+            "max": 22.88
+          },
+          "gpu_load": {
+            "mean": 0.75,
+            "min": 0.7,
+            "p5": 0.73,
+            "p95": 0.77,
+            "max": 0.77
+          },
+          "cpu_load": {
+            "mean": 0.401,
+            "min": 0.38,
+            "p5": 0.38,
+            "p95": 0.42,
+            "max": 0.43
+          },
+          "temperature_c": {
+            "mean": 46.567,
+            "min": 46,
+            "p5": 46,
+            "p95": 47,
+            "max": 47
+          },
+          "stale_frames": 328,
+          "torn_frames": 0
+        },
+        "memory": {
+          "total_pss_mib": 611.5,
+          "total_rss_mib": 745.3,
+          "graphics_pss_mib": 367.2
+        },
+        "screenshot": "medium-3/many_mis.png"
+      },
+      "error": "invalid GPU counter Fragments Shaded / Second: -1",
+      "timing_status": "ok",
+      "gpu_status": "invalid",
+      "validated_workload_samples": 30,
+      "workload_evidence": "medium-3.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "high",
+      "repeat": 3,
+      "directory": "high-3",
+      "status": "failed",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5071.911,
+          "launch_to_focused_ms": 6520
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 78.064,
+            "min": 71.248,
+            "p5": 73.155,
+            "p95": 80.679,
+            "max": 80.779
+          },
+          "frame_ms": {
+            "mean": 12.821,
+            "min": 12.379,
+            "p5": 12.395,
+            "p95": 13.67,
+            "max": 14.036
+          },
+          "update_ms": {
+            "mean": 6.506,
+            "min": 6.209,
+            "p5": 6.281,
+            "p95": 6.995,
+            "max": 7.134
+          },
+          "scene_ms": {
+            "mean": 1.251,
+            "min": 1.132,
+            "p5": 1.16,
+            "p95": 1.352,
+            "max": 1.447
+          },
+          "left_eye_ms": {
+            "mean": 1.568,
+            "min": 1.496,
+            "p5": 1.504,
+            "p95": 1.651,
+            "max": 1.722
+          },
+          "right_eye_ms": {
+            "mean": 1.284,
+            "min": 1.246,
+            "p5": 1.259,
+            "p95": 1.363,
+            "max": 1.365
+          },
+          "finish_ms": {
+            "mean": 1.592,
+            "min": 1.555,
+            "p5": 1.557,
+            "p95": 1.699,
+            "max": 1.724
+          },
+          "submit_ms": {
+            "mean": 0.362,
+            "min": 0.349,
+            "p5": 0.349,
+            "p95": 0.384,
+            "max": 0.389
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 78.633,
+            "min": 72,
+            "p5": 74,
+            "p95": 81,
+            "max": 82
+          },
+          "foveation_level": {
+            "mean": 3,
+            "min": 3,
+            "p5": 3,
+            "p95": 3,
+            "max": 3
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.162,
+            "min": 7.98,
+            "p5": 8.02,
+            "p95": 8.28,
+            "max": 8.32
+          },
+          "compositor_ms": {
+            "mean": 0.698,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.72,
+            "max": 0.73
+          },
+          "cpu_gpu_ms": {
+            "mean": 21.856,
+            "min": 20.79,
+            "p5": 20.83,
+            "p95": 23,
+            "max": 24.15
+          },
+          "gpu_load": {
+            "mean": 0.729,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.75,
+            "max": 0.75
+          },
+          "cpu_load": {
+            "mean": 0.403,
+            "min": 0.38,
+            "p5": 0.38,
+            "p95": 0.43,
+            "max": 0.44
+          },
+          "temperature_c": {
+            "mean": 47.633,
+            "min": 47,
+            "p5": 47,
+            "p95": 48,
+            "max": 48
+          },
+          "stale_frames": 419,
+          "torn_frames": 0
+        },
+        "memory": {
+          "total_pss_mib": 611.3,
+          "total_rss_mib": 745,
+          "graphics_pss_mib": 366.2
+        },
+        "screenshot": "high-3/many_mis.png"
+      },
+      "error": "invalid GPU counter Fragments Shaded / Second: -1",
+      "timing_status": "ok",
+      "gpu_status": "invalid",
+      "validated_workload_samples": 30,
+      "workload_evidence": "high-3.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "low",
+      "repeat": 3,
+      "directory": "low-3",
+      "status": "failed",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 4967.315,
+          "launch_to_focused_ms": 6200
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 79.925,
+            "min": 74.156,
+            "p5": 75.027,
+            "p95": 81.735,
+            "max": 82.111
+          },
+          "frame_ms": {
+            "mean": 12.519,
+            "min": 12.179,
+            "p5": 12.235,
+            "p95": 13.329,
+            "max": 13.485
+          },
+          "update_ms": {
+            "mean": 6.42,
+            "min": 6.259,
+            "p5": 6.264,
+            "p95": 6.825,
+            "max": 6.922
+          },
+          "scene_ms": {
+            "mean": 1.184,
+            "min": 1.072,
+            "p5": 1.117,
+            "p95": 1.299,
+            "max": 1.299
+          },
+          "left_eye_ms": {
+            "mean": 1.491,
+            "min": 1.415,
+            "p5": 1.426,
+            "p95": 1.585,
+            "max": 1.63
+          },
+          "right_eye_ms": {
+            "mean": 1.239,
+            "min": 1.207,
+            "p5": 1.208,
+            "p95": 1.303,
+            "max": 1.326
+          },
+          "finish_ms": {
+            "mean": 1.575,
+            "min": 1.544,
+            "p5": 1.544,
+            "p95": 1.672,
+            "max": 1.674
+          },
+          "submit_ms": {
+            "mean": 0.353,
+            "min": 0.341,
+            "p5": 0.342,
+            "p95": 0.376,
+            "max": 0.385
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 80.567,
+            "min": 75,
+            "p5": 76,
+            "p95": 83,
+            "max": 83
+          },
+          "foveation_level": {
+            "mean": 1,
+            "min": 1,
+            "p5": 1,
+            "p95": 1,
+            "max": 1
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.257,
+            "min": 8.05,
+            "p5": 8.07,
+            "p95": 8.39,
+            "max": 8.39
+          },
+          "compositor_ms": {
+            "mean": 0.698,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.72,
+            "max": 0.74
+          },
+          "cpu_gpu_ms": {
+            "mean": 21.801,
+            "min": 20.91,
+            "p5": 20.94,
+            "p95": 22.7,
+            "max": 24.16
+          },
+          "gpu_load": {
+            "mean": 0.756,
+            "min": 0.71,
+            "p5": 0.73,
+            "p95": 0.77,
+            "max": 0.77
+          },
+          "cpu_load": {
+            "mean": 0.397,
+            "min": 0.38,
+            "p5": 0.38,
+            "p95": 0.42,
+            "max": 0.43
+          },
+          "temperature_c": {
+            "mean": 47.467,
+            "min": 47,
+            "p5": 47,
+            "p95": 48,
+            "max": 48
+          },
+          "stale_frames": 337,
+          "torn_frames": 2
+        },
+        "memory": {
+          "total_pss_mib": 612.1,
+          "total_rss_mib": 745.9,
+          "graphics_pss_mib": 367.8
+        },
+        "screenshot": "low-3/many_mis.png"
+      },
+      "error": "invalid GPU counter Fragments Shaded / Second: -1",
+      "timing_status": "ok",
+      "gpu_status": "invalid",
+      "validated_workload_samples": 30,
+      "workload_evidence": "low-3.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "off",
+      "repeat": 3,
+      "directory": "off-3",
+      "status": "failed",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5050.645,
+          "launch_to_focused_ms": 6381
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 82.218,
+            "min": 71.889,
+            "p5": 76.865,
+            "p95": 84.921,
+            "max": 85.001
+          },
+          "frame_ms": {
+            "mean": 12.176,
+            "min": 11.765,
+            "p5": 11.776,
+            "p95": 13.01,
+            "max": 13.91
+          },
+          "update_ms": {
+            "mean": 6.351,
+            "min": 6.073,
+            "p5": 6.092,
+            "p95": 6.883,
+            "max": 7.246
+          },
+          "scene_ms": {
+            "mean": 1.116,
+            "min": 1.058,
+            "p5": 1.059,
+            "p95": 1.188,
+            "max": 1.352
+          },
+          "left_eye_ms": {
+            "mean": 1.397,
+            "min": 1.344,
+            "p5": 1.357,
+            "p95": 1.501,
+            "max": 1.581
+          },
+          "right_eye_ms": {
+            "mean": 1.198,
+            "min": 1.169,
+            "p5": 1.171,
+            "p95": 1.263,
+            "max": 1.335
+          },
+          "finish_ms": {
+            "mean": 1.555,
+            "min": 1.525,
+            "p5": 1.526,
+            "p95": 1.643,
+            "max": 1.734
+          },
+          "submit_ms": {
+            "mean": 0.307,
+            "min": 0.291,
+            "p5": 0.292,
+            "p95": 0.334,
+            "max": 0.343
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 82.767,
+            "min": 74,
+            "p5": 75,
+            "p95": 85,
+            "max": 85
+          },
+          "foveation_level": {
+            "mean": 0,
+            "min": 0,
+            "p5": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.667,
+            "min": 8.5,
+            "p5": 8.51,
+            "p95": 8.85,
+            "max": 8.87
+          },
+          "compositor_ms": {
+            "mean": 0.704,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.73,
+            "max": 0.78
+          },
+          "cpu_gpu_ms": {
+            "mean": 21.711,
+            "min": 20.89,
+            "p5": 21.01,
+            "p95": 22.65,
+            "max": 23.45
+          },
+          "gpu_load": {
+            "mean": 0.811,
+            "min": 0.75,
+            "p5": 0.76,
+            "p95": 0.83,
+            "max": 0.83
+          },
+          "cpu_load": {
+            "mean": 0.397,
+            "min": 0.37,
+            "p5": 0.38,
+            "p95": 0.42,
+            "max": 0.42
+          },
+          "temperature_c": {
+            "mean": 48.633,
+            "min": 48,
+            "p5": 48,
+            "p95": 49,
+            "max": 49
+          },
+          "stale_frames": 248,
+          "torn_frames": 0
+        },
+        "memory": {
+          "total_pss_mib": 610.4,
+          "total_rss_mib": 744.2,
+          "graphics_pss_mib": 367.2
+        },
+        "screenshot": "off-3/many_mis.png"
+      },
+      "error": "invalid GPU counter Fragments Shaded / Second: -1",
+      "timing_status": "ok",
+      "gpu_status": "invalid",
+      "validated_workload_samples": 30,
+      "workload_evidence": "off-3.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "high",
+      "repeat": 4,
+      "directory": "high-4",
+      "status": "failed",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5053.128,
+          "launch_to_focused_ms": 6417
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 79.446,
+            "min": 74.081,
+            "p5": 74.352,
+            "p95": 82.209,
+            "max": 82.385
+          },
+          "frame_ms": {
+            "mean": 12.597,
+            "min": 12.138,
+            "p5": 12.164,
+            "p95": 13.449,
+            "max": 13.499
+          },
+          "update_ms": {
+            "mean": 6.441,
+            "min": 6.164,
+            "p5": 6.199,
+            "p95": 6.919,
+            "max": 6.954
+          },
+          "scene_ms": {
+            "mean": 1.175,
+            "min": 1.092,
+            "p5": 1.093,
+            "p95": 1.283,
+            "max": 1.297
+          },
+          "left_eye_ms": {
+            "mean": 1.503,
+            "min": 1.45,
+            "p5": 1.452,
+            "p95": 1.586,
+            "max": 1.612
+          },
+          "right_eye_ms": {
+            "mean": 1.277,
+            "min": 1.248,
+            "p5": 1.248,
+            "p95": 1.328,
+            "max": 1.355
+          },
+          "finish_ms": {
+            "mean": 1.585,
+            "min": 1.552,
+            "p5": 1.552,
+            "p95": 1.67,
+            "max": 1.685
+          },
+          "submit_ms": {
+            "mean": 0.362,
+            "min": 0.349,
+            "p5": 0.349,
+            "p95": 0.385,
+            "max": 0.389
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 80.033,
+            "min": 75,
+            "p5": 76,
+            "p95": 82,
+            "max": 83
+          },
+          "foveation_level": {
+            "mean": 3,
+            "min": 3,
+            "p5": 3,
+            "p95": 3,
+            "max": 3
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.069,
+            "min": 7.88,
+            "p5": 7.96,
+            "p95": 8.18,
+            "max": 8.26
+          },
+          "compositor_ms": {
+            "mean": 0.701,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.73,
+            "max": 0.73
+          },
+          "cpu_gpu_ms": {
+            "mean": 21.409,
+            "min": 20.46,
+            "p5": 20.74,
+            "p95": 22.52,
+            "max": 23.52
+          },
+          "gpu_load": {
+            "mean": 0.736,
+            "min": 0.7,
+            "p5": 0.71,
+            "p95": 0.75,
+            "max": 0.75
+          },
+          "cpu_load": {
+            "mean": 0.398,
+            "min": 0.38,
+            "p5": 0.38,
+            "p95": 0.42,
+            "max": 0.43
+          },
+          "temperature_c": {
+            "mean": 49.333,
+            "min": 49,
+            "p5": 49,
+            "p95": 50,
+            "max": 50
+          },
+          "stale_frames": 355,
+          "torn_frames": 0
+        },
+        "memory": {
+          "total_pss_mib": 610.5,
+          "total_rss_mib": 744.3,
+          "graphics_pss_mib": 366.6
+        },
+        "screenshot": "high-4/many_mis.png"
+      },
+      "error": "invalid GPU counter Fragments Shaded / Second: -1",
+      "timing_status": "ok",
+      "gpu_status": "invalid",
+      "validated_workload_samples": 30,
+      "workload_evidence": "high-4.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "off",
+      "repeat": 4,
+      "directory": "off-4",
+      "status": "failed",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5070.109,
+          "launch_to_focused_ms": 6475
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 81.671,
+            "min": 74.587,
+            "p5": 75.718,
+            "p95": 83.847,
+            "max": 83.99
+          },
+          "frame_ms": {
+            "mean": 12.253,
+            "min": 11.906,
+            "p5": 11.927,
+            "p95": 13.207,
+            "max": 13.407
+          },
+          "update_ms": {
+            "mean": 6.291,
+            "min": 6.03,
+            "p5": 6.078,
+            "p95": 6.847,
+            "max": 7.004
+          },
+          "scene_ms": {
+            "mean": 1.171,
+            "min": 1.094,
+            "p5": 1.122,
+            "p95": 1.249,
+            "max": 1.264
+          },
+          "left_eye_ms": {
+            "mean": 1.46,
+            "min": 1.398,
+            "p5": 1.407,
+            "p95": 1.575,
+            "max": 1.594
+          },
+          "right_eye_ms": {
+            "mean": 1.21,
+            "min": 1.183,
+            "p5": 1.183,
+            "p95": 1.292,
+            "max": 1.297
+          },
+          "finish_ms": {
+            "mean": 1.562,
+            "min": 1.539,
+            "p5": 1.539,
+            "p95": 1.664,
+            "max": 1.688
+          },
+          "submit_ms": {
+            "mean": 0.306,
+            "min": 0.297,
+            "p5": 0.298,
+            "p95": 0.33,
+            "max": 0.332
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 82.233,
+            "min": 75,
+            "p5": 76,
+            "p95": 85,
+            "max": 85
+          },
+          "foveation_level": {
+            "mean": 0,
+            "min": 0,
+            "p5": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.695,
+            "min": 8.57,
+            "p5": 8.57,
+            "p95": 8.84,
+            "max": 8.86
+          },
+          "compositor_ms": {
+            "mean": 0.703,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.73,
+            "max": 0.74
+          },
+          "cpu_gpu_ms": {
+            "mean": 21.821,
+            "min": 20.85,
+            "p5": 20.95,
+            "p95": 22.96,
+            "max": 23.5
+          },
+          "gpu_load": {
+            "mean": 0.807,
+            "min": 0.76,
+            "p5": 0.77,
+            "p95": 0.82,
+            "max": 0.83
+          },
+          "cpu_load": {
+            "mean": 0.395,
+            "min": 0.37,
+            "p5": 0.37,
+            "p95": 0.41,
+            "max": 0.42
+          },
+          "temperature_c": {
+            "mean": 49.333,
+            "min": 48,
+            "p5": 48,
+            "p95": 50,
+            "max": 50
+          },
+          "stale_frames": 283,
+          "torn_frames": 0
+        },
+        "memory": {
+          "total_pss_mib": 610.7,
+          "total_rss_mib": 744.4,
+          "graphics_pss_mib": 367.3
+        },
+        "screenshot": "off-4/many_mis.png"
+      },
+      "error": "invalid GPU counter Fragments Shaded / Second: -1",
+      "timing_status": "ok",
+      "gpu_status": "invalid",
+      "validated_workload_samples": 30,
+      "workload_evidence": "off-4.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "medium",
+      "repeat": 4,
+      "directory": "medium-4",
+      "status": "failed",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5014.161,
+          "launch_to_focused_ms": 6216
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 80.17,
+            "min": 74.863,
+            "p5": 74.951,
+            "p95": 82.12,
+            "max": 82.483
+          },
+          "frame_ms": {
+            "mean": 12.481,
+            "min": 12.124,
+            "p5": 12.177,
+            "p95": 13.342,
+            "max": 13.358
+          },
+          "update_ms": {
+            "mean": 6.44,
+            "min": 6.223,
+            "p5": 6.232,
+            "p95": 6.908,
+            "max": 6.984
+          },
+          "scene_ms": {
+            "mean": 1.19,
+            "min": 1.113,
+            "p5": 1.118,
+            "p95": 1.293,
+            "max": 1.318
+          },
+          "left_eye_ms": {
+            "mean": 1.464,
+            "min": 1.401,
+            "p5": 1.41,
+            "p95": 1.518,
+            "max": 1.544
+          },
+          "right_eye_ms": {
+            "mean": 1.209,
+            "min": 1.178,
+            "p5": 1.183,
+            "p95": 1.261,
+            "max": 1.285
+          },
+          "finish_ms": {
+            "mean": 1.571,
+            "min": 1.545,
+            "p5": 1.55,
+            "p95": 1.664,
+            "max": 1.695
+          },
+          "submit_ms": {
+            "mean": 0.352,
+            "min": 0.341,
+            "p5": 0.344,
+            "p95": 0.378,
+            "max": 0.381
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 80.767,
+            "min": 76,
+            "p5": 76,
+            "p95": 82,
+            "max": 83
+          },
+          "foveation_level": {
+            "mean": 2,
+            "min": 2,
+            "p5": 2,
+            "p95": 2,
+            "max": 2
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.387,
+            "min": 8.23,
+            "p5": 8.26,
+            "p95": 8.54,
+            "max": 8.58
+          },
+          "compositor_ms": {
+            "mean": 0.703,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.72,
+            "max": 0.72
+          },
+          "cpu_gpu_ms": {
+            "mean": 21.699,
+            "min": 20.69,
+            "p5": 20.79,
+            "p95": 22.45,
+            "max": 22.8
+          },
+          "gpu_load": {
+            "mean": 0.767,
+            "min": 0.73,
+            "p5": 0.74,
+            "p95": 0.78,
+            "max": 0.78
+          },
+          "cpu_load": {
+            "mean": 0.401,
+            "min": 0.38,
+            "p5": 0.38,
+            "p95": 0.41,
+            "max": 0.42
+          },
+          "temperature_c": {
+            "mean": 49.467,
+            "min": 49,
+            "p5": 49,
+            "p95": 50,
+            "max": 50
+          },
+          "stale_frames": 331,
+          "torn_frames": 0
+        },
+        "memory": {
+          "total_pss_mib": 611.6,
+          "total_rss_mib": 745.4,
+          "graphics_pss_mib": 367
+        },
+        "screenshot": "medium-4/many_mis.png"
+      },
+      "error": "invalid GPU counter Fragments Shaded / Second: -1",
+      "timing_status": "ok",
+      "gpu_status": "invalid",
+      "validated_workload_samples": 30,
+      "workload_evidence": "medium-4.telemetry.txt"
+    },
+    {
+      "scene": "many-brain-mixed-crowd",
+      "mode": "on",
+      "terrain": "upgraded",
+      "ffr": "low",
+      "repeat": 4,
+      "directory": "low-4",
+      "status": "failed",
+      "result": {
+        "status": "ok",
+        "mission": "many.mis",
+        "device": {
+          "serial": "<redacted>",
+          "model": "Quest 3",
+          "android": "14",
+          "apk_sha256": "36af1c509266ccd5c390132123ceed7c04493ba6e0fc25ed30af4580ccb7491e"
+        },
+        "sample": {
+          "warmup_seconds": 10,
+          "duration_seconds": 30
+        },
+        "startup": {
+          "game_init_ms": 5047.128,
+          "launch_to_focused_ms": 6496
+        },
+        "ready": {
+          "target_refresh_hz": 90,
+          "requested_refresh_hz": 90,
+          "refresh_hz": 90,
+          "eye_width": 1680,
+          "eye_height": 1760,
+          "refresh_rate_changes": []
+        },
+        "engine": {
+          "samples": 30,
+          "focused_samples": 30,
+          "unfocused_samples": 0,
+          "skipped_frames": 0,
+          "fps": {
+            "mean": 81.273,
+            "min": 75.3,
+            "p5": 75.429,
+            "p95": 83.256,
+            "max": 83.853
+          },
+          "frame_ms": {
+            "mean": 12.312,
+            "min": 11.926,
+            "p5": 12.011,
+            "p95": 13.258,
+            "max": 13.28
+          },
+          "update_ms": {
+            "mean": 6.378,
+            "min": 6.147,
+            "p5": 6.172,
+            "p95": 6.875,
+            "max": 6.912
+          },
+          "scene_ms": {
+            "mean": 1.12,
+            "min": 1.048,
+            "p5": 1.05,
+            "p95": 1.235,
+            "max": 1.237
+          },
+          "left_eye_ms": {
+            "mean": 1.435,
+            "min": 1.405,
+            "p5": 1.406,
+            "p95": 1.514,
+            "max": 1.536
+          },
+          "right_eye_ms": {
+            "mean": 1.226,
+            "min": 1.195,
+            "p5": 1.198,
+            "p95": 1.302,
+            "max": 1.303
+          },
+          "finish_ms": {
+            "mean": 1.549,
+            "min": 1.521,
+            "p5": 1.526,
+            "p95": 1.656,
+            "max": 1.657
+          },
+          "submit_ms": {
+            "mean": 0.356,
+            "min": 0.341,
+            "p5": 0.347,
+            "p95": 0.386,
+            "max": 0.387
+          }
+        },
+        "vrapi": {
+          "samples": 30,
+          "fps": {
+            "mean": 82.1,
+            "min": 78,
+            "p5": 78,
+            "p95": 84,
+            "max": 84
+          },
+          "foveation_level": {
+            "mean": 1,
+            "min": 1,
+            "p5": 1,
+            "p95": 1,
+            "max": 1
+          },
+          "dynamic_foveation_samples": 0,
+          "app_ms": {
+            "mean": 8.284,
+            "min": 8.14,
+            "p5": 8.16,
+            "p95": 8.39,
+            "max": 8.42
+          },
+          "compositor_ms": {
+            "mean": 0.695,
+            "min": 0.69,
+            "p5": 0.69,
+            "p95": 0.72,
+            "max": 0.72
+          },
+          "cpu_gpu_ms": {
+            "mean": 21.405,
+            "min": 20.67,
+            "p5": 20.72,
+            "p95": 22.56,
+            "max": 23.16
+          },
+          "gpu_load": {
+            "mean": 0.769,
+            "min": 0.73,
+            "p5": 0.75,
+            "p95": 0.79,
+            "max": 0.79
+          },
+          "cpu_load": {
+            "mean": 0.402,
+            "min": 0.38,
+            "p5": 0.38,
+            "p95": 0.43,
+            "max": 0.44
+          },
+          "temperature_c": {
+            "mean": 50,
+            "min": 50,
+            "p5": 50,
+            "p95": 50,
+            "max": 50
+          },
+          "stale_frames": 290,
+          "torn_frames": 1
+        },
+        "memory": {
+          "total_pss_mib": 611.1,
+          "total_rss_mib": 744.8,
+          "graphics_pss_mib": 367.9
+        },
+        "screenshot": "low-4/many_mis.png"
+      },
+      "error": "invalid GPU counter Fragments Shaded / Second: -1",
+      "timing_status": "ok",
+      "gpu_status": "invalid",
+      "validated_workload_samples": 30,
+      "workload_evidence": "low-4.telemetry.txt"
+    }
+  ]
+}

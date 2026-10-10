@@ -1,0 +1,111 @@
+GPU % Utilization                          :          58.065
+% Texture Fetch Stall                      :           0.000
+% Texture L1 Miss                          :           0.000
+% Texture L2 Miss                          :           0.000
+% Shaders Busy                             :           0.000
+Vertices Shaded / Second                   :    90062976.000
+Fragments Shaded / Second                  :          -1.000
+Textures / Fragment                        :          -1.000
+% Time Shading Fragments                   :           0.000
+% Time Shading Vertices                    :           0.000
+% Shader ALU Capacity Utilized             :           0.000
+% Texture Pipes Busy                       :           0.000
+% Wave Context Occupancy                   :           0.000
+
+GPU % Utilization                          :          57.445
+% Texture Fetch Stall                      :           0.000
+% Texture L1 Miss                          :           0.000
+% Texture L2 Miss                          :           0.000
+% Shaders Busy                             :           0.000
+Vertices Shaded / Second                   :    89721928.000
+Fragments Shaded / Second                  :          -1.000
+Textures / Fragment                        :          -1.000
+% Time Shading Fragments                   :           0.000
+% Time Shading Vertices                    :           0.000
+% Shader ALU Capacity Utilized             :           0.000
+% Texture Pipes Busy                       :           0.000
+% Wave Context Occupancy                   :           0.000
+
+GPU % Utilization                          :          56.596
+% Texture Fetch Stall                      :           0.000
+% Texture L1 Miss                          :           0.000
+% Texture L2 Miss                          :           0.000
+% Shaders Busy                             :           0.000
+Vertices Shaded / Second                   :    87569008.000
+Fragments Shaded / Second                  :          -1.000
+Textures / Fragment                        :          -1.000
+% Time Shading Fragments                   :           0.000
+% Time Shading Vertices                    :           0.000
+% Shader ALU Capacity Utilized             :           0.000
+% Texture Pipes Busy                       :           0.000
+% Wave Context Occupancy                   :           0.000
+
+GPU % Utilization                          :          57.134
+% Texture Fetch Stall                      :           0.000
+% Texture L1 Miss                          :           0.000
+% Texture L2 Miss                          :           0.000
+% Shaders Busy                             :           0.000
+Vertices Shaded / Second                   :    88898368.000
+Fragments Shaded / Second                  :          -1.000
+Textures / Fragment                        :          -1.000
+% Time Shading Fragments                   :           0.000
+% Time Shading Vertices                    :           0.000
+% Shader ALU Capacity Utilized             :           0.000
+% Texture Pipes Busy                       :           0.000
+% Wave Context Occupancy                   :           0.000
+
+GPU % Utilization                          :          56.361
+% Texture Fetch Stall                      :           0.000
+% Texture L1 Miss                          :           0.000
+% Texture L2 Miss                          :           0.000
+% Shaders Busy                             :           0.000
+Vertices Shaded / Second                   :    87443600.000
+Fragments Shaded / Second                  :          -1.000
+Textures / Fragment                        :          -1.000
+% Time Shading Fragments                   :           0.000
+% Time Shading Vertices                    :           0.000
+% Shader ALU Capacity Utilized             :           0.000
+% Texture Pipes Busy                       :           0.000
+% Wave Context Occupancy                   :           0.000
+
+GPU % Utilization                          :          58.442
+% Texture Fetch Stall                      :           0.000
+% Texture L1 Miss                          :           0.000
+% Texture L2 Miss                          :           0.000
+% Shaders Busy                             :           0.000
+Vertices Shaded / Second                   :    88874168.000
+Fragments Shaded / Second                  :          -1.000
+Textures / Fragment                        :          -1.000
+% Time Shading Fragments                   :           0.000
+% Time Shading Vertices                    :           0.000
+% Shader ALU Capacity Utilized             :           0.000
+% Texture Pipes Busy                       :           0.000
+% Wave Context Occupancy                   :           0.000
+
+GPU % Utilization                          :          57.854
+% Texture Fetch Stall                      :           0.000
+% Texture L1 Miss                          :           0.000
+% Texture L2 Miss                          :           0.000
+% Shaders Busy                             :           0.000
+Vertices Shaded / Second                   :    88786376.000
+Fragments Shaded / Second                  :          -1.000
+Textures / Fragment                        :          -1.000
+% Time Shading Fragments                   :           0.000
+% Time Shading Vertices                    :           0.000
+% Shader ALU Capacity Utilized             :           0.000
+% Texture Pipes Busy                       :           0.000
+% Wave Context Occupancy                   :           0.000
+
+GPU % Utilization                          :          59.076
+% Texture Fetch Stall                      :           0.000
+% Texture L1 Miss                          :           0.000
+% Texture L2 Miss                          :           0.000
+% Shaders Busy                             :           0.000
+Vertices Shaded / Second                   :    90602760.000
+Fragments Shaded / Second                  :          -1.000
+Textures / Fragment                        :          -1.000
+% Time Shading Fragments                   :           0.000
+% Time Shading Vertices                    :           0.000
+% Shader ALU Capacity Utilized             :           0.000
+% Texture Pipes Busy                       :           0.000
+% Wave Context Occupancy                   :           0.000
