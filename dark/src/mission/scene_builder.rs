@@ -262,10 +262,16 @@ pub fn to_scene(
                 render_pass::RenderPass,
                 scene_object::{BlendMode, MaterialPass, MaterialStack},
             };
+            let wetness_ramp = if crate::util::terrain::supports_wetness(&requested) {
+                asset_cache.get_opt(&TEXTURE_IMPORTER, "materials/nd-ir_shine.png")
+            } else {
+                None
+            };
             let passes = resolved
                 .passes
                 .iter()
-                .map(|pass| {
+                .enumerate()
+                .map(|(index, pass)| {
                     let texture: Rc<dyn TextureTrait> = if let Some(animation) = &pass.animation {
                         Rc::new(AnimatedTexture::with_playback(
                             animation
@@ -281,11 +287,27 @@ pub fn to_scene(
                     };
                     let mut material = engine::materials::LightmapMaterial::create_with_uv(
                         lightmap_texture.clone(),
-                        texture,
+                        texture.clone(),
                         level.render_params.ambient_color,
                         pass.uv_motion,
                         !pass.shaded || tex_info.render_type == RenderType::FullBright,
                     );
+                    // Compose gloss once, on the final layer. Its mask follows
+                    // that layer's animation/UVs rather than swimming separately.
+                    if index + 1 == resolved.passes.len() {
+                        if let Some(ramp) = &wetness_ramp {
+                            material.set_shine(engine::scene::shine::Shine {
+                                mask: texture,
+                                ramp: ramp.clone(),
+                                tint: cgmath::vec3(1.0, 1.0, 1.0),
+                                unlit: false,
+                                blend: engine::scene::shine::ShineBlend::Additive,
+                                passes: 0,
+                                veins: None,
+                                vein_scale: 1.0,
+                            });
+                        }
+                    }
                     material.set_render_pass(RenderPass {
                         color: pass.color,
                         alpha: pass.alpha,

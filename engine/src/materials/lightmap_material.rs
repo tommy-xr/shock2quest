@@ -2,6 +2,7 @@ extern crate gl;
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
 use crate::scene::render_pass::RenderPass;
+use crate::scene::shine::{Shine, ShineUniforms};
 use crate::scene::uv_motion::UvMotion;
 use crate::shader_program::ShaderProgram;
 use crate::texture::Texture;
@@ -76,7 +77,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform highp float spotlightRange[6];
 
         // Calculate spotlight contribution
-        vec3 calculateSpotlight(int i, highp vec3 worldPos, vec3 normal, vec3 texColor) {
+        vec3 calculateSpotlight(int i, highp vec3 worldPos, vec3 normal, vec3 texColor, inout vec3 specular, float power) {
             // Skip if light has zero intensity
             if (spotlightColorIntensity[i].w <= 0.0) {
                 return vec3(0.0);
@@ -106,6 +107,11 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             // Diffuse lighting
             float lambertian = max(dot(normal, lightDir), 0.0);
 
+            if (shineHighlights()) {
+                vec3 radiance = spotlightColorIntensity[i].rgb * spotlightColorIntensity[i].w
+                    * coneAttenuation * distanceAttenuation;
+                specular += shineHighlight(radiance, lightDir, normal, worldPos, power);
+            }
             // Combine all factors
             return texColor * spotlightColorIntensity[i].rgb * spotlightColorIntensity[i].w
                    * lambertian * coneAttenuation * distanceAttenuation;
@@ -132,16 +138,24 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 
             // Add dynamic spotlight contributions on top of baked lighting
             vec3 normal = normalize(worldNormal);
+            vec3 specular = vec3(0.0);
+            float power = shineHighlights() ? shinePower(length(worldNormal)) : SHINE_POWER;
             for (int i = 0; i < 6; i++) {
-                finalColor += calculateSpotlight(i, worldPos, normal, diffuseColor.rgb);
+                finalColor += calculateSpotlight(i, worldPos, normal, diffuseColor.rgb, specular, power);
             }
 
-            fragColor = vec4((unlit ? diffuseColor.rgb : finalColor) * layerColorAlpha.rgb,
+            vec4 base = vec4((unlit ? diffuseColor.rgb : finalColor) * layerColorAlpha.rgb,
                 layerEnabled ? diffuseColor.a * layerColorAlpha.a : 1.0);
+            // Terrain enables only the light-driven highlight (zero authored
+            // sheen passes and no environment reflection). Reuse the object's
+            // mask/coverage composition and move that mask with the diffuse.
+            fragColor = applyShine(base, vec3(0.0), specular, 1.0,
+                texCoord + diffuseUvOffset, worldPos, normal);
         }
 "#;
 
 struct UnifiedUniforms {
+    shine: ShineUniforms,
     world_wave: crate::scene::world_wave::Uniforms,
     uv_offset_loc: i32,
     unlit_loc: i32,
@@ -171,6 +185,7 @@ struct UnifiedUniforms {
 static UNIFIED_SHADER_PROGRAM: OnceCell<(ShaderProgram, UnifiedUniforms)> = OnceCell::new();
 
 pub struct LightmapMaterial {
+    shine: Option<Shine>,
     layer: Option<RenderPass>,
     uv_motion: UvMotion,
     unlit: bool,
@@ -203,6 +218,7 @@ impl LightmapMaterial {
         unlit: bool,
     ) -> Box<dyn Material> {
         Box::new(LightmapMaterial {
+            shine: None,
             layer: None,
             uv_motion,
             unlit,
@@ -231,6 +247,18 @@ impl LightmapMaterial {
 
             gl::UseProgram(shader_program.gl_id);
             uniforms.world_wave.bind(render_context.world_wave);
+            let strength = render_context.terrain_wetness;
+            let shine = self
+                .shine
+                .as_ref()
+                .filter(|_| strength > 0.0 && !self.unlit);
+            uniforms.shine.bind_with_strengths(
+                shine,
+                lights,
+                render_context,
+                view_matrix,
+                (strength, 0.0),
+            );
             let uv = self.uv_motion.offset(render_context.time);
             gl::Uniform2f(uniforms.uv_offset_loc, uv[0], uv[1]);
             gl::Uniform1i(uniforms.unlit_loc, i32::from(self.unlit));
@@ -318,6 +346,9 @@ impl LightmapMaterial {
 }
 
 impl Material for LightmapMaterial {
+    fn set_shine(&mut self, shine: Shine) {
+        self.shine = Some(shine);
+    }
     fn set_render_pass(&mut self, pass: RenderPass) {
         // Terrain's resolver admits only this shader's color/alpha subset.
         debug_assert!(
@@ -352,7 +383,9 @@ impl Material for LightmapMaterial {
 
             let fragment_shader = crate::shader::build(
                 &format!(
-                    "{}\n{}",
+                    "{}\n{}\n{}\n{}",
+                    crate::scene::environment::GLSL,
+                    crate::scene::shine::GLSL,
                     include_str!("../scene/flashlight.glsl"),
                     UNIFIED_FRAGMENT_SHADER_SOURCE
                 ),
@@ -365,6 +398,7 @@ impl Material for LightmapMaterial {
 
                 // Get uniform locations for all shader variables
                 let uniforms = UnifiedUniforms {
+                    shine: ShineUniforms::new(shader.gl_id),
                     layer_color_alpha_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("layerColorAlpha").as_ptr(),

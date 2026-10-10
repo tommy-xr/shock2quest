@@ -680,6 +680,12 @@ materials without an ordinary base pass, stepped motion, environment/incidence
 effects, and other waveforms retain their original art.
 Classic installs are unchanged.
 
+For a separate wet-looking Many terrain experiment, raise Developer → Organic
+shine → `terrain_wetness` from its default **0** while `upgraded_terrain` is on.
+Try 1.5 with a spotlight. This adds a project-owned specular highlight to
+selected flesh surfaces using their own texture as a provisional mask; it does
+not add authored normal maps or reflections. Set it to 0 for an immediate A/B.
+
 The main menu's bottom-left build label shows `dev | <commit>` for local builds
 and `v<version> | <commit>` for release builds. Click it three times to enable
 Developer. In VR, point at the label and press/release the trigger three times.

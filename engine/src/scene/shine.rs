@@ -228,6 +228,25 @@ impl ShineUniforms {
         context: &EngineRenderContext,
         view: &Matrix4<f32>,
     ) {
+        self.bind_with_strengths(
+            shine,
+            lights,
+            context,
+            view,
+            (lights.specular, lights.reflection),
+        );
+    }
+
+    /// Reuse the same lobe for terrain experiments without coupling their
+    /// strength to the shipping object controls or inventing authored passes.
+    pub fn bind_with_strengths(
+        &self,
+        shine: Option<&Shine>,
+        lights: &LightArray,
+        context: &EngineRenderContext,
+        view: &Matrix4<f32>,
+        strengths: (f32, f32),
+    ) {
         unsafe {
             gl::Uniform1i(self.enabled, i32::from(shine.is_some()));
             gl::Uniform1i(self.mask, MASK_UNIT as i32);
@@ -254,11 +273,11 @@ impl ShineUniforms {
                 Some(VeinProfile::Weapon) => lights.weapon_veins,
                 None => VeinTuning::default(),
             };
-            gl::Uniform1f(self.specular, lights.specular * tuning.specular);
+            gl::Uniform1f(self.specular, strengths.0 * tuning.specular);
             let reflection = match &lights.environment {
                 Some(environment) => {
                     environment.bind_to(ENVIRONMENT_UNIT);
-                    lights.reflection
+                    strengths.1
                 }
                 None => 0.0,
             };

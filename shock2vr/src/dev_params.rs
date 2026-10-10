@@ -541,6 +541,8 @@ dev_params! {
     /// Strength of the mission's captured surroundings reflected in those same
     /// wet surfaces. 0 turns reflections off.
     OBJECT_REFLECTION = Lighting::float("object_reflection", "Obj reflection", 3.0, 0.0, 4.0, 0.1),
+    /// Project-owned spotlight gloss for upgraded Many flesh terrain. Off by default.
+    TERRAIN_WETNESS = OrganicShine::float("terrain_wetness", "Terrain wetness", 0.0, 0.0, 4.0, 0.1),
     /// How far the highlight on worm goo gathers onto procedural veins; 0
     /// spreads it evenly. Growth has no authored glint map of its own.
     GOO_VEINS = OrganicShine::float("goo_veins", "Goo veins", 1.0, 0.0, 1.0, 0.05),
