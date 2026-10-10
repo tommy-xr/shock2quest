@@ -1,0 +1,1348 @@
+[
+  {
+    "label": "legacy A1",
+    "active_seconds": 30.177610244999997,
+    "solver_seconds": 40.40000210702419,
+    "ratio": 1.338740933395079,
+    "solver_steps": 2424,
+    "scene_seconds": 30.177610244999997,
+    "phases_mean_ms_per_call": {
+      "animation": 0.8306338407590759,
+      "audio": 0.025566047442244225,
+      "effects": 0.17386963531353136,
+      "game_update": 6.422049684818482,
+      "hitboxes": 0.4454596307755776,
+      "interaction": 0.38854167161716174,
+      "mission_update": 6.201956594059405,
+      "physics": 1.7688572636138615,
+      "physics_sync": 0.2744419286303631,
+      "scripts": 2.270091932343235,
+      "solver": 1.566149726072607,
+      "visibility": 1.562324652227723
+    },
+    "frame_wall_p95_upper_ms": 14.0,
+    "cpu_frames": 2424,
+    "frames_over_8_33ms": 2424,
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 81,
+        "min": 73,
+        "p5": 76,
+        "p95": 84,
+        "max": 85
+      },
+      "foveation_level": {
+        "mean": 1,
+        "min": 1,
+        "p5": 1,
+        "p95": 1,
+        "max": 1
+      },
+      "dynamic_foveation_samples": 0,
+      "app_ms": {
+        "mean": 8.23,
+        "min": 8.05,
+        "p5": 8.07,
+        "p95": 8.38,
+        "max": 8.4
+      },
+      "compositor_ms": {
+        "mean": 0.702,
+        "min": 0.69,
+        "p5": 0.69,
+        "p95": 0.72,
+        "max": 0.76
+      },
+      "cpu_gpu_ms": {
+        "mean": 21.44,
+        "min": 20.33,
+        "p5": 20.63,
+        "p95": 22.82,
+        "max": 23.25
+      },
+      "gpu_load": {
+        "mean": 0.755,
+        "min": 0.71,
+        "p5": 0.72,
+        "p95": 0.79,
+        "max": 0.79
+      },
+      "cpu_load": {
+        "mean": 0.401,
+        "min": 0.36,
+        "p5": 0.38,
+        "p95": 0.42,
+        "max": 0.43
+      },
+      "temperature_c": {
+        "mean": 39.667,
+        "min": 36,
+        "p5": 36,
+        "p95": 42,
+        "max": 42
+      },
+      "stale_frames": 323,
+      "torn_frames": 1
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 80.325,
+        "min": 72.994,
+        "p5": 75.358,
+        "p95": 83.681,
+        "max": 84.307
+      },
+      "frame_ms": {
+        "mean": 12.469,
+        "min": 11.861,
+        "p5": 11.95,
+        "p95": 13.27,
+        "max": 13.7
+      },
+      "update_ms": {
+        "mean": 6.435,
+        "min": 6.116,
+        "p5": 6.141,
+        "p95": 6.885,
+        "max": 7.139
+      },
+      "scene_ms": {
+        "mean": 1.137,
+        "min": 1.038,
+        "p5": 1.039,
+        "p95": 1.278,
+        "max": 1.278
+      },
+      "left_eye_ms": {
+        "mean": 1.468,
+        "min": 1.395,
+        "p5": 1.403,
+        "p95": 1.568,
+        "max": 1.59
+      },
+      "right_eye_ms": {
+        "mean": 1.241,
+        "min": 1.195,
+        "p5": 1.197,
+        "p95": 1.311,
+        "max": 1.337
+      },
+      "finish_ms": {
+        "mean": 1.568,
+        "min": 1.512,
+        "p5": 1.514,
+        "p95": 1.669,
+        "max": 1.711
+      },
+      "submit_ms": {
+        "mean": 0.362,
+        "min": 0.343,
+        "p5": 0.347,
+        "p95": 0.385,
+        "max": 0.392
+      }
+    },
+    "device": {
+      "serial": "REDACTED",
+      "model": "Quest 3",
+      "android": "14",
+      "apk_sha256": "5e407422c71ca5c13b8dab7714abaaabfb107d076bf16f6a72552f5e7fc535d4"
+    },
+    "metadata": {
+      "commit": "ae7fa5a39434b858393603429f8cea4b3e392cfb",
+      "dirty": true,
+      "options": {
+        "scene": "many-brain-mixed-crowd",
+        "lighting": "on",
+        "terrain": "upgraded",
+        "ffr": "low",
+        "profile-cpu": true,
+        "repeats": "1",
+        "warmup": "15",
+        "seconds": "30",
+        "gpu-seconds": "0",
+        "output": "/tmp/quest-clock-abba-20261009/legacy-1",
+        "fixed-simulation": false
+      },
+      "foveationOverrides": {
+        "level": "",
+        "dynamic": ""
+      },
+      "os": "oculus/eureka/eureka:14/UP1A.231005.007.A1/52433670048800520:user/abl_signing_keys:release,amss_signing_keys:release,release-keys",
+      "assets": "35597daf68cf3e0c811cd9b9d24a9604d2cffa1d2c793985056b8946c538c6bd  /sdcard/shock2quest/sshock2.kpf\n7436ff552c0bccc040aa29914fd0385ab8e063c59c3f8d9a2c66c3b3c1d471a6  /sdcard/shock2quest/mods/400.kpf\nbe36b80f0bab653ae506d790893fe99cb38e6bb22d42b3f2cd14605f9ef1d0d1  /sdcard/shock2quest/mods/patch_ext.kpf\n44c7383a32a19a2bfc9db494eb1d672440e2c20de89ce79fbf79dbbd1739c5b2  /sdcard/shock2quest/mods/scp.kpf\nf187b5fc3645756c0d29a9e9159b23fb25c8d28082a0ecf722a8828fe5e7cbe9  /sdcard/shock2quest/mods/shtup.kpf\n22663dae9b7118781e7ea6dc4ff329c6ecc2b7436918abff1d85961e7ce72011  /sdcard/shock2quest/mods/sshock2ee.kpf"
+    },
+    "fixture": {
+      "name": "many-brain-mixed-crowd",
+      "mission": "many.mis",
+      "player_position": [
+        -47.11925,
+        6.333176,
+        -100.730606
+      ],
+      "camera_eye": [
+        280,
+        16,
+        143
+      ],
+      "camera_look_at": [
+        303,
+        10,
+        143
+      ],
+      "subject_templates": [
+        253,
+        327,
+        316,
+        730,
+        61,
+        507
+      ],
+      "object_lighting": true,
+      "lights_on": true,
+      "light_templates": [],
+      "remove_templates": [],
+      "spawns": [
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            8.5313,
+            136
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            7.628,
+            140
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            7.628,
+            145
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            8.1693,
+            149
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -187,
+          "position": [
+            299,
+            9.4,
+            135
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -187,
+          "position": [
+            299,
+            9.0379,
+            150
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            7.5,
+            136.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            6.728,
+            141.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            6.9,
+            146.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            7.7,
+            150.5
+          ],
+          "animated": false
+        }
+      ],
+      "subject_model": "rumbler",
+      "expected_subject_meshes": 4,
+      "additional_subjects": [
+        {
+          "model": "overlord",
+          "expected_meshes": 6
+        },
+        {
+          "model": "eggcl",
+          "expected_meshes": 8
+        }
+      ],
+      "upgraded_terrain": true,
+      "terrain_wetness": 0,
+      "spotlight": {
+        "position": [
+          280,
+          14,
+          143
+        ],
+        "look_at": [
+          302,
+          10,
+          143
+        ],
+        "intensity": 1.5,
+        "range": 45
+      },
+      "ffr": "low",
+      "fixed_simulation": false,
+      "profile_cpu": true
+    },
+    "validated_workload_samples": 30,
+    "clock_gate": null
+  },
+  {
+    "label": "fixed B1",
+    "active_seconds": 30.161060764999995,
+    "solver_seconds": 30.150001572445035,
+    "ratio": 0.9996333287930047,
+    "solver_steps": 1809,
+    "scene_seconds": 30.149999999999995,
+    "phases_mean_ms_per_call": {
+      "animation": 0.816607144278607,
+      "audio": 0.02641394914317302,
+      "effects": 0.19513836207849636,
+      "game_update": 4.900295265497553,
+      "hitboxes": 0.4640464184632393,
+      "interaction": 0.4106110735212824,
+      "mission_update": 6.389719987285793,
+      "physics": 1.8340450071862906,
+      "physics_sync": 0.2847818496406854,
+      "scripts": 2.3565508905472634,
+      "solver": 1.62821064013267,
+      "visibility": 1.5471673185154975
+    },
+    "frame_wall_p95_upper_ms": 14.2,
+    "cpu_frames": 2452,
+    "frames_over_8_33ms": 1809,
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 81.633,
+        "min": 74,
+        "p5": 74,
+        "p95": 84,
+        "max": 85
+      },
+      "foveation_level": {
+        "mean": 1,
+        "min": 1,
+        "p5": 1,
+        "p95": 1,
+        "max": 1
+      },
+      "dynamic_foveation_samples": 0,
+      "app_ms": {
+        "mean": 8.483,
+        "min": 8.13,
+        "p5": 8.24,
+        "p95": 8.78,
+        "max": 8.87
+      },
+      "compositor_ms": {
+        "mean": 0.704,
+        "min": 0.69,
+        "p5": 0.69,
+        "p95": 0.74,
+        "max": 0.77
+      },
+      "cpu_gpu_ms": {
+        "mean": 21.041,
+        "min": 18.88,
+        "p5": 18.89,
+        "p95": 23.19,
+        "max": 23.44
+      },
+      "gpu_load": {
+        "mean": 0.782,
+        "min": 0.74,
+        "p5": 0.75,
+        "p95": 0.8,
+        "max": 0.8
+      },
+      "cpu_load": {
+        "mean": 0.363,
+        "min": 0.33,
+        "p5": 0.34,
+        "p95": 0.39,
+        "max": 0.39
+      },
+      "temperature_c": {
+        "mean": 42.767,
+        "min": 42,
+        "p5": 42,
+        "p95": 43,
+        "max": 43
+      },
+      "stale_frames": 340,
+      "torn_frames": 1
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 81.299,
+        "min": 73.063,
+        "p5": 77.11,
+        "p95": 83.81,
+        "max": 84.613
+      },
+      "frame_ms": {
+        "mean": 12.312,
+        "min": 11.818,
+        "p5": 11.932,
+        "p95": 12.968,
+        "max": 13.687
+      },
+      "update_ms": {
+        "mean": 4.913,
+        "min": 4.495,
+        "p5": 4.584,
+        "p95": 5.412,
+        "max": 6.034
+      },
+      "scene_ms": {
+        "mean": 1.172,
+        "min": 1.036,
+        "p5": 1.068,
+        "p95": 1.316,
+        "max": 1.38
+      },
+      "left_eye_ms": {
+        "mean": 1.471,
+        "min": 1.377,
+        "p5": 1.388,
+        "p95": 1.594,
+        "max": 1.658
+      },
+      "right_eye_ms": {
+        "mean": 1.241,
+        "min": 1.2,
+        "p5": 1.201,
+        "p95": 1.317,
+        "max": 1.363
+      },
+      "finish_ms": {
+        "mean": 1.552,
+        "min": 1.5,
+        "p5": 1.501,
+        "p95": 1.658,
+        "max": 1.727
+      },
+      "submit_ms": {
+        "mean": 0.353,
+        "min": 0.335,
+        "p5": 0.337,
+        "p95": 0.373,
+        "max": 0.411
+      }
+    },
+    "device": {
+      "serial": "REDACTED",
+      "model": "Quest 3",
+      "android": "14",
+      "apk_sha256": "5e407422c71ca5c13b8dab7714abaaabfb107d076bf16f6a72552f5e7fc535d4"
+    },
+    "metadata": {
+      "commit": "ae7fa5a39434b858393603429f8cea4b3e392cfb",
+      "dirty": true,
+      "options": {
+        "scene": "many-brain-mixed-crowd",
+        "lighting": "on",
+        "terrain": "upgraded",
+        "ffr": "low",
+        "fixed-simulation": true,
+        "repeats": "2",
+        "warmup": "15",
+        "seconds": "30",
+        "gpu-seconds": "0",
+        "output": "/tmp/quest-clock-abba-20261009/fixed",
+        "profile-cpu": false
+      },
+      "foveationOverrides": {
+        "level": "",
+        "dynamic": ""
+      },
+      "os": "oculus/eureka/eureka:14/UP1A.231005.007.A1/52433670048800520:user/abl_signing_keys:release,amss_signing_keys:release,release-keys",
+      "assets": "35597daf68cf3e0c811cd9b9d24a9604d2cffa1d2c793985056b8946c538c6bd  /sdcard/shock2quest/sshock2.kpf\n7436ff552c0bccc040aa29914fd0385ab8e063c59c3f8d9a2c66c3b3c1d471a6  /sdcard/shock2quest/mods/400.kpf\nbe36b80f0bab653ae506d790893fe99cb38e6bb22d42b3f2cd14605f9ef1d0d1  /sdcard/shock2quest/mods/patch_ext.kpf\n44c7383a32a19a2bfc9db494eb1d672440e2c20de89ce79fbf79dbbd1739c5b2  /sdcard/shock2quest/mods/scp.kpf\nf187b5fc3645756c0d29a9e9159b23fb25c8d28082a0ecf722a8828fe5e7cbe9  /sdcard/shock2quest/mods/shtup.kpf\n22663dae9b7118781e7ea6dc4ff329c6ecc2b7436918abff1d85961e7ce72011  /sdcard/shock2quest/mods/sshock2ee.kpf"
+    },
+    "fixture": {
+      "name": "many-brain-mixed-crowd",
+      "mission": "many.mis",
+      "player_position": [
+        -47.11925,
+        6.333176,
+        -100.730606
+      ],
+      "camera_eye": [
+        280,
+        16,
+        143
+      ],
+      "camera_look_at": [
+        303,
+        10,
+        143
+      ],
+      "subject_templates": [
+        253,
+        327,
+        316,
+        730,
+        61,
+        507
+      ],
+      "object_lighting": true,
+      "lights_on": true,
+      "light_templates": [],
+      "remove_templates": [],
+      "spawns": [
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            8.5313,
+            136
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            7.628,
+            140
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            7.628,
+            145
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            8.1693,
+            149
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -187,
+          "position": [
+            299,
+            9.4,
+            135
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -187,
+          "position": [
+            299,
+            9.0379,
+            150
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            7.5,
+            136.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            6.728,
+            141.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            6.9,
+            146.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            7.7,
+            150.5
+          ],
+          "animated": false
+        }
+      ],
+      "subject_model": "rumbler",
+      "expected_subject_meshes": 4,
+      "additional_subjects": [
+        {
+          "model": "overlord",
+          "expected_meshes": 6
+        },
+        {
+          "model": "eggcl",
+          "expected_meshes": 8
+        }
+      ],
+      "upgraded_terrain": true,
+      "terrain_wetness": 0,
+      "spotlight": {
+        "position": [
+          280,
+          14,
+          143
+        ],
+        "look_at": [
+          302,
+          10,
+          143
+        ],
+        "intensity": 1.5,
+        "range": 45
+      },
+      "ffr": "low",
+      "fixed_simulation": true,
+      "profile_cpu": true
+    },
+    "validated_workload_samples": 30,
+    "clock_gate": {
+      "active_seconds": 30.161060764999995,
+      "solver_seconds": 30.150001572445035,
+      "scene_seconds": 30.149999999999995,
+      "solver_to_active_ratio": 0.9996333287930047
+    }
+  },
+  {
+    "label": "fixed B2",
+    "active_seconds": 30.163152796,
+    "solver_seconds": 30.166668239980936,
+    "ratio": 1.0001165476303062,
+    "solver_steps": 1810,
+    "scene_seconds": 30.166666666999998,
+    "phases_mean_ms_per_call": {
+      "animation": 0.8130110712707183,
+      "audio": 0.027118607182320443,
+      "effects": 0.1866739281767956,
+      "game_update": 4.775882941673371,
+      "hitboxes": 0.4647167276243094,
+      "interaction": 0.4043953375690607,
+      "mission_update": 6.313799445856353,
+      "physics": 1.7991482270718233,
+      "physics_sync": 0.2796631955801105,
+      "scripts": 2.3229713447513816,
+      "solver": 1.5960714038674035,
+      "visibility": 1.5700103346741754
+    },
+    "frame_wall_p95_upper_ms": 14.0,
+    "cpu_frames": 2486,
+    "frames_over_8_33ms": 1810,
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 83.1,
+        "min": 78,
+        "p5": 79,
+        "p95": 85,
+        "max": 86
+      },
+      "foveation_level": {
+        "mean": 1,
+        "min": 1,
+        "p5": 1,
+        "p95": 1,
+        "max": 1
+      },
+      "dynamic_foveation_samples": 0,
+      "app_ms": {
+        "mean": 8.276,
+        "min": 7.96,
+        "p5": 7.99,
+        "p95": 8.54,
+        "max": 8.62
+      },
+      "compositor_ms": {
+        "mean": 0.705,
+        "min": 0.69,
+        "p5": 0.69,
+        "p95": 0.73,
+        "max": 0.74
+      },
+      "cpu_gpu_ms": {
+        "mean": 20.588,
+        "min": 18.53,
+        "p5": 18.79,
+        "p95": 23.17,
+        "max": 23.2
+      },
+      "gpu_load": {
+        "mean": 0.776,
+        "min": 0.75,
+        "p5": 0.75,
+        "p95": 0.79,
+        "max": 0.8
+      },
+      "cpu_load": {
+        "mean": 0.357,
+        "min": 0.34,
+        "p5": 0.34,
+        "p95": 0.37,
+        "max": 0.39
+      },
+      "temperature_c": {
+        "mean": 44.433,
+        "min": 44,
+        "p5": 44,
+        "p95": 45,
+        "max": 45
+      },
+      "stale_frames": 320,
+      "torn_frames": 0
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 82.418,
+        "min": 77.648,
+        "p5": 78.88,
+        "p95": 84.618,
+        "max": 84.999
+      },
+      "frame_ms": {
+        "mean": 12.14,
+        "min": 11.765,
+        "p5": 11.818,
+        "p95": 12.677,
+        "max": 12.879
+      },
+      "update_ms": {
+        "mean": 4.785,
+        "min": 4.412,
+        "p5": 4.469,
+        "p95": 5.2,
+        "max": 5.422
+      },
+      "scene_ms": {
+        "mean": 1.173,
+        "min": 1.065,
+        "p5": 1.104,
+        "p95": 1.261,
+        "max": 1.369
+      },
+      "left_eye_ms": {
+        "mean": 1.467,
+        "min": 1.41,
+        "p5": 1.418,
+        "p95": 1.547,
+        "max": 1.583
+      },
+      "right_eye_ms": {
+        "mean": 1.266,
+        "min": 1.22,
+        "p5": 1.221,
+        "p95": 1.324,
+        "max": 1.352
+      },
+      "finish_ms": {
+        "mean": 1.574,
+        "min": 1.518,
+        "p5": 1.521,
+        "p95": 1.655,
+        "max": 1.691
+      },
+      "submit_ms": {
+        "mean": 0.348,
+        "min": 0.33,
+        "p5": 0.334,
+        "p95": 0.369,
+        "max": 0.379
+      }
+    },
+    "device": {
+      "serial": "REDACTED",
+      "model": "Quest 3",
+      "android": "14",
+      "apk_sha256": "5e407422c71ca5c13b8dab7714abaaabfb107d076bf16f6a72552f5e7fc535d4"
+    },
+    "metadata": {
+      "commit": "ae7fa5a39434b858393603429f8cea4b3e392cfb",
+      "dirty": true,
+      "options": {
+        "scene": "many-brain-mixed-crowd",
+        "lighting": "on",
+        "terrain": "upgraded",
+        "ffr": "low",
+        "fixed-simulation": true,
+        "repeats": "2",
+        "warmup": "15",
+        "seconds": "30",
+        "gpu-seconds": "0",
+        "output": "/tmp/quest-clock-abba-20261009/fixed",
+        "profile-cpu": false
+      },
+      "foveationOverrides": {
+        "level": "",
+        "dynamic": ""
+      },
+      "os": "oculus/eureka/eureka:14/UP1A.231005.007.A1/52433670048800520:user/abl_signing_keys:release,amss_signing_keys:release,release-keys",
+      "assets": "35597daf68cf3e0c811cd9b9d24a9604d2cffa1d2c793985056b8946c538c6bd  /sdcard/shock2quest/sshock2.kpf\n7436ff552c0bccc040aa29914fd0385ab8e063c59c3f8d9a2c66c3b3c1d471a6  /sdcard/shock2quest/mods/400.kpf\nbe36b80f0bab653ae506d790893fe99cb38e6bb22d42b3f2cd14605f9ef1d0d1  /sdcard/shock2quest/mods/patch_ext.kpf\n44c7383a32a19a2bfc9db494eb1d672440e2c20de89ce79fbf79dbbd1739c5b2  /sdcard/shock2quest/mods/scp.kpf\nf187b5fc3645756c0d29a9e9159b23fb25c8d28082a0ecf722a8828fe5e7cbe9  /sdcard/shock2quest/mods/shtup.kpf\n22663dae9b7118781e7ea6dc4ff329c6ecc2b7436918abff1d85961e7ce72011  /sdcard/shock2quest/mods/sshock2ee.kpf"
+    },
+    "fixture": {
+      "name": "many-brain-mixed-crowd",
+      "mission": "many.mis",
+      "player_position": [
+        -47.11925,
+        6.333176,
+        -100.730606
+      ],
+      "camera_eye": [
+        280,
+        16,
+        143
+      ],
+      "camera_look_at": [
+        303,
+        10,
+        143
+      ],
+      "subject_templates": [
+        253,
+        327,
+        316,
+        730,
+        61,
+        507
+      ],
+      "object_lighting": true,
+      "lights_on": true,
+      "light_templates": [],
+      "remove_templates": [],
+      "spawns": [
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            8.5313,
+            136
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            7.628,
+            140
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            7.628,
+            145
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            8.1693,
+            149
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -187,
+          "position": [
+            299,
+            9.4,
+            135
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -187,
+          "position": [
+            299,
+            9.0379,
+            150
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            7.5,
+            136.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            6.728,
+            141.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            6.9,
+            146.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            7.7,
+            150.5
+          ],
+          "animated": false
+        }
+      ],
+      "subject_model": "rumbler",
+      "expected_subject_meshes": 4,
+      "additional_subjects": [
+        {
+          "model": "overlord",
+          "expected_meshes": 6
+        },
+        {
+          "model": "eggcl",
+          "expected_meshes": 8
+        }
+      ],
+      "upgraded_terrain": true,
+      "terrain_wetness": 0,
+      "spotlight": {
+        "position": [
+          280,
+          14,
+          143
+        ],
+        "look_at": [
+          302,
+          10,
+          143
+        ],
+        "intensity": 1.5,
+        "range": 45
+      },
+      "ffr": "low",
+      "fixed_simulation": true,
+      "profile_cpu": true
+    },
+    "validated_workload_samples": 30,
+    "clock_gate": {
+      "active_seconds": 30.163152796,
+      "solver_seconds": 30.166668239980936,
+      "scene_seconds": 30.166666666999998,
+      "solver_to_active_ratio": 1.0001165476303062
+    }
+  },
+  {
+    "label": "legacy A2",
+    "active_seconds": 30.213652696999997,
+    "solver_seconds": 40.93333546817303,
+    "ratio": 1.3547959883790357,
+    "solver_steps": 2456,
+    "scene_seconds": 30.213652696999997,
+    "phases_mean_ms_per_call": {
+      "animation": 0.8234045337947882,
+      "audio": 0.023836973941368078,
+      "effects": 0.16543513192182413,
+      "game_update": 6.431335469055375,
+      "hitboxes": 0.4437221657166124,
+      "interaction": 0.38272250773615635,
+      "mission_update": 6.2215213277687305,
+      "physics": 1.7777981469869708,
+      "physics_sync": 0.27102103745928335,
+      "scripts": 2.2922312280130295,
+      "solver": 1.5768874776058632,
+      "visibility": 1.5533963688925079
+    },
+    "frame_wall_p95_upper_ms": 13.9,
+    "cpu_frames": 2456,
+    "frames_over_8_33ms": 2456,
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 82.3,
+        "min": 74,
+        "p5": 74,
+        "p95": 89,
+        "max": 90
+      },
+      "foveation_level": {
+        "mean": 1,
+        "min": 1,
+        "p5": 1,
+        "p95": 1,
+        "max": 1
+      },
+      "dynamic_foveation_samples": 0,
+      "app_ms": {
+        "mean": 8.088,
+        "min": 7.88,
+        "p5": 7.96,
+        "p95": 8.26,
+        "max": 8.26
+      },
+      "compositor_ms": {
+        "mean": 0.702,
+        "min": 0.68,
+        "p5": 0.69,
+        "p95": 0.72,
+        "max": 0.76
+      },
+      "cpu_gpu_ms": {
+        "mean": 21.041,
+        "min": 19.11,
+        "p5": 19.64,
+        "p95": 22.49,
+        "max": 23.08
+      },
+      "gpu_load": {
+        "mean": 0.755,
+        "min": 0.7,
+        "p5": 0.71,
+        "p95": 0.8,
+        "max": 0.8
+      },
+      "cpu_load": {
+        "mean": 0.399,
+        "min": 0.38,
+        "p5": 0.38,
+        "p95": 0.42,
+        "max": 0.43
+      },
+      "temperature_c": {
+        "mean": 46.3,
+        "min": 46,
+        "p5": 46,
+        "p95": 47,
+        "max": 47
+      },
+      "stale_frames": 291,
+      "torn_frames": 3
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 81.295,
+        "min": 72.759,
+        "p5": 73.136,
+        "p95": 88.401,
+        "max": 89.045
+      },
+      "frame_ms": {
+        "mean": 12.345,
+        "min": 11.23,
+        "p5": 11.312,
+        "p95": 13.673,
+        "max": 13.744
+      },
+      "update_ms": {
+        "mean": 6.448,
+        "min": 6.108,
+        "p5": 6.124,
+        "p95": 7.012,
+        "max": 7.117
+      },
+      "scene_ms": {
+        "mean": 1.105,
+        "min": 0.67,
+        "p5": 0.684,
+        "p95": 1.324,
+        "max": 2.617
+      },
+      "left_eye_ms": {
+        "mean": 1.429,
+        "min": 1.254,
+        "p5": 1.262,
+        "p95": 1.588,
+        "max": 1.623
+      },
+      "right_eye_ms": {
+        "mean": 1.197,
+        "min": 1.05,
+        "p5": 1.056,
+        "p95": 1.31,
+        "max": 1.315
+      },
+      "finish_ms": {
+        "mean": 1.56,
+        "min": 1.502,
+        "p5": 1.507,
+        "p95": 1.672,
+        "max": 1.689
+      },
+      "submit_ms": {
+        "mean": 0.36,
+        "min": 0.341,
+        "p5": 0.341,
+        "p95": 0.398,
+        "max": 0.403
+      }
+    },
+    "device": {
+      "serial": "REDACTED",
+      "model": "Quest 3",
+      "android": "14",
+      "apk_sha256": "5e407422c71ca5c13b8dab7714abaaabfb107d076bf16f6a72552f5e7fc535d4"
+    },
+    "metadata": {
+      "commit": "ae7fa5a39434b858393603429f8cea4b3e392cfb",
+      "dirty": true,
+      "options": {
+        "scene": "many-brain-mixed-crowd",
+        "lighting": "on",
+        "terrain": "upgraded",
+        "ffr": "low",
+        "profile-cpu": true,
+        "repeats": "1",
+        "warmup": "15",
+        "seconds": "30",
+        "gpu-seconds": "0",
+        "output": "/tmp/quest-clock-abba-20261009/legacy-2",
+        "fixed-simulation": false
+      },
+      "foveationOverrides": {
+        "level": "",
+        "dynamic": ""
+      },
+      "os": "oculus/eureka/eureka:14/UP1A.231005.007.A1/52433670048800520:user/abl_signing_keys:release,amss_signing_keys:release,release-keys",
+      "assets": "35597daf68cf3e0c811cd9b9d24a9604d2cffa1d2c793985056b8946c538c6bd  /sdcard/shock2quest/sshock2.kpf\n7436ff552c0bccc040aa29914fd0385ab8e063c59c3f8d9a2c66c3b3c1d471a6  /sdcard/shock2quest/mods/400.kpf\nbe36b80f0bab653ae506d790893fe99cb38e6bb22d42b3f2cd14605f9ef1d0d1  /sdcard/shock2quest/mods/patch_ext.kpf\n44c7383a32a19a2bfc9db494eb1d672440e2c20de89ce79fbf79dbbd1739c5b2  /sdcard/shock2quest/mods/scp.kpf\nf187b5fc3645756c0d29a9e9159b23fb25c8d28082a0ecf722a8828fe5e7cbe9  /sdcard/shock2quest/mods/shtup.kpf\n22663dae9b7118781e7ea6dc4ff329c6ecc2b7436918abff1d85961e7ce72011  /sdcard/shock2quest/mods/sshock2ee.kpf"
+    },
+    "fixture": {
+      "name": "many-brain-mixed-crowd",
+      "mission": "many.mis",
+      "player_position": [
+        -47.11925,
+        6.333176,
+        -100.730606
+      ],
+      "camera_eye": [
+        280,
+        16,
+        143
+      ],
+      "camera_look_at": [
+        303,
+        10,
+        143
+      ],
+      "subject_templates": [
+        253,
+        327,
+        316,
+        730,
+        61,
+        507
+      ],
+      "object_lighting": true,
+      "lights_on": true,
+      "light_templates": [],
+      "remove_templates": [],
+      "spawns": [
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            8.5313,
+            136
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            7.628,
+            140
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            7.628,
+            145
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -180,
+          "position": [
+            294,
+            8.1693,
+            149
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -187,
+          "position": [
+            299,
+            9.4,
+            135
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -187,
+          "position": [
+            299,
+            9.0379,
+            150
+          ],
+          "animated": true
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            7.5,
+            136.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            6.728,
+            141.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            6.9,
+            146.5
+          ],
+          "animated": false
+        },
+        {
+          "template_id": -1335,
+          "position": [
+            296,
+            7.7,
+            150.5
+          ],
+          "animated": false
+        }
+      ],
+      "subject_model": "rumbler",
+      "expected_subject_meshes": 4,
+      "additional_subjects": [
+        {
+          "model": "overlord",
+          "expected_meshes": 6
+        },
+        {
+          "model": "eggcl",
+          "expected_meshes": 8
+        }
+      ],
+      "upgraded_terrain": true,
+      "terrain_wetness": 0,
+      "spotlight": {
+        "position": [
+          280,
+          14,
+          143
+        ],
+        "look_at": [
+          302,
+          10,
+          143
+        ],
+        "intensity": 1.5,
+        "range": 45
+      },
+      "ffr": "low",
+      "fixed_simulation": false,
+      "profile_cpu": true
+    },
+    "validated_workload_samples": 30,
+    "clock_gate": null
+  }
+]

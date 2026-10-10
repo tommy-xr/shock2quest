@@ -729,6 +729,14 @@ The project supports experimental flags for gating in-progress features during d
 
 #### Available Experimental Features
 
+- **`profile_cpu`**: opt-in inclusive CPU phase timings and simulation-clock
+  diagnostics. This does not change simulation timing; see `benchmarks/README.md`.
+- **`fixed_simulation`**: opt-in 60 Hz scene scheduling with the existing solver
+  timestep. Legacy frame-driven updates remain the default. On Quest use
+  `simulation-clock.txt` containing `fixed`, or an explicit benchmark fixture.
+  Catch-up/input-backlog and interaction/presentation checks remain before default
+  promotion; see `projects/quest-120hz.md`.
+
 - **`ragdoll`**: spawn a physics ragdoll on creature death (`SlayEntity`) instead of
   just removing the entity. Without it, death is unchanged.
 
