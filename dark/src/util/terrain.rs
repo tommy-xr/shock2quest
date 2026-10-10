@@ -3,19 +3,27 @@
 //! it, classic installs and flag-off runs retain their exact legacy lookup.
 use std::{io::Read, path::Path};
 
-use engine::assets::asset_paths::AbstractAssetPath;
+use engine::{assets::asset_paths::AbstractAssetPath, texture::PlaybackMode};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerrainAnimation {
+    pub frames: Vec<String>,
+    pub frame_ms: u32,
+    pub playback: PlaybackMode,
+}
 
 #[derive(Debug, PartialEq)]
 pub struct TerrainTexture {
     pub name: String,
     pub dimensions: Option<(u32, u32)>,
+    pub animation: Option<TerrainAnimation>,
 }
 
 pub fn resolve(
     paths: &dyn AbstractAssetPath,
     base: &str,
     requested: &str,
-    allow_upgrade: bool,
+    allow_static_upgrade: bool,
 ) -> TerrainTexture {
     let requested = requested.to_ascii_lowercase();
     let original = format!("original_fam/{requested}");
@@ -26,8 +34,9 @@ pub fn resolve(
     let fallback = TerrainTexture {
         name: original,
         dimensions,
+        animation: None,
     };
-    if !enabled || !allow_upgrade {
+    if !enabled {
         return fallback;
     }
 
@@ -47,6 +56,19 @@ pub fn resolve(
         else {
             return fallback;
         };
+        if let Some(animation) = resolve_animation(paths, base, &script) {
+            let Ok(Some(size)) = material_dimensions(&script, dimensions) else {
+                return fallback;
+            };
+            return TerrainTexture {
+                name: animation.frames[0].clone(),
+                dimensions: Some(size),
+                animation: Some(animation),
+            };
+        }
+        if !allow_static_upgrade {
+            return fallback;
+        }
         match logical_dimensions(&script, dimensions) {
             Ok(Some(size)) => logical = Some(size),
             Ok(None) => {}
@@ -56,6 +78,9 @@ pub fn resolve(
             // The existing diffuse-pass parser strips the FAM prefix.
             texture = format!("fam/{}", redirect.replace('\\', "/").to_ascii_lowercase());
         }
+    }
+    if !allow_static_upgrade {
+        return fallback;
     }
     // Never substitute an image whose world-space footprint is unknown.
     if logical.is_none() {
@@ -74,10 +99,68 @@ pub fn resolve(
             TerrainTexture {
                 name,
                 dimensions: logical,
+                animation: None,
             }
         }
         None => fallback,
     }
+}
+
+fn resolve_animation(
+    paths: &dyn AbstractAssetPath,
+    base: &str,
+    script: &str,
+) -> Option<TerrainAnimation> {
+    use engine::scene::render_pass::BlendFactor;
+    let plan = super::render_material::parse(script).ok()?;
+    if !plan.material_only || plan.passes.len() != 1 {
+        return None;
+    }
+    let pass = &plan.passes[0];
+    // A single ordinary shaded pass can use the existing world shader.
+    if !pass.shaded
+        || pass.environment
+        || pass.incidence.is_some()
+        || pass.clamp
+        || pass.mipmap_bias != 0.0
+        || pass.alpha != 1.0
+        || pass.color != cgmath::vec3(1.0, 1.0, 1.0)
+        || !matches!(
+            pass.blend,
+            (BlendFactor::SrcAlpha, BlendFactor::InvSrcAlpha)
+                | (BlendFactor::One, BlendFactor::Zero)
+        )
+    {
+        return None;
+    }
+    let animation = pass.animation.as_ref()?;
+    let prefix = animation.prefix.to_ascii_lowercase();
+    if !prefix.starts_with("fam/") {
+        return None;
+    }
+    let frames = (0..animation.count)
+        .map(|frame| {
+            // NewDark's *_ form uses the unnumbered prefix as frame zero.
+            let name = if frame == 0 {
+                prefix.clone()
+            } else {
+                format!(
+                    "{prefix}{}{frame}",
+                    if prefix.ends_with('_') { "" } else { "_" }
+                )
+            };
+            let candidates = engine::texture_format::DECODABLE_EXTENSIONS
+                .iter()
+                .map(|ext| format!("{name}.{ext}"))
+                .collect::<Vec<_>>();
+            paths.resolve_first(base.to_owned(), &candidates)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(TerrainAnimation {
+        frames,
+        frame_ms: pass.frame_ms,
+        playback: pass.playback,
+    })
 }
 
 fn read(paths: &dyn AbstractAssetPath, base: &str, name: &str) -> Option<Vec<u8>> {
@@ -106,6 +189,13 @@ fn logical_dimensions(
     }) {
         return Err(());
     }
+    material_dimensions(script, original)
+}
+
+fn material_dimensions(
+    script: &str,
+    original: Option<(u32, u32)>,
+) -> Result<Option<(u32, u32)>, ()> {
     let size = dimension_directive(script, "terrain_scale")?.or(original);
     let tiles = dimension_directive(script, "tile_factor")?.unwrap_or((1, 1));
     size.map(|(w, h)| {
@@ -200,6 +290,7 @@ mod tests {
             TerrainTexture {
                 name: "fam/shared/new_wall.dds".into(),
                 dimensions: Some((128, 64)),
+                animation: None,
             }
         );
         // Existing animations opt out as a whole, including their dimensions.
@@ -208,6 +299,7 @@ mod tests {
             TerrainTexture {
                 name: "original_fam/med/wall.pcx".into(),
                 dimensions: Some((64, 32)),
+                animation: None,
             }
         );
     }
@@ -247,8 +339,36 @@ mod tests {
             TerrainTexture {
                 name: "fam/med/wall.png".into(),
                 dimensions: Some((64, 32)),
+                animation: None,
             }
         );
+    }
+
+    #[test]
+    fn numbered_animation_is_complete_and_can_replace_legacy_animation() {
+        let mut files = fixture();
+        files.0.insert("fam/med/wall.mtl".into(), b"terrain_scale 64\nrender_material_only 1\nrender_pass {\nani_mode PINGPONG\nani_rate 164\ntexture *_ 3 FAM/med/pulse_\nshaded 1\n}".to_vec());
+        for name in ["pulse_", "pulse_1", "pulse_2"] {
+            files.0.insert(format!("fam/med/{name}.dds"), vec![]);
+        }
+        let resolved = resolve(&files, "", "med/wall.pcx", false);
+        let animation = resolved.animation.unwrap();
+        assert_eq!(
+            animation.frames,
+            [
+                "fam/med/pulse_.dds",
+                "fam/med/pulse_1.dds",
+                "fam/med/pulse_2.dds"
+            ]
+        );
+        assert_eq!(animation.frame_ms, 164);
+        assert_eq!(animation.playback, PlaybackMode::PingPong);
+        assert_eq!(resolved.dimensions, Some((64, 64)));
+        files.0.remove("fam/med/pulse_2.dds");
+        let fallback = resolve(&files, "", "med/wall.pcx", false);
+        assert_eq!(fallback.name, "original_fam/med/wall.pcx");
+        assert_eq!(fallback.dimensions, Some((64, 32)));
+        assert!(fallback.animation.is_none());
     }
 
     #[test]
