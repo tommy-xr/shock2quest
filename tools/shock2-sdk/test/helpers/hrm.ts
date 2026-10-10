@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
-import type { GameServer } from "../../src/index.js";
+import type { GameServer, UiElement } from "../../src/index.js";
 import { clickElement } from "./os-upgrade.js";
+import { canvasCenter } from "./ui.js";
+
+/** Node art stays centered inside the more generous invisible click target. */
+export function nodeOverlay(elements: UiElement[], node: UiElement): UiElement | undefined {
+  const [x, y] = canvasCenter(node);
+  return elements.find(element => {
+    if (!/^hrm(mine|burn|on)\.pcx$/i.test(element.texture ?? "")) return false;
+    const [artX, artY] = canvasCenter(element);
+    return Math.abs(artX - x) < .01 && Math.abs(artY - y) < .01;
+  });
+}
 
 /** The open panel's elements. */
 export async function elements(game: GameServer) {
@@ -47,9 +58,7 @@ export async function winBoard(game: GameServer) {
     for (const node of (await elements(game)).filter((e) => e.label?.startsWith("node-"))) {
       const current = await elements(game);
       if (current.some((e) => /(win|fail)[hmr]\.pcx/.test(e.texture ?? ""))) break;
-      const overlay = current.find(
-        (e) => e.kind === "image" && e.rect[0] === node.rect[0] && e.rect[1] === node.rect[1],
-      );
+      const overlay = nodeOverlay(current, node);
       if (!overlay) await clickElement(game, node);
     }
     if (await won()) return;

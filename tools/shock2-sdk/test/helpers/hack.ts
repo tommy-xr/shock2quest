@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { GameServer, UiPanel } from "../../src/index.js";
 import { clickUiElement } from "./ui.js";
+import { nodeOverlay } from "./hrm.js";
 
 export function hasHackTexture(panel: UiPanel, texture: string): boolean {
   return panel.elements.some((element) => element.texture?.toLowerCase() === texture);
@@ -23,9 +24,7 @@ export async function winHack(game: GameServer, click = clickUiElement): Promise
         assert.ok(!hasHackTexture(panel, "loseh.pcx"), "the visible mines must be avoided");
         assert.ok(!hasHackTexture(panel, "payh.pcx"), "the wallet must cover the paid hack");
         const node = panel.elements.find((element) => element.label === `node-${x}-${y}`);
-        if (!node || panel.elements.some((element) =>
-          ["hrmmine.pcx", "hrmburn.pcx", "hrmon.pcx"].includes(element.texture?.toLowerCase() ?? "") &&
-          element.rect[0] === node.rect[0] && element.rect[1] === node.rect[1])) continue;
+        if (!node || nodeOverlay(panel.elements, node)) continue;
         await click(game, node);
       }
     }

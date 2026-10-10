@@ -6,6 +6,7 @@ import { carriedNaniteTotal } from "./helpers/nanites.js";
 import { pullTrigger } from "./helpers/weapon.js";
 import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 import { clickUiElement, clickCanvasWithRay, requirePanelPose } from "./helpers/ui.js";
+import { nodeOverlay } from "./helpers/hrm.js";
 
 for (const mode of ["flat", "left", "right"] as const) {
   const vr = mode !== "flat";
@@ -72,7 +73,7 @@ for (const mode of ["flat", "left", "right"] as const) {
           assert.ok(panel);
           assert.ok(!panel.elements.some(e => e.texture === "payh.pcx"));
           const node = panel.elements.find(e => e.label === `node-${x}-${y}`);
-          if (!node || panel.elements.some(e => ["hrmmine.pcx","hrmburn.pcx","hrmon.pcx"].includes(e.texture ?? "") && e.rect[0] === node.rect[0] && e.rect[1] === node.rect[1])) continue;
+          if (!node || nodeOverlay(panel.elements, node)) continue;
           await click(node);
         }
       }

@@ -590,12 +590,13 @@ where
                 );
             }
             // The unlit node outline is already part of the backdrop. This
-            // zero-alpha button supplies a normal 16x16 hit target without
-            // painting a placeholder over that authored art.
+            // Expand the invisible target around the 16x16 art. The 28x32
+            // target leaves gaps between adjacent nodes, so clicks remain
+            // unambiguous on the small handheld MFD in either presentation.
             components.push(
                 gui::button(wrap(KeyPadMsg::PlayNode { x, y }))
-                    .with_position(position)
-                    .with_size(vec2(16.0, 16.0))
+                    .with_position(position - vec2(6.0, 8.0))
+                    .with_size(vec2(28.0, 32.0))
                     .with_image("hrmpip.pcx")
                     .with_alpha(0.0)
                     .with_label(&format!("node-{x}-{y}")),
@@ -1036,6 +1037,55 @@ mod tests {
         assert_eq!(terms.stat, 3);
         assert!(!terms.implant);
         assert_eq!(terms.bonus_levels, 0);
+    }
+
+    #[test]
+    fn enlarged_node_targets_accept_near_misses_without_reaching_neighbors() {
+        for context in [
+            HrmContext::Hack {
+                security_computer: false,
+            },
+            HrmContext::Modify,
+            HrmContext::Repair,
+        ] {
+            let state = HackState {
+                phase: HackPhase::Playing,
+                ..Default::default()
+            };
+            let board = draw_hack_board(
+                &state,
+                PropHackDiff {
+                    success_chance: 20,
+                    critical_chance: 10,
+                    cost: 3.0,
+                },
+                context,
+                |message| message,
+            );
+            let target = vec2(BOARD_X + 2.0 * BOARD_DX - 4.0, BOARD_Y + 8.0);
+            let clicks: Vec<_> = board
+                .iter()
+                .filter_map(|element| match element {
+                    GuiComponent::Button {
+                        on_click: Some(KeyPadMsg::PlayNode { x, y }),
+                        ..
+                    } if element.rect().contains(target) => Some((*x, *y)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(clicks, vec![(2, 0)], "the near edge belongs to one node");
+            let gap = vec2(BOARD_X + 2.0 * BOARD_DX + 23.0, BOARD_Y + 8.0);
+            assert!(
+                !board.iter().any(|element| matches!(
+                    element,
+                    GuiComponent::Button {
+                        on_click: Some(KeyPadMsg::PlayNode { .. }),
+                        ..
+                    }
+                ) && element.rect().contains(gap)),
+                "the gap between nodes stays inert"
+            );
+        }
     }
 
     #[test]
