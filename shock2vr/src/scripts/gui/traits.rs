@@ -1,4 +1,4 @@
-//! O/S upgrade machine MFD panel (projects/flat-ui-panels.md §4).
+//! O/S upgrade machine MFD panel.
 //!
 //! The original game's O/S upgrade overlay: one pick from all 16 traits on a
 //! 4x4 icon matrix, an owned-slots row (up to 4 - the whole game has exactly

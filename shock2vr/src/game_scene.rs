@@ -678,7 +678,7 @@ pub struct DebugSkillLevelsRequest {
 /// `mode` is "shooter" (mouse-look, no cursor) or "use" (cursor-driven
 /// metagame UI, the original game's Tab mode). `active_panel` is the
 /// object-bound MFD panel opened by frobbing a GUI-bearing entity (keypad,
-/// container, ...), with its clickable elements - see `projects/flat-ui.md`.
+/// container, ...), with its clickable elements.
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugUiState {
     pub water: Option<crate::swimming::WaterStatus>,

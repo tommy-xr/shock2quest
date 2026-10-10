@@ -47,7 +47,7 @@ pub struct SystemShock2EntityInfo {
     hierarchy: HashMap<i32, Vec<i32>>,
 }
 
-// Background level loading (projects/loading-screen.md, PR S2) parses the level on a
+// Background level loading parses the level on a
 // worker thread, so the parse output must be `Send + Sync`. This compile-time assertion
 // guards that the entity-info (the second `Rc` blocker) stays thread-safe.
 const _: fn() = || {

@@ -8,7 +8,7 @@
 //! little-endian `i32`, Normal difficulty (the per-difficulty multipliers live
 //! in `DIFFPARAM`, parsed by `DifficultyParams`).
 //!
-//! Decoded from the shipped `shock2.gam` (projects/flat-ui-panels.md §3.2) and
+//! Decoded from the shipped `shock2.gam` and
 //! identical to the community-documented tables, so both sources corroborate.
 
 use std::io;

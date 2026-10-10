@@ -1,4 +1,4 @@
-//! Flat-mode automap panel (`projects/flat-ui-panels.md` §5, `kOverlayMap 26`).
+//! Flat-mode automap panel.
 //!
 //! The wide map MFD: `MAPBACK.PCX` frame (636x296 - the one panel spanning both
 //! MFD slots), the current level's `PAGE001.PCX` page art, one dim

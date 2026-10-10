@@ -71,7 +71,7 @@ impl Mission {
     /// The GL-free, CPU-only first phase of a level load: read + parse the `.mis` into a
     /// `Send` `SystemShock2Level`. Takes only the `Send + Sync` asset-path layer and the
     /// gamesys/definitions (borrowed), so a worker thread can run it by owning `Arc`s of
-    /// those and passing references in (projects/loading-screen.md). No GL, no AssetCache.
+    /// those and passing references in. No GL, no AssetCache.
     pub fn parse(
         asset_paths: &dyn AbstractAssetPath,
         base_path: &str,

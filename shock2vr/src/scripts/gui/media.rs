@@ -1,4 +1,4 @@
-//! Audio-log / email reader MFD (`projects/flat-ui-panels.md` §1).
+//! Audio-log / email reader MFD.
 //!
 //! The shared flat/VR reader panel matching the original game's email/log
 //! overlay: a `LOG.PCX` backdrop with sender portrait, deck icon, header and a

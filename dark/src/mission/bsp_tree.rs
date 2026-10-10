@@ -12,7 +12,7 @@ pub struct BspTree {
     root_node: Arc<BspNode>,
 }
 
-// Background level loading (projects/loading-screen.md, PR S1) parses the level on a
+// Background level loading parses the level on a
 // worker thread, so the parse output must be `Send + Sync`. This compile-time assertion
 // guards that `BspTree` stays thread-safe.
 const _: fn() = || {

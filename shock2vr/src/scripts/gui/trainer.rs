@@ -1,4 +1,4 @@
-//! Trainer / upgrade station MFD panels (projects/flat-ui-panels.md §3).
+//! Trainer / upgrade station MFD panels.
 //!
 //! Each trainer machine opens one category panel directly (there is no
 //! in-panel category chooser - the "category" is which machine was frobbed),
@@ -456,7 +456,7 @@ mod tests {
     use super::*;
 
     fn tables() -> TrainerCostTables {
-        // The retail shock2.gam values (projects/flat-ui-panels.md §3.2).
+        // The retail shock2.gam values.
         TrainerCostTables {
             stat_cost: [[3, 8, 15, 30, 50]; 5],
             tech_cost: [[10, 5, 8, 12, 25, 50]; 5],

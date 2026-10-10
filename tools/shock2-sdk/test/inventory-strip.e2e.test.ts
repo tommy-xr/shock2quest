@@ -5,8 +5,7 @@ import { GameServer } from "../src/index.js";
 import type { UiElement } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
-// End-to-end test for the Tab metagame ("use") mode inventory strip
-// (projects/flat-ui.md §5.2 / §6 PR 4):
+// End-to-end test for the Tab metagame ("use") mode inventory strip:
 //
 //  1. Tab (`ToggleUseMode`) flips /v1/ui mode to "use" AND renders the
 //     player's actual carried inventory in the top-docked strip

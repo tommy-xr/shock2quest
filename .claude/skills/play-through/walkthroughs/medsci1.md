@@ -209,7 +209,7 @@ honestly (report a blocker rather than teleporting past):
    Flat (desktop-style) climbing is implemented as of 2026-07: push toward the
    ladder to ascend, look down + push to descend. Known gaps: entering a
    descent from the top lip is untested (the grip needs horizontal overlap),
-   and VR grip-climbing is still unimplemented (`projects/climbing.md`).
+   and VR grip-climbing is still unimplemented.
 2. **Breakable debris** (step 3) — wrench-smash to clear the ladder approach.
 3. **Air-shaft crawl** (step 6) — low-clearance traversal (crouch).
 4. **Power-cell carry + insert** (steps 7, 16) — pick up, recharge, socket into

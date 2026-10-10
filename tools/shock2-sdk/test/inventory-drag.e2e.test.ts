@@ -5,8 +5,7 @@ import { GameServer } from "../src/index.js";
 import type { UiElement, UiState } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
-// End-to-end test for the cursor-is-the-item inventory drag (flat UI 4.5,
-// projects/flat-ui.md §1.5 / §2.4 / §5.2):
+// End-to-end test for the cursor-is-the-item inventory drag (flat UI 4.5):
 //
 //   - LMB on a strip item LIFTS it onto the cursor (the cursor becomes the
 //     item; the slot empties). /v1/ui exposes the held item (`cursor`).

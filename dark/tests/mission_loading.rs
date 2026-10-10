@@ -444,7 +444,7 @@ fn gamesys_trainer_cost_tables_match_the_retail_values() {
     let costs = dark::gamesys::TrainerCostTables::read(&toc, &mut reader)
         .expect("retail shock2.gam carries the four cost chunks");
 
-    // The retail tables (projects/flat-ui-panels.md §3.2; identical to the
+    // The retail tables (identical to the
     // community-documented values). Every stat row: 3/8/15/30/50.
     for row in &costs.stat_cost {
         assert_eq!(row, &[3, 8, 15, 30, 50]);

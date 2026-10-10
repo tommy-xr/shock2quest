@@ -3072,7 +3072,7 @@ where
 }
 
 // `Send + Sync` is required so the level parse (which builds `Vec<Arc<Box<dyn Property>>>`)
-// can run on a background thread (projects/loading-screen.md, PR S2). This is satisfied
+// can run on a background thread. This is satisfied
 // for free: both blanket impls below already require `C: Send + Sync`.
 pub trait Property: fmt::Debug + Send + Sync {
     fn initialize(&self, world: &mut World, entity: EntityId);
@@ -3081,7 +3081,7 @@ pub trait Property: fmt::Debug + Send + Sync {
 }
 
 // `Send + Sync` so the shared `GlobalContext` (which holds these definition objects)
-// can be borrowed by the background level-parse thread (projects/loading-screen.md, PR S3).
+// can be borrowed by the background level-parse thread.
 pub trait PropertyDefinition<R: io::Read + io::Seek>: Send + Sync {
     fn name(&self) -> String;
 

@@ -1009,7 +1009,7 @@ fn create_bitmap(
     }
 }
 
-/// Enforce containment at creation (projects/flat-ui.md §5.2/§6 PR 3): an
+/// Enforce containment at creation: an
 /// entity with an incoming `Contains` link lives inside its container's loot
 /// panel and must have NO world presence - no render, no physics - until
 /// taken (`GrabEntity`/`DropEntityInfo` clear or move the link and restore

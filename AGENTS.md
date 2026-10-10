@@ -341,7 +341,7 @@ For debugging visual/rendering changes without a full interactive session:
    cargo dv ar15_h.bin --debug-subobjects
    ```
 
-2. **Debug Runtime** (see `projects/debug-runtime.md`): HTTP-controlled game runtime for programmatic control and introspection:
+2. **Debug Runtime**: HTTP-controlled game runtime for programmatic control and introspection:
 
    ```bash
    # Start debug runtime. NOTE: do NOT add an extra `--` after `cargo dbgr` -
@@ -669,8 +669,7 @@ screen: disc, bar, status text), `MAIN.PCX` + `MAINR.BIN` (main menu: 6 buttons 
 Format: a header-less list of **LTRB `int16` rectangles** in the 640×480 UI canvas, 8 bytes
 each (`file_size / 8` = widget count), in a screen-defined order. Load via
 `dark::importers::UI_LAYOUT_IMPORTER` → `Vec<MapRect>` (same binary format as the
-map-position files). See `shock2vr/src/scenes/loading.rs` for a usage example, and
-`projects/loading-screen.md` §6.1 for the loading-screen breakdown.
+map-position files). See `shock2vr/src/scenes/loading.rs` for a usage example.
 
 Quick peek (decode the rects directly):
 

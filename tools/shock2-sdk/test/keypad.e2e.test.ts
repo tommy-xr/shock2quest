@@ -5,7 +5,7 @@ import { GameServer } from "../src/index.js";
 import type { UiElement } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
-// End-to-end test for the flat-mode keypad MFD (projects/flat-ui.md PR 2,
+// End-to-end test for the flat-mode keypad MFD (flat UI PR 2,
 // resolves #435): frobbing a keypad in flat presentation opens its MFD panel
 // (drawn at the original left-MFD anchor on the 640x480 canvas), the panel's
 // digit buttons are clickable via the pointer channels, entering the code

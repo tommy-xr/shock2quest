@@ -94,11 +94,11 @@ pub enum InputAction {
 
     /// Toggle the flat-mode "use" (metagame) mode: cursor-driven UI over the
     /// 3D view, as the original game does on Tab. Shooter mode is restored on
-    /// a second toggle. No-op in VR. See `projects/flat-ui.md`.
+    /// a second toggle. No-op in VR.
     ToggleUseMode,
 
     /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
-    /// `M` key). No-op in VR. See `projects/flat-ui-panels.md` §5.
+    /// `M` key). No-op in VR.
     ToggleMap,
 
     /// Toggle the in-game pause menu. Unlike every other action here this one

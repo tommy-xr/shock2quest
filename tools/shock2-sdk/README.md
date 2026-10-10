@@ -1,6 +1,6 @@
 # @shock2vr/sdk
 
-Playwright-style TypeScript SDK for driving the shock2vr [debug runtime](../../projects/debug-runtime.md)
+Playwright-style TypeScript SDK for driving the shock2vr debug runtime
 programmatically. Designed for automation scripts, regression tests, and
 coding agents that need to "play" the game without a human at the keyboard.
 
