@@ -75,3 +75,48 @@ gameplay performance.
 
 - [Quest 3 refresh-rate exploration, 2026-10-06](results/2026-10-06-quest3-refresh.md): 90/120 Hz crowd samples, lighting cost, and PR #2068 lifecycle checks, with retained telemetry.
 - [Quest 3 object lighting, 2026-09-21](results/2026-09-21-quest3-lighting.md): paired timing runs, GPU counters, and stereo comparisons.
+
+## Many brain room: classic terrain versus 25AE
+
+`many-brain-mixed-crowd` places a fixed camera in the SCP version of the Many's
+brain room. The player stays at the mission entrance to avoid the ending
+trigger. Four rumblers, two overlords, and four floor eggs are added through
+ordinary entity creation; the authored brain and creatures remain. This is a
+synthetic renderer stress workload, not a claim about the normal encounter.
+AI, physics, particles, and skeletal/material animation remain active.
+
+Compare classic terrain, upgraded 25AE terrain (including supported animation,
+UV effects, and material layers), and the additional experimental wetness:
+
+```sh
+node tools/quest-bench/run.mjs --scene many-brain-mixed-crowd \
+  --lighting on --terrain all --repeats 2 --warmup 10 --seconds 30 --gpu-seconds 10 \
+  --output /tmp/quest-many-terrain
+```
+
+Two repeats use classic/upgraded/wet/wet/upgraded/classic ordering. All modes
+use the same release APK, object assets, object lighting, camera, crowd, and
+world-space spotlight. `classic` disables only the `upgraded_terrain` feature;
+this is not an original-game-versus-remaster comparison of all assets.
+`upgraded` has wetness zero; `wet` uses 1.5. Default `--terrain fixture` honors
+the fixture without changing existing lighting benchmarks.
+
+Each measured bucket verifies the actual terrain feature/wetness, per-model
+mesh counts, lighting, and advancing animations. Static eggs count as meshes
+but are explicitly excluded from skeletal animation checks. A nonzero mesh
+count proves submission, not visibility: inspect the captured device image too.
+
+For deterministic desktop inspection of the same workload:
+
+```sh
+cargo dbgr --benchmark-scene benchmarks/scenes/many-brain-mixed-crowd.json \
+  --vr --port 0 --window-size 1200x900
+```
+
+Copy the JSON and change `upgraded_terrain` / `terrain_wetness` to capture a
+matched comparison. The fixture owns camera placement and its spotlight;
+normal tracked-hand lights resume when no fixture is loaded. No saves change.
+
+`--gpu-seconds 10` adds a separate, bounded Adreno counter interval after each
+timing/visual sample. Counter IDs are discovered by name from the connected OS;
+`gpu-metrics.txt` preserves that mapping. Counters do not run during FPS timing.

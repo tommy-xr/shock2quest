@@ -1,0 +1,151 @@
+{
+  "name": "many-brain-mixed-crowd",
+  "mission": "many.mis",
+  "player_position": [
+    -47.11925,
+    6.333176,
+    -100.730606
+  ],
+  "camera_eye": [
+    280,
+    16,
+    143
+  ],
+  "camera_look_at": [
+    303,
+    10,
+    143
+  ],
+  "subject_templates": [
+    253,
+    327,
+    316,
+    730,
+    61,
+    507
+  ],
+  "object_lighting": true,
+  "lights_on": true,
+  "light_templates": [],
+  "remove_templates": [],
+  "spawns": [
+    {
+      "template_id": -180,
+      "position": [
+        294,
+        8.5313,
+        136
+      ],
+      "animated": true
+    },
+    {
+      "template_id": -180,
+      "position": [
+        294,
+        7.628,
+        140
+      ],
+      "animated": true
+    },
+    {
+      "template_id": -180,
+      "position": [
+        294,
+        7.628,
+        145
+      ],
+      "animated": true
+    },
+    {
+      "template_id": -180,
+      "position": [
+        294,
+        8.1693,
+        149
+      ],
+      "animated": true
+    },
+    {
+      "template_id": -187,
+      "position": [
+        299,
+        9.4,
+        135
+      ],
+      "animated": true
+    },
+    {
+      "template_id": -187,
+      "position": [
+        299,
+        9.0379,
+        150
+      ],
+      "animated": true
+    },
+    {
+      "template_id": -1335,
+      "position": [
+        296,
+        7.5,
+        136.5
+      ],
+      "animated": false
+    },
+    {
+      "template_id": -1335,
+      "position": [
+        296,
+        6.728,
+        141.5
+      ],
+      "animated": false
+    },
+    {
+      "template_id": -1335,
+      "position": [
+        296,
+        6.9,
+        146.5
+      ],
+      "animated": false
+    },
+    {
+      "template_id": -1335,
+      "position": [
+        296,
+        7.7,
+        150.5
+      ],
+      "animated": false
+    }
+  ],
+  "subject_model": "rumbler",
+  "expected_subject_meshes": 4,
+  "additional_subjects": [
+    {
+      "model": "overlord",
+      "expected_meshes": 6
+    },
+    {
+      "model": "eggcl",
+      "expected_meshes": 8
+    }
+  ],
+  "upgraded_terrain": false,
+  "terrain_wetness": 0,
+  "spotlight": {
+    "position": [
+      280,
+      14,
+      143
+    ],
+    "look_at": [
+      302,
+      10,
+      143
+    ],
+    "intensity": 1.5,
+    "range": 45
+  }
+}

@@ -5,7 +5,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { adb, resolveSerial, stopApp, restoreProximityAutomation, missionSelection, restoreMissionSelection } from '../../.claude/skills/vr-device-loop/scripts/quest-device.mjs';
-import { renderMarkdown } from '../../.claude/skills/oculus-profiling/scripts/quest-benchmark.mjs';
+import { renderMarkdown, summarize } from '../../.claude/skills/oculus-profiling/scripts/quest-benchmark.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const configPath = '/sdcard/shock2quest/benchmark-scene.json';
@@ -34,7 +34,18 @@ export function validateWorkload(text, fixture, seconds) {
         sample.lit_subject_meshes !== (fixture.object_lighting ? fixture.expected_subject_meshes : 0)) {
       throw new Error(`workload mismatch: ${JSON.stringify(sample)}`);
     }
-    if (sample.animations.length !== (fixture.spawns?.length ?? 0)) throw new Error('missing animated subjects');
+    if ((sample.upgraded_terrain ?? false) !== (fixture.upgraded_terrain ?? false) ||
+        (sample.terrain_wetness ?? 0) !== (fixture.terrain_wetness ?? 0)) throw new Error('terrain mode mismatch');
+    const groups = sample.additional_subjects ?? [];
+    if (groups.length !== (fixture.additional_subjects?.length ?? 0)) throw new Error('missing model groups');
+    for (const expected of fixture.additional_subjects ?? []) {
+      const group = groups.find(group => group.model === expected.model);
+      if (!group || group.meshes !== expected.expected_meshes ||
+          group.lit_meshes !== (fixture.object_lighting ? expected.expected_meshes : 0)) {
+        throw new Error(`mixed subject mismatch: ${JSON.stringify(groups)}`);
+      }
+    }
+    if (sample.animations.length !== (fixture.spawns ?? []).filter(spawn => spawn.animated !== false).length) throw new Error('missing animated subjects');
     if (!Array.isArray(sample.lamp_intensities) ||
         sample.lamp_intensities.length !== (fixture.light_templates?.length ?? 0) ||
         sample.lamp_intensities.some(intensity => intensity !== (fixture.lights_on ? 1 : 0))) {
@@ -60,6 +71,34 @@ export function runOrder(repeats, lighting) {
       .map(mode => ({ repeat: repeat + 1, mode }))).flat();
 }
 
+export function terrainRuns(repeats, lighting, terrain) {
+  return runOrder(repeats, lighting).flatMap(run => {
+    const modes = terrain === 'all' ? ['classic', 'upgraded', 'wet'] : [terrain];
+    if (run.repeat % 2 === 0) modes.reverse();
+    return modes.map(terrain => ({ ...run, terrain }));
+  });
+}
+
+export function terrainFixture(base, mode) {
+  if (mode === 'fixture') return base;
+  return { ...base, upgraded_terrain: mode !== 'classic', terrain_wetness: mode === 'wet' ? 1.5 : 0 };
+}
+
+export function parseGpuCounters(text) {
+  const counters = {};
+  for (const line of text.split('\n')) {
+    const match = line.trim().match(/^(.+?)\s*:\s*([0-9.eE+-]+)$/);
+    if (match && Number.isFinite(Number(match[2]))) {
+      const value = Number(match[2]);
+      // The selected utilization/work counters cannot be negative. The driver
+      // emits -1 when a counter is unavailable; never average that as data.
+      if (value < 0) throw new Error(`invalid GPU counter ${match[1].trim()}: ${value}`);
+      (counters[match[1].trim()] ??= []).push(value);
+    }
+  }
+  return Object.fromEntries(Object.entries(counters).map(([name, values]) => [name, summarize(values)]));
+}
+
 function child(args, log, cancellation) {
   return new Promise((resolveChild, reject) => {
     const childProcess = spawn(process.execPath, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -79,15 +118,19 @@ function child(args, log, cancellation) {
 
 async function main(argv) {
   const { values } = parseArgs({ args: argv, options: {
+    'gpu-seconds': { type: 'string', default: '0' },
+    terrain: { type: 'string', default: 'fixture' },
     scene: { type: 'string', default: 'all' }, lighting: { type: 'string', default: 'both' },
     repeats: { type: 'string', default: '2' }, warmup: { type: 'string', default: '10' },
     seconds: { type: 'string', default: '30' }, output: { type: 'string' }, serial: { type: 'string' },
   }});
+  if (!['fixture', 'classic', 'upgraded', 'wet', 'all'].includes(values.terrain)) throw new Error('invalid terrain variant');
   if (!['off', 'on', 'both'].includes(values.lighting)) throw new Error('lighting must be off, on or both');
   for (const key of ['repeats', 'warmup', 'seconds']) {
     const minimum = key === 'warmup' ? 3 : key === 'seconds' ? 2 : 1;
     if (!/^\d+$/.test(values[key]) || Number(values[key]) < minimum) throw new Error(`invalid ${key}: minimum ${minimum}`);
   }
+  if (!/^\d+$/.test(values['gpu-seconds']) || Number(values['gpu-seconds']) > 30) throw new Error('gpu-seconds must be 0..30');
   const sceneDir = resolve(root, 'benchmarks/scenes');
   const files = readdirSync(sceneDir).filter(name => name.endsWith('.json') &&
     (values.scene === 'all' || name === `${values.scene}.json`)).sort();
@@ -112,6 +155,16 @@ async function main(argv) {
     // coexist on the device but the runtime gives these archives precedence.
     assets: adb(serial, ['shell', 'sha256sum /sdcard/shock2quest/sshock2.kpf /sdcard/shock2quest/mods/*.kpf']),
   };
+  // Counter indices vary between OS versions; resolve the device's own list.
+  const gpuMetrics = Number(values['gpu-seconds']) ? adb(serial, ['shell', 'ovrgpuprofiler', '-m']) : '';
+  const gpuNames = ['GPU % Utilization', '% Time Shading Vertices', '% Time Shading Fragments',
+    '% Shaders Busy', '% Shader ALU Capacity Utilized', '% Wave Context Occupancy',
+    '% Texture Fetch Stall', '% Texture L1 Miss', '% Texture L2 Miss', '% Texture Pipes Busy',
+    'Vertices Shaded / Second', 'Fragments Shaded / Second', 'Textures / Fragment'];
+  const gpuIds = gpuNames.map(name => gpuMetrics.split('\n').map(line => line.trim().match(/^(\d+)\s+(.+)$/))
+    .find(match => match?.[2] === name)?.[1]);
+  if (gpuMetrics && gpuIds.some(id => !id)) throw new Error('device lacks required GPU counters');
+  if (gpuMetrics) writeFileSync(resolve(output, 'gpu-metrics.txt'), gpuMetrics);
   const runs = [];
   const previousMission = missionSelection(serial);
   const cancellation = new AbortController();
@@ -123,15 +176,15 @@ async function main(argv) {
     adb(serial, ['logcat', '-b', 'main', '-G', '16M']);
     for (const file of files) {
       const base = JSON.parse(readFileSync(resolve(sceneDir, file), 'utf8'));
-      for (const { repeat, mode } of runOrder(Number(values.repeats), values.lighting)) {
+      for (const { repeat, mode, terrain } of terrainRuns(Number(values.repeats), values.lighting, values.terrain)) {
         if (cancellation.signal.aborted) throw new Error('benchmark interrupted');
-        const fixture = { ...base, object_lighting: mode === 'on' };
-        const directory = resolve(output, `${fixture.name}-${mode}-${repeat}`);
+        const fixture = terrainFixture({ ...base, object_lighting: mode === 'on' }, terrain);
+        const directory = resolve(output, `${fixture.name}-${mode}-${terrain}-${repeat}`);
         mkdirSync(directory, { recursive: true });
         const localConfig = resolve(directory, 'fixture.json');
         writeFileSync(localConfig, JSON.stringify(fixture, null, 2) + '\n');
-        const run = { scene: fixture.name, mode, repeat, directory, status: 'failed' };
-        process.stdout.write(`Measuring ${fixture.name} lighting=${mode} repeat=${repeat}\n`);
+        const run = { scene: fixture.name, mode, terrain, repeat, directory, status: 'failed' };
+        process.stdout.write(`Measuring ${fixture.name} lighting=${mode} terrain=${terrain} repeat=${repeat}\n`);
         try {
           adb(serial, ['push', localConfig, configPath]);
           writeFileSync(resolve(directory, 'battery-before.txt'), adb(serial, ['shell', 'dumpsys', 'battery']));
@@ -144,7 +197,22 @@ async function main(argv) {
           run.workload = validateWorkload(telemetry, fixture, Number(values.seconds));
           run.result = result;
           run.status = 'ok';
+          if (gpuMetrics) {
+            // Separate from timing samples: counters can perturb rendering.
+            // Android timeout bounds the remote process even if the host exits.
+            let counters;
+            try {
+              counters = adb(serial, ['shell', '-tt', `timeout -s INT ${values['gpu-seconds']} ovrgpuprofiler --realtime="${gpuIds.join(',')}"`]);
+            } catch (error) {
+              if (error.status !== 124) throw error;
+              counters = error.stdout?.toString() ?? '';
+            }
+            writeFileSync(resolve(directory, 'gpu-counters.txt'), counters);
+            run.gpu = parseGpuCounters(counters);
+            if (gpuNames.some(name => !run.gpu[name])) throw new Error('GPU profiler returned incomplete counters');
+          }
         } catch (error) {
+          run.status = 'failed';
           run.error = error.message;
           process.stderr.write(`Excluded: ${run.error}\n`);
         } finally {
@@ -158,7 +226,7 @@ async function main(argv) {
           writeFileSync(resolve(output, 'results.json'), JSON.stringify({ metadata, runs }, null, 2) + '\n');
           const report = renderMarkdown(runs.map(run => ({
             ...run.result, status: run.status, error: run.error ?? run.battery_error,
-            mission: `${run.scene} / ${run.mode} / ${run.repeat}`,
+            mission: `${run.scene} / ${run.mode} / ${run.terrain} / ${run.repeat}`,
           })), {
             ...runs.find(run => run.result)?.result.device,
             warmup: Number(values.warmup), seconds: Number(values.seconds),
