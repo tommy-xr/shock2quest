@@ -90,7 +90,10 @@ commits). Bypass in a pinch with `git push --no-verify`.
 
 ##### Pre-requisites
 
-- Install [rust toolchain](https://www.rust-lang.org/tools/install)
+- Install [rustup](https://www.rust-lang.org/tools/install). The repository pins
+  Rust 1.99.0 in `rust-toolchain.toml`; Cargo automatically uses this version
+  locally and in CI. Run `rustup show active-toolchain` from the repository
+  to install and verify it.
 - (Windows) Install [cmake](https://cmake.org/install/)
 
 ##### Running
