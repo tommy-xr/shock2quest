@@ -4,7 +4,9 @@
 use std::{io::Read, path::Path};
 
 use engine::{
-    assets::asset_paths::AbstractAssetPath, scene::uv_motion::UvMotion, texture::PlaybackMode,
+    assets::asset_paths::AbstractAssetPath,
+    scene::{render_pass::BlendFactor, uv_motion::UvMotion},
+    texture::PlaybackMode,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -20,6 +22,10 @@ pub struct TerrainPass {
     pub animation: Option<TerrainAnimation>,
     pub uv_motion: UvMotion,
     pub shaded: bool,
+    pub blend: (BlendFactor, BlendFactor),
+    pub color: cgmath::Vector3<f32>,
+    pub alpha: f32,
+    pub writes_depth: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -66,14 +72,14 @@ pub fn resolve(
         else {
             return fallback;
         };
-        if let Some(pass) = resolve_pass(paths, base, &script, allow_static_upgrade) {
+        if let Some(passes) = resolve_material(paths, base, &script, allow_static_upgrade) {
             let Ok(Some(size)) = material_dimensions(&script, dimensions) else {
                 return fallback;
             };
             return TerrainTexture {
-                name: pass.name.clone(),
+                name: passes[0].name.clone(),
                 dimensions: Some(size),
-                passes: vec![pass],
+                passes,
             };
         }
         if !allow_static_upgrade
@@ -81,7 +87,7 @@ pub fn resolve(
                 let key = line.split_whitespace().next().unwrap_or("");
                 matches!(
                     key.to_ascii_lowercase().as_str(),
-                    "uv_mod" | "ani_frames" | "ani_mode" | "ani_rate"
+                    "uv_mod" | "ani_frames" | "ani_mode" | "ani_rate" | "render_material_only"
                 )
             })
         {
@@ -124,80 +130,95 @@ pub fn resolve(
     }
 }
 
-fn resolve_pass(
+fn resolve_material(
     paths: &dyn AbstractAssetPath,
     base: &str,
     script: &str,
     allow_static_upgrade: bool,
-) -> Option<TerrainPass> {
-    use engine::scene::render_pass::BlendFactor;
+) -> Option<Vec<TerrainPass>> {
     let plan = super::render_material::parse(script).ok()?;
-    if !plan.material_only || plan.passes.len() != 1 {
+    if !plan.material_only || !(1..=8).contains(&plan.passes.len()) || plan.force_opaque {
         return None;
     }
-    let pass = &plan.passes[0];
-    if !allow_static_upgrade && !plan.suppress_animation && pass.animation.is_none() {
+    if !allow_static_upgrade
+        && !plan.suppress_animation
+        && !plan.passes.iter().any(|p| p.animation.is_some())
+    {
         return None;
     }
-    if plan.force_opaque || pass.replace_alpha {
-        return None;
-    }
-    // A single ordinary shaded pass can use the existing world shader.
-    if pass.environment
-        || pass.incidence.is_some()
-        || pass.clamp
-        || pass.mipmap_bias != 0.0
-        || pass.alpha != 1.0
-        || pass.color != cgmath::vec3(1.0, 1.0, 1.0)
+    // World geometry is batched by texture, not sorted per transparent face.
+    // Require an ordinary depth-writing first layer; overlays then share its
+    // geometry and draw in authored order through the existing material stack.
+    let base_pass = &plan.passes[0];
+    if base_pass.alpha != 1.0
         || !matches!(
-            pass.blend,
+            base_pass.blend,
             (BlendFactor::SrcAlpha, BlendFactor::InvSrcAlpha)
                 | (BlendFactor::One, BlendFactor::Zero)
         )
     {
         return None;
     }
-    let Some(animation) = pass.animation.as_ref() else {
-        let name = pass.texture.as_ref()?.to_ascii_lowercase();
-        if !name.starts_with("fam/") {
-            return None;
-        }
-        let name = resolve_image(paths, base, &name)?;
-        return Some(TerrainPass {
-            name,
-            animation: None,
-            uv_motion: pass.uv_motion,
-            shaded: pass.shaded,
-        });
-    };
-    let prefix = animation.prefix.to_ascii_lowercase();
-    if !prefix.starts_with("fam/") {
-        return None;
-    }
-    let frames = (0..animation.count)
-        .map(|frame| {
-            // NewDark's *_ form uses the unnumbered prefix as frame zero.
-            let name = if frame == 0 {
-                prefix.clone()
+    plan.passes
+        .iter()
+        .enumerate()
+        .map(|(index, pass)| {
+            if pass.environment
+                || pass.incidence.is_some()
+                || pass.clamp
+                || pass.mipmap_bias != 0.0
+                || pass.replace_alpha
+                || !(0.0..=1.0).contains(&pass.alpha)
+            {
+                return None;
+            }
+            let animation = if let Some(animation) = &pass.animation {
+                let prefix = animation.prefix.to_ascii_lowercase();
+                if !prefix.starts_with("fam/") {
+                    return None;
+                }
+                let frames = (0..animation.count)
+                    .map(|frame| {
+                        let name = if frame == 0 {
+                            prefix.clone()
+                        } else {
+                            format!(
+                                "{prefix}{}{frame}",
+                                if prefix.ends_with('_') { "" } else { "_" }
+                            )
+                        };
+                        resolve_image(paths, base, &name)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(TerrainAnimation {
+                    frames,
+                    frame_ms: pass.frame_ms,
+                    playback: pass.playback,
+                })
             } else {
-                format!(
-                    "{prefix}{}{frame}",
-                    if prefix.ends_with('_') { "" } else { "_" }
-                )
+                None
             };
-            resolve_image(paths, base, &name)
+            let name = if let Some(animation) = &animation {
+                animation.frames[0].clone()
+            } else {
+                let name = pass.texture.as_ref()?.to_ascii_lowercase();
+                if !name.starts_with("fam/") {
+                    return None;
+                }
+                resolve_image(paths, base, &name)?
+            };
+            Some(TerrainPass {
+                name,
+                animation,
+                uv_motion: pass.uv_motion,
+                shaded: pass.shaded,
+                blend: pass.blend,
+                color: pass.color,
+                alpha: pass.alpha,
+                writes_depth: index == 0,
+            })
         })
-        .collect::<Option<Vec<_>>>()?;
-    Some(TerrainPass {
-        name: frames[0].clone(),
-        animation: Some(TerrainAnimation {
-            frames,
-            frame_ms: pass.frame_ms,
-            playback: pass.playback,
-        }),
-        uv_motion: pass.uv_motion,
-        shaded: pass.shaded,
-    })
+        .collect()
 }
 
 fn resolve_image(paths: &dyn AbstractAssetPath, base: &str, name: &str) -> Option<String> {
@@ -326,6 +347,59 @@ mod tests {
             ),
             ("fam/shared/new_wall.dds".into(), vec![]),
         ]))
+    }
+
+    #[test]
+    fn layered_material_preserves_order_motion_blending_and_one_depth_writer() {
+        let mut files = fixture();
+        let script = "terrain_scale 64\nrender_material_only 1\nrender_pass {\ntexture FAM/shared/new_wall\nuv_mod SCROLL .45 -.45 [1 1]\nshaded 1\n}\nrender_pass {\ntexture *_ 2 FAM/med/overlay_\nani_mode PINGPONG\nani_rate 128\nblend SRC_ALPHA INV_SRC_ALPHA\nshaded 1\nalpha .75\nrgb 1 .5 .25\n}";
+        files
+            .0
+            .insert("fam/med/wall.mtl".into(), script.as_bytes().to_vec());
+        for name in ["overlay_", "overlay_1"] {
+            files.0.insert(format!("fam/med/{name}.dds"), vec![]);
+        }
+        let resolved = resolve(&files, "", "med/wall.pcx", false);
+        assert_eq!(resolved.passes.len(), 2);
+        assert_eq!(resolved.passes[0].name, "fam/shared/new_wall.dds");
+        assert_eq!(
+            resolved.passes[0].uv_motion,
+            UvMotion::Scroll([0.45, -0.45])
+        );
+        assert!(resolved.passes[0].writes_depth);
+        let overlay = &resolved.passes[1];
+        assert!(!overlay.writes_depth);
+        assert_eq!(
+            overlay.blend,
+            (BlendFactor::SrcAlpha, BlendFactor::InvSrcAlpha)
+        );
+        assert_eq!(overlay.alpha, 0.75);
+        assert_eq!(overlay.color, cgmath::vec3(1.0, 0.5, 0.25));
+        assert_eq!(overlay.animation.as_ref().unwrap().frame_ms, 128);
+        assert_eq!(
+            overlay.animation.as_ref().unwrap().playback,
+            PlaybackMode::PingPong
+        );
+        for invalid in [
+            script.replace("ani_rate 128", "ani_rate 0"),
+            script.replace("shaded 1", "uv_source environment"),
+            script.replacen("shaded 1", "blend ONE ONE", 1),
+        ] {
+            files
+                .0
+                .insert("fam/med/wall.mtl".into(), invalid.into_bytes());
+            let fallback = resolve(&files, "", "med/wall.pcx", true);
+            assert_eq!(fallback.name, "original_fam/med/wall.pcx");
+            assert_eq!(fallback.dimensions, Some((64, 32)));
+            assert!(fallback.passes.is_empty());
+        }
+        files
+            .0
+            .insert("fam/med/wall.mtl".into(), script.as_bytes().to_vec());
+        files.0.remove("fam/med/overlay_1.dds");
+        let fallback = resolve(&files, "", "med/wall.pcx", true);
+        assert!(fallback.passes.is_empty());
+        assert_eq!(fallback.name, "original_fam/med/wall.pcx");
     }
 
     #[test]

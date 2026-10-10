@@ -402,9 +402,16 @@ impl SceneObject {
         material: RefCell<Box<dyn Material>>,
         geometry: Rc<Box<dyn Geometry>>,
     ) -> SceneObject {
+        Self::create_with_shared_material(Rc::new(material), geometry)
+    }
+
+    pub fn create_with_shared_material(
+        material: Rc<RefCell<Box<dyn Material>>>,
+        geometry: Rc<Box<dyn Geometry>>,
+    ) -> SceneObject {
         let transform: Matrix4<f32> = Matrix4::identity();
         SceneObject {
-            material: Rc::new(material),
+            material,
             material_name: None,
             material_stack: None,
             geometry,
@@ -606,12 +613,15 @@ impl SceneObject {
         let Some(stack) = &self.material_stack else {
             return;
         };
+        // The ordinary material can be the stack's first pass. Read its
+        // opacity before borrowing a pass mutably to prepare that shader.
+        let transparency = self.effective_transparency();
         for pass in &stack.passes {
             let mut material = pass.material.borrow_mut();
             if !material.has_initialized() {
                 material.initialize(engine.is_opengl_es);
             }
-            material.set_transparency_override(self.effective_transparency());
+            material.set_transparency_override(transparency);
             material.set_emissivity_scale(self.emissivity_scale.unwrap_or(1.0));
             let xform = self.transform * self.local_transform;
             let prepared = material.draw_opaque(context, view, &xform, &self.skinning_data, lights)

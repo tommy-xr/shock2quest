@@ -21,3 +21,12 @@ Nightdive assets) and independent UOFFSET_WAVE/VOFFSET_WAVE with SINE or
 SAWTOOTH. Unsupported stepping, scale/rotation transforms, and other waveforms
 retain fallback. Offset evaluation uses simulation time; lightmap UVs are
 untouched. `ani_frames 1` explicitly suppresses legacy texture animation.
+
+Layered terrain uses the shared MaterialStack draw path, retaining authored
+pass order and blend factors. The supported subset is material-only plans of
+one to eight passes with an ordinary depth-writing first pass; overlays keep
+bitmap alpha and may have independent UV motion, animation and RGB/alpha
+modulation. Only the base pass alpha-tests and writes depth. Every pass must
+resolve, otherwise both original art and UV dimensions remain. Water,
+transparent-only stacks, environment/incidence maps, clamping, mip bias,
+force_opaque and replace_alpha are outside this terrain subset.

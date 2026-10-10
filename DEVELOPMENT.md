@@ -672,8 +672,12 @@ original image **and** its dimensions. Single-pass numbered texture sequences no
 uses simulation time and turns around without duplicating endpoint frames.
 All frames must resolve before replacing the original material. Single passes
 also support continuous `SCROLL` and independent U/V offset waves (`SINE` and
-`SAWTOOTH`). Only diffuse UVs move; baked lightmaps stay fixed. Water, layered
-materials, stepped motion, and other waveforms retain their original art.
+`SAWTOOTH`). Only diffuse UVs move; baked lightmaps stay fixed. Ordered terrain layers
+can combine scrolling, waves, frame animation, authored blending and color/alpha
+modulation (for example the Many's OVM015). The first pass writes depth;
+subsequent passes blend over it. All pass textures must resolve. Water,
+materials without an ordinary base pass, stepped motion, environment/incidence
+effects, and other waveforms retain their original art.
 Classic installs are unchanged.
 
 The main menu's bottom-left build label shows `dev | <commit>` for local builds
