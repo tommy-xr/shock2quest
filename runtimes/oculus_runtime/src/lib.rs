@@ -597,6 +597,7 @@ fn main() {
     if let Some(benchmark) = &benchmark_config {
         benchmark.configure(&mut experimental_features);
     }
+    let fixed_simulation = experimental_features.contains("fixed_simulation");
     let requested_ffr = benchmark_config
         .as_ref()
         .map(|scene| foveation::Level::parse(&scene.ffr).expect("validated FFR level"))
@@ -746,7 +747,9 @@ fn main() {
                     let next_session_focused = e.state() == xr::SessionState::FOCUSED;
                     game.set_simulation_focus(next_session_focused);
                     if next_session_focused != session_focused {
-                        last_update_time = Instant::now();
+                        if fixed_simulation {
+                            last_update_time = Instant::now();
+                        }
                         // Never emit a one-second bucket containing samples from
                         // both sides of a focus transition.
                         frame_profiler.reset();
