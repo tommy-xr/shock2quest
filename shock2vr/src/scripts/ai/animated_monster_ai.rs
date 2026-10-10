@@ -3027,7 +3027,7 @@ mod tests {
 
     #[test]
     fn scent_requires_search_contact_and_never_reveals_remote_player() {
-        let (mut world, entity) = world_with_monster_and_player(Deg(180.0));
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
         let mut trail = crate::mission::player_trail::PlayerTrail::default();
         trail.update(0.5, Some(vec3(2.0, 0.0, 0.0)));
         trail.update(0.5, Some(vec3(30.0, 0.0, 0.0)));
