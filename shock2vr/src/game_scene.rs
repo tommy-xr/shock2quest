@@ -1288,6 +1288,7 @@ pub struct DebugPathfindingStats {
     pub queries: u64,
     pub stressed_retries: u64,
     pub no_route: u64,
+    pub dijkstra_searches: u64,
     /// Cell crossings currently excluded because an AI's steering stalled
     /// on them, summed over every AI holding one - each exclusion applies
     /// only to the AI that reported it (see
@@ -1360,6 +1361,10 @@ pub enum DebugEntityMessage {
     /// break a gun outright rather than waiting on its break roll.
     SetObjectState {
         state: dark::properties::ObjectState,
+    },
+    /// Provision the real lock property for targeted door/navigation tests.
+    SetLocked {
+        locked: bool,
     },
 }
 

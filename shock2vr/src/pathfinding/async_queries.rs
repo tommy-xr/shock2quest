@@ -41,6 +41,8 @@ pub struct PathQueryRequest {
 /// The computed route (or lack of one) for an entity's latest request
 #[derive(Clone)]
 pub struct PathQueryResponse {
+    /// Door passability when this search started; consumers reject stale answers.
+    pub door_revision: u64,
     /// The goal the route was computed against (echoed from the request, so
     /// the consumer can discard results whose goal has since drifted)
     pub goal: Vector3<f32>,
@@ -84,6 +86,7 @@ impl AsyncPathfinding {
             .name("ai-pathfinding".to_string())
             .spawn(move || {
                 while let Ok(request) = rx.recv() {
+                    let door_revision = service.door_revision();
                     let mut outcome = AiPathOutcome::Full;
                     // Crossings THIS AI's steering reported as physically
                     // blocked (stall mid-route) are expensive in its own
@@ -151,6 +154,7 @@ impl AsyncPathfinding {
                         results.insert(
                             request.entity,
                             PathQueryResponse {
+                                door_revision,
                                 goal: request.goal,
                                 outcome,
                                 waypoints,
@@ -231,7 +235,7 @@ mod tests {
                 dark::mission::path_database::PathCellFlags::empty(),
             ),
         )));
-        let async_pf = AsyncPathfinding::spawn(service);
+        let async_pf = AsyncPathfinding::spawn(service.clone());
 
         assert!(async_pf.submit(PathQueryRequest {
             entity: 7,
@@ -243,6 +247,9 @@ mod tests {
         }));
         let response = wait_for_result(&async_pf, 7).expect("worker must respond");
         assert_eq!(response.outcome, AiPathOutcome::Full);
+        assert_eq!(response.door_revision, service.door_revision());
+        service.set_blocked_doors([99].into_iter().collect());
+        assert_ne!(response.door_revision, service.door_revision());
         assert!(!response.waypoints.is_empty());
         assert_eq!(response.goal, cgmath::vec3(5.0, 0.0, 1.0));
         // Result was taken; nothing pending or left over

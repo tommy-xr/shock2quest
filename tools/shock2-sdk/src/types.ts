@@ -172,6 +172,8 @@ export interface PathfindingStats {
   queries: number;
   stressed_retries: number;
   no_route: number;
+  /** Full reachable-set searches, including partial-route Dijkstra. */
+  dijkstra_searches: number;
   /**
    * Cell crossings currently excluded because an AI stalled on them,
    * counted once per AI holding one (an exclusion applies only to the AI
@@ -210,6 +212,8 @@ export type DebugEntityMessage =
       bone?: number;
     }
   | { type: "Frob" }
+  /** Provision P$Locked using the same setter as the real lock effect. */
+  | { type: "SetLocked"; locked: boolean }
   | { type: "Signal"; name: string }
   | { type: "HeardNoise"; origin: Vec3 }
   | { type: "SetAlertness"; level: "Lowest" | "Low" | "Moderate" | "High" }
