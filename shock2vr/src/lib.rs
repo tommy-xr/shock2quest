@@ -2,6 +2,7 @@ pub mod alcohol;
 pub mod armor;
 pub mod audio_log;
 pub mod benchmark_scene;
+pub mod cyber_interface;
 pub mod environment_map;
 mod environmental_aux;
 pub mod game_scene;
