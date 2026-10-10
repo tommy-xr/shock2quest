@@ -110,7 +110,7 @@ fn mirror_x(q: Quaternion<f32>) -> Quaternion<f32> {
 
 /// Rotation of the GLB wrist frame relative to the pose data's wrist frame
 /// (after handedness conversion). Solved once by aligning the five metacarpal
-/// bind offsets of the two rigs (Kabsch fit); see projects/vr-gloves.md.
+/// bind offsets of the two rigs (Kabsch fit).
 fn wrist_frame() -> Quaternion<f32> {
     Quaternion::new(0.998_773_2, -0.008_677_66, -0.034_176_15, 0.034_767_6)
 }

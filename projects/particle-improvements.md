@@ -2,20 +2,11 @@
 
 This note documents how the original Dark Engine handles particle colours and the steps required to mirror that behaviour in our renderer. It focuses on the palette-driven colour ramps used for effects like blood splatter and the ENG1 mission emitters.
 
-## Status & hand-off (2026-06-19)
+## Status
 
-**Single-colour rendering is DONE (PR #308).** A particle now draws in its
-authored palette colour (no more grey blobs). What shipped, mapped to the
-porting strategy below:
-- Step 1 (palette): **done** — `shock2vr/src/palette.rs` loads the SS2 **game
-  master palette** `res/pal/SHOCKPAL.PCX` once and exposes `index_to_rgb`.
-  ⚠️ Note: this is the *game master* palette, **not** the per-mission `RENDPARAMS`
-  palette the strategy below assumes — for SS2 particles the master palette is the
-  correct source. If a mission ever needs its own palette, revisit.
-- Step 6 (shader) + 7 (cache): **done for a single colour** — `BillboardMaterial`
-  has a `color`, the `inColor` uniform is fetched/uploaded, the hardcoded grey is
-  gone, and the colour is resolved once per `ParticleSystem` (`with_color`). The
-  emissive term is tinted by `inColor` too (so it glows in-colour, not white).
+Single-colour rendering shipped in PR #308: particles draw in their authored
+colour from the game master palette (`res/pal/SHOCKPAL.PCX`, `shock2vr/src/palette.rs`),
+not the per-mission `RENDPARAMS` palette assumed below.
 
 **Remaining (ranked) — the lifetime fade is what the rest of this doc covers:**
 1. **Lifetime `cr → cg → cb` colour ramp (steps 3–4, 6).** This is the main

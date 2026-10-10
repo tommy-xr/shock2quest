@@ -2,7 +2,7 @@
 """Regenerate `assets/vr_hand_skin.png` from `assets/vr_glove_color.jpg`.
 
 The VR hands are the SteamVR glove *mesh*, so their skin has to live in the
-glove's own UV atlas - see `projects/vr-gloves.md`. This recolours that atlas:
+glove's own UV atlas. This recolours that atlas:
 it keeps the map's skin-scale relief, tints it with the game's own hand tone,
 and flattens the glove's hardware (straps, buckles, stitching, panel edges,
 perforations) so the skin doesn't inherit strap ridges.

@@ -58,42 +58,11 @@ axis; its fixed-camera highlight is barely visible in this scene.
 
 ## Ordered milestones
 
-### 1. Fixed foveated rendering: first experiment
+### 1. Fixed foveated rendering: done
 
-- [ ] Add an opt-in off/low/medium/high setting; default off during evaluation.
-- [ ] Discover the runtime's foveation and swapchain-update capabilities and
-  create compatible GLES swapchains. Confirm the installed OpenXR binding/API
-  requirements before implementation. Missing support falls back to off and
-  reports the effective setting; requested and effective settings must both
-  appear in benchmark provenance.
-- [ ] Apply the same fixed profile to both eyes and handle profile/swapchain
-  creation, recreation, and destruction correctly. Start with fixed levels;
-  defer dynamic foveation until the quality/performance curve is established.
-- [ ] Extend the existing fixture runner to compare all four levels with the
-  same APK, scene, 1680×1760 eye dimensions, active refresh, assets, and lighting.
-  Keep 90 Hz and existing simulation scheduling unchanged for this experiment.
-- [ ] Measure at least three counterbalanced repeats per setting, 10 s warmup
-  and 30 s timing per run. Collect GPU counters separately; reject unavailable
-  counters rather than averaging sentinel values. Compare raw repetitions and
-  spread, not only rounded averages.
-- [ ] Capture matched Quest stereo PNGs/recordings and inspect central and
-  peripheral terrain, thin geometry, emissive/animated effects, held weapons,
-  HUD and menu text. Inspect while turning the head as well as standing still;
-  compositor images alone cannot establish in-headset readability.
-- [ ] Record cost, freshness, memory, temperature, and visual tradeoffs. Select
-  the least aggressive level with a repeatable useful saving, or retain off
-  if quality/performance does not justify a level. Do not automatically ship
-  the fastest or highest level.
-
-Primary workload: `many-brain-mixed-crowd`, upgraded terrain on, wetness zero,
-object lighting on. Hold those constant while varying FFR. Then confirm the
-selected setting on `rec1-six-hybrids`, a MedSci gameplay view, and a wetness-on
-Many run. Keep the six-variant terrain experiment available as a regression
-check, without combining every feature into the initial FFR matrix.
-
-Deliverable: a small FFR PR with repeatable benchmark controls, before/after
-visuals, raw results, and an explicit keep/reject decision. An improvement at
-90 Hz does not prove 120 Hz readiness.
+Shipped in #2124; low became the default after headset review (#2127). See the
+[sweep results](../benchmarks/results/2026-10-09-quest3-ffr.md). The warm-run
+freshness regression it showed still needs isolating.
 
 ### 2. Simulation clock audit and fixed-step scheduling
 
@@ -242,7 +211,6 @@ Proposed completion criteria:
 - Current: opt-in clock correction measured at 90 Hz; broaden interaction, lifecycle and presentation checks before promotion.
 - Before any 120 Hz experiment: finish milestone 2 interaction/presentation gates and remeasure full-tick frame tails.
 - Subsequent CPU, multiview, and threading PRs: select from updated measurements.
-- Historical baseline and tooling context: [Quest profiling](quest-profiling.md).
 
 ## Default-off merge review
 

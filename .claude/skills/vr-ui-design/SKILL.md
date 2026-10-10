@@ -104,8 +104,7 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
   (including shoulder/backpack and against the personal card). Collection uses
   their existing scripts to credit balances, install software or record credentials;
   they never occupy backpack cells. Logs retain their separate immediate-collection
-  behavior. Flat pickup remains immediate. See
-  `projects/vr-personal-access-card.md` for the accepted design and implementation status.
+  behavior. Flat pickup remains immediate.
 - **The personal belt card is permanent.** Available before the first credential,
   drawn by either free hand, returned on release, never consumable or lost. In VR,
   scanning is mandatory at credential-locked doors/readers and supported machines;

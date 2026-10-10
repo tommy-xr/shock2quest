@@ -13,8 +13,6 @@
 //! matters beyond fidelity - the community mod layers (SCP) ship a redrawn
 //! backdrop *with a retuned `*R.BIN`*, so a hardcoded rect is wrong on a
 //! modded install.
-//!
-//! See `projects/flatscreen-and-vr-architecture.md` (Slice 3).
 
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
 #[cfg(test)]
