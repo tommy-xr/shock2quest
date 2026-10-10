@@ -107,6 +107,14 @@ combat, and do not establish stable 120 Hz.
   reference has been removed. Do not interpret absence of audit output as parity.
 - Actual hybrid attack clips/transitions and Quest gameplay validation remain
   necessary before considering a default change. Physics timing is unchanged.
+- Independent Claude review found an opt-in melee gap: synthetic overlap contacts
+  do not carry limb velocity, and `velocity_at_point` only sees Rapier bodies.
+  A moving limb hitting a stationary blade can therefore lose its damage, while
+  a retreating limb can overstate closing speed. Preserve committed limb motion
+  and add a moving-limb/stationary-blade regression before enabling by default.
+- Further opt-in checks: squeeze-to-frob of animated corpses through a query limb;
+  capsule fallback when hidden/skipped limbs are pruned but the hitbox marker
+  remains; feature-build CI coverage. Default builds retain Rapier limb bodies.
 
 Historical measurements: [query audit](../benchmarks/results/2026-10-10-damage-queries.md)
 and [Quest proxy-omission experiment](../benchmarks/results/2026-10-10-quest-physics.md).
