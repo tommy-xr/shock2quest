@@ -1,0 +1,96 @@
+[
+  {
+    "mission": "many.mis",
+    "audits": [
+      {
+        "bounds_build_us": 33.875,
+        "distance_mismatches": 0,
+        "equal_distance_different_proxy": 55,
+        "grouped_query_us": 4629.583,
+        "groups": 34,
+        "rapier_query_us": 1937,
+        "rays": 1952,
+        "shape_tests": 35837,
+        "shapes": 488,
+        "skipped_probes": 0,
+        "step": 600,
+        "ungated_shape_tests": 952576
+      },
+      {
+        "bounds_build_us": 36.083,
+        "distance_mismatches": 0,
+        "equal_distance_different_proxy": 53,
+        "grouped_query_us": 4696,
+        "groups": 34,
+        "rapier_query_us": 1848.209,
+        "rays": 1952,
+        "shape_tests": 36164,
+        "shapes": 488,
+        "skipped_probes": 0,
+        "step": 1200,
+        "ungated_shape_tests": 952576
+      },
+      {
+        "bounds_build_us": 43.708000000000006,
+        "distance_mismatches": 0,
+        "equal_distance_different_proxy": 56,
+        "grouped_query_us": 4436.125,
+        "groups": 34,
+        "rapier_query_us": 1882.8339999999998,
+        "rays": 1952,
+        "shape_tests": 34730,
+        "shapes": 488,
+        "skipped_probes": 0,
+        "step": 1800,
+        "ungated_shape_tests": 952576
+      }
+    ]
+  },
+  {
+    "mission": "medsci1.mis",
+    "audits": [
+      {
+        "bounds_build_us": 18.375,
+        "distance_mismatches": 0,
+        "equal_distance_different_proxy": 23,
+        "grouped_query_us": 2122.791,
+        "groups": 14,
+        "rapier_query_us": 1135.458,
+        "rays": 824,
+        "shape_tests": 13534,
+        "shapes": 206,
+        "skipped_probes": 0,
+        "step": 600,
+        "ungated_shape_tests": 169744
+      },
+      {
+        "bounds_build_us": 47.958,
+        "distance_mismatches": 0,
+        "equal_distance_different_proxy": 36,
+        "grouped_query_us": 2111.2079999999996,
+        "groups": 14,
+        "rapier_query_us": 1028.125,
+        "rays": 824,
+        "shape_tests": 13129,
+        "shapes": 206,
+        "skipped_probes": 0,
+        "step": 1200,
+        "ungated_shape_tests": 169744
+      },
+      {
+        "bounds_build_us": 22.75,
+        "distance_mismatches": 0,
+        "equal_distance_different_proxy": 24,
+        "grouped_query_us": 2051.959,
+        "groups": 14,
+        "rapier_query_us": 1097.875,
+        "rays": 824,
+        "shape_tests": 12934,
+        "shapes": 206,
+        "skipped_probes": 0,
+        "step": 1800,
+        "ungated_shape_tests": 169744
+      }
+    ]
+  }
+]

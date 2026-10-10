@@ -35,3 +35,9 @@ rand = "0.8.5"
 [features]
 default = ["ffmpeg"]
 ffmpeg = ["engine_ffmpeg"]
+
+# Opt-in aggregate timings; normal builds have no instrumentation overhead.
+physics-profiling = ["rapier3d/profiler"]
+
+# Shadow-query prototype; leaves gameplay collision and melee paths unchanged.
+damage-query-audit = []

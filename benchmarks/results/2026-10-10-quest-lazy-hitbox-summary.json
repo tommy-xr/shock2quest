@@ -1,0 +1,1421 @@
+[
+  {
+    "run": "fixed-1-scalar-many",
+    "mission": "many.mis",
+    "physics_ms": 1.8644602972222222,
+    "physics_windows": 3,
+    "stages": {
+      "broad_phase_ms": 0.39674567888888884,
+      "ccd_ms": 0.0,
+      "controller_ms": 0.17750234055555544,
+      "events_ms": 0.0004168877777777798,
+      "islands_ms": 0.16647164722222227,
+      "narrow_phase_ms": 0.4966142366666663,
+      "prepare_ms": 0.042094175000000005,
+      "solver_ms": 0.22009689944444444,
+      "step_ms": 1.6444468938888892,
+      "update_ms": 0.11810705055555556,
+      "user_changes_ms": 0.04168577944444446
+    },
+    "kinematic_per_tick": 488.0,
+    "update_ms": 6.537,
+    "app_ms": 4.516,
+    "fps": 88.1,
+    "min_fps": 85,
+    "stale": 103,
+    "torn": 10,
+    "skipped": 0,
+    "temperature": 32,
+    "scene_objects_range": [
+      119,
+      122
+    ],
+    "ready": {
+      "target_refresh_hz": 90,
+      "requested_refresh_hz": 90,
+      "refresh_hz": 90,
+      "eye_width": 1680,
+      "eye_height": 1760,
+      "refresh_rate_changes": []
+    },
+    "memory": {
+      "total_pss_mib": 656.4,
+      "total_rss_mib": 796.4,
+      "graphics_pss_mib": 402
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 87.519,
+        "min": 83.132,
+        "p5": 84.665,
+        "p95": 89.446,
+        "max": 89.998
+      },
+      "frame_ms": {
+        "mean": 11.429,
+        "min": 11.111,
+        "p5": 11.18,
+        "p95": 11.811,
+        "max": 12.029
+      },
+      "update_ms": {
+        "mean": 6.537,
+        "min": 6.148,
+        "p5": 6.173,
+        "p95": 6.978,
+        "max": 7.133
+      },
+      "scene_ms": {
+        "mean": 0.648,
+        "min": 0.607,
+        "p5": 0.612,
+        "p95": 0.685,
+        "max": 0.694
+      },
+      "left_eye_ms": {
+        "mean": 0.948,
+        "min": 0.904,
+        "p5": 0.912,
+        "p95": 0.982,
+        "max": 0.985
+      },
+      "right_eye_ms": {
+        "mean": 0.705,
+        "min": 0.682,
+        "p5": 0.686,
+        "p95": 0.723,
+        "max": 0.724
+      },
+      "finish_ms": {
+        "mean": 1.675,
+        "min": 1.611,
+        "p5": 1.628,
+        "p95": 1.744,
+        "max": 1.748
+      },
+      "submit_ms": {
+        "mean": 0.327,
+        "min": 0.299,
+        "p5": 0.302,
+        "p95": 0.35,
+        "max": 0.351
+      }
+    },
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 88.1,
+        "min": 85,
+        "p5": 86,
+        "p95": 90,
+        "max": 90
+      },
+      "app_ms": {
+        "mean": 4.516,
+        "min": 4.24,
+        "p5": 4.25,
+        "p95": 5.18,
+        "max": 5.2
+      },
+      "compositor_ms": {
+        "mean": 0.75,
+        "min": 0.71,
+        "p5": 0.72,
+        "p95": 0.79,
+        "max": 0.81
+      },
+      "cpu_gpu_ms": {
+        "mean": 15.861,
+        "min": 14.54,
+        "p5": 14.84,
+        "p95": 17.67,
+        "max": 17.8
+      },
+      "gpu_load": {
+        "mean": 0.488,
+        "min": 0.46,
+        "p5": 0.46,
+        "p95": 0.52,
+        "max": 0.54
+      },
+      "cpu_load": {
+        "mean": 0.398,
+        "min": 0.38,
+        "p5": 0.38,
+        "p95": 0.42,
+        "max": 0.43
+      },
+      "temperature_c": {
+        "mean": 32,
+        "min": 32,
+        "p5": 32,
+        "p95": 32,
+        "max": 32
+      },
+      "stale_frames": 103,
+      "torn_frames": 10
+    },
+    "clock_records": {
+      "CPU4/GPU=3/3,2361/492MHz": 4,
+      "CPU4/GPU=4/4,2361/492MHz": 6,
+      "CPU4/GPU=3/4,2361/492MHz": 1,
+      "CPU4/GPU=4/3,2361/492MHz": 3,
+      "CPU4/GPU=4/4,2361/545MHz": 6,
+      "CPU4/GPU=3/3,2361/545MHz": 1,
+      "CPU4/GPU=2/3,2361/545MHz": 1,
+      "CPU4/GPU=2/2,2361/545MHz": 1,
+      "CPU4/GPU=3/2,2361/545MHz": 1,
+      "CPU4/GPU=3/2,2361/492MHz": 1,
+      "CPU4/GPU=2/3,2361/492MHz": 1,
+      "CPU4/GPU=4/4,2208/545MHz": 4
+    },
+    "mode_markers": [
+      "SHOCK2QUEST_HITBOX_BENCHMARK omit_proxies=false gameplay_valid=true"
+    ]
+  },
+  {
+    "run": "fixed-1-scalar-medsci1",
+    "mission": "medsci1.mis",
+    "physics_ms": 1.3226478794444445,
+    "physics_windows": 3,
+    "stages": {
+      "broad_phase_ms": 0.3302683011111111,
+      "ccd_ms": 0.0,
+      "controller_ms": 0.07242668944444441,
+      "events_ms": 0.0002589938888888897,
+      "islands_ms": 0.1315358011111111,
+      "narrow_phase_ms": 0.33384634666666674,
+      "prepare_ms": 0.04089567277777775,
+      "solver_ms": 0.11422264444444447,
+      "step_ms": 1.2090665233333335,
+      "update_ms": 0.0983769644444444,
+      "user_changes_ms": 0.0261244811111111
+    },
+    "kinematic_per_tick": 206.0,
+    "update_ms": 5.039,
+    "app_ms": 2.39,
+    "fps": 89.4,
+    "min_fps": 86,
+    "stale": 112,
+    "torn": 0,
+    "skipped": 0,
+    "temperature": 33,
+    "scene_objects_range": [
+      182,
+      189
+    ],
+    "ready": {
+      "target_refresh_hz": 90,
+      "requested_refresh_hz": 90,
+      "refresh_hz": 90,
+      "eye_width": 1680,
+      "eye_height": 1760,
+      "refresh_rate_changes": []
+    },
+    "memory": {
+      "total_pss_mib": 748.1,
+      "total_rss_mib": 887.9,
+      "graphics_pss_mib": 466.5
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 88.767,
+        "min": 85.191,
+        "p5": 86.1,
+        "p95": 90.102,
+        "max": 90.115
+      },
+      "frame_ms": {
+        "mean": 11.268,
+        "min": 11.097,
+        "p5": 11.098,
+        "p95": 11.614,
+        "max": 11.738
+      },
+      "update_ms": {
+        "mean": 5.039,
+        "min": 4.809,
+        "p5": 4.885,
+        "p95": 5.321,
+        "max": 5.358
+      },
+      "scene_ms": {
+        "mean": 0.757,
+        "min": 0.693,
+        "p5": 0.698,
+        "p95": 0.837,
+        "max": 0.853
+      },
+      "left_eye_ms": {
+        "mean": 1.488,
+        "min": 1.402,
+        "p5": 1.406,
+        "p95": 1.557,
+        "max": 1.585
+      },
+      "right_eye_ms": {
+        "mean": 1.132,
+        "min": 1.084,
+        "p5": 1.097,
+        "p95": 1.175,
+        "max": 1.194
+      },
+      "finish_ms": {
+        "mean": 1.008,
+        "min": 0.767,
+        "p5": 0.8,
+        "p95": 1.142,
+        "max": 1.233
+      },
+      "submit_ms": {
+        "mean": 0.318,
+        "min": 0.302,
+        "p5": 0.308,
+        "p95": 0.334,
+        "max": 0.34
+      }
+    },
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 89.4,
+        "min": 86,
+        "p5": 87,
+        "p95": 91,
+        "max": 91
+      },
+      "app_ms": {
+        "mean": 2.39,
+        "min": 2.23,
+        "p5": 2.24,
+        "p95": 2.65,
+        "max": 2.7
+      },
+      "compositor_ms": {
+        "mean": 0.729,
+        "min": 0.69,
+        "p5": 0.69,
+        "p95": 0.8,
+        "max": 0.81
+      },
+      "cpu_gpu_ms": {
+        "mean": 12.453,
+        "min": 10.93,
+        "p5": 10.95,
+        "p95": 13.63,
+        "max": 13.9
+      },
+      "gpu_load": {
+        "mean": 0.296,
+        "min": 0.28,
+        "p5": 0.28,
+        "p95": 0.32,
+        "max": 0.32
+      },
+      "cpu_load": {
+        "mean": 0.333,
+        "min": 0.31,
+        "p5": 0.31,
+        "p95": 0.36,
+        "max": 0.37
+      },
+      "temperature_c": {
+        "mean": 33,
+        "min": 33,
+        "p5": 33,
+        "p95": 33,
+        "max": 33
+      },
+      "stale_frames": 112,
+      "torn_frames": 0
+    },
+    "clock_records": {
+      "CPU4/GPU=3/3,2361/545MHz": 2,
+      "CPU4/GPU=2/3,2361/545MHz": 1,
+      "CPU4/GPU=2/2,2361/456MHz": 1,
+      "CPU4/GPU=3/2,2361/456MHz": 1,
+      "CPU4/GPU=3/3,2361/456MHz": 2,
+      "CPU4/GPU=4/3,2361/456MHz": 2,
+      "CPU4/GPU=4/4,2361/456MHz": 4,
+      "CPU4/GPU=4/3,2361/492MHz": 1,
+      "CPU4/GPU=4/4,2361/492MHz": 6,
+      "CPU4/GPU=3/3,2361/492MHz": 3,
+      "CPU4/GPU=2/2,2208/456MHz": 1,
+      "CPU4/GPU=4/3,2208/456MHz": 1,
+      "CPU4/GPU=4/4,2208/456MHz": 3,
+      "CPU4/GPU=3/4,2208/456MHz": 2
+    },
+    "mode_markers": [
+      "SHOCK2QUEST_HITBOX_BENCHMARK omit_proxies=false gameplay_valid=true"
+    ]
+  },
+  {
+    "run": "fixed-2-omit-many",
+    "mission": "many.mis",
+    "physics_ms": 1.2325649354166675,
+    "physics_windows": 4,
+    "stages": {
+      "broad_phase_ms": 0.19183076291666676,
+      "ccd_ms": 0.0,
+      "controller_ms": 0.16679112999999993,
+      "events_ms": 0.0003139962500000003,
+      "islands_ms": 0.10218581458333331,
+      "narrow_phase_ms": 0.3934738345833334,
+      "prepare_ms": 0.02529183625,
+      "solver_ms": 0.1651181774999999,
+      "step_ms": 1.0401679729166673,
+      "update_ms": 0.059159762916666636,
+      "user_changes_ms": 0.018774186666666675
+    },
+    "kinematic_per_tick": 0.0,
+    "update_ms": 5.498,
+    "app_ms": 5.03,
+    "fps": 90.233,
+    "min_fps": 89,
+    "stale": 30,
+    "torn": 9,
+    "skipped": 0,
+    "temperature": 35,
+    "scene_objects_range": [
+      120,
+      123
+    ],
+    "ready": {
+      "target_refresh_hz": 90,
+      "requested_refresh_hz": 90,
+      "refresh_hz": 90,
+      "eye_width": 1680,
+      "eye_height": 1760,
+      "refresh_rate_changes": []
+    },
+    "memory": {
+      "total_pss_mib": 655.1,
+      "total_rss_mib": 795.1,
+      "graphics_pss_mib": 401.3
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 89.659,
+        "min": 87.948,
+        "p5": 88.256,
+        "p95": 90.072,
+        "max": 90.084
+      },
+      "frame_ms": {
+        "mean": 11.154,
+        "min": 11.101,
+        "p5": 11.102,
+        "p95": 11.331,
+        "max": 11.37
+      },
+      "update_ms": {
+        "mean": 5.498,
+        "min": 5.211,
+        "p5": 5.258,
+        "p95": 5.868,
+        "max": 5.944
+      },
+      "scene_ms": {
+        "mean": 0.651,
+        "min": 0.613,
+        "p5": 0.619,
+        "p95": 0.695,
+        "max": 0.727
+      },
+      "left_eye_ms": {
+        "mean": 0.947,
+        "min": 0.9,
+        "p5": 0.907,
+        "p95": 0.99,
+        "max": 1.005
+      },
+      "right_eye_ms": {
+        "mean": 0.722,
+        "min": 0.679,
+        "p5": 0.68,
+        "p95": 0.757,
+        "max": 0.764
+      },
+      "finish_ms": {
+        "mean": 1.705,
+        "min": 1.651,
+        "p5": 1.653,
+        "p95": 1.799,
+        "max": 1.811
+      },
+      "submit_ms": {
+        "mean": 0.34,
+        "min": 0.311,
+        "p5": 0.322,
+        "p95": 0.363,
+        "max": 0.366
+      }
+    },
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 90.233,
+        "min": 89,
+        "p5": 89,
+        "p95": 91,
+        "max": 91
+      },
+      "app_ms": {
+        "mean": 5.03,
+        "min": 4.48,
+        "p5": 4.9,
+        "p95": 5.18,
+        "max": 5.22
+      },
+      "compositor_ms": {
+        "mean": 0.807,
+        "min": 0.75,
+        "p5": 0.79,
+        "p95": 0.82,
+        "max": 0.82
+      },
+      "cpu_gpu_ms": {
+        "mean": 15.596,
+        "min": 14.67,
+        "p5": 14.82,
+        "p95": 16.55,
+        "max": 17.12
+      },
+      "gpu_load": {
+        "mean": 0.553,
+        "min": 0.53,
+        "p5": 0.54,
+        "p95": 0.57,
+        "max": 0.57
+      },
+      "cpu_load": {
+        "mean": 0.374,
+        "min": 0.34,
+        "p5": 0.35,
+        "p95": 0.4,
+        "max": 0.4
+      },
+      "temperature_c": {
+        "mean": 35,
+        "min": 35,
+        "p5": 35,
+        "p95": 35,
+        "max": 35
+      },
+      "stale_frames": 30,
+      "torn_frames": 9
+    },
+    "clock_records": {
+      "CPU4/GPU=2/2,2361/456MHz": 23,
+      "CPU4/GPU=2/2,2208/456MHz": 5,
+      "CPU4/GPU=4/3,2208/456MHz": 1,
+      "CPU4/GPU=4/4,2208/456MHz": 1
+    },
+    "mode_markers": [
+      "SHOCK2QUEST_HITBOX_BENCHMARK omit_proxies=true gameplay_valid=false"
+    ]
+  },
+  {
+    "run": "fixed-2-omit-medsci1",
+    "mission": "medsci1.mis",
+    "physics_ms": 1.0816769577777783,
+    "physics_windows": 3,
+    "stages": {
+      "broad_phase_ms": 0.2190011472222223,
+      "ccd_ms": 0.0,
+      "controller_ms": 0.07529515999999997,
+      "events_ms": 0.00026845833333333436,
+      "islands_ms": 0.11504141888888883,
+      "narrow_phase_ms": 0.2851627305555555,
+      "prepare_ms": 0.03303249722222223,
+      "solver_ms": 0.1003674461111111,
+      "step_ms": 0.9730808422222226,
+      "update_ms": 0.07820759555555552,
+      "user_changes_ms": 0.019472450555555555
+    },
+    "kinematic_per_tick": 0.0,
+    "update_ms": 4.834,
+    "app_ms": 2.568,
+    "fps": 89.3,
+    "min_fps": 87,
+    "stale": 138,
+    "torn": 0,
+    "skipped": 0,
+    "temperature": 35,
+    "scene_objects_range": [
+      182,
+      188
+    ],
+    "ready": {
+      "target_refresh_hz": 90,
+      "requested_refresh_hz": 90,
+      "refresh_hz": 90,
+      "eye_width": 1680,
+      "eye_height": 1760,
+      "refresh_rate_changes": []
+    },
+    "memory": {
+      "total_pss_mib": 748.4,
+      "total_rss_mib": 888.6,
+      "graphics_pss_mib": 467.2
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 88.707,
+        "min": 85.794,
+        "p5": 86.119,
+        "p95": 89.973,
+        "max": 90.072
+      },
+      "frame_ms": {
+        "mean": 11.275,
+        "min": 11.102,
+        "p5": 11.114,
+        "p95": 11.612,
+        "max": 11.656
+      },
+      "update_ms": {
+        "mean": 4.834,
+        "min": 4.501,
+        "p5": 4.605,
+        "p95": 5.131,
+        "max": 5.241
+      },
+      "scene_ms": {
+        "mean": 0.821,
+        "min": 0.722,
+        "p5": 0.725,
+        "p95": 0.936,
+        "max": 0.955
+      },
+      "left_eye_ms": {
+        "mean": 1.507,
+        "min": 1.418,
+        "p5": 1.426,
+        "p95": 1.581,
+        "max": 1.584
+      },
+      "right_eye_ms": {
+        "mean": 1.139,
+        "min": 1.091,
+        "p5": 1.098,
+        "p95": 1.188,
+        "max": 1.195
+      },
+      "finish_ms": {
+        "mean": 0.957,
+        "min": 0.724,
+        "p5": 0.785,
+        "p95": 1.119,
+        "max": 1.139
+      },
+      "submit_ms": {
+        "mean": 0.328,
+        "min": 0.307,
+        "p5": 0.311,
+        "p95": 0.344,
+        "max": 0.347
+      }
+    },
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 89.3,
+        "min": 87,
+        "p5": 87,
+        "p95": 91,
+        "max": 91
+      },
+      "app_ms": {
+        "mean": 2.568,
+        "min": 2.24,
+        "p5": 2.31,
+        "p95": 2.7,
+        "max": 2.71
+      },
+      "compositor_ms": {
+        "mean": 0.776,
+        "min": 0.71,
+        "p5": 0.72,
+        "p95": 0.8,
+        "max": 0.8
+      },
+      "cpu_gpu_ms": {
+        "mean": 12.453,
+        "min": 11.12,
+        "p5": 11.13,
+        "p95": 14.59,
+        "max": 14.59
+      },
+      "gpu_load": {
+        "mean": 0.317,
+        "min": 0.29,
+        "p5": 0.3,
+        "p95": 0.33,
+        "max": 0.33
+      },
+      "cpu_load": {
+        "mean": 0.34,
+        "min": 0.31,
+        "p5": 0.31,
+        "p95": 0.37,
+        "max": 0.37
+      },
+      "temperature_c": {
+        "mean": 35,
+        "min": 35,
+        "p5": 35,
+        "p95": 35,
+        "max": 35
+      },
+      "stale_frames": 138,
+      "torn_frames": 0
+    },
+    "clock_records": {
+      "CPU4/GPU=2/2,2361/456MHz": 14,
+      "CPU4/GPU=3/3,2361/456MHz": 3,
+      "CPU4/GPU=2/3,2361/456MHz": 2,
+      "CPU4/GPU=3/2,2361/456MHz": 1,
+      "CPU4/GPU=2/2,2208/492MHz": 2,
+      "CPU4/GPU=3/2,2208/492MHz": 3,
+      "CPU4/GPU=2/3,2208/492MHz": 2,
+      "CPU4/GPU=4/3,2208/492MHz": 1,
+      "CPU4/GPU=4/4,2208/492MHz": 2
+    },
+    "mode_markers": [
+      "SHOCK2QUEST_HITBOX_BENCHMARK omit_proxies=true gameplay_valid=false"
+    ]
+  },
+  {
+    "run": "fixed-5-omit-many",
+    "mission": "many.mis",
+    "physics_ms": 1.261275702777778,
+    "physics_windows": 3,
+    "stages": {
+      "broad_phase_ms": 0.189602486111111,
+      "ccd_ms": 0.0,
+      "controller_ms": 0.16747838444444432,
+      "events_ms": 0.0003323455555555565,
+      "islands_ms": 0.10593654999999996,
+      "narrow_phase_ms": 0.40509982611111106,
+      "prepare_ms": 0.024092588888888884,
+      "solver_ms": 0.17562675500000008,
+      "step_ms": 1.069372383888889,
+      "update_ms": 0.06052336333333334,
+      "user_changes_ms": 0.018128511111111106
+    },
+    "kinematic_per_tick": 0.0,
+    "update_ms": 5.455,
+    "app_ms": 4.831,
+    "fps": 90.1,
+    "min_fps": 89,
+    "stale": 50,
+    "torn": 11,
+    "skipped": 0,
+    "temperature": 37.2,
+    "scene_objects_range": [
+      120,
+      122
+    ],
+    "ready": {
+      "target_refresh_hz": 90,
+      "requested_refresh_hz": 90,
+      "refresh_hz": 90,
+      "eye_width": 1680,
+      "eye_height": 1760,
+      "refresh_rate_changes": []
+    },
+    "memory": {
+      "total_pss_mib": 655.8,
+      "total_rss_mib": 795.9,
+      "graphics_pss_mib": 401.6
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 89.496,
+        "min": 87.931,
+        "p5": 88.898,
+        "p95": 90.058,
+        "max": 90.091
+      },
+      "frame_ms": {
+        "mean": 11.174,
+        "min": 11.1,
+        "p5": 11.104,
+        "p95": 11.249,
+        "max": 11.373
+      },
+      "update_ms": {
+        "mean": 5.455,
+        "min": 5.264,
+        "p5": 5.336,
+        "p95": 5.724,
+        "max": 5.79
+      },
+      "scene_ms": {
+        "mean": 0.64,
+        "min": 0.602,
+        "p5": 0.611,
+        "p95": 0.696,
+        "max": 0.697
+      },
+      "left_eye_ms": {
+        "mean": 0.969,
+        "min": 0.919,
+        "p5": 0.926,
+        "p95": 1.014,
+        "max": 1.055
+      },
+      "right_eye_ms": {
+        "mean": 0.759,
+        "min": 0.711,
+        "p5": 0.728,
+        "p95": 0.795,
+        "max": 0.805
+      },
+      "finish_ms": {
+        "mean": 1.722,
+        "min": 1.645,
+        "p5": 1.659,
+        "p95": 1.816,
+        "max": 1.826
+      },
+      "submit_ms": {
+        "mean": 0.331,
+        "min": 0.309,
+        "p5": 0.315,
+        "p95": 0.353,
+        "max": 0.356
+      }
+    },
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 90.1,
+        "min": 89,
+        "p5": 89,
+        "p95": 91,
+        "max": 91
+      },
+      "app_ms": {
+        "mean": 4.831,
+        "min": 4.23,
+        "p5": 4.58,
+        "p95": 5.02,
+        "max": 5.04
+      },
+      "compositor_ms": {
+        "mean": 0.798,
+        "min": 0.75,
+        "p5": 0.77,
+        "p95": 0.83,
+        "max": 0.84
+      },
+      "cpu_gpu_ms": {
+        "mean": 15.143,
+        "min": 14.07,
+        "p5": 14.08,
+        "p95": 16.36,
+        "max": 17.43
+      },
+      "gpu_load": {
+        "mean": 0.525,
+        "min": 0.49,
+        "p5": 0.5,
+        "p95": 0.55,
+        "max": 0.55
+      },
+      "cpu_load": {
+        "mean": 0.368,
+        "min": 0.35,
+        "p5": 0.35,
+        "p95": 0.39,
+        "max": 0.41
+      },
+      "temperature_c": {
+        "mean": 37.2,
+        "min": 37,
+        "p5": 37,
+        "p95": 38,
+        "max": 38
+      },
+      "stale_frames": 50,
+      "torn_frames": 11
+    },
+    "clock_records": {
+      "CPU4/GPU=2/3,2361/456MHz": 2,
+      "CPU4/GPU=3/3,2361/456MHz": 3,
+      "CPU4/GPU=2/2,2361/456MHz": 8,
+      "CPU4/GPU=4/4,2361/492MHz": 2,
+      "CPU4/GPU=3/3,2361/492MHz": 1,
+      "CPU4/GPU=2/2,2361/492MHz": 7,
+      "CPU4/GPU=3/2,2361/456MHz": 2,
+      "CPU4/GPU=3/3,2208/492MHz": 2,
+      "CPU4/GPU=2/3,2208/492MHz": 2,
+      "CPU4/GPU=3/2,2208/492MHz": 1
+    },
+    "mode_markers": [
+      "SHOCK2QUEST_HITBOX_BENCHMARK omit_proxies=true gameplay_valid=false"
+    ]
+  },
+  {
+    "run": "fixed-5-omit-medsci1",
+    "mission": "medsci1.mis",
+    "physics_ms": 1.0098301433333337,
+    "physics_windows": 3,
+    "stages": {
+      "broad_phase_ms": 0.20914344666666668,
+      "ccd_ms": 0.0,
+      "controller_ms": 0.07149548499999998,
+      "events_ms": 0.0002622344444444452,
+      "islands_ms": 0.10298191333333331,
+      "narrow_phase_ms": 0.2697978355555557,
+      "prepare_ms": 0.032557368888888875,
+      "solver_ms": 0.08840357055555556,
+      "step_ms": 0.9055150550000003,
+      "update_ms": 0.0754094444444445,
+      "user_changes_ms": 0.01862976055555555
+    },
+    "kinematic_per_tick": 0.0,
+    "update_ms": 4.615,
+    "app_ms": 2.344,
+    "fps": 89.833,
+    "min_fps": 87,
+    "stale": 93,
+    "torn": 0,
+    "skipped": 0,
+    "temperature": 37.267,
+    "scene_objects_range": [
+      185,
+      189
+    ],
+    "ready": {
+      "target_refresh_hz": 90,
+      "requested_refresh_hz": 90,
+      "refresh_hz": 90,
+      "eye_width": 1680,
+      "eye_height": 1760,
+      "refresh_rate_changes": []
+    },
+    "memory": {
+      "total_pss_mib": 747.4,
+      "total_rss_mib": 887.3,
+      "graphics_pss_mib": 466.6
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 89.302,
+        "min": 87.939,
+        "p5": 87.982,
+        "p95": 90.145,
+        "max": 90.149
+      },
+      "frame_ms": {
+        "mean": 11.199,
+        "min": 11.093,
+        "p5": 11.093,
+        "p95": 11.366,
+        "max": 11.372
+      },
+      "update_ms": {
+        "mean": 4.615,
+        "min": 4.316,
+        "p5": 4.374,
+        "p95": 4.82,
+        "max": 4.838
+      },
+      "scene_ms": {
+        "mean": 0.804,
+        "min": 0.722,
+        "p5": 0.738,
+        "p95": 0.896,
+        "max": 0.904
+      },
+      "left_eye_ms": {
+        "mean": 1.523,
+        "min": 1.437,
+        "p5": 1.448,
+        "p95": 1.593,
+        "max": 1.612
+      },
+      "right_eye_ms": {
+        "mean": 1.147,
+        "min": 1.089,
+        "p5": 1.097,
+        "p95": 1.2,
+        "max": 1.204
+      },
+      "finish_ms": {
+        "mean": 0.986,
+        "min": 0.676,
+        "p5": 0.842,
+        "p95": 1.071,
+        "max": 1.127
+      },
+      "submit_ms": {
+        "mean": 0.319,
+        "min": 0.306,
+        "p5": 0.307,
+        "p95": 0.331,
+        "max": 0.333
+      }
+    },
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 89.833,
+        "min": 87,
+        "p5": 88,
+        "p95": 91,
+        "max": 91
+      },
+      "app_ms": {
+        "mean": 2.344,
+        "min": 2.07,
+        "p5": 2.09,
+        "p95": 2.52,
+        "max": 2.52
+      },
+      "compositor_ms": {
+        "mean": 0.756,
+        "min": 0.68,
+        "p5": 0.7,
+        "p95": 0.8,
+        "max": 0.81
+      },
+      "cpu_gpu_ms": {
+        "mean": 11.944,
+        "min": 10.34,
+        "p5": 10.39,
+        "p95": 13.72,
+        "max": 14.04
+      },
+      "gpu_load": {
+        "mean": 0.295,
+        "min": 0.27,
+        "p5": 0.27,
+        "p95": 0.31,
+        "max": 0.31
+      },
+      "cpu_load": {
+        "mean": 0.344,
+        "min": 0.32,
+        "p5": 0.33,
+        "p95": 0.37,
+        "max": 0.37
+      },
+      "temperature_c": {
+        "mean": 37.267,
+        "min": 37,
+        "p5": 37,
+        "p95": 38,
+        "max": 38
+      },
+      "stale_frames": 93,
+      "torn_frames": 0
+    },
+    "clock_records": {
+      "CPU4/GPU=2/2,2361/456MHz": 7,
+      "CPU4/GPU=3/3,2361/456MHz": 3,
+      "CPU4/GPU=4/4,2361/456MHz": 3,
+      "CPU4/GPU=3/4,2361/456MHz": 2,
+      "CPU4/GPU=2/3,2361/456MHz": 1,
+      "CPU4/GPU=4/2,2361/456MHz": 1,
+      "CPU4/GPU=2/2,1382/456MHz": 4,
+      "CPU4/GPU=3/3,1382/456MHz": 1,
+      "CPU4/GPU=4/4,1382/456MHz": 4,
+      "CPU4/GPU=3/4,1382/456MHz": 1,
+      "CPU4/GPU=2/3,2208/492MHz": 1,
+      "CPU4/GPU=2/2,2208/492MHz": 1,
+      "CPU4/GPU=3/3,2208/492MHz": 1
+    },
+    "mode_markers": [
+      "SHOCK2QUEST_HITBOX_BENCHMARK omit_proxies=true gameplay_valid=false"
+    ]
+  },
+  {
+    "run": "fixed-6-scalar-many",
+    "mission": "many.mis",
+    "physics_ms": 1.8751985205555552,
+    "physics_windows": 3,
+    "stages": {
+      "broad_phase_ms": 0.40941120833333344,
+      "ccd_ms": 0.0,
+      "controller_ms": 0.17602885166666657,
+      "events_ms": 0.00047430777777777847,
+      "islands_ms": 0.16789493333333333,
+      "narrow_phase_ms": 0.5016213149999997,
+      "prepare_ms": 0.044165601111111105,
+      "solver_ms": 0.2165201138888889,
+      "step_ms": 1.6545297599999997,
+      "update_ms": 0.11674248555555554,
+      "user_changes_ms": 0.04324203111111113
+    },
+    "kinematic_per_tick": 488.0,
+    "update_ms": 6.544,
+    "app_ms": 4.525,
+    "fps": 87.933,
+    "min_fps": 86,
+    "stale": 115,
+    "torn": 9,
+    "skipped": 0,
+    "temperature": 38,
+    "scene_objects_range": [
+      120,
+      122
+    ],
+    "ready": {
+      "target_refresh_hz": 90,
+      "requested_refresh_hz": 90,
+      "refresh_hz": 90,
+      "eye_width": 1680,
+      "eye_height": 1760,
+      "refresh_rate_changes": []
+    },
+    "memory": {
+      "total_pss_mib": 657.1,
+      "total_rss_mib": 796.9,
+      "graphics_pss_mib": 403
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 87.411,
+        "min": 85.244,
+        "p5": 85.532,
+        "p95": 88.995,
+        "max": 89.117
+      },
+      "frame_ms": {
+        "mean": 11.442,
+        "min": 11.221,
+        "p5": 11.237,
+        "p95": 11.692,
+        "max": 11.731
+      },
+      "update_ms": {
+        "mean": 6.544,
+        "min": 6.304,
+        "p5": 6.306,
+        "p95": 6.95,
+        "max": 6.985
+      },
+      "scene_ms": {
+        "mean": 0.675,
+        "min": 0.618,
+        "p5": 0.628,
+        "p95": 0.715,
+        "max": 0.733
+      },
+      "left_eye_ms": {
+        "mean": 0.947,
+        "min": 0.911,
+        "p5": 0.913,
+        "p95": 0.984,
+        "max": 1.009
+      },
+      "right_eye_ms": {
+        "mean": 0.696,
+        "min": 0.676,
+        "p5": 0.677,
+        "p95": 0.72,
+        "max": 0.729
+      },
+      "finish_ms": {
+        "mean": 1.668,
+        "min": 1.602,
+        "p5": 1.604,
+        "p95": 1.757,
+        "max": 1.765
+      },
+      "submit_ms": {
+        "mean": 0.326,
+        "min": 0.305,
+        "p5": 0.307,
+        "p95": 0.351,
+        "max": 0.355
+      }
+    },
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 87.933,
+        "min": 86,
+        "p5": 86,
+        "p95": 90,
+        "max": 90
+      },
+      "app_ms": {
+        "mean": 4.525,
+        "min": 4.25,
+        "p5": 4.25,
+        "p95": 5.05,
+        "max": 5.1
+      },
+      "compositor_ms": {
+        "mean": 0.754,
+        "min": 0.71,
+        "p5": 0.71,
+        "p95": 0.8,
+        "max": 0.8
+      },
+      "cpu_gpu_ms": {
+        "mean": 15.814,
+        "min": 14.88,
+        "p5": 14.88,
+        "p95": 17.07,
+        "max": 17.36
+      },
+      "gpu_load": {
+        "mean": 0.487,
+        "min": 0.47,
+        "p5": 0.47,
+        "p95": 0.52,
+        "max": 0.53
+      },
+      "cpu_load": {
+        "mean": 0.399,
+        "min": 0.37,
+        "p5": 0.38,
+        "p95": 0.42,
+        "max": 0.42
+      },
+      "temperature_c": {
+        "mean": 38,
+        "min": 38,
+        "p5": 38,
+        "p95": 38,
+        "max": 38
+      },
+      "stale_frames": 115,
+      "torn_frames": 9
+    },
+    "clock_records": {
+      "CPU4/GPU=4/4,2361/456MHz": 1,
+      "CPU4/GPU=4/4,2361/545MHz": 5,
+      "CPU4/GPU=4/3,2361/545MHz": 1,
+      "CPU4/GPU=3/3,2361/545MHz": 4,
+      "CPU4/GPU=3/3,1651/492MHz": 2,
+      "CPU4/GPU=2/2,1651/492MHz": 2,
+      "CPU4/GPU=3/2,1651/492MHz": 1,
+      "CPU4/GPU=4/3,1651/492MHz": 2,
+      "CPU4/GPU=4/4,1651/492MHz": 1,
+      "CPU4/GPU=3/4,1651/492MHz": 2,
+      "CPU4/GPU=3/3,2361/492MHz": 1,
+      "CPU4/GPU=2/3,2361/492MHz": 1,
+      "CPU4/GPU=4/3,2361/492MHz": 1,
+      "CPU4/GPU=4/4,2361/492MHz": 6
+    },
+    "mode_markers": [
+      "SHOCK2QUEST_HITBOX_BENCHMARK omit_proxies=false gameplay_valid=true"
+    ]
+  },
+  {
+    "run": "fixed-6-scalar-medsci1",
+    "mission": "medsci1.mis",
+    "physics_ms": 1.4268527999999996,
+    "physics_windows": 3,
+    "stages": {
+      "broad_phase_ms": 0.35602487055555565,
+      "ccd_ms": 0.0,
+      "controller_ms": 0.07822295777777778,
+      "events_ms": 0.0002387227777777784,
+      "islands_ms": 0.15017118166666665,
+      "narrow_phase_ms": 0.35284213388888885,
+      "prepare_ms": 0.04315873611111111,
+      "solver_ms": 0.11862196055555552,
+      "step_ms": 1.3052323833333328,
+      "update_ms": 0.10329771722222228,
+      "user_changes_ms": 0.029043491666666664
+    },
+    "kinematic_per_tick": 206.0,
+    "update_ms": 5.289,
+    "app_ms": 2.603,
+    "fps": 87.867,
+    "min_fps": 84,
+    "stale": 190,
+    "torn": 0,
+    "skipped": 0,
+    "temperature": 38,
+    "scene_objects_range": [
+      183,
+      189
+    ],
+    "ready": {
+      "target_refresh_hz": 90,
+      "requested_refresh_hz": 90,
+      "refresh_hz": 90,
+      "eye_width": 1680,
+      "eye_height": 1760,
+      "refresh_rate_changes": []
+    },
+    "memory": {
+      "total_pss_mib": 748.5,
+      "total_rss_mib": 888.5,
+      "graphics_pss_mib": 467.3
+    },
+    "engine": {
+      "samples": 30,
+      "focused_samples": 30,
+      "unfocused_samples": 0,
+      "skipped_frames": 0,
+      "fps": {
+        "mean": 87.208,
+        "min": 84.314,
+        "p5": 84.326,
+        "p95": 89.15,
+        "max": 89.972
+      },
+      "frame_ms": {
+        "mean": 11.47,
+        "min": 11.115,
+        "p5": 11.217,
+        "p95": 11.859,
+        "max": 11.86
+      },
+      "update_ms": {
+        "mean": 5.289,
+        "min": 5.08,
+        "p5": 5.119,
+        "p95": 5.619,
+        "max": 5.623
+      },
+      "scene_ms": {
+        "mean": 0.826,
+        "min": 0.725,
+        "p5": 0.73,
+        "p95": 0.904,
+        "max": 0.938
+      },
+      "left_eye_ms": {
+        "mean": 1.526,
+        "min": 1.448,
+        "p5": 1.467,
+        "p95": 1.614,
+        "max": 1.629
+      },
+      "right_eye_ms": {
+        "mean": 1.152,
+        "min": 1.104,
+        "p5": 1.108,
+        "p95": 1.195,
+        "max": 1.237
+      },
+      "finish_ms": {
+        "mean": 0.995,
+        "min": 0.803,
+        "p5": 0.847,
+        "p95": 1.191,
+        "max": 1.207
+      },
+      "submit_ms": {
+        "mean": 0.322,
+        "min": 0.307,
+        "p5": 0.308,
+        "p95": 0.336,
+        "max": 0.342
+      }
+    },
+    "vrapi": {
+      "samples": 30,
+      "fps": {
+        "mean": 87.867,
+        "min": 84,
+        "p5": 85,
+        "p95": 90,
+        "max": 90
+      },
+      "app_ms": {
+        "mean": 2.603,
+        "min": 2.27,
+        "p5": 2.28,
+        "p95": 2.75,
+        "max": 2.76
+      },
+      "compositor_ms": {
+        "mean": 0.765,
+        "min": 0.69,
+        "p5": 0.7,
+        "p95": 0.79,
+        "max": 0.8
+      },
+      "cpu_gpu_ms": {
+        "mean": 13.139,
+        "min": 11.31,
+        "p5": 11.68,
+        "p95": 14.66,
+        "max": 15.1
+      },
+      "gpu_load": {
+        "mean": 0.315,
+        "min": 0.29,
+        "p5": 0.29,
+        "p95": 0.33,
+        "max": 0.33
+      },
+      "cpu_load": {
+        "mean": 0.357,
+        "min": 0.33,
+        "p5": 0.33,
+        "p95": 0.38,
+        "max": 0.4
+      },
+      "temperature_c": {
+        "mean": 38,
+        "min": 38,
+        "p5": 38,
+        "p95": 38,
+        "max": 38
+      },
+      "stale_frames": 190,
+      "torn_frames": 0
+    },
+    "clock_records": {
+      "CPU4/GPU=2/3,2361/492MHz": 1,
+      "CPU4/GPU=2/2,2361/492MHz": 2,
+      "CPU4/GPU=2/2,2361/456MHz": 7,
+      "CPU4/GPU=3/3,2361/456MHz": 1,
+      "CPU4/GPU=3/2,2361/456MHz": 1,
+      "CPU4/GPU=4/3,2361/456MHz": 1,
+      "CPU4/GPU=3/4,2361/545MHz": 1,
+      "CPU4/GPU=2/3,2361/545MHz": 2,
+      "CPU4/GPU=2/2,2361/545MHz": 6,
+      "CPU4/GPU=3/2,2361/545MHz": 1,
+      "CPU4/GPU=3/2,2208/456MHz": 1,
+      "CPU4/GPU=4/3,2208/456MHz": 1,
+      "CPU4/GPU=4/4,2208/456MHz": 2,
+      "CPU4/GPU=3/3,2208/456MHz": 1,
+      "CPU4/GPU=2/2,2208/456MHz": 2
+    },
+    "mode_markers": [
+      "SHOCK2QUEST_HITBOX_BENCHMARK omit_proxies=false gameplay_valid=true"
+    ]
+  }
+]

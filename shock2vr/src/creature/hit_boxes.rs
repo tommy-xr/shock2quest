@@ -184,6 +184,8 @@ fn is_finite(v: Vector3<f32>) -> bool {
 }
 
 pub struct HitBoxManager {
+    #[cfg(feature = "physics-profiling")]
+    benchmark_omit_proxies: bool,
     // Map entity to all the corresponding entities for their joints
     pub hit_boxes: HashMap<EntityId, HashMap<JointId, EntityId>>,
 }
@@ -223,7 +225,18 @@ impl HitBoxManager {
     }
 
     pub fn new() -> HitBoxManager {
+        #[cfg(feature = "physics-profiling")]
+        let benchmark_omit_proxies =
+            std::fs::read_to_string(crate::paths::data_root().join("hitbox-benchmark.txt"))
+                .is_ok_and(|value| value.trim() == "omit-proxies");
+        #[cfg(feature = "physics-profiling")]
+        eprintln!(
+            "SHOCK2QUEST_HITBOX_BENCHMARK omit_proxies={benchmark_omit_proxies} gameplay_valid={}",
+            !benchmark_omit_proxies
+        );
         HitBoxManager {
+            #[cfg(feature = "physics-profiling")]
+            benchmark_omit_proxies,
             hit_boxes: HashMap::new(),
         }
     }
@@ -386,6 +399,15 @@ impl HitBoxManager {
 
                     let pos = point3_to_vec3(get_position_from_matrix(&joint_xform));
                     let rotation = get_rotation_from_matrix(&joint_xform);
+                    // Cost ablation only: retain animation, joint transforms, ECS
+                    // proxies and scripts, but omit Rapier limb maintenance.
+                    // Damage/melee are intentionally incomplete in this mode.
+                    #[cfg(feature = "physics-profiling")]
+                    if self.benchmark_omit_proxies {
+                        joint_updates.insert(*hit_box_entry, joint_xform);
+                        joint_index += 1;
+                        continue;
+                    }
                     // If there is not a physics entity yet, create one
                     if !id_to_physics.contains_key(hit_box_entry) {
                         let physics_handle = physics.add_kinematic_shared_shape(
@@ -403,6 +425,8 @@ impl HitBoxManager {
                         physics.set_position_rotation2(*hit_box_entry, pos, rotation);
                     }
 
+                    #[cfg(feature = "damage-query-audit")]
+                    physics.register_damage_hitbox(*hit_box_entry, parent_entity_id);
                     joint_updates.insert(*hit_box_entry, joint_xform);
 
                     joint_index += 1;

@@ -1,6 +1,10 @@
+#[cfg(any(test, feature = "damage-query-audit"))]
+mod damage_queries;
 mod debug_render_pipeline;
 mod held_recovery;
 mod physics_events;
+#[cfg(feature = "physics-profiling")]
+mod profiling;
 pub use held_recovery::{HeldRecovery, HeldRecoveryContext};
 pub(crate) mod util;
 
@@ -3699,10 +3703,16 @@ impl PlayerHandle {
 const HELD_ITEM_SKIN: f32 = 0.01;
 
 pub struct PhysicsWorld {
+    #[cfg(feature = "damage-query-audit")]
+    damage_owners: HashMap<EntityId, EntityId>,
+    #[cfg(feature = "damage-query-audit")]
+    damage_audit_steps: u64,
     ignored_collision_pairs: HashSet<(u128, u128)>,
     gravity: Vector<Real>,
     integration_parameters: IntegrationParameters,
     physics_pipeline: PhysicsPipeline,
+    #[cfg(feature = "physics-profiling")]
+    profile: profiling::PhysicsProfile,
     island_manager: IslandManager,
     broad_phase: DefaultBroadPhase,
     /// Whether the pipeline has stepped at least once. Rapier builds the
@@ -6322,6 +6332,9 @@ impl PhysicsWorld {
     }
 
     pub fn remove(&mut self, entity_id: EntityId) {
+        #[cfg(feature = "damage-query-audit")]
+        self.damage_owners
+            .retain(|child, owner| *child != entity_id && *owner != entity_id);
         let removed = entity_id.inner() as u128;
         self.ignored_collision_pairs
             .retain(|(a, b)| *a != removed && *b != removed);
@@ -6583,11 +6596,17 @@ impl PhysicsWorld {
         );
 
         PhysicsWorld {
+            #[cfg(feature = "damage-query-audit")]
+            damage_owners: HashMap::new(),
+            #[cfg(feature = "damage-query-audit")]
+            damage_audit_steps: 0,
             ignored_collision_pairs: HashSet::new(),
             gravity,
             integration_parameters,
             collider_set,
             physics_pipeline,
+            #[cfg(feature = "physics-profiling")]
+            profile: profiling::PhysicsProfile::default(),
             island_manager,
             broad_phase,
             has_stepped: false,
@@ -6995,6 +7014,8 @@ impl PhysicsWorld {
         request: PlayerMoveRequest,
         player_handle: &mut PlayerHandle,
     ) -> (Vector3<f32>, Vec<CollisionEvent>) {
+        #[cfg(feature = "physics-profiling")]
+        let started = std::time::Instant::now();
         // Queue every PhysAttach child at its parent's same next-frame target
         // before Rapier derives kinematic velocities. Moving-terrain assemblies
         // (tram floor + walls/buttons) therefore advance as one physical body,
@@ -7010,6 +7031,9 @@ impl PhysicsWorld {
         // consumes it (see report_nonfinite_rigid_body_state) - by the time
         // parry panics, the culprit is already named in the log.
         self.report_nonfinite_rigid_body_state();
+
+        #[cfg(feature = "physics-profiling")]
+        let prepared = std::time::Instant::now();
 
         /* Run the game loop, stepping the simulation once per frame. */
         profile!(scope: "physics", level: TRACE, "physics.step", {
@@ -7033,14 +7057,34 @@ impl PhysicsWorld {
         });
         self.has_stepped = true;
 
+        #[cfg(feature = "physics-profiling")]
+        let stepped = std::time::Instant::now();
+
         // Update character controller
         let (mut collision_events, character_body) =
             self.move_player(request, player_handle, medium_sample_y);
         let translation = nvec_to_cgmath(*character_body.translation());
 
+        #[cfg(feature = "physics-profiling")]
+        let controlled = std::time::Instant::now();
+
         let mut additional_collision_events = { self.events.get_and_clear_events() };
 
         collision_events.append(&mut additional_collision_events);
+
+        #[cfg(feature = "physics-profiling")]
+        self.profile.record(
+            &self.physics_pipeline.counters,
+            [
+                prepared.duration_since(started),
+                stepped.duration_since(prepared),
+                controlled.duration_since(stepped),
+                controlled.elapsed(),
+            ],
+        );
+
+        #[cfg(feature = "damage-query-audit")]
+        self.audit_damage_queries();
 
         // Output result
         (translation, collision_events)
