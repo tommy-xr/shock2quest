@@ -46,6 +46,37 @@ const MAX_ALIVE: usize = 15;
 const OS_STATIONS: i32 = 60_300;
 const OS_WAVES: [u32; 4] = [0, 3, 6, 9];
 
+// Earth's blinking red fixtures identify themselves by their authored alarm
+// script. Leave steady/decorative lighting alone.
+fn is_wave_alarm(light: &PropAnimLight, scripts: &PropScripts) -> bool {
+    light.mode == AnimLightMode::Alternate
+        && scripts
+            .scripts
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case("LightSoundOn"))
+}
+
+fn wave_alarms(world: &World, active: bool) -> Effect {
+    let (lights, scripts) = world
+        .borrow::<(View<PropAnimLight>, View<PropScripts>)>()
+        .unwrap();
+    Effect::Multiple(
+        (&lights, &scripts)
+            .iter()
+            .with_id()
+            .filter(|(_, (light, scripts))| {
+                is_wave_alarm(light, scripts)
+                    && (light.inactive == active || (!active && light.initial_intensity() != 0.0))
+            })
+            .map(|(entity_id, _)| Effect::SetAnimatedLight {
+                entity_id,
+                intensity: if active { 1.0 } else { 0.0 },
+                inactive: !active,
+            })
+            .collect(),
+    )
+}
+
 // Unlocks are monotonic: a debug jump backwards never revokes an earned station.
 fn unlock_os_stations(world: &World, wave: u32) -> Vec<Effect> {
     let (ids, locked) = world
@@ -199,6 +230,17 @@ impl EntityPopulator for HordePopulation {
                     .clone();
                 pos.position = door.base_closed_location;
                 world.add_component(entity, (door, pos));
+            }
+            // Silence alarms before the first animated-light update (which
+            // runs before scripts), avoiding a startup flash or beep.
+            let alarm = world.run(|lights: View<PropAnimLight>, scripts: View<PropScripts>| {
+                let light = lights.get(entity).ok()?;
+                is_wave_alarm(light, scripts.get(entity).ok()?).then(|| light.clone())
+            });
+            if let Some(mut light) = alarm {
+                light.inactive = true;
+                light.brightness = Some(0.0);
+                world.add_component(entity, light);
             }
             let kept = world
                 .borrow::<View<PropScripts>>()
@@ -896,6 +938,7 @@ impl HordeDirector {
         effects.extend(self.supplies.start_wave(world, self.wave, self.quick));
         self.phase = Phase::Assault;
         effects.push(self.music());
+        effects.push(wave_alarms(world, true));
         effects.extend(unlock_os_stations(world, self.wave));
         self.spawned = 0;
         self.clock = 0.0;
@@ -961,7 +1004,7 @@ impl HordeDirector {
         tracing::info!(target: "earth_horde", wave=self.wave, phase=?self.phase, spawned=self.spawned, kills=self.kills, "{text}");
         Effect::ShowMessage { text }
     }
-    fn clear_wave(&mut self) -> Effect {
+    fn clear_wave(&mut self, world: &World) -> Effect {
         self.report_shown = false;
         self.phase = if self.wave == self.final_wave() {
             Phase::Victory
@@ -972,6 +1015,7 @@ impl HordeDirector {
         self.next_status = 5.0;
         let effects = vec![
             self.music(),
+            wave_alarms(world, false),
             Effect::SetSurvivalStatus(self.screen_status()),
             Effect::ShowBanner {
                 text: if self.phase == Phase::Victory {
@@ -1222,6 +1266,8 @@ impl Script for HordeDirector {
         }
         if !self.music_synced {
             effects.push(self.music());
+            // Reconcile saved runs without restarting an already-active blink.
+            effects.push(wave_alarms(world, self.phase == Phase::Assault));
             self.music_synced = true;
         }
         if self.phase != Phase::Failed
@@ -1231,6 +1277,7 @@ impl Script for HordeDirector {
         {
             self.phase = Phase::Failed;
             effects.push(self.music());
+            effects.push(wave_alarms(world, false));
             effects.push(self.status());
         }
         if self.phase == Phase::Failed {
@@ -1330,7 +1377,7 @@ impl Script for HordeDirector {
                     && self.enemies.is_empty()
                     && self.clock >= self.assault_seconds()
                 {
-                    effects.push(self.clear_wave());
+                    effects.push(self.clear_wave(world));
                 } else if self.spawned < self.quota()
                     && self.enemies.len() < MAX_ALIVE
                     && self.next_spawn <= 0.0
@@ -1497,7 +1544,7 @@ mod tests {
                 wave,
                 ..Default::default()
             };
-            director.clear_wave();
+            director.clear_wave(&World::new());
             assert_eq!(director.clock, seconds);
             tick(&mut director, &World::new(), seconds - 1.0);
             assert_eq!(director.phase, Phase::Rest);
@@ -1785,12 +1832,12 @@ mod tests {
             wave: FINAL_WAVE,
             ..Default::default()
         };
-        director.clear_wave();
+        director.clear_wave(&world);
         assert_eq!(director.phase, Phase::Victory);
         director.start_wave(&world);
         assert_eq!(director.wave, FINAL_WAVE + 1);
         assert_eq!(director.phase, Phase::Assault);
-        director.clear_wave();
+        director.clear_wave(&world);
         assert_eq!(director.phase, Phase::Rest);
         assert!(director.quota() > WAVE_COUNTS[9]);
     }
@@ -2018,6 +2065,64 @@ mod tests {
     }
 
     #[test]
+    fn wave_alarms_select_authored_alarms_and_preserve_active_phase() {
+        let mut world = World::new();
+        let light = PropAnimLight {
+            offset: vec3(0.0, 0.0, 0.0),
+            cell_index: 0,
+            hit_cells: 0,
+            light_number: 1,
+            mode: AnimLightMode::Alternate,
+            brighten_time_ms: 1000,
+            dim_time_ms: 100,
+            min_brightness: 0.0,
+            max_brightness: 100.0,
+            brightness: Some(0.0),
+            rising: true,
+            countdown_ms: 321,
+            countdown_fraction_ms: 0.5,
+            inactive: true,
+            radius: 10.0,
+        };
+        let alarm = world.add_entity((
+            light.clone(),
+            PropScripts {
+                scripts: vec!["LIghtSoundOn".into()],
+                inherits: false,
+            },
+        ));
+        world.add_entity((
+            light.clone(),
+            PropScripts {
+                scripts: vec!["BaseLight".into()],
+                inherits: false,
+            },
+        ));
+        let Effect::Multiple(on) = wave_alarms(&world, true) else {
+            panic!()
+        };
+        assert!(matches!(on.as_slice(), [Effect::SetAnimatedLight {
+            entity_id, intensity: 1.0, inactive: false
+        }] if *entity_id == alarm));
+        let mut running = light;
+        running.inactive = false;
+        world.add_component(alarm, running);
+        let Effect::Multiple(unchanged) = wave_alarms(&world, true) else {
+            panic!()
+        };
+        assert!(
+            unchanged.is_empty(),
+            "load must not restart an active low interval"
+        );
+        let Effect::Multiple(off) = wave_alarms(&world, false) else {
+            panic!()
+        };
+        assert!(matches!(off.as_slice(), [Effect::SetAnimatedLight {
+            entity_id, intensity: 0.0, inactive: true
+        }] if *entity_id == alarm));
+    }
+
+    #[test]
     fn waves_rotate_level_songs_and_rest_stops_music() {
         let mut director = HordeDirector::default();
         let world = World::new();
@@ -2026,7 +2131,7 @@ mod tests {
                 music_changes(director.start_wave(&world)),
                 vec![Some(WAVE_SONGS[(wave - 1) % WAVE_SONGS.len()].to_owned())]
             );
-            assert_eq!(music_changes(director.clear_wave()), vec![None]);
+            assert_eq!(music_changes(director.clear_wave(&world)), vec![None]);
         }
     }
 
