@@ -18,6 +18,7 @@ pub struct MobileAwareness {
     pub alertness: AlertnessState,
     pub target: Option<Vector3<f32>>,
     pub pinned: bool,
+    pub visible: bool,
 }
 impl MobileAwareness {
     fn cap(world: &World, entity: EntityId) -> PropAIAlertCap {
@@ -48,6 +49,7 @@ impl MobileAwareness {
     }
     pub fn hear(&mut self, world: &World, entity: EntityId, origin: Vector3<f32>) -> Effect {
         self.target = Some(origin);
+        self.visible = false;
         alertness::set_level(
             &mut self.alertness,
             AIAlertLevel::High,
@@ -80,6 +82,7 @@ impl MobileAwareness {
         dt: f32,
     ) -> (bool, Effect) {
         let visible = self.pinned || ai_util::is_player_visible(entity, world, physics);
+        self.visible = visible;
         let cap = Self::cap(world, entity);
         let timings = world
             .borrow::<View<PropAIAwareDelay>>()

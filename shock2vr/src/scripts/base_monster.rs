@@ -1,6 +1,7 @@
 use dark::properties::{Link, PropAI, PropAISignalResponse};
 use shipyard::{EntityId, Get, View, World};
 
+use super::ai::speech_events::{Cue, SpeechEvents};
 use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
@@ -13,6 +14,7 @@ pub struct BaseMonster {
     ai: Box<dyn Script>,
     stasis: Option<super::stasis::StasisState>,
     hydrated_ai: bool,
+    speech: SpeechEvents,
 }
 
 impl BaseMonster {
@@ -21,6 +23,7 @@ impl BaseMonster {
             ai: Box::new(NoopScript {}),
             stasis: None,
             hydrated_ai: false,
+            speech: SpeechEvents::default(),
         }
     }
 }
@@ -38,18 +41,24 @@ impl Script for BaseMonster {
             .script_state_key()
             .map(|key| self.ai.save_state().map(|state| (key.to_owned(), state)))
             .transpose()?;
-        super::ScriptState::encode(3, &(&self.stasis, child), "shock2vr.ai_stasis")
+        super::ScriptState::encode(
+            4,
+            &(&self.stasis, child, &self.speech),
+            "shock2vr.ai_stasis",
+        )
     }
     fn restore_state(
         &mut self,
         state: &super::ScriptState,
         context: &super::ScriptRestoreContext<'_>,
     ) -> Result<(), super::ScriptStateError> {
-        let (stasis, child): (
+        let (stasis, child, speech): (
             Option<super::stasis::StasisState>,
             Option<(String, super::ScriptState)>,
-        ) = state.decode(3, "shock2vr.ai_stasis")?;
+            SpeechEvents,
+        ) = state.decode(4, "shock2vr.ai_stasis")?;
         self.stasis = stasis;
+        self.speech = speech;
         self.hydrated_ai = false;
         if let Some((key, saved)) = child {
             self.ai = match key.as_str() {
@@ -83,7 +92,9 @@ impl Script for BaseMonster {
         _hydrated: bool,
     ) -> Effect {
         if self.hydrated_ai {
-            self.ai.initialize_after_hydration(entity, world, true)
+            let effect = self.ai.initialize_after_hydration(entity, world, true);
+            self.speech.synchronize(self.ai.ai_speech_context());
+            effect
         } else {
             self.initialize(entity, world)
         }
@@ -137,7 +148,9 @@ impl Script for BaseMonster {
             self.ai = ai;
         }
 
-        self.ai.initialize(entity_id, world)
+        let effect = self.ai.initialize(entity_id, world);
+        self.speech.synchronize(self.ai.ai_speech_context());
+        effect
     }
 
     fn update(
@@ -155,7 +168,17 @@ impl Script for BaseMonster {
             }
             self.stasis = None;
         }
-        self.ai.update(entity_id, world, physics, time)
+        let ai_effect = self.ai.update(entity_id, world, physics, time);
+        let voice = self
+            .ai
+            .ai_speech_context()
+            .map(|mut context| {
+                context.active &= !super::ai::ai_util::is_killed(entity_id, world);
+                self.speech
+                    .update(world, entity_id, context, time.elapsed.as_secs_f32())
+            })
+            .unwrap_or(Effect::NoEffect);
+        Effect::combine(vec![voice, ai_effect])
     }
 
     fn handle_message(
@@ -197,7 +220,61 @@ impl Script for BaseMonster {
         {
             return Effect::NoEffect;
         }
-        self.ai.handle_message(entity_id, world, physics, msg)
+        if let MessagePayload::SpeechTiming {
+            concept,
+            duration_seconds,
+            ..
+        } = msg
+        {
+            self.speech.played(concept, *duration_seconds);
+        }
+        let context = self.ai.ai_speech_context();
+        let active = context.is_some_and(|context| context.active)
+            && self.stasis.is_none()
+            && !super::ai::ai_util::is_killed(entity_id, world);
+        let cue = match msg {
+            MessagePayload::HitPointsChanged { previous, current } => {
+                let max_hp = world
+                    .borrow::<View<dark::properties::PropMaxHitPoints>>()
+                    .ok()
+                    .and_then(|view| {
+                        view.get(entity_id)
+                            .ok()
+                            .map(|hp| hp.hit_points.min(i32::MAX as u32) as i32)
+                    })
+                    .unwrap_or(*previous);
+                self.speech.health_changed(*previous, *current, max_hp)
+            }
+            MessagePayload::Damage { amount, .. } if *amount >= 0.0 && amount.round() == 0.0 => {
+                Some(Cue::HitNoDamage)
+            }
+            _ => None,
+        };
+        let mut voice = cue
+            .filter(|_| active)
+            .map(|cue| self.speech.request(world, entity_id, cue))
+            .unwrap_or(Effect::NoEffect);
+        if active {
+            if let MessagePayload::MeleeFeedback { blocked } = msg {
+                voice = self.speech.melee_feedback(world, entity_id, *blocked);
+            }
+        }
+        let ai_effects =
+            Effect::flatten(vec![self.ai.handle_message(entity_id, world, physics, msg)]);
+        if matches!(msg, MessagePayload::Damage { .. }) {
+            if let Some(context) = context {
+                for effect in &ai_effects {
+                    if matches!(effect, Effect::AdjustHitPoints { entity_id: target, delta } if *target == entity_id && *delta < 0)
+                    {
+                        self.speech.damage_pending(context);
+                    }
+                }
+            }
+        }
+        if matches!(msg, MessagePayload::Resurrected) {
+            self.speech.synchronize(self.ai.ai_speech_context());
+        }
+        Effect::combine(vec![voice, Effect::combine(ai_effects)])
     }
 }
 
@@ -232,6 +309,7 @@ mod tests {
             ai: Box::new(AnimatedMonsterAI::new()),
             stasis: None,
             hydrated_ai: false,
+            speech: SpeechEvents::default(),
         };
         let saved = original.save_state().unwrap();
         let mut restored = BaseMonster::new();
@@ -255,6 +333,7 @@ mod tests {
             ai: Box::new(Counter(count.clone())),
             stasis: None,
             hydrated_ai: false,
+            speech: SpeechEvents::default(),
         };
         let physics = PhysicsWorld::new();
         script.handle_message(

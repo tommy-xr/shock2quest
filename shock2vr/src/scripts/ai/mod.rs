@@ -4,6 +4,8 @@ pub mod alertness;
 pub mod steering;
 
 mod ambient_speech;
+pub(crate) mod speech_events;
+pub use speech_events::{SpeechContext, SpeechTactic};
 mod animated_monster_ai;
 mod behavior;
 mod camera_ai;

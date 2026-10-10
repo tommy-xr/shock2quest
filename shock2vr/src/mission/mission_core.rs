@@ -14093,6 +14093,7 @@ impl MissionCore {
                                 payload: MessagePayload::SpeechTiming {
                                     concept: concept.clone(),
                                     seconds: repeat.as_secs_f32(),
+                                    duration_seconds: duration.as_secs_f32(),
                                 },
                             });
                             let gain = resolved.linear_gain();

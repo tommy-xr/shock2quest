@@ -491,8 +491,12 @@ mod tests {
         turret.alertness.hidden_time = 1.25;
         let saved = turret.save_state().unwrap();
         let outer = super::super::super::ScriptState::encode(
-            3,
-            &serde_json::json!([null, ["shock2vr.turret", saved]]),
+            4,
+            &serde_json::json!([
+                null,
+                ["shock2vr.turret", saved],
+                super::super::speech_events::SpeechEvents::default()
+            ]),
             "shock2vr.ai_stasis",
         )
         .unwrap();

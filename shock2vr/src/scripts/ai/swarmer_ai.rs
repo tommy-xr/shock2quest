@@ -174,6 +174,16 @@ fn backoff_point(
 }
 
 impl Script for SwarmerAI {
+    fn ai_speech_context(&self) -> Option<super::SpeechContext> {
+        Some(super::SpeechContext {
+            level: self.state.awareness.alertness.current_level,
+            visible: self.state.awareness.visible,
+            player_target: true,
+            active: !self.state.dead,
+            tactic: super::SpeechTactic::None,
+        })
+    }
+
     fn script_state_key(&self) -> Option<&'static str> {
         Some(KEY)
     }
@@ -374,7 +384,10 @@ impl Script for SwarmerAI {
         _: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        if let MessagePayload::SpeechTiming { concept, seconds } = msg {
+        if let MessagePayload::SpeechTiming {
+            concept, seconds, ..
+        } = msg
+        {
             self.state.ambient_speech.played(concept, *seconds);
             return Effect::NoEffect;
         }

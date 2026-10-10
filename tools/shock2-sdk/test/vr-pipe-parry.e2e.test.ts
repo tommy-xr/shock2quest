@@ -44,6 +44,33 @@ async function stage(game: GameServer, guard: boolean, motion = "bh413001", hand
   return { enemy, held };
 }
 
+for (const guard of [true, false]) {
+  test(`resolved pipe ${guard ? "parry" : "hit"} routes attacker feedback through its authored voice`, { skip: !enabled, timeout: 600_000 }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_melee", debugFlags: ["--vr"] });
+    const { enemy } = await stage(game, guard);
+    const before = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+    const hp = (await game.info()).player.hit_points!;
+    for (let i = 0; i < 180; i++) {
+      await game.step({ frames: 1 });
+      if ((await attackState(game, enemy.id))?.consumed) break;
+    }
+    assert.equal((await attackState(game, enemy.id))?.parries, guard ? 1 : 0);
+    assert.equal((await game.info()).player.hit_points, guard ? hp : hp - 10);
+    // Let an in-flight attack voice finish without starting another contact.
+    await game.player.teleport({ x: 0, y: 1.244, z: 15 });
+    await game.step({ frames: 180 });
+    const concept = guard ? "comblocked" : "comsucchit";
+    const calls = (await game.audio.recent()).sounds.filter(s => s.sequence > before
+      && s.source_entity?.template_id === enemy.template_id && tagValue(s, "concept") === concept);
+    const messages = (await game.messages.recent()).messages.filter(m => m.to.entity_id === enemy.id && m.payload === "MeleeFeedback");
+    assert.equal(messages.length, 1, "one resolved contact must deliver one feedback event");
+    // The shipped OG-Pipe voice has comsucchit samples but no comblocked
+    // schema. A parry must not substitute another actor's voice.
+    assert.equal(calls.length, guard ? 0 : 1);
+    if (!guard) assert.match(calls[0].sample, /^og1hit_/);
+  });
+}
+
 for (const [motion, hand] of [["bh413001", "right"], ["bh413004", "right"], ["bh413001", "left"]] as const) {
 test(`a stationary ${hand} VR wrench blocks ${motion}, clangs once and recoils without damage`,
   { skip: !enabled, timeout: 600_000 }, async () => {

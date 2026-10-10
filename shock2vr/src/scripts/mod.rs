@@ -322,6 +322,7 @@ pub enum MessagePayload {
     SpeechTiming {
         concept: String,
         seconds: f32,
+        duration_seconds: f32,
     },
 
     // Animation event
@@ -374,6 +375,11 @@ pub enum MessagePayload {
     TurnClipBlend {
         token: u64,
         alpha: f32,
+    },
+
+    /// A resolved melee contact, sent to the attacking creature.
+    MeleeFeedback {
+        blocked: bool,
     },
 
     // Gameplay events
@@ -650,6 +656,11 @@ impl<'a> ScriptRestoreContext<'a> {
 }
 
 pub trait Script {
+    /// Mobile AI opts into shared voice reactions using its current private state.
+    fn ai_speech_context(&self) -> Option<ai::SpeechContext> {
+        None
+    }
+
     /// Produce presentation data for one GUI instance. This is separate from
     /// gameplay update so unopened panels do no layout work; handle identity
     /// distinguishes multiple GUI scripts on one entity.
