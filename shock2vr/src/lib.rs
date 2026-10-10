@@ -3228,6 +3228,15 @@ pub enum App {
 }
 
 impl App {
+    /// Recover from an optional startup workload failure without losing the
+    /// runtime's event/render loop. Missing-assets recovery stays authoritative.
+    pub fn show_main_menu_notice(&mut self, text: String) {
+        if let App::Ready(game) = self {
+            game.handle_global_effect(GlobalEffect::ShowMainMenu);
+            game.apply_scene_effects(vec![Effect::ShowMessage { text }]);
+        }
+    }
+
     pub fn take_haptics(&self) -> [Option<haptics::HapticPulse>; 2] {
         match self {
             App::Ready(game) => haptics::take(game.world()),

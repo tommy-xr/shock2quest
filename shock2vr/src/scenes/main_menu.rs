@@ -351,6 +351,7 @@ pub struct MainMenuScene {
     developer_enabled: bool,
     version_clicks: u8,
     persistence_error: bool,
+    notice: Option<String>,
     difficulty: dark::gamesys::Difficulty,
     /// The backdrop's looping anims, loaded on the first update.
     anims: Option<UiAnims>,
@@ -368,6 +369,7 @@ impl MainMenuScene {
             developer_enabled: crate::developer_mode::enabled(),
             version_clicks: 0,
             persistence_error: false,
+            notice: None,
             difficulty: dark::gamesys::Difficulty::Normal,
             anims: None,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
@@ -586,6 +588,16 @@ impl MainMenuScene {
                     },
                 );
         }
+        if let Some(notice) = &self.notice {
+            canvas.text(
+                Rect::new(14.0, 390.0, 612.0, 28.0),
+                notice,
+                "mainfont.fon",
+                16.0,
+                HAlign::Center,
+                VAlign::Middle,
+            );
+        }
         if self.persistence_error {
             canvas.text(
                 Rect::new(14.0, 360.0, 290.0, 22.0),
@@ -718,6 +730,10 @@ impl GameScene for MainMenuScene {
             .into_iter()
             .filter_map(|e| match e {
                 Effect::GlobalEffect(g) => Some(g),
+                Effect::ShowMessage { text } => {
+                    self.notice = Some(text);
+                    None
+                }
                 _ => None,
             })
             .collect()

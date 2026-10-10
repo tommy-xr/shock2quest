@@ -56,6 +56,17 @@ pub struct BenchmarkRun {
 }
 
 impl BenchmarkScene {
+    /// A missing fixture is normal; an unreadable or incompatible one must be
+    /// reported so the caller can return to the menu instead of running a
+    /// different workload under the benchmark's name.
+    pub fn load_optional(path: &std::path::Path) -> Result<Option<Self>, String> {
+        match std::fs::read_to_string(path) {
+            Ok(json) => Self::parse(&json).map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
     pub fn parse(json: &str) -> Result<Self, String> {
         let scene: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
         if !matches!(scene.ffr.as_str(), "off" | "low" | "medium" | "high") {
@@ -277,6 +288,35 @@ impl BenchmarkRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_fixture_distinguishes_absent_valid_invalid_and_unreadable() {
+        let dir = crate::test_support::TempDir::new("benchmark-startup");
+        let path = dir.path().join("benchmark-scene.json");
+        assert!(BenchmarkScene::load_optional(&path).unwrap().is_none());
+
+        let json = include_str!("../../benchmarks/scenes/rec1-six-hybrids.json");
+        std::fs::write(&path, json).unwrap();
+        assert!(BenchmarkScene::load_optional(&path).unwrap().is_some());
+
+        // Regression: a fixture left by another branch killed Quest startup.
+        let mut incompatible: serde_json::Value = serde_json::from_str(json).unwrap();
+        incompatible["spawns"] = serde_json::json!([
+            {"template_id": -180, "position": [0, 0, 0], "animated": true}
+        ]);
+        std::fs::write(&path, incompatible.to_string()).unwrap();
+        let error = BenchmarkScene::load_optional(&path).unwrap_err();
+        assert!(error.contains("unknown field `animated`"), "{error}");
+
+        std::fs::write(&path, "{broken").unwrap();
+        assert!(BenchmarkScene::load_optional(&path).is_err());
+
+        // An existing but unreadable path is not equivalent to no fixture.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(BenchmarkScene::load_optional(&path).is_err());
+    }
+
     #[test]
     fn fixture_camera_and_unknown_fields_are_validated_before_setup() {
         let value = serde_json::json!({"name":"court","mission":"rec1.mis","player_position":[0,0,0],
