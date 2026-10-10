@@ -327,7 +327,7 @@ pub(crate) const MOD_ARCHIVES: &[&str] = &[
 /// - `strings` from the Nightdive layer: 41 of its 42 tables are `$`-token stubs
 ///   that KEX resolves through `localization/loc_english.txt`, which we do not
 ///   implement, so honouring them renders raw keys like `$PSI6`.
-/// - `fam` (terrain) upgrades require the opt-in `upgraded_terrain` flag.
+/// - `fam` (terrain) upgrades are enabled unless explicitly opted out.
 ///   Terrain loading resolves material redirects and logical dimensions before
 ///   substituting the higher-resolution art.
 fn mod_layer_may_override(family: &str, archive: &str, upgraded_terrain: bool) -> bool {
@@ -605,6 +605,14 @@ pub struct GameOptions {
     pub debug_ai: bool,
     pub debug_pathfinding: bool,
     pub experimental_features: HashSet<String>,
+}
+
+impl GameOptions {
+    /// Remaster terrain is enabled on every runtime; an explicit opt-out wins
+    /// even when an older launcher also supplies the opt-in flag.
+    pub fn upgraded_terrain_enabled(&self) -> bool {
+        !self.experimental_features.contains("no_upgraded_terrain")
+    }
 }
 
 impl Default for GameOptions {
@@ -1462,7 +1470,7 @@ impl Game {
             panic!("cannot load the game: {}", install.summary());
         }
 
-        let upgraded_terrain = options.experimental_features.contains("upgraded_terrain");
+        let upgraded_terrain = options.upgraded_terrain_enabled();
         println!("upgraded terrain textures: {upgraded_terrain}");
         let asset_paths = game_asset_mounts_with_terrain(bundle_storage.clone(), upgraded_terrain);
         // Global items
@@ -3172,6 +3180,22 @@ mod tests {
         assert!(!transition_ready(MIN_LOADING_FRAMES - 1, Some(1)));
         // And an unfinished parse is never ready.
         assert!(!transition_ready(1000, None));
+    }
+
+    #[test]
+    fn upgraded_terrain_defaults_on_with_explicit_opt_out() {
+        for (flags, expected) in [
+            (vec![], true),
+            (vec!["upgraded_terrain"], true),
+            (vec!["no_upgraded_terrain"], false),
+            (vec!["upgraded_terrain", "no_upgraded_terrain"], false),
+        ] {
+            let options = GameOptions {
+                experimental_features: features(&flags),
+                ..Default::default()
+            };
+            assert_eq!(options.upgraded_terrain_enabled(), expected);
+        }
     }
 
     /// On by default on every platform since the Quest measurement (#1022).
