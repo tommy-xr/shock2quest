@@ -149,7 +149,9 @@ impl Behavior for BackOffBehavior {
                 .ok()
                 .and_then(|positions| positions.get(entity).ok().map(|p| p.position));
         }
-        self.remaining_delay = (self.remaining_delay - time.elapsed.as_secs_f32()).max(0.0);
+        // The firing delay paces with the difficulty, like the attack clips.
+        let elapsed = time.elapsed.as_secs_f32() * crate::difficulty::ai_speed(world);
+        self.remaining_delay = (self.remaining_delay - elapsed).max(0.0);
         self.stopped = ai_util::chase_target_distance(world, entity)
             .is_none_or(|distance| distance >= self.stand_off.ideal)
             || !can_back_off(world, physics, entity);

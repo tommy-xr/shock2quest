@@ -1983,7 +1983,9 @@ impl Script for AnimatedMonsterAI {
         let (turn_clip_effect, heading_held) =
             self.update_turn_clip(entity_id, steering_output.desired_heading, time, may_turn);
         // The difficulty's AI speed - animation, turning and flight - except
-        // over a scripted performance, which plays at its authored rate.
+        // over a scripted performance, which plays at its authored rate. The
+        // animation clock advances before scripts update, so a sequence's
+        // first frame or two still run at the previous pace.
         let pace = if self.current_behavior.borrow().scripted_state() == ScriptedState::Running {
             1.0
         } else {

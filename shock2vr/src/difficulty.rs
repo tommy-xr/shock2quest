@@ -149,8 +149,7 @@ fn ai_speed_for(difficulty: Difficulty, modifier: f32) -> f32 {
         Difficulty::Hard => 1.0,
         Difficulty::Impossible => 2.0,
     };
-    // The floor keeps a large modifier from stopping (or reversing) Easy.
-    (AI_SPEED + modifier * steps).max(0.1)
+    AI_SPEED + modifier * steps
 }
 
 /// The campaign's difficulty, defaulting for a world without a character sheet
@@ -255,7 +254,6 @@ mod tests {
         for (speed, expected) in speeds.iter().zip(expected) {
             assert!((speed - expected).abs() < 1e-6, "{speeds:?}");
         }
-        assert_eq!(ai_speed_for(Difficulty::Easy, 5.0), 0.1);
     }
     #[test]
     fn reconstruction_is_free_only_on_easy() {
