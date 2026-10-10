@@ -5,7 +5,7 @@ import { validateWorkload, runOrder } from './run.mjs';
 const fixture = { name: 'stress', object_lighting: true, expected_subject_meshes: 2, spawns: [{}] };
 const sample = frame => ({ name: 'stress', setup_complete: true, object_lighting: true, subject_meshes: 2,
   lit_subject_meshes: 2, lamp_intensities: [], animations: [{ entity: 12, clip: 'idle', frame }] });
-const logs = samples => samples.map(s => `SHOCK2QUEST_PERF focused=true\nSHOCK2QUEST_BENCHMARK ${JSON.stringify(s)}`).join('\n');
+const logs = samples => samples.map(s => `SHOCK2QUEST_PERF focused=true samples=90\nSHOCK2QUEST_BENCHMARK ${JSON.stringify(s)}`).join('\n');
 
 test('validates the measured tail and accepts moving animation', () => {
   assert.equal(validateWorkload(logs([{}, sample(1), sample(2)]), fixture, 2).length, 2);
@@ -25,7 +25,7 @@ test('balances paired runs as ABBA', () => {
   assert.deepEqual(runOrder(2, 'on').map(run => run.mode), ['on', 'on']);
 });
 test('a missing workload cannot be replaced by buffered warmup evidence', () => {
-  assert.throws(() => validateWorkload(logs([sample(1), sample(2)]) + '\nSHOCK2QUEST_PERF focused=true', fixture, 2));
+  assert.throws(() => validateWorkload(logs([sample(1), sample(2)]) + '\nSHOCK2QUEST_PERF focused=true samples=90', fixture, 2));
 });
 test('rejects animation that advances once and then freezes', () => {
   assert.throws(() => validateWorkload(logs([sample(1), ...Array(29).fill(sample(2))]), fixture, 30));
@@ -78,9 +78,11 @@ test('rejects unavailable GPU counter sentinels instead of averaging them', asyn
 test('CPU diagnostics require matching windows and complete frame histogram counts', async () => {
   const { validateCpuProfile } = await import('./run.mjs');
   const sample = { cpu_frames: 90, phases: { game_update: { calls: 90 } }, cpu_histogram_100us: [[80, 90]] };
-  const log = `SHOCK2QUEST_CPU_PROFILE ${JSON.stringify(sample)}\nSHOCK2QUEST_PERF focused=true\n`;
+  const log = `SHOCK2QUEST_CPU_PROFILE ${JSON.stringify(sample)}\nSHOCK2QUEST_PERF focused=true samples=90\n`;
   assert.equal(validateCpuProfile(log + log, 2).length, 2);
-  assert.throws(() => validateCpuProfile(log + 'SHOCK2QUEST_PERF focused=true\n', 2), /diagnostics/);
+  assert.throws(() => validateCpuProfile(log + 'SHOCK2QUEST_PERF focused=true samples=90\n', 2), /diagnostics/);
+  assert.throws(() => validateCpuProfile(log.replace('samples=90', 'samples=89'), 1), /diagnostics/);
+  assert.throws(() => validateCpuProfile(log.replace(' samples=90', ''), 1), /diagnostics/);
   sample.cpu_histogram_100us[0][1] = 89;
-  assert.throws(() => validateCpuProfile(`SHOCK2QUEST_CPU_PROFILE ${JSON.stringify(sample)}\nSHOCK2QUEST_PERF focused=true`, 1), /diagnostics/);
+  assert.throws(() => validateCpuProfile(`SHOCK2QUEST_CPU_PROFILE ${JSON.stringify(sample)}\nSHOCK2QUEST_PERF focused=true samples=90`, 1), /diagnostics/);
 });

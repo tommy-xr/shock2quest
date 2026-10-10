@@ -70,7 +70,11 @@ export function validateCpuProfile(text, seconds) {
   let pending = null;
   for (const line of text.split('\n')) {
     if (line.startsWith('SHOCK2QUEST_CPU_PROFILE ')) pending = JSON.parse(line.slice('SHOCK2QUEST_CPU_PROFILE '.length));
-    else if (line.includes('SHOCK2QUEST_PERF')) { reports.push(pending); pending = null; }
+    else if (line.includes('SHOCK2QUEST_PERF')) {
+      const frames = Number(line.match(/\bsamples=(\d+)/)?.[1]);
+      reports.push(pending?.cpu_frames === frames ? pending : null);
+      pending = null;
+    }
   }
   const samples = reports.slice(-seconds);
   if (samples.length !== seconds || samples.some(sample => !sample || sample.cpu_frames <= 0 ||

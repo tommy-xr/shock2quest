@@ -745,6 +745,7 @@ fn main() {
                         // Never emit a one-second bucket containing samples from
                         // both sides of a focus transition.
                         frame_profiler.reset();
+                        let _ = shock2vr::perf::take_report();
                     }
                     session_focused = next_session_focused;
                     match e.state() {
@@ -805,6 +806,7 @@ fn main() {
                             ready_reported = false;
                             last_update_time = Instant::now();
                             frame_profiler.reset();
+                            let _ = shock2vr::perf::take_report();
                             vr_crouch.reset();
                             pending_stage_change_time = None;
                             // A latched button crouch must not survive a
@@ -838,6 +840,7 @@ fn main() {
                             session_running = false;
                             last_update_time = Instant::now();
                             frame_profiler.reset();
+                            let _ = shock2vr::perf::take_report();
                         }
                         xr::SessionState::EXITING | xr::SessionState::LOSS_PENDING => {
                             break 'main_loop;
