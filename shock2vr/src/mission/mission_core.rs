@@ -18037,7 +18037,7 @@ impl MissionCore {
         (scene, player.pos, player.rotation)
     }
 
-    /// Player-carried lights: developer spotlights, weapon flashlights, and melee glow.
+    /// Shared dynamic lights: carried lights plus bounded transient shot lights.
     pub fn get_hand_lights(&self, options: &GameOptions) -> Vec<engine::scene::light::SceneLight> {
         let debug_lights = self.interaction.hand_spotlights(options);
         // The developer override already supplies one light per hand.
@@ -18061,6 +18061,21 @@ impl MissionCore {
                 .map(Into::into),
             );
         }
+        let observer = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
+        lights.extend(
+            crate::shot_lighting::lights(
+                &self.world,
+                observer,
+                crate::shot_lighting::budget(lights.len()),
+                |name| {
+                    self.template_name_to_template_id
+                        .get(name)
+                        .map(|m| m.template_id)
+                },
+            )
+            .into_iter()
+            .map(Into::into),
+        );
         lights
     }
 
