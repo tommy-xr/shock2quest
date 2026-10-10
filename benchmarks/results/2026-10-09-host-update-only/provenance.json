@@ -1,0 +1,8 @@
+{
+  "source_commit": "e3011c516da1d657d0ead0952562ad0259afa7b4",
+  "binary_sha256": "4194e99d619e8afe06eb4c5613d36ffd6cc22c3f46cf609c76a8f359178bc2b7",
+  "host": "Apple M3, 16 GiB RAM, macOS 26.6.2",
+  "profile": "optimized dev; debug assertions enabled; CARGO_INCREMENTAL=0",
+  "logging": "RUST_LOG=error",
+  "notes": "Host foreground/background load and CPU core placement were not controlled. Sequential repeated baselines, no optimization A/B."
+}
