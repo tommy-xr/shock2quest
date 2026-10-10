@@ -104,6 +104,13 @@ To collect worm ammunition, touch an empty beaker to a worm pile in VR and
 pull the trigger or release it. In flat mode, use the pile while carrying an
 empty beaker. Small beakers hold four rounds; large beakers hold eight.
 
+**Feeding annelid weapons in VR.** Hold a worm beaker above the Worm Launcher
+or Viral Proliferator in your other hand and tip it past horizontal. Small grubs
+pour onto any part of the weapon's body and fade into it, one round at a time.
+Straighten the beaker or move it away to stop. A full weapon leaves the remaining
+worms in the beaker; draining it leaves an empty beaker in your hand, ready to
+return to your backpack and refill.
+
 Broken replicators show static in the MFD and tricorder. Select their Repair
 control to attempt the skill-gated repair minigame; a win restores the catalog,
 and a failed attempt leaves the machine broken and available for another try.

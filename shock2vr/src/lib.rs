@@ -112,6 +112,7 @@ pub mod weapon_recoil;
 pub mod weapon_repair;
 mod weapon_requirements;
 pub mod weapon_upgrades;
+mod worm_pour;
 pub use hand_glove::{GloveRenderer, HandLight};
 /// Re-exported (the module itself stays private) so the `melee_grip` example
 /// can re-measure the melee `_h` contact offsets off the shipped rigs with the

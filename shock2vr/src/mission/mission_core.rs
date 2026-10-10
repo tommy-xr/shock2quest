@@ -3368,6 +3368,7 @@ pub struct MissionCore {
     ///
     /// [`update_clip_insert_gesture`]: MissionCore::update_clip_insert_gesture
     vr_clip_insert_engaged: [bool; 2],
+    worm_pour: crate::worm_pour::WormPour,
     shoulder_backpack: super::shoulder_backpack::ShoulderBackpack,
     holsters: super::holsters::Holsters,
     chest_slots: super::holsters::Holsters,
@@ -4311,6 +4312,7 @@ impl MissionCore {
             vr_squeeze_swallow: [false; 2],
             vr_trigger_safe_latch: [None; 2],
             vr_clip_insert_engaged: [false; 2],
+            worm_pour: crate::worm_pour::WormPour::default(),
             shoulder_backpack: Default::default(),
             body_hand_contacts: [None; 2],
             download_release_disarmed: [false; 2],
@@ -7443,6 +7445,19 @@ impl MissionCore {
         // loads it. Runs after the hands have been updated so the held pair is
         // this frame's.
         if game_options.presentation_mode == crate::PresentationMode::Vr {
+            let tracked = input_context
+                .pose_tracking
+                .is_none_or(|p| p.head && p.hands.iter().all(|h| *h))
+                && [&input_context.left_hand, &input_context.right_hand]
+                    .iter()
+                    .all(|hand| {
+                        crate::vr_support::GripPose {
+                            position: hand.position,
+                            rotation: hand.rotation,
+                        }
+                        .is_tracked()
+                    });
+            effects.extend(self.update_worm_pour(time.elapsed.as_secs_f32(), tracked));
             let cues = self.update_clip_insert_gesture(asset_cache);
             effects.extend(cues);
         }
@@ -13341,6 +13356,21 @@ impl MissionCore {
                     entity_id,
                     template_id,
                 } => {
+                    let held_scale = self.interaction.is_holding(entity_id).then(|| {
+                        self.world
+                            .borrow::<View<RuntimePropTransform>>()
+                            .ok()
+                            .and_then(|v| {
+                                v.get(entity_id).ok().map(|t| {
+                                    vec3(
+                                        t.0.x.truncate().magnitude(),
+                                        t.0.y.truncate().magnitude(),
+                                        t.0.z.truncate().magnitude(),
+                                    )
+                                })
+                            })
+                            .unwrap_or(vec3(1.0, 1.0, 1.0))
+                    });
                     let (position, rotation) = {
                         if let Some(handle) = &self.id_to_physics.get(&entity_id) {
                             let position = self.physics.get_position(**handle).unwrap();
@@ -13349,13 +13379,16 @@ impl MissionCore {
                             //     Matrix4::from_nonuniform_scale(scale.x.abs(), scale.y.abs(), scale.z.abs());
                             (position, rotation)
                         } else {
-                            (
-                                vec3(0.0, 0.0, 0.0),
-                                Quaternion {
-                                    s: 1.0,
-                                    v: vec3(0.0, 0.0, 0.0),
-                                },
-                            )
+                            self.world
+                                .borrow::<View<PropPosition>>()
+                                .ok()
+                                .and_then(|v| {
+                                    v.get(entity_id).ok().map(|p| (p.position, p.rotation))
+                                })
+                                .unwrap_or((
+                                    vec3(0.0, 0.0, 0.0),
+                                    Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                                ))
                         }
                     };
 
@@ -13380,6 +13413,26 @@ impl MissionCore {
                     // Keep a contained item (e.g. an inventory power cell
                     // recharged at a station) in its container after replacement.
                     self.transfer_containment(entity_id, new_entity_info.entity_id);
+
+                    // A replacement is still held. Leaving its freshly-created
+                    // world body active overrides the prepared grip's scale on
+                    // every physics sync (a drained beaker becomes enormous).
+                    // Restore the shared held-physics policy and preserve its
+                    // pose for this frame; next frame resolves the new grip.
+                    if let Some(scale) = held_scale {
+                        let new = new_entity_info.entity_id;
+                        restore_held_item_physics(
+                            &self.world,
+                            &mut self.id_to_physics,
+                            &mut self.physics,
+                            new,
+                        );
+                        self.set_entity_position_rotation(new, position, rotation, scale);
+                        self.script_world.dispatch(Message {
+                            to: new,
+                            payload: MessagePayload::Hold,
+                        });
+                    }
 
                     self.remove_entity(entity_id);
                 }
@@ -15517,6 +15570,13 @@ impl MissionCore {
         let held = [left_held, right_held];
         let mut cues = Vec::new();
         for slot in 0..2 {
+            // Beakers have their own continuous tilt-to-pour interaction, even
+            // while upright or aimed at an incompatible gun. Never consume the
+            // container through the ordinary instant clip-insertion path.
+            if held[slot].is_some_and(|item| self.empty_worm_beaker(item).is_some()) {
+                self.vr_clip_insert_engaged[slot] = false;
+                continue;
+            }
             // Per weapon, not per player: the zone belongs to whichever hand
             // holds a gun, so dual wielding inserts into the gun the clip
             // actually reached.
@@ -15543,6 +15603,91 @@ impl MissionCore {
             }
         }
         cues
+    }
+
+    fn empty_worm_beaker(&self, entity: EntityId) -> Option<&'static str> {
+        let names = self.world.borrow::<View<PropModelName>>().ok()?;
+        crate::worm_pour::empty_beaker(&names.get(entity).ok()?.0)
+    }
+
+    fn update_worm_pour(&mut self, dt: f32, tracked: bool) -> Vec<Effect> {
+        self.worm_pour.advance(dt);
+        let (left, right) = self.interaction.held_entities();
+        let held = [left, right];
+        let mut effects = Vec::new();
+        for slot in 0..2 {
+            let offer = (|| {
+                if !tracked {
+                    return None;
+                }
+                let beaker = held[slot]?;
+                let weapon = held[1 - slot]?;
+                let empty_name = self.empty_worm_beaker(beaker)?;
+                let empty_template = self
+                    .template_name_to_template_id
+                    .get(empty_name)?
+                    .template_id;
+                let index = super::reload::clip_projectile_index(&self.world, weapon, beaker)?;
+                // A pour feeds the current setting; it must never eject a gun
+                // or silently switch ammunition as a side effect of proximity.
+                if index != super::reload::selected_ammo_index(&self.world, weapon)
+                    || super::reload::clip_rounds(&self.world, beaker) <= 0
+                    || self.magazine_rounds(weapon) >= self.magazine_capacity(weapon)?
+                {
+                    return None;
+                }
+                let transforms = self.world.borrow::<View<RuntimePropTransform>>().ok()?;
+                let weapon_transform = transforms.get(weapon).ok()?.0;
+                let (start, target) = crate::worm_pour::pour_target(
+                    self.id_to_model.get(&beaker)?,
+                    transforms.get(beaker).ok()?.0,
+                    self.id_to_model.get(&weapon)?,
+                    weapon_transform,
+                )?;
+                Some((
+                    beaker,
+                    weapon,
+                    empty_template,
+                    start,
+                    target,
+                    weapon_transform,
+                ))
+            })();
+            let pair = offer.as_ref().map(|o| (o.0, o.1));
+            if !self.worm_pour.ready(slot, pair, dt) {
+                continue;
+            }
+            let Some((beaker, weapon, empty_template, start, target, transform)) = offer else {
+                continue;
+            };
+            // Reuse the normal accounting, with a one-round ceiling for this
+            // tick. The offer above has already checked the real capacity.
+            let outcome = super::reload::load_from_held_clip(
+                &self.world,
+                weapon,
+                beaker,
+                self.magazine_rounds(weapon) + 1,
+            );
+            if outcome.rounds_loaded == 0 {
+                continue;
+            }
+            crate::vr_weapon_action::reloaded(&mut self.world, weapon);
+            self.worm_pour.emit(weapon, start, target, transform);
+            effects.push(Effect::HandHaptic {
+                hand: [crate::Handedness::Left, crate::Handedness::Right][slot],
+                pulse: crate::haptics::HapticPulse {
+                    amplitude: 0.18,
+                    duration_ms: 25,
+                },
+            });
+            for entity_id in outcome.depleted_items {
+                effects.push(Effect::ReplaceEntity {
+                    entity_id,
+                    template_id: empty_template,
+                });
+            }
+        }
+        effects
     }
 
     /// How many rounds `weapon`'s magazine holds, or `None` when it is not a
@@ -17018,6 +17163,16 @@ impl MissionCore {
             self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos,
             self.environment.clone(),
         );
+        for mut worm in self.worm_pour.render(asset_cache, "grub3", |entity| {
+            v_transform.get(entity).ok().map(|t| t.0)
+        }) {
+            worm.set_lights(
+                object_lights
+                    .as_ref()
+                    .map(|lights| lights.at_player_position(worm.get_world_position())),
+            );
+            scene.push(worm);
+        }
 
         // A successfully loaded attached effect can replace its host's mesh.
         // Keep the model and physics data intact; unavailable art leaves the
