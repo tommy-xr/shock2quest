@@ -504,17 +504,21 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_can_force_both_terrain_modes_despite_the_default() {
+    fn benchmark_can_force_terrain_and_wetness_modes_despite_the_defaults() {
+        let previous_wetness = dev_params::get(dev_params::TERRAIN_WETNESS);
         let mut scene = BenchmarkScene::parse(include_str!(
             "../../benchmarks/scenes/many-brain-mixed-crowd.json"
         ))
         .unwrap();
         let mut options = crate::GameOptions::default();
-        for enabled in [false, true, false] {
+        for (enabled, wetness) in [(false, 0.0), (true, 1.5), (true, 0.0), (false, 0.0)] {
             scene.upgraded_terrain = enabled;
+            scene.terrain_wetness = wetness;
             scene.configure(&mut options.experimental_features);
             assert_eq!(options.upgraded_terrain_enabled(), enabled);
+            assert_eq!(dev_params::get(dev_params::TERRAIN_WETNESS), wetness);
         }
+        dev_params::set(dev_params::TERRAIN_WETNESS, previous_wetness);
     }
 
     #[test]

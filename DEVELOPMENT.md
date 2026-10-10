@@ -682,12 +682,13 @@ materials without an ordinary base pass, stepped motion, environment/incidence
 effects, and other waveforms retain their original art.
 Classic installs are unchanged.
 
-For a separate wet-looking Many terrain experiment, raise Developer → Organic
-shine → `terrain_wetness` from its default **0** while upgraded terrain is enabled. Wetness remains
-**off by default and opt-in**, independently of the texture upgrade.
-Try 1.5 with a spotlight. This adds a project-owned specular highlight to
+Wet highlights on upgraded Many terrain are **on by default** at strength **1.5**.
+Developer → Organic shine → `terrain_wetness` adjusts the strength independently
+of the texture upgrade; set it to **0** to disable the highlights live.
+This adds a project-owned, light-driven specular highlight to
 selected flesh surfaces using their own texture as a provisional mask; it does
-not add authored normal maps or reflections. Set it to 0 for an immediate A/B.
+not add authored normal maps or reflections. Benchmark fixtures explicitly
+select their wetness, so classic and dry upgraded comparisons remain dry.
 
 The main menu's bottom-left build label shows `dev | <commit>` for local builds
 and `v<version> | <commit>` for release builds. Click it three times to enable
