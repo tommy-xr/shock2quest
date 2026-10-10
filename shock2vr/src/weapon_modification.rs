@@ -8,7 +8,7 @@ use dark::properties::{
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     Pistol,
     Shotgun,
     Rifle,
@@ -20,7 +20,7 @@ enum Kind {
     Annelid,
     Viral,
 }
-fn kind(world: &World, weapon: EntityId) -> Option<Kind> {
+pub(crate) fn kind(world: &World, weapon: EntityId) -> Option<Kind> {
     world
         .borrow::<View<PropScripts>>()
         .ok()?

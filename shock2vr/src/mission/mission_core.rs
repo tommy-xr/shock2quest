@@ -3199,6 +3199,7 @@ pub struct MissionCore {
     immolate_flames: Option<ParticleSystem>,
     water_feedback: crate::swimming::WaterFeedback,
     held_recovery_particles: Vec<ParticleSystem>,
+    barrel_smoke: Vec<(EntityId, ParticleSystem)>,
     #[allow(dead_code)]
     pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub template_name_to_template_id: HashMap<String, EntityMetadata>,
@@ -4257,6 +4258,7 @@ impl MissionCore {
             immolate_flames: None,
             water_feedback: Default::default(),
             held_recovery_particles: Vec::new(),
+            barrel_smoke: Vec::new(),
             template_name_to_template_id,
             mission_object_name_to_id,
             rains_landed: 0,
@@ -5733,6 +5735,10 @@ impl MissionCore {
         self.psi_drain_trails
             .retain_mut(|trail| trail.advance(time.elapsed));
         self.held_recovery_particles.retain_mut(|particles| {
+            particles.update(time.elapsed, Matrix4::identity());
+            !particles.is_done()
+        });
+        self.barrel_smoke.retain_mut(|(_, particles)| {
             particles.update(time.elapsed, Matrix4::identity());
             !particles.is_done()
         });
@@ -13872,6 +13878,24 @@ impl MissionCore {
                     drop(quests);
                 }
                 Effect::WeaponRecoil { entity_id } => {
+                    // Bound overlapping wisps per gun and across the mission.
+                    // Only accepted shots reach this effect (never dry fire).
+                    if self.barrel_smoke.len() < 24
+                        && self
+                            .barrel_smoke
+                            .iter()
+                            .filter(|(gun, _)| *gun == entity_id)
+                            .count()
+                            < 3
+                    {
+                        if let Some(smoke) = crate::particle_effects::barrel_smoke(
+                            &self.world,
+                            entity_id,
+                            asset_cache,
+                        ) {
+                            self.barrel_smoke.push((entity_id, smoke));
+                        }
+                    }
                     self.flat_weapon_animation.fired(&self.world, entity_id);
                     crate::vr_shotgun_pump::fired(&mut self.world, entity_id);
                     crate::vr_weapon_action::fired(&mut self.world, entity_id);
@@ -17248,6 +17272,18 @@ impl MissionCore {
         }
         if options.render_particles {
             scene.extend(self.water_feedback.render());
+            for (weapon, particles) in &self.barrel_smoke {
+                let tag = Rc::new(engine::scene::SceneObjectDebugTag {
+                    entity_id: Some(weapon.inner()),
+                    name: Some("Barrel smoke".to_owned()),
+                    model: Some("NDsmk".to_owned()),
+                    source: Some("barrel_smoke".to_owned()),
+                });
+                for mut object in particles.render() {
+                    object.set_debug_tag(Some(tag.clone()));
+                    scene.push(object);
+                }
+            }
             for particles in &self.held_recovery_particles {
                 scene.extend(particles.render());
             }
