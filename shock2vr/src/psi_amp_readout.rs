@@ -163,8 +163,10 @@ pub(crate) fn wrist(world: &World, amp: EntityId, hand: Handedness) -> Option<(M
     // along its wrist axis. Both bio bands and the implant use this result.
     let forward = crate::dev_params::get(crate::dev_params::PSI_BAND_FORWARD_CM)
         * (0.01 / crate::METERS_PER_WORLD_UNIT);
+    let back = crate::dev_params::get(crate::dev_params::PSI_BAND_BACK_CM)
+        * (0.01 / crate::METERS_PER_WORLD_UNIT);
     Some((
-        wrist_frame(transform) * Matrix4::from_translation(vec3(0.0, forward, 0.0)),
+        wrist_frame(transform) * Matrix4::from_translation(vec3(0.0, forward, back)),
         AMP_FOREARM_RADIUS
             * transform.x.truncate().magnitude()
             * crate::dev_params::get(crate::dev_params::PSI_BAND_SCALE),

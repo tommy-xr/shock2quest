@@ -256,7 +256,9 @@ dev_params! {
     GLOVE_BAND_PALM_LIFT_CM = Hands::float("glove_band_palm_lift_cm", "Glove bracelet palm cm", 1.2, 0.0, 3.0, 0.1),
     /// Positive is toward the amp's hand; negative is toward its elbow.
     PSI_BAND_FORWARD_CM = Hands::float("psi_band_forward_cm", "Psi bracelet forward cm", 3.5, -5.0, 14.0, 0.1),
-    PSI_BAND_SCALE = Hands::float("psi_band_scale", "Psi bracelet size", 1.12, 0.7, 1.5, 0.01),
+    PSI_BAND_SCALE = Hands::float("psi_band_scale", "Psi bracelet size", 0.90, 0.7, 1.5, 0.01),
+    /// Center the band on the forearm before reducing its radius; positive is dorsal.
+    PSI_BAND_BACK_CM = Hands::float("psi_band_back_cm", "Psi bracelet back cm", 0.8, -2.0, 2.0, 0.1),
     /// Fit-scene-only model size, about the hand origin; does not rescale tracking.
     GLOVE_FIT_SIZE = Fit::float("glove_fit_size", "Glove size", 1.0, 0.5, 1.5, 0.01),
     /// Hide the fit gloves to compare the real hand silhouette in passthrough.

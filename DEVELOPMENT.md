@@ -588,11 +588,16 @@ ratio. The visible implant and its insertion/removal target follow the same fit.
 These controls apply live in VR gameplay and reset on restart; the glove's ammo
 readout retains its cuff mount.
 
-| Fit | Forward cm | Size |
-| --- | --- | --- |
-| Glove default | 0.7 | 0.97 |
-| Amp behind cord (default) | 3.5 | 1.12 |
-| Amp in front of cord (alternative) | 11.5 | 1.00 |
+| Fit | Forward cm | Size | Back cm |
+| --- | --- | --- | --- |
+| Glove default | 0.7 | 0.97 | — |
+| Amp behind cord (default) | 3.5 | 0.90 | 0.8 |
+| Amp in front of cord (alternative) | 10.5 | 0.85 | 0.0 |
+
+`psi_band_back_cm` recenters the amp bracelet toward the back of the hand
+(positive) or palm (negative). This allows a smaller radius to fit both sides
+without sinking one readout into the skin. It moves the implant and its target
+with the bracelet. Set all three amp values when comparing the presets.
 
 `glove_band_palm_lift_cm` sets the extra palm-side clearance before bracelet
 scaling (default 1.2 cm), allowing a snug palm fit without burying the dorsal
