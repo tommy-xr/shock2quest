@@ -40,3 +40,36 @@ test('requires every authored lamp to match the fixture state', () => {
     assert.throws(() => validateWorkload(logs(samples), litFixture, 2));
   }
 });
+
+test('balances three terrain modes independently of object lighting', async () => {
+  const { terrainRuns, terrainFixture } = await import('./run.mjs');
+  assert.deepEqual(terrainRuns(2, 'on', 'all').map(run => run.terrain),
+    ['classic', 'upgraded', 'wet', 'wet', 'upgraded', 'classic']);
+  assert.equal(terrainFixture({}, 'classic').upgraded_terrain, false);
+  assert.equal(terrainFixture({}, 'upgraded').terrain_wetness, 0);
+  assert.equal(terrainFixture({}, 'wet').terrain_wetness, 1.5);
+});
+
+test('mixed crowds require all model groups but static eggs need no animation', () => {
+  const mixed = { ...fixture, upgraded_terrain: true, terrain_wetness: 1.5,
+    additional_subjects: [{ model: 'eggcl', expected_meshes: 4 }], spawns: [{}, { animated: false }] };
+  const samples = [sample(1), sample(2)].map(s => ({ ...s, upgraded_terrain: true, terrain_wetness: 1.5,
+    additional_subjects: [{ model: 'eggcl', meshes: 4, lit_meshes: 4 }] }));
+  assert.equal(validateWorkload(logs(samples), mixed, 2).length, 2);
+  for (const patch of [{ upgraded_terrain: false }, { terrain_wetness: 0 }, { additional_subjects: [] },
+    { additional_subjects: [{ model: 'eggcl', meshes: 3, lit_meshes: 3 }] }]) {
+    assert.throws(() => validateWorkload(logs([samples[0], { ...samples[1], ...patch }]), mixed, 2));
+  }
+});
+
+test('GPU output uses metric names and accepts terminal line endings', async () => {
+  const { parseGpuCounters } = await import('./run.mjs');
+  const gpu = parseGpuCounters('GPU % Utilization : 40.0\r\n\r\nGPU % Utilization : 60.0\r\nnoise');
+  assert.equal(gpu['GPU % Utilization'].mean, 50);
+  assert.deepEqual(parseGpuCounters('no permission'), {});
+});
+
+test('rejects unavailable GPU counter sentinels instead of averaging them', async () => {
+  const { parseGpuCounters } = await import('./run.mjs');
+  assert.throws(() => parseGpuCounters('Fragments Shaded / Second : -1.000'), /invalid GPU counter/);
+});
