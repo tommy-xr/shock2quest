@@ -1,3 +1,5 @@
+#[cfg(any(test, feature = "damage-query-audit"))]
+mod damage_queries;
 mod debug_render_pipeline;
 mod held_recovery;
 mod physics_events;
@@ -3701,6 +3703,10 @@ impl PlayerHandle {
 const HELD_ITEM_SKIN: f32 = 0.01;
 
 pub struct PhysicsWorld {
+    #[cfg(feature = "damage-query-audit")]
+    damage_owners: HashMap<EntityId, EntityId>,
+    #[cfg(feature = "damage-query-audit")]
+    damage_audit_steps: u64,
     ignored_collision_pairs: HashSet<(u128, u128)>,
     gravity: Vector<Real>,
     integration_parameters: IntegrationParameters,
@@ -6326,6 +6332,9 @@ impl PhysicsWorld {
     }
 
     pub fn remove(&mut self, entity_id: EntityId) {
+        #[cfg(feature = "damage-query-audit")]
+        self.damage_owners
+            .retain(|child, owner| *child != entity_id && *owner != entity_id);
         let removed = entity_id.inner() as u128;
         self.ignored_collision_pairs
             .retain(|(a, b)| *a != removed && *b != removed);
@@ -6587,6 +6596,10 @@ impl PhysicsWorld {
         );
 
         PhysicsWorld {
+            #[cfg(feature = "damage-query-audit")]
+            damage_owners: HashMap::new(),
+            #[cfg(feature = "damage-query-audit")]
+            damage_audit_steps: 0,
             ignored_collision_pairs: HashSet::new(),
             gravity,
             integration_parameters,
@@ -7069,6 +7082,9 @@ impl PhysicsWorld {
                 controlled.elapsed(),
             ],
         );
+
+        #[cfg(feature = "damage-query-audit")]
+        self.audit_damage_queries();
 
         // Output result
         (translation, collision_events)

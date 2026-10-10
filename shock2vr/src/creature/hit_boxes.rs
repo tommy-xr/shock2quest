@@ -403,6 +403,8 @@ impl HitBoxManager {
                         physics.set_position_rotation2(*hit_box_entry, pos, rotation);
                     }
 
+                    #[cfg(feature = "damage-query-audit")]
+                    physics.register_damage_hitbox(*hit_box_entry, parent_entity_id);
                     joint_updates.insert(*hit_box_entry, joint_xform);
 
                     joint_index += 1;
