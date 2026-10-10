@@ -332,6 +332,12 @@ pub(crate) fn resolve(
                 state.guardable = false;
                 state.recovering = true;
                 state.parries += 1;
+                effects.push(Effect::Send {
+                    msg: crate::scripts::Message {
+                        to: entity,
+                        payload: crate::scripts::MessagePayload::MeleeFeedback { blocked: true },
+                    },
+                });
                 if is_ranged_guard(world, guard) {
                     effects.push(Effect::AdjustWeaponCondition {
                         entity_id: guard,

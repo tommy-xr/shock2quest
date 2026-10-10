@@ -3,7 +3,7 @@
 Checked against the shipped voice database and sound schemas, October 2026.
 This is a trigger and playback audit, not a claim of complete audible parity.
 
-## Restored in this change
+## Ambient vocalizations
 
 Animated creatures (including spiders, hybrids, monkeys, midwives and robots),
 grubs and swarms now request `atlevelzero` through `atlevelthree` according to
@@ -30,7 +30,7 @@ schemas; values are from `P$SchLoopPa`, not a generic creature timer):
 | `og1at0` | Hybrid, calm | 100 | 100 |
 
 Speech now observes the concept priorities stored in `Speech_DB`: equal/lower
-priority requests wait while a clip is playing; higher priority requests stop
+priority requests are rejected while a clip is playing; higher priority requests stop
 the previous voice. This prevents ambient speech from talking over an attack
 or death line. Playback and interruption remain visible in `/v1/audio/recent`.
 
@@ -42,10 +42,10 @@ or death line. Playback and interruption remain visible in `/v1/audio/recent`.
 | Attack voices | Animated attacks request `comattack`, including protocol droid self-destruct. | Requests are tied to animation selection rather than a complete combat-sound policy. |
 | Enemy weapon shots | Weapon/projectile sound queries are present. | Voice concepts such as `ogshoot` need a separate comparison against weapon sounds. |
 | Death voices | Animated organic deaths request loud/soft concepts. Linked debris/explosion deaths use a separate path. | Loud/soft selection is random; custom grub/swarm and linked-death voice coverage is incomplete. |
-| Alert transitions | Cameras have transition calls. | Mobile creatures lack `tolevelone`, `toleveltwo`, `tolevelthree`, `spotplayer`, `backtozero` and `lostcontact`. Ambient state changes are not substitutes for these lines. |
-| Pain | Physical damage reactions exist. | No mobile-AI requests for `comhithigh`, `comhitlow`, `comhitamb` or `comhitnodam`. |
-| Melee feedback | Physical parry/impact effects exist. | Voice reactions such as `comsucchit`, `comsuccblock`, `comblocked` and `comdetblock` are not wired. |
-| Tactical/discovery calls | Some related gameplay behaviors exist. | Charge, fleeing, ally warnings, body discovery and similar speech triggers remain incomplete. |
+| Alert transitions | Mobile AI requests `tolevelone`, `toleveltwo`, `tolevelthree`, `spotplayer`, `backtozero` and `lostcontact` on perception edges. Cameras keep their existing calls. | `lostcontact` follows de-escalation from combat after actual visual contact; hearing alone does not claim a lost target. |
+| Pain | Mobile AI requests `comhithigh`, `comhitlow` or `comhitamb` after committed, nonlethal HP loss; zero-rounded damage requests `comhitnodam`. Healing and lethal hits do not play ordinary pain. | Audio-specific thresholds are not decoded. Heavy hits currently mean at least one quarter of maximum HP; ambush means no visual contact at Lowest/Low alertness. |
+| Melee feedback | Resolved damaging melee contacts request attacker `comsucchit`; physical pipe parries request attacker `comblocked`. A pending reaction can wait up to six seconds for the attack voice to finish. | The shipped hybrid voice has no `comblocked` schema, so its parry remains vocally silent. `comsuccblock` and `comdetblock` need AI defensive-block events. Player weapon guards do not have an AI voice. |
+| Tactical/discovery calls | Entering a visible-target chase or ranged attack requests `reactcharge` or `reactshoot` after the alert line finishes. Pending calls expire after six seconds or on loss of sight. | Fleeing, ally warnings and body discovery need gameplay events before speech can be wired. |
 | Cameras/turrets | Camera speech and camera motor sound; turret activation/deactivation and firing. | Device sustain loops and turret rotation audio need their own pass. |
 
 ## Playback limitations to follow up
@@ -67,3 +67,20 @@ Unit coverage checks speech priorities, countdown restoration, mute and missing
 voice behavior, alert-state changes, and suppression during death, stun and
 scripted sequences. SDK regression tests exercise actual spider samples,
 authored repeat gaps, silence after death, and protocol droid ambient speech.
+
+## Event-speech policy and verification
+
+The shared mobile-AI wrapper observes each child AI's current perception,
+behavior, and committed HP changes. Event requests use the actor's authored
+voice and the same mute and priority policy as ambient speech. Missing concepts
+stay silent. Alert/contact request cooldowns and bounded pending calls prevent
+chatter; those throttle values are implementation policy, not decoded schema
+timing. Controller state round-trips with the monster script. Dead, frozen,
+stunned and scripted actors suppress event calls.
+
+Unit tests cover visual versus heard contact, transition edges, deferred tactical
+and melee feedback, batched damage, lethal/healing suppression, mute and restored
+cooldowns. SDK tests cover resolved hybrid pain and transition samples plus
+actual physical pipe hit samples and parry feedback delivery (including silence
+for the hybrid's missing blocked concept). This restores event coverage without
+claiming full retail timing or context-tag parity.

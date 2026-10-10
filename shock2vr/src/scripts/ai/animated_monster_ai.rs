@@ -1511,6 +1511,22 @@ impl AnimatedMonsterAI {
 }
 
 impl Script for AnimatedMonsterAI {
+    fn ai_speech_context(&self) -> Option<super::SpeechContext> {
+        Some(super::SpeechContext {
+            level: self.alertness.current_level,
+            visible: self.published_awareness.is_some_and(|(_, visible)| visible),
+            player_target: self.combat_team != Some(dark::properties::AITeam::Good),
+            active: !self.is_dead
+                && self.stun.is_none()
+                && self.current_behavior.borrow().scripted_state() != ScriptedState::Running,
+            tactic: match self.current_behavior.borrow().name() {
+                "Chase" => super::SpeechTactic::Charge,
+                "RangedAttack" => super::SpeechTactic::Shoot,
+                _ => super::SpeechTactic::None,
+            },
+        })
+    }
+
     fn script_state_key(&self) -> Option<&'static str> {
         Some("shock2vr.animated_combat")
     }
@@ -2103,7 +2119,10 @@ impl Script for AnimatedMonsterAI {
         physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        if let MessagePayload::SpeechTiming { concept, seconds } = msg {
+        if let MessagePayload::SpeechTiming {
+            concept, seconds, ..
+        } = msg
+        {
             self.ambient_speech.played(concept, *seconds);
             return Effect::NoEffect;
         }

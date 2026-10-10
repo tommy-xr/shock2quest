@@ -833,6 +833,12 @@ pub(crate) fn melee_contact_damage(
         hazard,
         Effect::Send {
             msg: crate::scripts::Message {
+                to: entity_id,
+                payload: crate::scripts::MessagePayload::MeleeFeedback { blocked: false },
+            },
+        },
+        Effect::Send {
+            msg: crate::scripts::Message {
                 to: target_entity_id,
                 payload: crate::scripts::MessagePayload::Damage {
                     amount: damage,
