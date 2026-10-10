@@ -186,13 +186,13 @@ impl ShoulderBackpack {
                 }
             }
             let pressed = hand.squeeze_value >= 0.5;
-            if held[i].is_none() && self.near[i] {
+            // Proximity only previews; a squeeze claims the hand's input, so an
+            // unsqueezed hand keeps its independent world trigger.
+            if held[i].is_none() && self.near[i] && pressed {
                 self.blocks_grab[i] = true;
-                if pressed {
-                    self.consumed[i] = true;
-                    if !self.draw_pressed[i] {
-                        self.draws[i] = self.near_slot[i];
-                    }
+                self.consumed[i] = true;
+                if !self.draw_pressed[i] {
+                    self.draws[i] = self.near_slot[i];
                 }
             }
             self.draw_pressed[i] = !tracked || pressed;
@@ -420,6 +420,29 @@ mod tests {
         input.pose_tracking = None;
         tracker.update(&input, [None; 2], true, 0.016);
         assert_eq!(tracker.draws, [None; 2]);
+    }
+
+    #[test]
+    fn shoulder_reach_leaves_world_input_free_until_a_squeeze_claims_it() {
+        let (mut tracker, mut input, _) = fixture();
+        tracker.update(&input, [None; 2], true, 0.016);
+        input.left_hand.position = tracker.centers.unwrap()[1];
+        input.left_hand.trigger_value = 1.0;
+        tracker.update(&input, [None; 2], true, 0.016);
+        assert!(tracker.near[0]);
+        assert!(
+            !tracker.blocks_grab[0],
+            "reach cannot consume world trigger"
+        );
+        input.left_hand.squeeze_value = 1.0;
+        tracker.update(&input, [None; 2], true, 0.016);
+        assert!(
+            tracker.blocks_grab[0],
+            "actual shoulder squeeze claims input"
+        );
+        input.left_hand.squeeze_value = 0.0;
+        tracker.update(&input, [None; 2], true, 0.016);
+        assert!(!tracker.blocks_grab[0], "release restores world input");
     }
 
     #[test]
