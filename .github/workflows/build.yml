@@ -26,6 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
       # Install Linux-specific dependencies
       - name: Install ALSA (Linux only)
         if: runner.os == 'Linux'

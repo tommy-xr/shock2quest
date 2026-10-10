@@ -23,5 +23,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
       - name: Check cargo fmt
         run: cargo fmt --all -- --check
