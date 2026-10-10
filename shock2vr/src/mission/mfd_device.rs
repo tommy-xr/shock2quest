@@ -7,7 +7,7 @@ use cgmath::{Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector2, Vector3,
 mod grip;
 
 /// Allow moving around a scanned machine without losing the handheld panel.
-pub(super) const PANEL_RANGE: f32 = 6.0 / crate::METERS_PER_WORLD_UNIT;
+pub(super) const PANEL_RANGE: f32 = 8.0 / crate::METERS_PER_WORLD_UNIT;
 
 pub const SIZE: Vector2<f32> = Vector2::new(268.0, 376.0);
 pub const SCREEN: Rect = Rect::new(8.0, 8.0, 252.0, 296.0);
