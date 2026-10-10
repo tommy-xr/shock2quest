@@ -1,6 +1,7 @@
 extern crate gl;
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
+use crate::scene::uv_motion::UvMotion;
 use crate::shader_program::ShaderProgram;
 use crate::texture::Texture;
 use crate::texture::TextureTrait;
@@ -59,6 +60,8 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform sampler2D texture2; // diffuse texture
         uniform vec3 ambientColor;  // authored mission-wide minimum lighting
         uniform float lightmapIntensity;
+        uniform highp vec2 diffuseUvOffset;
+        uniform bool unlit;
 
         // Spotlight array uniforms (up to 6 spotlights)
         uniform highp vec3 spotlightPos[6];
@@ -116,7 +119,11 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             wrappedTexCoord.y = mod(lightMapTexCoord.y * height, height) + atlasCoord.y + half_pixel;
 
             vec4 lightmapColor = texture(texture1, wrappedTexCoord) * lightmapIntensity;
-            vec4 diffuseColor = texture(texture2, texCoord);
+            vec4 diffuseColor = texture(texture2, texCoord + diffuseUvOffset);
+            if (unlit) {
+                fragColor = vec4(diffuseColor.rgb, 1.0);
+                return;
+            }
 
             // Dark's mission ambient is a minimum final intensity: preserve
             // brighter authored pixels while keeping unlit surfaces legible.
@@ -134,6 +141,8 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 
 struct UnifiedUniforms {
     world_wave: crate::scene::world_wave::Uniforms,
+    uv_offset_loc: i32,
+    unlit_loc: i32,
     // Basic transformation matrices
     world_loc: i32,
     view_loc: i32,
@@ -157,6 +166,8 @@ struct UnifiedUniforms {
 static UNIFIED_SHADER_PROGRAM: OnceCell<(ShaderProgram, UnifiedUniforms)> = OnceCell::new();
 
 pub struct LightmapMaterial {
+    uv_motion: UvMotion,
+    unlit: bool,
     has_initialized: bool,
     lightmap_texture: Rc<Texture>,
     diffuse_texture: Rc<dyn TextureTrait>,
@@ -169,7 +180,25 @@ impl LightmapMaterial {
         diffuse_texture: Rc<dyn TextureTrait>,
         ambient_color: Vector3<f32>,
     ) -> Box<dyn Material> {
+        Self::create_with_uv(
+            lightmap_texture,
+            diffuse_texture,
+            ambient_color,
+            UvMotion::None,
+            false,
+        )
+    }
+
+    pub fn create_with_uv(
+        lightmap_texture: Rc<Texture>,
+        diffuse_texture: Rc<dyn TextureTrait>,
+        ambient_color: Vector3<f32>,
+        uv_motion: UvMotion,
+        unlit: bool,
+    ) -> Box<dyn Material> {
         Box::new(LightmapMaterial {
+            uv_motion,
+            unlit,
             diffuse_texture,
             lightmap_texture,
             ambient_color,
@@ -195,6 +224,9 @@ impl LightmapMaterial {
 
             gl::UseProgram(shader_program.gl_id);
             uniforms.world_wave.bind(render_context.world_wave);
+            let uv = self.uv_motion.offset(render_context.time);
+            gl::Uniform2f(uniforms.uv_offset_loc, uv[0], uv[1]);
+            gl::Uniform1i(uniforms.unlit_loc, i32::from(self.unlit));
 
             let projection = render_context.projection_matrix;
 
@@ -299,6 +331,11 @@ impl Material for LightmapMaterial {
 
                 // Get uniform locations for all shader variables
                 let uniforms = UnifiedUniforms {
+                    uv_offset_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("diffuseUvOffset").as_ptr(),
+                    ),
+                    unlit_loc: gl::GetUniformLocation(shader.gl_id, c_str!("unlit").as_ptr()),
                     world_wave: crate::scene::world_wave::Uniforms::new(shader.gl_id),
                     // Basic transformation matrices
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),

@@ -15,3 +15,9 @@ The implementation follows `doc/material-format.txt` in the original
 
 Unsupported directives retain the original material. This is a bounded subset,
 not a claim of complete NewDark material support.
+
+The UV increment supports continuous SCROLL (including literal `[1 1]` in the
+Nightdive assets) and independent UOFFSET_WAVE/VOFFSET_WAVE with SINE or
+SAWTOOTH. Unsupported stepping, scale/rotation transforms, and other waveforms
+retain fallback. Offset evaluation uses simulation time; lightmap UVs are
+untouched. `ani_frames 1` explicitly suppresses legacy texture animation.

@@ -670,10 +670,11 @@ image detail. Missing art or incomplete/invalid sizing falls back to the
 original image **and** its dimensions. Single-pass numbered texture sequences now honor `ani_rate` (milliseconds) and
 `ani_mode PINGPONG`, including the Many's eight-frame `OMW` surface. Playback
 uses simulation time and turns around without duplicating endpoint frames.
-All frames must resolve before replacing the original material. Water and
-materials requiring UV or layered effects retain their original art; this
-flag does not add UV scrolling, emissive passes, or new lighting. Classic
-installs are unchanged.
+All frames must resolve before replacing the original material. Single passes
+also support continuous `SCROLL` and independent U/V offset waves (`SINE` and
+`SAWTOOTH`). Only diffuse UVs move; baked lightmaps stay fixed. Water, layered
+materials, stepped motion, and other waveforms retain their original art.
+Classic installs are unchanged.
 
 The main menu's bottom-left build label shows `dev | <commit>` for local builds
 and `v<version> | <commit>` for release builds. Click it three times to enable

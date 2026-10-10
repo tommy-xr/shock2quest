@@ -2,6 +2,7 @@
 //! the existing single-texture fallback remains available, without pretending a
 //! partially parsed effect is a faithful ordered material.
 use cgmath::{Vector3, vec3};
+use engine::scene::uv_motion::{UvMotion, Wave, Waveform};
 use engine::{scene::render_pass::BlendFactor, texture::PlaybackMode};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -10,6 +11,7 @@ pub(super) struct Pass {
     pub animation: Option<Animation>,
     pub frame_ms: u32,
     pub playback: PlaybackMode,
+    pub uv_motion: UvMotion,
     pub blend: (BlendFactor, BlendFactor),
     pub color: Vector3<f32>,
     pub alpha: f32,
@@ -40,6 +42,7 @@ impl Default for Pass {
             animation: None,
             frame_ms: 250,
             playback: PlaybackMode::Loop,
+            uv_motion: UvMotion::None,
             blend: (BlendFactor::SrcAlpha, BlendFactor::InvSrcAlpha),
             color: vec3(1.0, 1.0, 1.0),
             alpha: 1.0,
@@ -56,6 +59,7 @@ impl Default for Pass {
 pub(super) struct Plan {
     pub material_only: bool,
     pub force_opaque: bool,
+    pub suppress_animation: bool,
     pub passes: Vec<Pass>,
 }
 
@@ -141,6 +145,7 @@ pub(super) fn parse(source: &str) -> Result<Plan, String> {
                         _ => return Err("unsupported animation mode".into()),
                     }
                 }
+                ("uv_mod", args) => parse_uv_motion(&mut p.uv_motion, args)?,
                 ("blend", [src, dst]) => {
                     p.blend = (
                         BlendFactor::parse(src).ok_or("unknown blend source")?,
@@ -183,7 +188,8 @@ pub(super) fn parse(source: &str) -> Result<Plan, String> {
                 "render_material_only" => plan.material_only = boolean(args)?,
                 "force_opaque" => plan.force_opaque = boolean(args)?,
                 // Texture sizing is consumed by UI/world loaders and doesn't alter model pass state.
-                "ui_scale" | "terrain_scale" => {}
+                "ui_scale" | "terrain_scale" | "tile_factor" => {}
+                "ani_frames" if args == ["1"] => plan.suppress_animation = true,
                 _ => return Err(format!("unsupported material directive: {line}")),
             }
         }
@@ -204,9 +210,93 @@ pub(super) fn parse(source: &str) -> Result<Plan, String> {
     Ok(plan)
 }
 
+// Keep this subset explicit: unknown waveforms, stepped motion and conflicting
+// offset modes reject the whole material rather than silently approximating it.
+fn parse_uv_motion(motion: &mut UvMotion, args: &[&str]) -> Result<(), String> {
+    let args: Vec<_> = args
+        .iter()
+        .map(|a| a.trim_matches(['[', ']']))
+        .filter(|a| !a.is_empty())
+        .collect();
+    let number = |v: &str| {
+        v.parse::<f32>()
+            .ok()
+            .filter(|n| n.is_finite())
+            .ok_or("invalid UV number".to_owned())
+    };
+    let Some(kind) = args.first() else {
+        return Err("missing UV mode".into());
+    };
+    match kind.to_ascii_uppercase().as_str() {
+        "SCROLL" if args.len() == 3 || args.len() == 5 => {
+            if *motion != UvMotion::None
+                || (args.len() == 5 && args[3..].iter().any(|v| !matches!(*v, "0" | "1")))
+            {
+                return Err("conflicting or stepped UV motion".into());
+            }
+            *motion = UvMotion::Scroll([number(args[1])?, number(args[2])?]);
+        }
+        "UOFFSET_WAVE" | "VOFFSET_WAVE" if args.len() == 6 => {
+            let shape = match args[1].to_ascii_uppercase().as_str() {
+                "SINE" => Waveform::Sine,
+                "SAWTOOTH" => Waveform::Sawtooth,
+                _ => return Err("unsupported UV waveform".into()),
+            };
+            let wave = Wave {
+                shape,
+                bias: number(args[2])?,
+                amplitude: number(args[3])?,
+                phase: number(args[4])?,
+                period_ms: args[5]
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|n| *n > 0)
+                    .ok_or("invalid UV period")?,
+            };
+            if *motion == UvMotion::None {
+                *motion = UvMotion::OffsetWaves([None; 2]);
+            }
+            let UvMotion::OffsetWaves(waves) = motion else {
+                return Err("conflicting UV motion".into());
+            };
+            let axis = usize::from(kind.eq_ignore_ascii_case("VOFFSET_WAVE"));
+            if waves[axis].replace(wave).is_some() {
+                return Err("duplicate UV axis".into());
+            }
+        }
+        _ => return Err("unsupported UV motion".into()),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authored_uv_motion_parses_without_guessing_unsupported_modes() {
+        let script = |body: &str| format!("ani_frames 1\nrender_pass {{\n{body}\n}}");
+        let p = parse(&script("uv_mod SCROLL 0.45 -0.45 [1 1]")).unwrap();
+        assert!(p.suppress_animation);
+        assert_eq!(p.passes[0].uv_motion, UvMotion::Scroll([0.45, -0.45]));
+        let p = parse(&script(
+            "uv_mod UOFFSET_WAVE SINE -1 .025 .1 30000\nuv_mod VOFFSET_WAVE SAWTOOTH 0 .1 .1 20000",
+        ))
+        .unwrap();
+        assert!(matches!(
+            p.passes[0].uv_motion,
+            UvMotion::OffsetWaves([Some(_), Some(_)])
+        ));
+        for bad in [
+            "uv_mod SCROLL NaN 1",
+            "uv_mod SCROLL 1 1 4 4",
+            "uv_mod UOFFSET_WAVE TURB 0 1 0 1000",
+            "uv_mod UOFFSET_WAVE SINE 0 1 0 0",
+            "uv_mod SCROLL 1 0\nuv_mod UOFFSET_WAVE SINE 0 1 0 1000",
+            "uv_mod UOFFSET_WAVE SINE 0 1 0 1000\nuv_mod UOFFSET_WAVE SINE 0 1 0 1000",
+        ] {
+            assert!(parse(&script(bad)).is_err(), "{bad}");
+        }
+    }
     #[test]
     fn animation_requires_complete_bounded_numbered_sequence_and_timing() {
         let source = "render_material_only 1\nrender_pass {\nani_mode PINGPONG\nani_rate 164\ntexture *_ 8 FAM\\_ND\\OMW_\nshaded 1\n}";
@@ -307,7 +397,12 @@ pub(super) fn apply(
     };
     // Terrain-only animation support must not turn formerly rejected model
     // materials into partially rendered effects.
-    if plan.passes.iter().any(|p| p.animation.is_some()) {
+    if plan.suppress_animation
+        || plan
+            .passes
+            .iter()
+            .any(|p| p.animation.is_some() || p.uv_motion != UvMotion::None)
+    {
         return false;
     }
     if plan.passes.is_empty() {

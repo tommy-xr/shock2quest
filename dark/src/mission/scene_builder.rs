@@ -257,7 +257,11 @@ pub fn to_scene(
         );
         let initial_texture = asset_cache.get(&TEXTURE_IMPORTER, &resolved.name);
 
-        let animated_texture: Rc<dyn TextureTrait> = if let Some(animation) = &resolved.animation {
+        let animated_texture: Rc<dyn TextureTrait> = if let Some(animation) = resolved
+            .passes
+            .first()
+            .and_then(|pass| pass.animation.as_ref())
+        {
             let frames = animation
                 .frames
                 .iter()
@@ -268,7 +272,11 @@ pub fn to_scene(
                 Duration::from_millis(animation.frame_ms as u64),
                 animation.playback,
             ))
-        } else if let Some(animation_info) = &tex_info.animation_info {
+        } else if let Some(animation_info) = tex_info
+            .animation_info
+            .as_ref()
+            .filter(|_| resolved.passes.is_empty())
+        {
             let mut additional_textures = load_multiple_textures_for_family(
                 asset_cache,
                 &tex_info.family,
@@ -287,7 +295,15 @@ pub fn to_scene(
             Rc::new(Box::new(engine::scene::mesh::create(vertices)));
 
         let material = {
-            if tex_info.render_type == RenderType::FullBright {
+            if let Some(pass) = resolved.passes.first() {
+                RefCell::new(engine::materials::LightmapMaterial::create_with_uv(
+                    lightmap_texture.clone(),
+                    animated_texture,
+                    level.render_params.ambient_color,
+                    pass.uv_motion,
+                    !pass.shaded || tex_info.render_type == RenderType::FullBright,
+                ))
+            } else if tex_info.render_type == RenderType::FullBright {
                 RefCell::new(engine::scene::basic_material::create_with_fixed_ambient(
                     animated_texture,
                     1.0,
