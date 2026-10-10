@@ -20157,11 +20157,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .with_id()
                     .filter(|(_, hitbox)| hitbox.parent_entity_id == id)
                     .filter_map(|(proxy_id, hitbox)| {
-                        let handle = *self.id_to_physics.get(&proxy_id)?;
-                        let body = self.physics.debug_body_detail(handle.into_raw_parts().0)?;
+                        #[cfg(feature = "lazy-hitboxes")]
+                        let (body_id, position) =
+                            (None, self.physics.query_hitbox_position(proxy_id)?);
+                        #[cfg(not(feature = "lazy-hitboxes"))]
+                        let (body_id, position) = {
+                            let handle = *self.id_to_physics.get(&proxy_id)?;
+                            let body = self.physics.debug_body_detail(handle.into_raw_parts().0)?;
+                            (Some(body.body_id), body.position)
+                        };
                         Some(DebugAimPoint {
                             proxy_entity_id: proxy_id.inner() as i32,
-                            body_id: body.body_id,
+                            body_id,
                             joint_id: hitbox.joint_id,
                             classification: match hitbox.hit_box_type {
                                 crate::creature::HitBoxType::Head => "head",
@@ -20170,7 +20177,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                                 crate::creature::HitBoxType::Extremity => "extremity",
                             }
                             .to_string(),
-                            position: body.position,
+                            position,
                         })
                     })
                     .collect::<Vec<_>>()

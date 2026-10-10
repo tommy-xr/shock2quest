@@ -343,7 +343,8 @@ pub struct DebugEntityDetail {
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugAimPoint {
     pub proxy_entity_id: i32,
-    pub body_id: u32,
+    /// Query-only damage volumes have no Rapier body.
+    pub body_id: Option<u32>,
     pub joint_id: u32,
     pub classification: String,
     pub position: [f32; 3],

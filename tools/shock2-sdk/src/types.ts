@@ -305,7 +305,8 @@ export interface EntityDetailResult {
 
 export interface AimPoint {
   proxy_entity_id: number;
-  body_id: number;
+  /** Null for query-only damage volumes, which have no Rapier body. */
+  body_id: number | null;
   joint_id: number;
   classification: "head" | "torso" | "limb" | "extremity" | "no_damage";
   position: Vec3;

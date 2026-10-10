@@ -387,6 +387,15 @@ mod tests {
             crate::physics::CollisionGroup::selectable(),
             false,
         );
+        #[cfg(feature = "lazy-hitboxes")]
+        physics.promote_hitboxes_for_test(|entity| {
+            use shipyard::Get;
+            world
+                .borrow::<shipyard::View<RuntimePropHitBox>>()
+                .unwrap()
+                .get(entity)
+                .map_or(entity, |hitbox| hitbox.parent_entity_id)
+        });
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
         let effects = Effect::flatten(vec![
             super::InternalFastProjectileScript::new(vec3(0.0, 0.0, 1.0)).update(
@@ -435,6 +444,15 @@ mod tests {
         );
         let mut player =
             physics.create_player(vec3(10.0, 10.0, 10.0), EntityId::from_inner(1000).unwrap());
+        #[cfg(feature = "lazy-hitboxes")]
+        physics.promote_hitboxes_for_test(|entity| {
+            use shipyard::Get;
+            world
+                .borrow::<shipyard::View<RuntimePropHitBox>>()
+                .unwrap()
+                .get(entity)
+                .map_or(entity, |hitbox| hitbox.parent_entity_id)
+        });
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
         let cast = |x, y| {
             projectile_ray_cast(
@@ -575,6 +593,15 @@ mod tests {
         // parked far behind the muzzle and never on the line of fire.
         let mut player =
             physics.create_player(vec3(0.0, 0.0, -50.0), EntityId::from_inner(9).unwrap());
+        #[cfg(feature = "lazy-hitboxes")]
+        physics.promote_hitboxes_for_test(|entity| {
+            use shipyard::Get;
+            world
+                .borrow::<shipyard::View<RuntimePropHitBox>>()
+                .unwrap()
+                .get(entity)
+                .map_or(entity, |hitbox| hitbox.parent_entity_id)
+        });
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
 
         let hit = projectile_ray_cast(
@@ -639,6 +666,15 @@ mod tests {
 
         let mut player =
             physics.create_player(vec3(0.0, 0.0, -50.0), EntityId::from_inner(9).unwrap());
+        #[cfg(feature = "lazy-hitboxes")]
+        physics.promote_hitboxes_for_test(|entity| {
+            use shipyard::Get;
+            world
+                .borrow::<shipyard::View<RuntimePropHitBox>>()
+                .unwrap()
+                .get(entity)
+                .map_or(entity, |hitbox| hitbox.parent_entity_id)
+        });
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
 
         let hit = projectile_ray_cast(
@@ -706,6 +742,15 @@ mod tests {
         );
         let mut player =
             physics.create_player(vec3(0.0, 0.0, -50.0), EntityId::from_inner(9).unwrap());
+        #[cfg(feature = "lazy-hitboxes")]
+        physics.promote_hitboxes_for_test(|entity| {
+            use shipyard::Get;
+            world
+                .borrow::<shipyard::View<RuntimePropHitBox>>()
+                .unwrap()
+                .get(entity)
+                .map_or(entity, |hitbox| hitbox.parent_entity_id)
+        });
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
 
         let hit = projectile_ray_cast(
@@ -756,6 +801,15 @@ mod tests {
         );
         let mut player =
             physics.create_player(vec3(0.0, 0.0, -50.0), EntityId::from_inner(9).unwrap());
+        #[cfg(feature = "lazy-hitboxes")]
+        physics.promote_hitboxes_for_test(|entity| {
+            use shipyard::Get;
+            world
+                .borrow::<shipyard::View<RuntimePropHitBox>>()
+                .unwrap()
+                .get(entity)
+                .map_or(entity, |hitbox| hitbox.parent_entity_id)
+        });
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
 
         let hit = projectile_ray_cast(

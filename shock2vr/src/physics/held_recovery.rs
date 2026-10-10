@@ -182,12 +182,27 @@ impl PhysicsWorld {
         {
             return false;
         }
+        #[cfg(feature = "lazy-hitboxes")]
+        {
+            // A capsule is the swept arm sphere, including both endpoints.
+            let corridor = Capsule::new(Point::from(from), Point::from(to), ARM_RADIUS);
+            if self
+                .query_hitboxes
+                .intersects(&Isometry::identity(), &corridor, &|_| true)
+            {
+                return false;
+            }
+        }
         // Validate every collider at its full final orientation and local
         // offset. A clear grip point alone doesn't clear a long barrel.
         !body.colliders().is_empty()
             && body.colliders().iter().all(|handle| {
                 let c = &self.collider_set[*handle];
                 let at = *pose * c.position_wrt_parent().copied().unwrap_or_default();
+                #[cfg(feature = "lazy-hitboxes")]
+                if self.query_hitboxes.intersects(&at, c.shape(), &|_| true) {
+                    return false;
+                }
                 queries.intersect_shape(at, c.shape()).next().is_none()
             })
     }
@@ -220,6 +235,25 @@ mod tests {
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
         );
         (world, player, weapon, handle)
+    }
+
+    #[cfg(feature = "lazy-hitboxes")]
+    #[test]
+    fn recovery_checks_query_only_limbs_across_the_arm_corridor() {
+        let (mut world, _player, _weapon, handle) = fixture();
+        let pose = Isometry::translation(-1.0, 1.2, 0.0);
+        let context = context(-1.0);
+        assert!(world.held_recovery_pose_is_clear(handle, &pose, context));
+        world.stage_query_hitbox(
+            EntityId::from_inner(90).unwrap(),
+            EntityId::from_inner(91).unwrap(),
+            0,
+            vec3(-1.0, 1.2, 0.25),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            || SharedShape::ball(0.05),
+        );
+        world.query_hitboxes.commit();
+        assert!(!world.held_recovery_pose_is_clear(handle, &pose, context));
     }
 
     fn context(x: f32) -> HeldRecoveryContext {
