@@ -1,0 +1,74 @@
+{
+  "kind": "unpaced-rendered-host-throughput",
+  "note": "Includes game update, scene preparation, GPU rendering, visibility, swap and amortized HTTP overhead; not visibility-only or headset FPS.",
+  "rows": [
+    {
+      "label": "A1",
+      "binary": "/tmp/shock2quest-visibility-optimized",
+      "frames": 720,
+      "warmup": 600,
+      "ms_per_frame": [
+        4.207281249999998,
+        3.877112150000001,
+        3.9769798583333267,
+        3.958934725000002,
+        3.9089711833333394,
+        3.8777850666666684
+      ],
+      "mean_ms": 3.9678440388888894,
+      "before_count": 216,
+      "after_count": 217
+    },
+    {
+      "label": "B1",
+      "binary": "/tmp/shock2quest-visibility-bounds",
+      "frames": 720,
+      "warmup": 600,
+      "ms_per_frame": [
+        3.890563541666658,
+        3.8844031250000017,
+        3.8636194416666814,
+        3.918129858333335,
+        3.8767840333333274,
+        3.8264854166666433
+      ],
+      "mean_ms": 3.8766642361111074,
+      "before_count": 216,
+      "after_count": 216
+    },
+    {
+      "label": "B2",
+      "binary": "/tmp/shock2quest-visibility-bounds",
+      "frames": 720,
+      "warmup": 600,
+      "ms_per_frame": [
+        5.623074658333341,
+        4.40862534166666,
+        5.555386108333338,
+        5.013639241666654,
+        4.274749650000013,
+        4.247323258333321
+      ],
+      "mean_ms": 4.85379970972222,
+      "before_count": 217,
+      "after_count": 216
+    },
+    {
+      "label": "A2",
+      "binary": "/tmp/shock2quest-visibility-optimized",
+      "frames": 720,
+      "warmup": 600,
+      "ms_per_frame": [
+        4.818111800000042,
+        4.971332291666658,
+        5.647920833333349,
+        4.782447224999972,
+        4.558097916666702,
+        4.769939233333329
+      ],
+      "mean_ms": 4.924641550000009,
+      "before_count": 216,
+      "after_count": 216
+    }
+  ]
+}
