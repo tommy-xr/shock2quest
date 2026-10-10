@@ -19,9 +19,9 @@ use crate::{
 /// classic meshes fit within 0.02 of these.
 const AMP_SPHERE_CENTER: Point3<f32> = Point3::new(-0.42, 0.094, -0.04);
 const AMP_SPHERE_RADIUS: f32 = 0.155;
-/// The baked forearm's axis at the wrist, in model space; the forearm runs
-/// along model +x. Mount toward the elbow so the pinky-side implant well
-/// clears the authored cable inlet. This frame drives both bio bands and the socket.
+/// Reference anchor on the baked forearm, in model space (+x toward the elbow).
+/// `wrist` tunes along this axis to seat the bracelet beside the cable inlet;
+/// both bio bands and the implant socket consume that final frame.
 const AMP_WRIST_CENTER: Point3<f32> = Point3::new(0.08, -0.12, -0.10);
 /// Bands at this radius sit just off the forearm's skin, palm and back.
 const AMP_FOREARM_RADIUS: f32 = 0.15;
@@ -159,9 +159,15 @@ fn badge_lift(up: Vector3<f32>) -> f32 {
 /// the forearm's world radius.
 pub(crate) fn wrist(world: &World, amp: EntityId, hand: Handedness) -> Option<(Matrix4<f32>, f32)> {
     let transform = drawn_transform(world, amp, hand)?;
+    // Apply physical centimetres after resolving the mirrored/scaled model,
+    // along its wrist axis. Both bio bands and the implant use this result.
+    let forward = crate::dev_params::get(crate::dev_params::PSI_BAND_FORWARD_CM)
+        * (0.01 / crate::METERS_PER_WORLD_UNIT);
     Some((
-        wrist_frame(transform),
-        AMP_FOREARM_RADIUS * transform.x.truncate().magnitude(),
+        wrist_frame(transform) * Matrix4::from_translation(vec3(0.0, forward, 0.0)),
+        AMP_FOREARM_RADIUS
+            * transform.x.truncate().magnitude()
+            * crate::dev_params::get(crate::dev_params::PSI_BAND_SCALE),
     ))
 }
 

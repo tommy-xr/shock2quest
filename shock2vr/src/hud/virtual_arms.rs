@@ -92,7 +92,12 @@ pub fn create_wrist_hud_panels(
             }
             continue;
         }
-        objects.extend(bio_bands(asset_cache, &bio_canvas, root, GLOVE_PALM_LIFT));
+        objects.extend(bio_bands(
+            asset_cache,
+            &bio_canvas,
+            glove_band_frame(root),
+            glove_palm_lift(),
+        ));
         let ammo_canvas = ammo_panel::build_wrist_canvas(&readout);
         // A psi amp carries its own readout (`psi_amp_readout`).
         if ammo_canvas.element_count() > 0 && readout.psi_power.is_none() {
@@ -177,7 +182,19 @@ const BIO_WIDTH: f32 = 0.085;
 /// The bio band wraps a cylinder about the wrist axis, just outside the cuff.
 pub(crate) const BIO_BAND_RADIUS: f32 = 0.045;
 /// The glove's cuff stands further off the wrist on the palm side.
-pub(crate) const GLOVE_PALM_LIFT: f32 = 0.02;
+pub(crate) fn glove_palm_lift() -> f32 {
+    crate::dev_params::get(crate::dev_params::GLOVE_BAND_PALM_LIFT_CM)
+        * (0.01 / crate::METERS_PER_WORLD_UNIT)
+}
+
+/// Keep the glove's bracelet and implant interaction in the same tuned frame.
+/// Ammo and alarm mounts retain their own cuff anchors.
+pub(crate) fn glove_band_frame(root: Matrix4<f32>) -> Matrix4<f32> {
+    let forward = crate::dev_params::get(crate::dev_params::GLOVE_BAND_FORWARD_CM)
+        * (0.01 / crate::METERS_PER_WORLD_UNIT);
+    root * Matrix4::from_translation(vec3(0.0, forward, 0.0))
+        * Matrix4::from_scale(crate::dev_params::get(crate::dev_params::GLOVE_BAND_SCALE))
+}
 
 /// Pinky side of the same bracelet. Rendering and grab
 /// targeting share this frame, including the thicker palm side of the glove.
