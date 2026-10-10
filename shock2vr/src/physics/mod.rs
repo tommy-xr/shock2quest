@@ -1,10 +1,12 @@
-#[cfg(any(test, feature = "damage-query-audit"))]
+#[cfg(any(test, feature = "damage-query-audit", feature = "lazy-hitboxes"))]
 mod damage_queries;
 mod debug_render_pipeline;
 mod held_recovery;
 mod physics_events;
 #[cfg(feature = "physics-profiling")]
 mod profiling;
+#[cfg(feature = "lazy-hitboxes")]
+mod query_hitboxes;
 pub use held_recovery::{HeldRecovery, HeldRecoveryContext};
 pub(crate) mod util;
 
@@ -3703,6 +3705,8 @@ impl PlayerHandle {
 const HELD_ITEM_SKIN: f32 = 0.01;
 
 pub struct PhysicsWorld {
+    #[cfg(feature = "lazy-hitboxes")]
+    query_hitboxes: query_hitboxes::QueryHitboxes,
     #[cfg(feature = "damage-query-audit")]
     damage_owners: HashMap<EntityId, EntityId>,
     #[cfg(feature = "damage-query-audit")]
@@ -5232,6 +5236,13 @@ impl PhysicsWorld {
     }
 
     pub fn get_aabb2(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
+        #[cfg(feature = "lazy-hitboxes")]
+        if let Some(bounds) = self.query_hitboxes.bounds(entity_id) {
+            return Some(Aabb3 {
+                min: point3(bounds.mins.x, bounds.mins.y, bounds.mins.z),
+                max: point3(bounds.maxs.x, bounds.maxs.y, bounds.maxs.z),
+            });
+        }
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get(*handle);
             maybe_rigid_body.and_then(|rigid_body| {
@@ -5319,6 +5330,13 @@ impl PhysicsWorld {
         ));
         let pose = Isometry::from_parts(Translation::from(vec_to_nvec(center)), orientation);
         let shape = Cuboid::new(vec_to_nvec(size) * 0.5);
+        #[cfg(feature = "lazy-hitboxes")]
+        if self
+            .query_hitboxes
+            .intersects(&pose, &shape, &|entity| !ignored.contains(&entity))
+        {
+            return false;
+        }
         let groups = (InternalCollisionGroups::WORLD
             | InternalCollisionGroups::ENTITIES
             | InternalCollisionGroups::HITBOX)
@@ -6252,24 +6270,24 @@ impl PhysicsWorld {
             // is offset from the body origin, so sweeping the body's origin
             // would probe empty space beside the weapon.
             let shape_pose = current * collider.position_wrt_parent().copied().unwrap_or_default();
-            if let Some((hit_collider, hit)) = queries.cast_shape(
-                &shape_pose,
-                &direction,
-                collider.shape(),
-                rapier3d::parry::query::ShapeCastOptions {
-                    max_time_of_impact: distance,
-                    // Leave a hair of clearance so a weapon resting on a
-                    // surface does not re-report a zero-distance hit forever.
-                    target_distance: HELD_ITEM_SKIN,
-                    // An already-penetrating start must not pin the weapon in
-                    // place; let it keep sweeping out.
-                    stop_at_penetration: false,
-                    compute_impact_geometry_on_penetration: true,
-                },
-            ) {
-                if hit.time_of_impact >= nearest {
-                    continue;
-                }
+            if let Some((hit_collider, hit)) = queries
+                .cast_shape(
+                    &shape_pose,
+                    &direction,
+                    collider.shape(),
+                    rapier3d::parry::query::ShapeCastOptions {
+                        max_time_of_impact: distance,
+                        // Leave a hair of clearance so a weapon resting on a
+                        // surface does not re-report a zero-distance hit forever.
+                        target_distance: HELD_ITEM_SKIN,
+                        // An already-penetrating start must not pin the weapon in
+                        // place; let it keep sweeping out.
+                        stop_at_penetration: false,
+                        compute_impact_geometry_on_penetration: true,
+                    },
+                )
+                .filter(|(_, hit)| hit.time_of_impact < nearest)
+            {
                 nearest = hit.time_of_impact;
                 // A swing stopped by a creature's hitbox *is* a blow landing
                 // on that limb: the cast knows which one, where, and how fast
@@ -6304,6 +6322,21 @@ impl PhysicsWorld {
                         normal: -nvec_to_cgmath(hit.normal1.into_inner()),
                     });
             }
+            #[cfg(feature = "lazy-hitboxes")]
+            if collider
+                .collision_groups()
+                .test(CollisionGroup::hitbox().collision)
+                && let Some((toi, stop)) = self.query_hitboxes.sweep(
+                    &shape_pose,
+                    &direction,
+                    collider.shape(),
+                    nearest,
+                    HELD_ITEM_SKIN,
+                )
+            {
+                nearest = toi;
+                stopped_by = Some(stop);
+            }
         }
         let fraction = if distance <= 0.0 {
             1.0
@@ -6332,6 +6365,8 @@ impl PhysicsWorld {
     }
 
     pub fn remove(&mut self, entity_id: EntityId) {
+        #[cfg(feature = "lazy-hitboxes")]
+        self.query_hitboxes.remove(entity_id);
         #[cfg(feature = "damage-query-audit")]
         self.damage_owners
             .retain(|child, owner| *child != entity_id && *owner != entity_id);
@@ -6596,6 +6631,8 @@ impl PhysicsWorld {
         );
 
         PhysicsWorld {
+            #[cfg(feature = "lazy-hitboxes")]
+            query_hitboxes: Default::default(),
             #[cfg(feature = "damage-query-audit")]
             damage_owners: HashMap::new(),
             #[cfg(feature = "damage-query-audit")]
@@ -6648,8 +6685,8 @@ impl PhysicsWorld {
         }
     }
 
-    /// A line wireframe of every collider on `entity_id`'s primary body, read
-    /// straight out of Rapier at each collider's own live world isometry.
+    /// A line wireframe of the entity's live collider geometry, read from
+    /// Rapier or the committed query-only limb snapshot at its world isometry.
     ///
     /// Deliberately *not* a recomputation of what the wield intended: a
     /// recomputation would agree with the renderer by construction and so
@@ -6661,18 +6698,22 @@ impl PhysicsWorld {
         entity_id: EntityId,
         color: Vector3<f32>,
     ) -> Vec<SceneObject> {
-        let Some(handle) = self.entity_id_to_body.get(&entity_id) else {
-            return Vec::new();
-        };
-        let Some(body) = self.rigid_body_set.get(*handle) else {
-            return Vec::new();
-        };
+        let mut geometries: Vec<(&dyn Shape, &Isometry<Real>)> = self
+            .entity_id_to_body
+            .get(&entity_id)
+            .and_then(|handle| self.rigid_body_set.get(*handle))
+            .into_iter()
+            .flat_map(|body| body.colliders())
+            .filter_map(|handle| self.collider_set.get(*handle))
+            .map(|collider| (collider.shape(), collider.position()))
+            .collect();
+        #[cfg(feature = "lazy-hitboxes")]
+        if let Some(geometry) = self.query_hitboxes.geometry(entity_id) {
+            geometries.push(geometry);
+        }
         let mut objects = Vec::new();
-        for collider_handle in body.colliders() {
-            let Some(collider) = self.collider_set.get(*collider_handle) else {
-                continue;
-            };
-            let shape = match collider.shape().as_typed_shape() {
+        for (geometry, isometry) in geometries.drain(..) {
+            let shape = match geometry.as_typed_shape() {
                 TypedShape::Cuboid(cuboid) => dark::hit_box::HitBoxShape::Cuboid {
                     half_extents: nvec_to_cgmath(cuboid.half_extents),
                     center: Vector3::new(0.0, 0.0, 0.0),
@@ -6691,7 +6732,6 @@ impl PhysicsWorld {
                 // approximation would be worse than drawing nothing.
                 _ => continue,
             };
-            let isometry = collider.position();
             let rotation = isometry.rotation;
             let world: cgmath::Matrix4<f32> =
                 cgmath::Matrix4::from_translation(nvec_to_cgmath(isometry.translation.vector))
@@ -7056,6 +7096,8 @@ impl PhysicsWorld {
             )
         });
         self.has_stepped = true;
+        #[cfg(feature = "lazy-hitboxes")]
+        self.query_hitboxes.commit();
 
         #[cfg(feature = "physics-profiling")]
         let stepped = std::time::Instant::now();
@@ -7071,6 +7113,8 @@ impl PhysicsWorld {
         let mut additional_collision_events = { self.events.get_and_clear_events() };
 
         collision_events.append(&mut additional_collision_events);
+        #[cfg(feature = "lazy-hitboxes")]
+        collision_events.extend(self.query_hitbox_contacts());
 
         #[cfg(feature = "physics-profiling")]
         self.profile.record(
@@ -7083,7 +7127,9 @@ impl PhysicsWorld {
             ],
         );
 
-        #[cfg(feature = "damage-query-audit")]
+        // The reference audit compares against Rapier-owned limbs. With the
+        // replacement enabled there is no independent Rapier oracle to audit.
+        #[cfg(all(feature = "damage-query-audit", not(feature = "lazy-hitboxes")))]
         self.audit_damage_queries();
 
         // Output result
@@ -8492,8 +8538,39 @@ impl PhysicsWorld {
             filter,
         );
 
-        if let Some((handle, intersection)) = queries.cast_ray_and_get_normal(&ray, max_toi, solid)
+        let reference = queries.cast_ray_and_get_normal(&ray, max_toi, solid);
+        #[cfg(feature = "lazy-hitboxes")]
+        if CollisionGroup::hitbox()
+            .collision
+            .test(InteractionGroups::new(
+                query_memberships.bits.into(),
+                collision_groups.bits.into(),
+                Default::default(),
+            ))
         {
+            let limit = reference
+                .as_ref()
+                .map_or(max_toi, |(_, hit)| hit.time_of_impact);
+            let allowed = |entity| {
+                Some(entity) != entity_to_ignore
+                    && entity_filter.is_none_or(|filter| filter(entity))
+            };
+            if let Some((entity, hit)) = self.query_hitboxes.cast_ray(&ray, limit, &allowed)
+                && reference
+                    .as_ref()
+                    .is_none_or(|(_, old)| hit.time_of_impact < old.time_of_impact)
+            {
+                return Some(RayCastResult {
+                    hit_point: npoint_to_cgmath(ray.point_at(hit.time_of_impact)),
+                    hit_normal: nvec_to_cgmath(hit.normal),
+                    maybe_entity_id: Some(entity),
+                    maybe_rigid_body_handle: None,
+                    is_sensor: false,
+                    surface_material: None,
+                });
+            }
+        }
+        if let Some((handle, intersection)) = reference {
             // This is similar to `QueryPipeline::cast_ray` illustrated above except
             // that it also returns the normal of the collider shape at the hit point.
             let hit_point = ray.point_at(intersection.time_of_impact);

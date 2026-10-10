@@ -1,5 +1,10 @@
 # Conservative damage-query prototype
 
+This report describes the original audit experiment. The subsequent opt-in
+[query-only gameplay backend](../../projects/lazy-hitboxes.md) routes rays, held
+melee, placement and recovery without Rapier limb bodies. The measurements below
+are historical and do not measure that complete replacement.
+
 The `damage-query-audit` feature explores grouping damage shapes by creature,
 independently of its physical movement capsule. Gameplay still uses the existing
 Rapier proxies, projectile queries, and held-melee contact events. This is a

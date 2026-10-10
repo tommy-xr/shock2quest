@@ -17,9 +17,14 @@ test("a hatched grub animates, leaves its pod and pursues upright", {
   const segments = start.aim_points ?? [];
   assert.equal(segments.length, 4, "head, chest, abdomen and tail must have damage proxies");
   for (const segment of segments) {
-    const body = await game.physics.body(segment.body_id);
-    assert.ok(body.collision_groups.includes("hitbox"));
-    assert.equal(body.blocks_actor, false, "damage proxies must not push the actor");
+    if (segment.body_id === null) {
+      assert.equal((await game.physics.bodies({ entityId: segment.proxy_entity_id })).bodies.length, 0,
+        "query-only damage volumes must not create physics bodies");
+    } else {
+      const body = await game.physics.body(segment.body_id);
+      assert.ok(body.collision_groups.includes("hitbox"));
+      assert.equal(body.blocks_actor, false, "damage proxies must not push the actor");
+    }
     const hit = await game.raycast({
       start: [segment.position[0]!, segment.position[1]! + 0.5, segment.position[2]!],
       end: segment.position,

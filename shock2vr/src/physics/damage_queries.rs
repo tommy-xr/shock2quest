@@ -19,53 +19,62 @@ struct DamageGroup {
 
 impl DamageGroup {
     fn new(shapes: Vec<DamageShape>) -> Self {
-        let mut bounds: Option<Aabb> = None;
-        let mut valid = true;
-        for child in &shapes {
-            let child_bounds = child.shape.compute_aabb(&child.pose);
-            if !child_bounds
-                .mins
+        let bounds = conservative_bounds(
+            shapes
                 .iter()
-                .chain(child_bounds.maxs.iter())
-                .all(|v| v.is_finite())
-            {
-                valid = false;
-                break;
-            }
-            bounds = Some(match bounds {
-                None => child_bounds,
-                Some(acc) => Aabb::new(
-                    acc.mins.inf(&child_bounds.mins),
-                    acc.maxs.sup(&child_bounds.maxs),
-                ),
-            });
-        }
-        let bounds = if valid {
-            bounds.and_then(|bounds| {
-                // Outward slack protects grazing hits against roundoff in transformed bounds.
-                let scale = bounds
-                    .mins
-                    .coords
-                    .abs()
-                    .max()
-                    .max(bounds.maxs.coords.abs().max());
-                let margin = (8.0 * Real::EPSILON * (1.0 + scale)).max(1.0e-5);
-                let padded = Aabb::new(
-                    bounds.mins - Vector::repeat(margin),
-                    bounds.maxs + Vector::repeat(margin),
-                );
-                padded
-                    .mins
-                    .iter()
-                    .chain(padded.maxs.iter())
-                    .all(|v| v.is_finite())
-                    .then_some(padded)
-            })
-        } else {
-            None
-        };
+                .map(|child| child.shape.compute_aabb(&child.pose)),
+        );
         Self { bounds, shapes }
     }
+}
+
+/// Unknown or overflowing bounds must never reject a possible damage hit.
+pub(super) fn conservative_bounds(shapes: impl IntoIterator<Item = Aabb>) -> Option<Aabb> {
+    let mut bounds: Option<Aabb> = None;
+    let mut valid = true;
+    for child_bounds in shapes {
+        if !child_bounds
+            .mins
+            .iter()
+            .chain(child_bounds.maxs.iter())
+            .all(|v| v.is_finite())
+        {
+            valid = false;
+            break;
+        }
+        bounds = Some(match bounds {
+            None => child_bounds,
+            Some(acc) => Aabb::new(
+                acc.mins.inf(&child_bounds.mins),
+                acc.maxs.sup(&child_bounds.maxs),
+            ),
+        });
+    }
+    let bounds = if valid {
+        bounds.and_then(|bounds| {
+            // Outward slack protects grazing hits against roundoff in transformed bounds.
+            let scale = bounds
+                .mins
+                .coords
+                .abs()
+                .max()
+                .max(bounds.maxs.coords.abs().max());
+            let margin = (8.0 * Real::EPSILON * (1.0 + scale)).max(1.0e-5);
+            let padded = Aabb::new(
+                bounds.mins - Vector::repeat(margin),
+                bounds.maxs + Vector::repeat(margin),
+            );
+            padded
+                .mins
+                .iter()
+                .chain(padded.maxs.iter())
+                .all(|v| v.is_finite())
+                .then_some(padded)
+        })
+    } else {
+        None
+    };
+    bounds
 }
 
 struct DamageSnapshot {

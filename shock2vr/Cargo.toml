@@ -41,3 +41,6 @@ physics-profiling = ["rapier3d/profiler"]
 
 # Shadow-query prototype; leaves gameplay collision and melee paths unchanged.
 damage-query-audit = []
+
+# Experimental query-only creature damage volumes; preserves the legacy default.
+lazy-hitboxes = []

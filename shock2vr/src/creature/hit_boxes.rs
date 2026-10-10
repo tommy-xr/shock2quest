@@ -249,6 +249,10 @@ impl HitBoxManager {
         id_to_model: &HashMap<EntityId, Model>,
         id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
     ) {
+        #[cfg(feature = "lazy-hitboxes")]
+        let _ = &id_to_physics;
+        #[cfg(feature = "lazy-hitboxes")]
+        physics.begin_query_hitbox_frame();
         let (joint_updates, marked_parents) = {
             let v_position = world.borrow::<View<PropPosition>>().unwrap();
             let v_has_refs = world
@@ -408,25 +412,39 @@ impl HitBoxManager {
                         joint_index += 1;
                         continue;
                     }
-                    // If there is not a physics entity yet, create one
-                    if !id_to_physics.contains_key(hit_box_entry) {
-                        let physics_handle = physics.add_kinematic_shared_shape(
+                    #[cfg(feature = "lazy-hitboxes")]
+                    {
+                        physics.stage_query_hitbox(
+                            parent_entity_id,
                             *hit_box_entry,
+                            joint_index,
                             pos,
                             rotation,
-                            shape_to_collider(&shape, center),
-                            vec3(0.0, 0.0, 0.0),
-                            crate::physics::CollisionGroup::hitbox(),
-                            false,
+                            || shape_to_collider(&shape, center),
                         );
-                        id_to_physics.insert(*hit_box_entry, physics_handle);
-                    } else {
-                        //physics.set_transform2(*hit_box_entry, joint_xform);
-                        physics.set_position_rotation2(*hit_box_entry, pos, rotation);
                     }
+                    #[cfg(not(feature = "lazy-hitboxes"))]
+                    {
+                        // If there is not a physics entity yet, create one
+                        if !id_to_physics.contains_key(hit_box_entry) {
+                            let physics_handle = physics.add_kinematic_shared_shape(
+                                *hit_box_entry,
+                                pos,
+                                rotation,
+                                shape_to_collider(&shape, center),
+                                vec3(0.0, 0.0, 0.0),
+                                crate::physics::CollisionGroup::hitbox(),
+                                false,
+                            );
+                            id_to_physics.insert(*hit_box_entry, physics_handle);
+                        } else {
+                            //physics.set_transform2(*hit_box_entry, joint_xform);
+                            physics.set_position_rotation2(*hit_box_entry, pos, rotation);
+                        }
 
-                    #[cfg(feature = "damage-query-audit")]
-                    physics.register_damage_hitbox(*hit_box_entry, parent_entity_id);
+                        #[cfg(feature = "damage-query-audit")]
+                        physics.register_damage_hitbox(*hit_box_entry, parent_entity_id);
+                    }
                     joint_updates.insert(*hit_box_entry, joint_xform);
 
                     joint_index += 1;
@@ -435,6 +453,8 @@ impl HitBoxManager {
 
             (joint_updates, marked_parents)
         };
+        #[cfg(feature = "lazy-hitboxes")]
+        physics.finish_query_hitbox_frame();
         for parent in marked_parents {
             world.add_component(parent, RuntimePropHasHitBoxes);
         }
