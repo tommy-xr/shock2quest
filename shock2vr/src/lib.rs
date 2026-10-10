@@ -69,6 +69,7 @@ pub mod pause_menu;
 pub mod perf;
 mod physics;
 mod simulation_input;
+mod speech_playback;
 pub use physics::player_collision_shape;
 pub mod item_tools;
 pub mod player_stats;

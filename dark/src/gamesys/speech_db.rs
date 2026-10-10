@@ -26,6 +26,8 @@ impl Voice {
 #[derive(Clone, Debug)]
 pub struct SpeechDB {
     pub concept_map: NameMap,
+    /// Authored arbitration priority, indexed by concept. Higher interrupts lower.
+    pub concept_priorities: Vec<u32>,
     pub tag_map: NameMap,
     pub value_map: NameMap,
     pub voices: Vec<Voice>,
@@ -46,8 +48,8 @@ impl SpeechDB {
         let value_map = NameMap::read(reader);
 
         // Read priority
-        let priority_size = read_u32(reader) * 4;
-        let _priority = read_bytes(reader, priority_size as usize);
+        let priority_count = read_u32(reader);
+        let concept_priorities = (0..priority_count).map(|_| read_u32(reader)).collect();
 
         let flags_size = read_u32(reader) * 4;
         let _flags = read_bytes(reader, flags_size as usize);
@@ -64,6 +66,7 @@ impl SpeechDB {
 
         SpeechDB {
             concept_map,
+            concept_priorities,
             tag_map,
             value_map,
             voices,

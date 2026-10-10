@@ -3237,6 +3237,7 @@ pub struct MissionCore {
     klaxon: crate::security_alarm::Klaxon,
     room_gravity: super::room_gravity::RoomGravity,
     listener_sounds: crate::listener_sounds::ListenerSounds,
+    speech_playback: crate::speech_playback::SpeechPlayback,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
     pub debug_pose_index: u32,
@@ -4289,6 +4290,7 @@ impl MissionCore {
             security_alarm,
             klaxon: Default::default(),
             room_gravity: Default::default(),
+            speech_playback: Default::default(),
             listener_sounds: Default::default(),
             debug_pose_index: 0,
             debug_weapon_index: 0,
@@ -14031,16 +14033,68 @@ impl MissionCore {
                     concept,
                     tags,
                 } => {
-                    if let Some(resolved) = resolve_speech_sample(
+                    if !crate::scripts::speech_util::broadcasts_enabled(&self.world, entity_id) {
+                        continue;
+                    }
+                    if let Some((schema_id, resolved)) = resolve_speech_sample(
                         &global_context.gamesys,
                         voice_index,
                         concept.as_str(),
                         &tags,
                     ) {
+                        let speech_db = global_context.gamesys.speech_db();
+                        let priority = speech_db
+                            .concept_map
+                            .get_index(&concept.to_ascii_lowercase())
+                            .and_then(|index| speech_db.concept_priorities.get(index as usize))
+                            .copied()
+                            .unwrap_or(0);
+                        let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                        if !self.speech_playback.allows(entity_id, priority, now) {
+                            continue;
+                        }
                         let audio_path = format!("{}.wav", resolved.sample_name);
                         if let Some(audio_clip) = asset_cache.get_opt(&AUDIO_IMPORTER, &audio_path)
                         {
                             let handle = AudioHandle::new();
+                            let duration = audio_clip
+                                .total_duration()
+                                .unwrap_or(Duration::from_secs(2));
+                            if let Some(previous) = self.speech_playback.started(
+                                entity_id,
+                                priority,
+                                now,
+                                duration,
+                                handle.clone(),
+                            ) {
+                                stop_sound(audio_context, previous);
+                            }
+                            let repeat = if concept.starts_with("atlevel") {
+                                global_context
+                                    .gamesys
+                                    .sound_schema
+                                    .loop_params_by_id(schema_id)
+                                    .and_then(|params| {
+                                        if params.is_seamless() {
+                                            Some(duration)
+                                        } else {
+                                            crate::environmental_aux::next_delay(
+                                                params, 1, duration,
+                                            )
+                                        }
+                                    })
+                                    .unwrap_or(duration + Duration::from_secs(2))
+                                    .max(duration)
+                            } else {
+                                duration
+                            };
+                            self.script_world.dispatch(Message {
+                                to: entity_id,
+                                payload: MessagePayload::SpeechTiming {
+                                    concept: concept.clone(),
+                                    seconds: repeat.as_secs_f32(),
+                                },
+                            });
                             let gain = resolved.linear_gain();
                             let maybe_position = get_entity_position(&self.world, entity_id);
                             let play_options = if let Some(position) = maybe_position {
@@ -14085,10 +14139,7 @@ impl MissionCore {
                             );
                         }
                     } else {
-                        warn!(
-                            "Failed to resolve speech for voice {} concept '{}'",
-                            voice_index, concept
-                        );
+                        trace!("No speech for voice {} concept '{}'", voice_index, concept);
                     }
                 }
                 Effect::KickHeldGun {
@@ -19672,7 +19723,7 @@ fn resolve_speech_sample(
     voice_index: usize,
     concept: &str,
     tags: &[(String, String)],
-) -> Option<dark::ResolvedSoundSchema> {
+) -> Option<(i32, dark::ResolvedSoundSchema)> {
     let speech_db = gamesys.speech_db();
     if voice_index >= speech_db.voices.len() {
         return None;
@@ -19736,6 +19787,7 @@ fn resolve_speech_sample(
     gamesys
         .sound_schema
         .resolve_sample(schema_id, samples[selected_index].sample_name.clone())
+        .map(|resolved| (schema_id, resolved))
 }
 
 /// Stable identity of the entity a sound came from, for the audio log.

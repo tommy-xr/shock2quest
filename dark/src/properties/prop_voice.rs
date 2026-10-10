@@ -25,3 +25,33 @@ impl PropSpeechVoice {
         PropSpeechVoice(cleaned)
     }
 }
+
+/// Global mute flag in P$AI_BcstSe. Per-concept customization is not yet used.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropAIBroadcastDisabled(pub bool);
+
+impl PropAIBroadcastDisabled {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, len: u32) -> Self {
+        let disabled = read_i32(reader) != 0;
+        let _ = crate::ss2_common::read_bytes(reader, len.saturating_sub(4) as usize);
+        Self(disabled)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn broadcast_mute_consumes_the_customization_record() {
+        for disabled in [0i32, 1] {
+            let mut bytes = vec![0; 712];
+            bytes[..4].copy_from_slice(&disabled.to_le_bytes());
+            let mut reader = std::io::Cursor::new(bytes);
+            assert_eq!(
+                PropAIBroadcastDisabled::read(&mut reader, 712).0,
+                disabled != 0
+            );
+            assert_eq!(reader.position(), 712);
+        }
+    }
+}

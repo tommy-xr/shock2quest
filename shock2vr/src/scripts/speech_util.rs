@@ -84,3 +84,10 @@ pub fn infer_voice_index_from_creature_type(world: &World, entity_id: EntityId) 
     }
     None
 }
+
+/// Authored mute applies to AI broadcasts, including attack and death speech.
+pub fn broadcasts_enabled(world: &World, entity: EntityId) -> bool {
+    !world
+        .borrow::<View<dark::properties::PropAIBroadcastDisabled>>()
+        .is_ok_and(|view| view.get(entity).is_ok_and(|disabled| disabled.0))
+}
