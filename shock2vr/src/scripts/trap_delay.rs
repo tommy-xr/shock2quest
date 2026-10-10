@@ -6,14 +6,15 @@ use tracing::info;
 use crate::{physics::PhysicsWorld, scripts::script_util::template_id_string, time::Time};
 
 use super::{
-    Effect, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
-    script_util::send_to_all_switch_links,
+    Effect, MessageOrigin, MessagePayload, Script, ScriptRestoreContext, ScriptState,
+    ScriptStateError, script_util::send_to_all_switch_links,
 };
 
 const STATE_KEY: &str = "shock2vr.trap_delay";
 
 #[derive(Clone, Serialize, Deserialize)]
 struct PendingSwitch {
+    origin: MessageOrigin,
     turn_on: bool,
     // None denotes a deleted sender, never an old-world handle to be reused.
     sender: Option<u64>,
@@ -48,8 +49,19 @@ impl Script for TrapDelay {
         &mut self,
         entity_id: EntityId,
         world: &World,
+        physics: &PhysicsWorld,
+        msg: &MessagePayload,
+    ) -> Effect {
+        self.handle_message_with_origin(entity_id, world, physics, msg, MessageOrigin::new())
+    }
+
+    fn handle_message_with_origin(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
+        origin: MessageOrigin,
     ) -> Effect {
         // Retail TrapDelay relays switch messages only. Transient collision,
         // hover, and animation messages are not delayed script events.
@@ -64,6 +76,7 @@ impl Script for TrapDelay {
             msg
         );
         self.messages.push(PendingSwitch {
+            origin,
             turn_on,
             sender: (from != EntityId::dead()).then_some(from.inner()),
             remaining_seconds: self.delay_time_in_seconds,
@@ -102,7 +115,9 @@ impl Script for TrapDelay {
             } else {
                 MessagePayload::TurnOff { from }
             };
-            eff.push(send_to_all_switch_links(world, entity_id, msg));
+            eff.push(
+                send_to_all_switch_links(world, entity_id, msg).with_message_origin(pending.origin),
+            );
         }
         Effect::Combined { effects: eff }
     }
@@ -182,7 +197,7 @@ mod tests {
         )])
         .into_iter()
         .filter_map(|effect| match effect {
-            Effect::Send { msg } => match msg.payload {
+            Effect::SendWithOrigin { msg, .. } => match msg.payload {
                 MessagePayload::TurnOn { from } => Some((true, from, msg.to)),
                 MessagePayload::TurnOff { from } => Some((false, from, msg.to)),
                 _ => panic!("unexpected delayed payload"),
