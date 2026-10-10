@@ -450,6 +450,12 @@ fn create_geometry(
     water_render_info: &WaterRenderInfo,
 ) -> Vec<SystemShock2Geometry> {
     let mut all_geometry: Vec<SystemShock2Geometry> = Vec::new();
+    // Resolve each texture once, not once per polygon (material includes and
+    // archive reads otherwise dominate mission loading).
+    let dimensions: Vec<_> = textures
+        .iter()
+        .map(|texture| texture_dimensions(asset_paths, base_path, texture))
+        .collect();
     let mut cell_idx = 0;
     for (cell_index, cell) in cells.iter().enumerate() {
         if cell_index % LOAD_EVENT_PUMP_CELL_INTERVAL == 0 {
@@ -492,8 +498,11 @@ fn create_geometry(
                     &water_render_info.texture_name(render_poly.texture_num, cell.flow_group),
                 )
             } else {
-                let tex_info = &textures[render_poly.texture_num as usize];
-                texture_dimensions(asset_paths, base_path, tex_info)
+                let size = &dimensions[render_poly.texture_num as usize];
+                TextureSize {
+                    width: size.width,
+                    height: size.height,
+                }
             };
 
             let rs_x = (texture_dim.width as f32) / 64.0;
@@ -673,7 +682,14 @@ fn texture_dimensions(
     )
     .to_ascii_lowercase();
 
-    texture_dimensions_for_asset(asset_paths, base_path, &tex_name)
+    let resolved = crate::util::terrain::resolve(
+        asset_paths,
+        base_path,
+        &tex_name,
+        tex_info.animation_info.is_none(),
+    );
+    let (width, height) = resolved.dimensions.unwrap_or((1, 1));
+    TextureSize { width, height }
 }
 
 fn texture_dimensions_for_asset(

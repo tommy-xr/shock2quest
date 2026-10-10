@@ -1,6 +1,7 @@
 mod material_includes;
 mod material_overlays;
 mod render_material;
+pub mod terrain;
 pub(crate) use material_overlays::append_incidence_overlays;
 mod merge_maps;
 

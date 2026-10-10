@@ -647,7 +647,7 @@ Ordered by value-per-unit-effort. Each step is independently shippable and verif
 | # | Change | Unlocks | Effort |
 | --- | --- | --- | --- |
 | 1 | Finish 25AE mounting: route `shock2.gam` through the asset paths. Blocked on `dark::properties::get()` being instantiated at `BufReader<File>` and its `PropertyDefinition`s being shared with mission loading, so the whole chain has to become generic over the reader. Until then a 25AE install needs `shock2.gam` extracted next to the KPFs. | Boot straight from an unmodified install with no manual step | M — a reader-generics refactor, not plumbing |
-| 1b | Honour the `.mtl` scale directives, then lift the `fam` carve-out in `mod_layer_may_override` | The terrain texture upgrade (currently withheld: taking the higher-res textures without `terrain_scale` tiles the world wrong) | M |
+| 1b | Implemented behind `--experimental upgraded_terrain`: static terrain includes, diffuse redirects, and square/rectangular `terrain_scale` and `tile_factor`; original-art fallback and flag-off baseline retained | MedSci before/after comparison; Quest measurements still required before enabling by default. Water and animated terrain remain original. | Device validation pending |
 | 2 | Android max-dimension cap in the DDS decode path | Bounded texture memory on Quest (see §4a) | S |
 | 3 | Minimal `.mtl` subset: `texture`, `terrain_scale`/`ui_scale`, `uv_clamp`, `uv_mod`, `ani_frames`/`ani_rate`, `blend` | Correct scale/tiling/animation for upgraded textures | M |
 | 4 | Optional: `illum_map`, incidence rim pass | The Nightdive "shine" look | M |
