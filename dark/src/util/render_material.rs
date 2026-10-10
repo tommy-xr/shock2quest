@@ -2,11 +2,14 @@
 //! the existing single-texture fallback remains available, without pretending a
 //! partially parsed effect is a faithful ordered material.
 use cgmath::{Vector3, vec3};
-use engine::scene::render_pass::BlendFactor;
+use engine::{scene::render_pass::BlendFactor, texture::PlaybackMode};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Pass {
     pub texture: Option<String>,
+    pub animation: Option<Animation>,
+    pub frame_ms: u32,
+    pub playback: PlaybackMode,
     pub blend: (BlendFactor, BlendFactor),
     pub color: Vector3<f32>,
     pub alpha: f32,
@@ -17,6 +20,12 @@ pub(super) struct Pass {
     pub environment: bool,
     pub clamp: bool,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Animation {
+    pub prefix: String,
+    pub count: usize,
+}
+
 impl Pass {
     fn incidence_distance(&self) -> Option<f32> {
         self.incidence
@@ -28,6 +37,9 @@ impl Default for Pass {
     fn default() -> Self {
         Self {
             texture: None,
+            animation: None,
+            frame_ms: 250,
+            playback: PlaybackMode::Loop,
             blend: (BlendFactor::SrcAlpha, BlendFactor::InvSrcAlpha),
             color: vec3(1.0, 1.0, 1.0),
             alpha: 1.0,
@@ -96,10 +108,38 @@ pub(super) fn parse(source: &str) -> Result<Plan, String> {
             }
             match (key.as_str(), args) {
                 ("texture", [texture]) => {
-                    if p.texture.is_some() {
+                    if p.texture.is_some() || p.animation.is_some() {
                         return Err("multiple texture stages".into());
                     }
                     p.texture = Some(texture.trim_matches('"').replace('\\', "/"));
+                }
+                ("texture", ["*_", count, prefix]) => {
+                    if p.texture.is_some() || p.animation.is_some() {
+                        return Err("multiple texture stages".into());
+                    }
+                    let count = count
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|n| (1..=256).contains(n))
+                        .ok_or("invalid animation count")?;
+                    p.animation = Some(Animation {
+                        prefix: prefix.trim_matches('"').replace('\\', "/"),
+                        count,
+                    });
+                }
+                ("ani_rate", [ms]) => {
+                    p.frame_ms = ms
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or("invalid animation rate")?
+                }
+                ("ani_mode", [mode]) => {
+                    p.playback = match mode.to_ascii_uppercase().as_str() {
+                        "PINGPONG" => PlaybackMode::PingPong,
+                        "NORMAL" => PlaybackMode::Loop,
+                        _ => return Err("unsupported animation mode".into()),
+                    }
                 }
                 ("blend", [src, dst]) => {
                     p.blend = (
@@ -151,6 +191,13 @@ pub(super) fn parse(source: &str) -> Result<Plan, String> {
     if pass.is_some() {
         return Err("unterminated render pass".into());
     }
+    if plan
+        .passes
+        .iter()
+        .any(|p| p.animation.is_some() && p.frame_ms == 0)
+    {
+        return Err("animation lacks a positive ani_rate".into());
+    }
     if plan.passes.is_empty() {
         plan.material_only = false;
     }
@@ -160,6 +207,32 @@ pub(super) fn parse(source: &str) -> Result<Plan, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn animation_requires_complete_bounded_numbered_sequence_and_timing() {
+        let source = "render_material_only 1\nrender_pass {\nani_mode PINGPONG\nani_rate 164\ntexture *_ 8 FAM\\_ND\\OMW_\nshaded 1\n}";
+        let pass = &parse(source).unwrap().passes[0];
+        assert_eq!(
+            pass.animation,
+            Some(Animation {
+                prefix: "FAM/_ND/OMW_".into(),
+                count: 8
+            })
+        );
+        assert_eq!(pass.frame_ms, 164);
+        assert_eq!(pass.playback, PlaybackMode::PingPong);
+        assert_eq!(
+            parse(&source.replace("ani_rate 164\n", "")).unwrap().passes[0].frame_ms,
+            250
+        );
+        for bad in [
+            source.replace("164", "0"),
+            source.replace("8 FAM", "0 FAM"),
+            source.replace("8 FAM", "257 FAM"),
+            source.replace("PINGPONG", "UNKNOWN"),
+        ] {
+            assert!(parse(&bad).is_err());
+        }
+    }
     #[test]
     fn preserves_authored_order_and_vertex_alpha_semantics() {
         let p = parse("render_material_only 1\nforce_opaque\nrender_pass {\ntexture $TEXTURE\nblend SRC_ALPHA ONE\nreplace_alpha 1\nALPHA 0.2\nRGB 0.3, 0.5, 0.8\nshaded 0\nmipmap_bias 2\n}\nrender_pass\n{\ntexture diffuse\nshaded 1\n}\n").unwrap();
@@ -232,6 +305,11 @@ pub(super) fn apply(
             return false;
         }
     };
+    // Terrain-only animation support must not turn formerly rejected model
+    // materials into partially rendered effects.
+    if plan.passes.iter().any(|p| p.animation.is_some()) {
+        return false;
+    }
     if plan.passes.is_empty() {
         if plan.force_opaque {
             object.material.borrow_mut().set_render_pass(RenderPass {
