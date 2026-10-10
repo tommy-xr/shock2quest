@@ -234,7 +234,7 @@ the desktop default view.
 
 ## Previous Implementation
 
-A previous attempt was tried in ragdoll-failed-attempt-1.md, and some learnings are collected there. Because of the challenges, I'm proposing a new incremental plan.
+A previous attempt failed. Because of the challenges, I'm proposing a new incremental plan.
 
 ## Revised Implementation
 

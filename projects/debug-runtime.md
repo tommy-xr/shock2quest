@@ -335,7 +335,7 @@ pass `"ignore_sensors": false` to probe sensor volumes deliberately.
 
 ## Next Steps
 
-1. **[Keybinding System Refactor](keybinding-system.md)** - Prerequisite for Phase 5
+1. **Keybinding System Refactor (see "Input Action System" in AGENTS.md)** - Prerequisite for Phase 5
    - Centralizes input handling in shock2vr
    - Enables `/v1/input/action` endpoint to trigger any game action
    - Eliminates `Command` trait (direct `InputAction` → `Effect` mapping)
@@ -383,7 +383,7 @@ culled-away geometry - flip that dev param when framing from far away.
 
 ## Input Action Injection ✅ COMPLETE
 
-The [Keybinding System Refactor](keybinding-system.md) resolved the previous
+The Keybinding System Refactor (see "Input Action System" in AGENTS.md) resolved the previous
 "Command Integration Complexity" architectural issue. Discrete input actions
 are now defined centrally in `shock2vr::input::InputAction` and can be
 injected over HTTP:
