@@ -351,14 +351,19 @@ mod tests {
     }
 
     /// The body text lines the reader currently draws (via the same
-    /// `GuiScript::update` -> `Effect::SetUI` path the game renders).
+    /// `GuiScript::update` -> `build_gui` -> `Effect::SetUI` path the game renders).
     fn drawn_lines(
         script: &mut GuiScript<MediaGuiState, MediaGuiMsg>,
         entity_id: EntityId,
         world: &World,
         physics: &PhysicsWorld,
     ) -> Vec<String> {
-        match script.update(entity_id, world, physics, &Time::default()) {
+        let Effect::BuildUI { handle, input, .. } =
+            script.update(entity_id, world, physics, &Time::default())
+        else {
+            panic!("expected UI request");
+        };
+        match script.build_gui(entity_id, world, handle, &input).unwrap() {
             Effect::SetUI { components, .. } => components
                 .into_iter()
                 .filter_map(|c| match c {

@@ -1,0 +1,42 @@
+{
+  "flat": {
+    "closed": true,
+    "first-open": true,
+    "open": true,
+    "hover": true,
+    "clicked": true,
+    "closed-again": true,
+    "first-reopen": true,
+    "inventory-strip": true,
+    "inventory-settled": true
+  },
+  "vr": {
+    "closed": true,
+    "first-open": true,
+    "open": true,
+    "hover": true,
+    "clicked": true,
+    "closed-again": true,
+    "first-reopen": true,
+    "inventory-strip": true,
+    "inventory-settled": true
+  },
+  "before-world-colliders": {
+    "closed": 0,
+    "first-open": 1,
+    "open": 1,
+    "hover": 1,
+    "clicked": 1,
+    "walk-away": 0,
+    "reopen": 1
+  },
+  "after-world-colliders": {
+    "closed": 0,
+    "first-open": 1,
+    "open": 1,
+    "hover": 1,
+    "clicked": 1,
+    "walk-away": 0,
+    "reopen": 1
+  }
+}

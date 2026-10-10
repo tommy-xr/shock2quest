@@ -13276,6 +13276,26 @@ impl MissionCore {
                     self.script_world.dispatch(msg);
                 }
 
+                Effect::BuildUI {
+                    parent_entity,
+                    handle,
+                    input,
+                } => {
+                    // Test demand at the same point SetUI used to be applied:
+                    // a preceding Frob/OpenPanel in this batch must populate
+                    // its panel immediately, even if it was closed at tick start.
+                    if self.flat_ui.accepts_ui(parent_entity)
+                        || (game_options.presentation_mode == crate::PresentationMode::Vr
+                            && self.gui.active_panel() == Some(parent_entity))
+                    {
+                        if let Some(ui) =
+                            self.script_world
+                                .build_gui(parent_entity, &self.world, handle, &input)
+                        {
+                            effects.push_front(ui);
+                        }
+                    }
+                }
                 Effect::SetUI {
                     parent_entity,
                     handle,

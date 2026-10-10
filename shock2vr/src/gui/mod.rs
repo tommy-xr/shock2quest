@@ -43,6 +43,7 @@ pub struct PanelSidecar {
     pub rect: Option<crate::ui::Rect>,
 }
 
+#[derive(Clone, Debug)]
 pub struct GuiCursor {
     pub position: Point2<f32>,
     pub held_entity_id: Option<EntityId>,

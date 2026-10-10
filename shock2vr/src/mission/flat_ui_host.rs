@@ -961,6 +961,11 @@ impl FlatUiHost {
         self.hover_close = false;
     }
 
+    /// Whether this host consumes layout for an object panel or inventory strip.
+    pub fn accepts_ui(&self, entity: EntityId) -> bool {
+        self.active_panel == Some(entity) || self.strip_entity() == Some(entity)
+    }
+
     /// Observe an `Effect::SetUI`: stash the component list if it belongs to
     /// the active panel or the inventory strip (the VR world-quad path is
     /// untouched by this).
@@ -976,7 +981,7 @@ impl FlatUiHost {
             .strip
             .as_ref()
             .is_some_and(|strip| strip.entity == parent_entity);
-        if !is_strip && self.active_panel != Some(parent_entity) {
+        if !self.accepts_ui(parent_entity) {
             return;
         }
 

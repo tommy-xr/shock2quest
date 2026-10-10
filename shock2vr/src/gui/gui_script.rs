@@ -11,6 +11,15 @@ use crate::{
 
 use super::{GUI_PIXEL_TO_WORLD_SIZE, GuiCursor};
 
+/// Input captured at script-update time, consumed only if a presentation wants
+/// this panel. Taking it even for hidden panels prevents stale hover on reopen.
+#[derive(Clone, Debug)]
+pub struct GuiFrameInput {
+    cursor: Point2<f32>,
+    last_cursor: Option<GuiCursor>,
+    hover_by_hand: [Option<Point2<f32>>; 2],
+}
+
 pub struct GuiScript<TState, TMsg>
 where
     TState: Default,
@@ -55,32 +64,52 @@ where
     fn update(
         &mut self,
         entity_id: EntityId,
-        world: &World,
+        _world: &World,
         _physics: &PhysicsWorld,
         _time: &Time,
     ) -> Effect {
+        Effect::BuildUI {
+            parent_entity: entity_id,
+            handle: self.handle.unwrap(),
+            input: GuiFrameInput {
+                cursor: self.cursor,
+                last_cursor: self.last_cursor.take(),
+                hover_by_hand: std::mem::take(&mut self.hover_by_hand),
+            },
+        }
+    }
+
+    fn build_gui(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        handle: GuiHandle,
+        input: &GuiFrameInput,
+    ) -> Option<Effect> {
+        if self.handle != Some(handle) {
+            return None;
+        }
         let config = self.gui.get_config_for(entity_id, world, &self.state);
         let components = {
-            let cursor = &self.last_cursor;
+            let cursor = &input.last_cursor;
             self.gui
                 .get_components(cursor, entity_id, world, &self.state)
         };
-        self.last_cursor = None;
         // An unavailable GUI must not create a second cursor-only world
         // panel over another script's active interface on the same entity.
         if components.is_empty() {
-            return Effect::NoEffect;
+            return Some(Effect::NoEffect);
         }
         let mut canvas = UiCanvas::from_elements(config.screen_size_in_pixels, components);
         let size = vec2(16.0, 16.0);
         canvas.push(GuiComponent::Image {
             alpha: 0.5,
-            position: vec2(self.cursor.x, self.cursor.y),
+            position: vec2(input.cursor.x, input.cursor.y),
             size,
             texture: "cursor.pcx".to_owned(),
             kind: crate::ui::ImageKind::Ui,
         });
-        let hover = std::mem::take(&mut self.hover_by_hand);
+        let hover = &input.hover_by_hand;
         let render_components = canvas
             .into_elements()
             .into_iter()
@@ -95,14 +124,14 @@ where
             })
             .collect();
 
-        Effect::SetUI {
+        Some(Effect::SetUI {
             parent_entity: entity_id,
-            handle: self.handle.unwrap(),
+            handle,
             world_offset: config.world_offset,
             world_size: config.screen_size_in_pixels * GUI_PIXEL_TO_WORLD_SIZE,
             components: render_components,
             sidecar: self.gui.sidecar(entity_id, world, &self.state),
-        }
+        })
     }
 
     fn handle_message(
@@ -267,6 +296,75 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hidden_panels_defer_layout_and_composites_route_only_the_requested_handle() {
+        use std::{cell::Cell, rc::Rc};
+        struct CountLayout(Rc<Cell<usize>>);
+        impl Gui<(), ()> for CountLayout {
+            fn get_components(
+                &self,
+                _: &Option<GuiCursor>,
+                _: EntityId,
+                _: &World,
+                _: &(),
+            ) -> Vec<GuiComponent<()>> {
+                self.0.set(self.0.get() + 1);
+                vec![gui::button(()).with_size(vec2(100.0, 100.0))]
+            }
+            fn get_config(&self) -> crate::gui::GuiConfig {
+                crate::gui::GuiConfig {
+                    world_offset: Vector3::new(0.0, 0.0, 0.0),
+                    screen_size_in_pixels: vec2(100.0, 100.0),
+                }
+            }
+            fn handle_msg(&self, _: EntityId, _: &World, _: &(), _: &()) -> ((), Effect) {
+                ((), Effect::NoEffect)
+            }
+        }
+        let calls = [Rc::new(Cell::new(0)), Rc::new(Cell::new(0))];
+        let mut script = crate::scripts::CompositeScript::new(
+            calls
+                .iter()
+                .map(|n| gui_script(Box::new(CountLayout(n.clone()))))
+                .collect(),
+        );
+        let world = World::new();
+        let physics = PhysicsWorld::new();
+        let entity = EntityId::from_inner(1).unwrap();
+        script.initialize(entity, &world);
+        let requests = Effect::flatten(vec![script.update(
+            entity,
+            &world,
+            &physics,
+            &Time::default(),
+        )]);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            [calls[0].get(), calls[1].get()],
+            [0, 0],
+            "closed panel updates must not build components"
+        );
+        let Effect::BuildUI { handle, input, .. } = &requests[1] else {
+            panic!("expected UI request");
+        };
+        assert!(
+            script
+                .build_gui(entity, &world, GuiHandle::new(), input)
+                .is_none()
+        );
+        assert!(matches!(
+            script.build_gui(entity, &world, *handle, input),
+            Some(Effect::SetUI { .. })
+        ));
+        assert_eq!([calls[0].get(), calls[1].get()], [0, 1]);
+        // Still builds fresh components while open; no cross-frame stale cache.
+        assert!(matches!(
+            script.build_gui(entity, &world, *handle, input),
+            Some(Effect::SetUI { .. })
+        ));
+        assert_eq!(calls[1].get(), 2);
+    }
+
     struct TwoButtons;
     impl Gui<(), ()> for TwoButtons {
         fn get_components(
@@ -320,7 +418,13 @@ mod tests {
             total: std::time::Duration::ZERO,
         };
         for expected in ["on.pcx", "off.pcx"] {
-            let Effect::SetUI { components, .. } = script.update(entity, &world, &physics, &time)
+            let Effect::BuildUI { handle, input, .. } =
+                script.update(entity, &world, &physics, &time)
+            else {
+                panic!("expected UI request");
+            };
+            let Some(Effect::SetUI { components, .. }) =
+                script.build_gui(entity, &world, handle, &input)
             else {
                 panic!("expected UI");
             };
