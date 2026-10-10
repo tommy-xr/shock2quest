@@ -120,3 +120,6 @@ normal tracked-hand lights resume when no fixture is loaded. No saves change.
 `--gpu-seconds 10` adds a separate, bounded Adreno counter interval after each
 timing/visual sample. Counter IDs are discovered by name from the connected OS;
 `gpu-metrics.txt` preserves that mapping. Counters do not run during FPS timing.
+
+The [Quest 120 Hz project](../projects/quest-120hz.md) tracks the 8.33 ms target,
+starting with FFR at 90 Hz and a physics-clock correctness gate before 120 Hz.

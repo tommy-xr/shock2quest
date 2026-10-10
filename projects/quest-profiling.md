@@ -1,5 +1,10 @@
 # Quest profiling
 
+Current optimization project: [Quest 120 Hz / 8.33 ms](quest-120hz.md).
+It uses the populated Many/Rec1 benchmarks, starts with fixed foveated
+rendering at 90 Hz, and requires a simulation-clock audit before raising the
+refresh rate. The spawn results and priorities below are historical context.
+
 ## Initial mission-spawn baseline
 
 Measured July 28, 2026 on a Quest 3 running Android 14 with a release APK from
