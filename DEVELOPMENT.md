@@ -639,9 +639,9 @@ opening follows the eye, while the lines remain fixed in tracking space.
 
 ### Developer options
 
-**Quest fixed foveated rendering.** FFR is off by default. Put `off`, `low`,
+**Quest fixed foveated rendering.** FFR is low by default. Put `off`, `low`,
 `medium`, or `high` in `/sdcard/shock2quest/ffr-level.txt` and restart to select
-one level. Removing the file restores off. Missing OpenXR/GLES support or
+one level. Removing the file restores low. Missing OpenXR/GLES support or
 profile setup failure falls back to off for both eyes. `SHOCK2QUEST_FFR`
 reports requested and effective levels. Benchmark fixtures override the file
 with their `ffr` setting (default `off`). This changes neither refresh rate nor
