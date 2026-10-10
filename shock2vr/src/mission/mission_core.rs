@@ -4222,8 +4222,8 @@ impl MissionCore {
         world.add_unique(crate::pathfinding::PathfindingFrameBudget::new());
 
         // The atlas is initially packed with static lightmaps only. Restore
-        // every instantiated light's persisted value once at load, then later
-        // script effects update just the rectangles touched by a state change.
+        // every instantiated light's persisted value once at load. Animation
+        // and script effects then update only rectangles touched by a change.
         if let Some(controller) = &mut animated_lightmaps {
             world.run(|lights: View<PropAnimLight>| {
                 for light in lights.iter() {
@@ -7765,6 +7765,10 @@ impl MissionCore {
                 time.elapsed.as_secs_f32(),
             ));
         }
+
+        // Advance the authored light once for both wall lightmaps and fixture
+        // emission. Dispatch its bright/dark edge before scripts consume it.
+        self.update_animated_lights(time.elapsed);
 
         // Update scripts
         let mut script_effects = profile!(
@@ -14502,17 +14506,35 @@ impl MissionCore {
                     intensity,
                     inactive,
                 } => {
-                    let light_number =
-                        self.world
-                            .run(|mut lights: ViewMut<PropAnimLight>| -> Option<i16> {
-                                let light = (&mut lights).get(entity_id).ok()?;
-                                light.inactive = inactive;
-                                Some(light.light_number)
+                    let transition = self.world.run(|mut lights: ViewMut<PropAnimLight>| {
+                        let light = (&mut lights).get(entity_id).ok()?;
+                        let previous_intensity = light.initial_intensity();
+                        light.inactive = inactive;
+                        light.brightness = Some(intensity * light.max_brightness);
+                        if !inactive && light.mode == dark::properties::AnimLightMode::Alternate {
+                            light.rising = false;
+                            light.countdown_ms = if light.dim_time_ms < 5 {
+                                63
+                            } else {
+                                light.dim_time_ms
+                            };
+                            light.countdown_fraction_ms = 0.0;
+                        }
+                        Some((light.light_number, previous_intensity))
+                    });
+                    if let Some((light_number, previous_intensity)) = transition {
+                        if let Some(controller) = &mut self.animated_lightmaps {
+                            controller.set_light_intensity(light_number, intensity);
+                        }
+                        if previous_intensity != intensity {
+                            self.script_world.dispatch(Message {
+                                to: entity_id,
+                                payload: MessagePayload::LightChange {
+                                    previous_intensity,
+                                    intensity,
+                                },
                             });
-                    if let (Some(light_number), Some(controller)) =
-                        (light_number, &mut self.animated_lightmaps)
-                    {
-                        controller.set_light_intensity(light_number, intensity);
+                        }
                     }
                 }
                 Effect::SetReplicatorHackedContents {
@@ -15364,6 +15386,26 @@ impl MissionCore {
         }
 
         global_effects
+    }
+
+    fn update_animated_lights(&mut self, elapsed: Duration) {
+        let mut lights = self.world.borrow::<ViewMut<PropAnimLight>>().unwrap();
+        for (entity_id, light) in (&mut lights).iter().with_id() {
+            let previous_intensity = light.initial_intensity();
+            if light.advance_alternating(elapsed) {
+                let intensity = light.initial_intensity();
+                if let Some(controller) = &mut self.animated_lightmaps {
+                    controller.set_light_intensity(light.light_number, intensity);
+                }
+                self.script_world.dispatch(Message {
+                    to: entity_id,
+                    payload: MessagePayload::LightChange {
+                        previous_intensity,
+                        intensity,
+                    },
+                });
+            }
+        }
     }
 
     /// Advance the flat melee swing animation. Only an active swing uses the
@@ -16939,6 +16981,11 @@ impl MissionCore {
             .world
             .borrow::<View<dark::properties::PropRenderAlpha>>()
             .unwrap();
+        let v_self_illumination = self
+            .world
+            .borrow::<View<dark::properties::PropSelfIllumination>>()
+            .unwrap();
+        let v_animated_light = self.world.borrow::<View<PropAnimLight>>().unwrap();
         // Debug-only provenance, so tooling can report which entity/model each
         // rendered object came from.
         let v_model_name = self.world.borrow::<View<PropModelName>>().unwrap();
@@ -17202,6 +17249,19 @@ impl MissionCore {
                     (false, _) => None,
                     (true, true) => crate::emissive_cue::held_scale(&self.world, *entity_id),
                     (true, false) => crate::emissive_cue::world_scale(&self.world, *entity_id),
+                };
+                // Compose authored light emission with existing item-state cues.
+                // The renderer scopes this multiplier per draw, including batching.
+                let self_illumination = v_self_illumination.get(*entity_id).ok().map(|p| p.0);
+                let light_scale = v_animated_light
+                    .get(*entity_id)
+                    .ok()
+                    .filter(|light| light.mode == dark::properties::AnimLightMode::Alternate)
+                    .map(|light| light.initial_intensity() * self_illumination.unwrap_or(1.0))
+                    .or(self_illumination);
+                let emissivity_scale = match (emissivity_scale, light_scale) {
+                    (Some(cue), Some(light)) => Some(cue * light),
+                    (cue, light) => cue.or(light),
                 };
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
