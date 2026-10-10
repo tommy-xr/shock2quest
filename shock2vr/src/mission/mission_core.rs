@@ -6283,6 +6283,11 @@ impl MissionCore {
         self.holsters.freeze_heading = self.ammo_pouch.near.iter().any(|near| *near)
             || self.chest_slots.near.iter().any(Option::is_some);
         self.holsters.load_poses(asset_cache);
+        // Belt, holsters and chest mounts are cyber-interface gear (hidden on Earth).
+        let body_gear = game_options.presentation_mode == crate::PresentationMode::Vr
+            && self.player_is_alive()
+            && self.player_controls_enabled
+            && crate::cyber_interface::installed(&self.world);
         let holster_actions = self.holsters.update(
             &body_input,
             held,
@@ -6306,9 +6311,7 @@ impl MissionCore {
                         .is_some()
                 })
             }),
-            game_options.presentation_mode == crate::PresentationMode::Vr
-                && self.player_is_alive()
-                && self.player_controls_enabled,
+            body_gear,
             time.elapsed.as_secs_f32(),
         );
         self.chest_slots.body_pose = self.holsters.body_pose;
@@ -6336,9 +6339,7 @@ impl MissionCore {
                     super::holsters::Holsters::accepts_chest_item(&self.world, id)
                 })
             }),
-            game_options.presentation_mode == crate::PresentationMode::Vr
-                && self.player_is_alive()
-                && self.player_controls_enabled,
+            body_gear,
             time.elapsed.as_secs_f32(),
         );
         let inventory = self
@@ -6414,10 +6415,7 @@ impl MissionCore {
                 item.is_some_and(|item| super::reload::is_ammo_clip(&self.world, item))
             }),
             pouch_offers,
-            game_options.presentation_mode == crate::PresentationMode::Vr
-                && !self.use_mode
-                && self.player_is_alive()
-                && self.player_controls_enabled,
+            body_gear && !self.use_mode,
         );
         let holster_contents = super::holsters::occupants(&self.world);
         self.interaction
@@ -17543,20 +17541,25 @@ impl MissionCore {
                     scene.extend(objects);
                 }
             }
-            scene.extend(
-                self.holsters
-                    .render(&self.world, player.pos, player.rotation),
-            );
-            scene.extend(
-                self.chest_slots
-                    .render(&self.world, player.pos, player.rotation),
-            );
-            if crate::dev_params::get_bool(crate::dev_params::VR_BODY_INVENTORY_ZONES) {
+            // Belt, holsters and chest mounts are cyber-interface gear (hidden on Earth).
+            let body_gear = crate::cyber_interface::installed(&self.world);
+            if body_gear {
+                scene.extend(
+                    self.holsters
+                        .render(&self.world, player.pos, player.rotation),
+                );
+                scene.extend(
+                    self.chest_slots
+                        .render(&self.world, player.pos, player.rotation),
+                );
+            }
+            if body_gear && crate::dev_params::get_bool(crate::dev_params::VR_BODY_INVENTORY_ZONES)
+            {
                 scene.extend(self.ammo_pouch.render_zone(player.pos, player.rotation));
             }
             // The pieces are authored in metres, with independent attachment
             // origins. Gameplay zones and visuals use the same body frame.
-            if let Some(body) = self.holsters.body_pose {
+            if let Some(body) = self.holsters.body_pose.filter(|_| body_gear) {
                 let root_rotation = self.holsters.world_rotation(player.rotation);
                 // The belt mesh already places its front 30 cm forward of its
                 // origin. Expose the actual belt distance, not that asset origin.
@@ -17706,7 +17709,11 @@ impl MissionCore {
                     }
                 }
             }
-            if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
+            if let Some(centers) = self
+                .holsters
+                .world_centers(player.pos, player.rotation)
+                .filter(|_| body_gear)
+            {
                 for (slot, entity) in self.holsters.occupants(&self.world).into_iter().enumerate() {
                     let Some(model) = entity.and_then(|entity| self.id_to_model.get(&entity))
                     else {
