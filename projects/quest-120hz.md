@@ -1,7 +1,7 @@
 # Quest 120 Hz: an 8.33 ms frame budget
 
 Status: FFR implemented and measured in [PR #2124](https://github.com/tommy-xr/shock2quest/pull/2124),
-with low selected as the default after wearer review. The [16-run sweep](../benchmarks/results/2026-10-09-quest3-ffr.md)
+with low selected as the default after wearer review. The [16-run sweep](https://github.com/tommy-xr/shock2quest/blob/709d2cba1649aea726cc32921eb163caf30287d3/benchmarks/results/2026-10-09-quest3-ffr.md)
 shows App-time savings but a warm-run freshness regression requiring isolation.
 High blurred peripheral text; low remained readable with a minor quality loss. [CPU/clock diagnostics](https://github.com/tommy-xr/shock2quest/pull/2126)
 confirm frame-driven solver drift on-device. [Opt-in clock correction](https://github.com/tommy-xr/shock2quest/pull/2129)
@@ -231,3 +231,21 @@ Proposed completion criteria:
 - Before any 120 Hz experiment: finish milestone 2 interaction/presentation gates and remeasure full-tick frame tails.
 - Subsequent CPU, multiview, and threading PRs: select from updated measurements.
 - Historical baseline and tooling context: [Quest profiling](quest-profiling.md).
+
+## Default-off merge review
+
+Independent Claude review recommends merging the instrumentation, opt-in clock,
+and update-only benchmark with fixed simulation disabled by default. Review
+follow-ups before enabling it:
+
+- Bound or explicitly discard catch-up debt from loading/quickload stalls; the
+  current eight-tick per-frame limit retains an unbounded backlog. Verify scene
+  transitions and sustained overload without fast-forwarding the new mission.
+- Bound/coalesce buffered input transitions, including analog noise crossing
+  zero, so a render rate above 60 Hz cannot create increasing control latency.
+- Exercise pause/focus, scene swaps, replay start, and zero/multiple-tick input
+  delivery end to end. Presentation interpolation remains a separate task.
+
+The review's default-path focus-time reset is now gated to fixed mode. CPU
+profiling totals are discarded alongside frame-profiler resets, and the runner
+requires matching CPU/PERF sample counts to reject mixed measurement windows.
