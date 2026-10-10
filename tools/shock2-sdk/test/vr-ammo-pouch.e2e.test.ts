@@ -1,12 +1,59 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GameServer } from "../src/index.js";
+import { GameServer, lookQuat } from "../src/index.js";
 import { setHandWorldPose } from "../src/vr-pose.js";
 import { add, aimVrHandAt, quatConjugate, quatRotate, sub } from "./helpers/vr-hand.js";
 import { drawPouchAmmo } from "./helpers/ammo-pouch.js";
 import { ammoOf, pullTrigger } from "./helpers/weapon.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
+test("an unsqueezed pouch hand can trigger Rec1's elevator without drawing ammo", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "rec1.mis", debugFlags: ["--vr"] });
+  // Stage a fresh mission at the campaign's elevator; interaction itself uses
+  // only the production hand trigger, never an injected Frob message.
+  await game.player.teleport({ x: -5.4254, y: -3.956, z: -127.7168 });
+  await game.step({ frames: 5 });
+  const button = (await game.entities.byTemplate(74))[0];
+  assert.ok(button);
+  for (const hand of ["left", "right"] as const) {
+    await game.input.set(`${hand}_hand.position`, [hand === "left" ? -.2 : .2, .3, -.6]);
+  }
+  await game.input.lookAtWorldPoint(button.position);
+  await game.step({ frames: 60 });
+  await game.input.set("right_hand.squeeze", 1);
+  const gun = await game.player.spawnItem(-17, { hand: "right" });
+  const reserve = await game.player.spawnItem(-31);
+  await game.step({ frames: 5 });
+  let player = (await game.info()).player;
+  assert.equal(player.right_hand_entity_id, gun.entity_id);
+  const center = player.hand_feedback?.ammo_pouch?.center;
+  assert.ok(center);
+  const rotation = lookQuat(sub(button.position, center));
+  await setHandWorldPose(game, player, "left", center, rotation);
+  await game.step({ frames: 3 });
+  player = (await game.info()).player;
+  const palm = player.hand_feedback?.glove_contacts?.centers[0];
+  const pouchCenter = player.hand_feedback?.ammo_pouch?.center;
+  assert.ok(palm && pouchCenter);
+  await setHandWorldPose(game, player, "left", add(center, sub(pouchCenter, palm)), rotation);
+  await game.step({ frames: 3 });
+  const ready = (await game.info()).player;
+  assert.equal(ready.hand_feedback?.ammo_pouch?.near[0], true);
+  assert.equal(ready.hand_feedback?.ammo_pouch?.offers[0]?.reserve, reserve.entity_id);
+  assert.equal(ready.hand_feedback?.left.target, button.id);
+  assert.equal(ready.hand_feedback?.left.light, "Green");
+  assert.equal((await game.ui.state()).active_panel, null);
+  await game.input.set("left_hand.trigger", 1);
+  await game.step({ frames: 2 });
+  assert.equal((await game.ui.state()).active_panel?.entity_id, button.id);
+  const pressed = (await game.info()).player;
+  assert.equal(pressed.wielded_entity_id, null, "trigger-only frob must not draw ammo");
+  assert.equal(pressed.hand_feedback?.ammo_pouch?.offers[0]?.stock,
+    ready.hand_feedback?.ammo_pouch?.offers[0]?.stock, "trigger-only frob preserves reserve");
+});
+
 test("a full gun offers a spare clip whose B-cycle returns rounds to their stack", {
   skip: !enabled, timeout: 180_000,
 }, async () => {
@@ -118,6 +165,11 @@ for (const hand of ["left", "right"] as const) {
     await setHandWorldPose(game, reached, hand, add(center, sub(pouchCenter, palm)), reached.rotation);
     await game.step({ frames: 3 });
     assert.equal((await game.info()).player[owner], null, "reach alone must not draw");
+    await game.input.set(`${hand}_hand.trigger`, 1);
+    await game.step({ frames: 3 });
+    assert.equal((await game.info()).player[owner], null, "trigger alone must not draw ammo");
+    await game.input.set(`${hand}_hand.trigger`, 0);
+    await game.step({ frames: 3 });
     const pickupsBefore = (await game.audio.recent()).sounds.filter(s => s.sample === "pickup").length;
     assert.ok((await game.info()).player.hand_feedback!.anticipation[i].curls.some(c => c > 0.03), "available pouch prepares an empty hand");
     await game.input.set(`${hand}_hand.squeeze`, 1);
