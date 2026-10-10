@@ -199,6 +199,10 @@ pub enum AIPropertyUpdate {
     LocomotionScale {
         scale: f32,
     },
+    /// Pace of the AI's animation clock (see `RuntimePropAIAnimationSpeed`).
+    AnimationSpeed {
+        speed: f32,
+    },
     /// Skeletal flight motor velocity, consumed by animation integration.
     FlightVelocity {
         velocity: Vector3<f32>,
