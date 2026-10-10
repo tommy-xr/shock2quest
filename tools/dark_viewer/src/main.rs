@@ -421,6 +421,7 @@ pub fn main() {
         let orig_camera_rot = yaw_quat * pitch_quat;
 
         let render_context = engine::EngineRenderContext {
+            terrain_wetness: 0.0,
             self_depth: engine::scene::self_depth::Phase::None,
             world_wave: Default::default(),
             ambient_light_intensity: 1.0,

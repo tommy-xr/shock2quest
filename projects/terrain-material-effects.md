@@ -30,3 +30,32 @@ modulation. Only the base pass alpha-tests and writes depth. Every pass must
 resolve, otherwise both original art and UV dimensions remain. Water,
 transparent-only stacks, environment/incidence maps, clamping, mip bias,
 force_opaque and replace_alpha are outside this terrain subset.
+
+## Experimental Many wetness
+
+The installed Nightdive egg and grub scripts reference dedicated
+`OBJ/TXT16/ND-anegg_s` and `ND-grub_s` masks with `MATERIALS/ND-IR_SHINE`.
+The ten `_ND/om*` and `_ND/ovm*` terrain includes inspected reference diffuse
+textures, animation and UV effects, without corresponding specular,
+normal or roughness-map directives.
+
+`terrain_wetness` (Developer → Organic shine) is a **project-owned prototype**,
+not recovered Nightdive terrain metadata. It defaults to **0** and ranges to 4.
+It requires `--experimental upgraded_terrain` and selects only OvrMnd_1's
+OM1/2/6/8, OMW and OVM003/005/010/012/015 surfaces. For a controlled comparison,
+set `game.devParams.set('terrain_wetness', 1.5)` under a fixed spotlight, then
+sweep the light separately. Setting it back to 0 disables the effect live.
+
+The terrain reuses the egg/grub Blinn–Phong highlight and mask composition.
+Its final layer's own diffuse RGB/alpha supplies the provisional gloss mask,
+following that layer's UV motion and animation. Gloss is applied once, without
+an extra geometry pass. The shared shine ramp is loaded as part of the existing
+shine pipeline, but there are zero authored incidence-sheen passes: only the
+light-driven highlight is enabled. Missing ramp art leaves diffuse rendering.
+Object shine controls and materials retain their existing behavior.
+
+This first prototype has no terrain normal/roughness map, procedural veins,
+or environment reflection. Highlights follow the mesh normals and are tinted
+by the diffuse art, so broad highlights can reveal the low-poly surface.
+It needs an active light; the baked lightmap alone supplies no light direction.
+The default is off pending visual review and Quest GPU measurements.
