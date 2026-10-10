@@ -680,9 +680,7 @@ OpenDarkEngine reimplementation both kept the **blocking** resource-manager mode
 **We emulate** the authentic asset (`LOADING.PCX` from `intrface.crf`, drawn on the
 existing 2D path with the `SHOCKPAL` palette / `MAINFONT` text) and the per-transition
 timing. **We improve** on it by *not blocking*: background parse keeps the compositor
-fed, which is both a UX win and, for VR, a requirement. The port's own
-`projects/ffmpeg-anr-fix.md` already establishes the "move I/O to a background thread +
-show loading state" pattern we reuse here.
+fed, which is both a UX win and, for VR, a requirement.
 
 > Correction (from PR 1): the original loading screen was **not** a static bitmap — see
 > §6.1. The single-threaded *load* blocked, but the screen itself was an animated meter
