@@ -1,0 +1,35 @@
+{
+  "name": "many-brain-authored",
+  "mission": "many.mis",
+  "player_position": [
+    -47.11925,
+    6.333176,
+    -100.730606
+  ],
+  "camera_eye": [
+    280,
+    16,
+    143
+  ],
+  "camera_look_at": [
+    303,
+    10,
+    143
+  ],
+  "subject_templates": [
+    253,
+    327,
+    316,
+    730,
+    61,
+    507
+  ],
+  "object_lighting": true,
+  "lights_on": true,
+  "light_templates": [],
+  "remove_templates": [],
+  "spawns": [],
+  "subject_model": "Bb_brain",
+  "expected_subject_meshes": 1,
+  "ffr": "low"
+}

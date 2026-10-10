@@ -85,17 +85,23 @@ Verified on the implementation branch:
   ragdoll handoff; ordinary animated corpses intentionally remain hittable.
 - Rust formatting and whitespace checks passed.
 
-## Limits and next measurement
+## Quest measurement and remaining limits
+
+The [full replacement Quest comparison](../benchmarks/results/2026-10-10-quest-lazy-hitboxes.md)
+measured two runs per backend at 90 Hz with low FFR. Many's whole update fell
+from **5.161 to 4.552 ms (11.8%)**, and MedSci's from **3.982 to 3.693 ms (7.3%)**.
+Physics fell **16.4%** and **14.0%**, respectively. Both replacement runs beat
+both baseline runs in each scene. These are fixed idle workloads, not sustained
+combat, and do not establish stable 120 Hz.
 
 - Animation evaluation is still eager. Bounds cover a committed snapshot, not
   an entire attack clip or motion envelope. An attached pipe is not automatically
   a damage volume just because the creature holds it.
 - Held melee retains the existing translation sweep and endpoint orientation
   checks. This does not add continuous rotational or relative limb-motion CCD.
-- The linear scan of creature bounds and per-step rebuild have a cost. Benchmark
-  the complete enabled implementation against the default before claiming a
-  frame-time improvement; the earlier proxy-omission measurements are only an
-  optimistic ceiling.
+- The linear scan of creature bounds and per-step rebuild have a cost, included
+  in the measured replacement results. Sustained combat with many simultaneous
+  queries still needs measurement; omission-only estimates are not delivered gains.
 - `damage-query-audit` continues to audit the legacy backend. Its sampling is
   disabled when `lazy-hitboxes` is enabled, since the independent Rapier limb
   reference has been removed. Do not interpret absence of audit output as parity.

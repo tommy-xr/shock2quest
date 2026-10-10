@@ -1,0 +1,30 @@
+{
+  "name": "medsci-cryo-fixed",
+  "mission": "medsci1.mis",
+  "player_position": [
+    -34.96759,
+    -4.376,
+    17.85841
+  ],
+  "camera_eye": [
+    -35,
+    -2,
+    18
+  ],
+  "camera_look_at": [
+    -29,
+    -3,
+    21
+  ],
+  "subject_templates": [
+    522
+  ],
+  "subject_model": "poddoor",
+  "expected_subject_meshes": 3,
+  "ffr": "low",
+  "object_lighting": false,
+  "lights_on": false,
+  "light_templates": [],
+  "remove_templates": [],
+  "spawns": []
+}
