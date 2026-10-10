@@ -577,16 +577,19 @@ fn main() {
         "physical_gun_weight".to_owned(),
     ]);
     // Explicitly provisioned benchmark workloads are opt-in and reset by
-    // removing this file. A malformed fixture must never silently measure a
-    // different scene.
-    let mut benchmark_config =
-        match std::fs::read_to_string(paths::data_root().join("benchmark-scene.json")) {
-            Ok(json) => Some(
-                shock2vr::benchmark_scene::BenchmarkScene::parse(&json)
-                    .expect("invalid benchmark-scene.json"),
-            ),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => panic!("cannot read benchmark-scene.json: {error}"),
+    // removing this file. An invalid fixture returns to the menu with a notice;
+    // it must neither kill Android's event pump nor silently run another mission.
+    let (mut benchmark_config, benchmark_error) =
+        match shock2vr::benchmark_scene::BenchmarkScene::load_optional(
+            &paths::data_root().join("benchmark-scene.json"),
+        ) {
+            Ok(config) => (config, None),
+            Err(error) => {
+                println!(
+                    "SHOCK2QUEST_BENCHMARK_ERROR file=benchmark-scene.json error={error:?} fallback=main_menu"
+                );
+                (None, Some(error))
+            }
         };
     if let Some(benchmark) = &benchmark_config {
         shock2vr::dev_params::set(
@@ -599,10 +602,14 @@ fn main() {
         .map(|scene| foveation::Level::parse(&scene.ffr).expect("validated FFR level"))
         .unwrap_or_else(foveation::configured_level);
     let mut effective_ffr = foveation::Level::Off;
-    let mission = benchmark_config
-        .as_ref()
-        .map(|b| b.mission.clone())
-        .unwrap_or_else(quest_config::configured_mission);
+    let mission = if benchmark_error.is_some() {
+        quest_config::DEFAULT_MISSION.to_owned()
+    } else {
+        benchmark_config
+            .as_ref()
+            .map(|b| b.mission.clone())
+            .unwrap_or_else(quest_config::configured_mission)
+    };
     let game_init_started = Instant::now();
     let options: GameOptions = GameOptions {
         build_label: env!("SHOCK2QUEST_BUILD_LABEL"),
@@ -626,6 +633,9 @@ fn main() {
         engine::platform::set_event_pump(Some(pump_events));
     }
     let mut game = shock2vr::App::init(options, bundle_storage);
+    if benchmark_error.is_some() {
+        game.show_main_menu_notice("Benchmark scene failed to load".to_owned());
+    }
     let mut benchmark_run: Option<shock2vr::benchmark_scene::BenchmarkRun> = None;
     // The real HMD orientation, from the previous frame's located view.
     // `input_context` is built before `locate_views` runs, so this frame's view

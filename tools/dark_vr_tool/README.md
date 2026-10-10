@@ -56,8 +56,19 @@ runtime startup override (not `vr_mission.txt` or a separate `vr_override` file)
 `vr-override` is an alias for the `mission` command. Missing configuration boots
 `main_menu`. Names are validated using the runtime's parser, but the tool does not
 verify that a mission exists in your installed game archives. Changes apply at
-next app launch. A provisioned `benchmark-scene.json` may select a benchmark
-workload independently; remove it manually when finished benchmarking.
+next app launch. A provisioned `benchmark-scene.json` takes precedence over the
+mission override. An unreadable or invalid benchmark configuration opens the main
+menu with "Benchmark scene failed to load"; `logs` includes the detailed
+`SHOCK2QUEST_BENCHMARK_ERROR`. Inspect or remove it with the shell command:
+
+```sh
+ss2vr shell 'cat /sdcard/shock2quest/benchmark-scene.json'
+ss2vr shell 'rm -f /sdcard/shock2quest/benchmark-scene.json'
+ss2vr mission unset  # also clear the mission override to boot the main menu
+```
+
+These commands use the `ss2vr` alias described below; `cargo dvr` also works.
+Removing the benchmark file does not clear the separate mission override.
 
 `debug-port` writes `/sdcard/shock2quest/debug-port.txt`. Restart the app after
 changing it, then use `adb -s SERIAL forward tcp:8171 tcp:8171` to reach its
