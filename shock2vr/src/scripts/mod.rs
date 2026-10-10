@@ -318,6 +318,12 @@ pub enum MessagePayload {
         contact: Option<crate::physics::CollisionContact>,
     },
 
+    /// Playback reports the actual clip length plus its authored repeat gap.
+    SpeechTiming {
+        concept: String,
+        seconds: f32,
+    },
+
     // Animation event
     AnimationFlagTriggered {
         motion_flags: MotionFlags,

@@ -37,6 +37,7 @@ enum Mode {
 }
 #[derive(Default, Clone, Serialize, Deserialize)]
 struct SwarmerState {
+    ambient_speech: super::ambient_speech::AmbientSpeech,
     awareness: MobileAwareness,
     mode: Mode,
     retreat: Option<Vector3<f32>>,
@@ -213,7 +214,13 @@ impl Script for SwarmerAI {
         self.state.retry_remaining = (self.state.retry_remaining - dt).max(0.0);
         self.state.pulse_remaining -= dt;
         let (visible, awareness) = self.state.awareness.update(world, physics, entity_id, dt);
-        let mut effects = vec![awareness];
+        let ambient_speech = self.state.ambient_speech.update(
+            world,
+            entity_id,
+            self.state.awareness.alertness.current_level,
+            dt,
+        );
+        let mut effects = vec![ambient_speech, awareness];
         let (pos, _) = ai_util::get_position_and_forward(world, entity_id);
         let position = pos.to_vec();
         let chasing = self.state.awareness.target.is_some()
@@ -367,6 +374,10 @@ impl Script for SwarmerAI {
         _: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        if let MessagePayload::SpeechTiming { concept, seconds } = msg {
+            self.state.ambient_speech.played(concept, *seconds);
+            return Effect::NoEffect;
+        }
         match msg {
             MessagePayload::Slay => self.die(entity),
             MessagePayload::SetAlertness { level, pin } => self

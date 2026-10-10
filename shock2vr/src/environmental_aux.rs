@@ -125,7 +125,11 @@ impl EnvironmentalAuxAudio {
     }
 }
 
-fn next_delay(params: &PropSchemaLoopParams, plays: u16, duration: Duration) -> Option<Duration> {
+pub(crate) fn next_delay(
+    params: &PropSchemaLoopParams,
+    plays: u16,
+    duration: Duration,
+) -> Option<Duration> {
     if params.is_seamless()
         || (params.flags & PropSchemaLoopParams::COUNT != 0 && plays >= params.count)
     {

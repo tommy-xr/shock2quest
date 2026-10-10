@@ -311,6 +311,7 @@ struct StunState {
 }
 
 pub struct AnimatedMonsterAI {
+    ambient_speech: super::ambient_speech::AmbientSpeech,
     stun: Option<StunState>,
     /// Last locally acquired scent identity, never a global player-route cursor.
     scent_cursor: Option<u64>,
@@ -403,6 +404,7 @@ impl AnimatedMonsterAI {
 
     pub fn idle() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
+            ambient_speech: Default::default(),
             stun: None,
             is_dead: false,
             alertness_pinned: false,
@@ -437,6 +439,7 @@ impl AnimatedMonsterAI {
 
     pub fn new() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
+            ambient_speech: Default::default(),
             stun: None,
             is_dead: false,
             alertness_pinned: false,
@@ -1513,8 +1516,9 @@ impl Script for AnimatedMonsterAI {
     }
     fn save_state(&self) -> Result<crate::scripts::ScriptState, crate::scripts::ScriptStateError> {
         crate::scripts::ScriptState::encode(
-            3,
+            4,
             &(
+                &self.ambient_speech,
                 &self.stun,
                 &self.combat_frustration,
                 self.scent_cursor,
@@ -1537,12 +1541,13 @@ impl Script for AnimatedMonsterAI {
         _: &crate::scripts::ScriptRestoreContext<'_>,
     ) -> Result<(), crate::scripts::ScriptStateError> {
         (
+            self.ambient_speech,
             self.stun,
             self.combat_frustration,
             self.scent_cursor,
             self.scent_goal,
             self.last_known_player_pos,
-        ) = saved.decode(3, "shock2vr.animated_combat")?;
+        ) = saved.decode(4, "shock2vr.animated_combat")?;
         if self
             .stun
             .as_ref()
@@ -2063,7 +2068,16 @@ impl Script for AnimatedMonsterAI {
         // Open a door in the way (or, pursuing, give up at a locked one)
         let door_effect = self.handle_doors(world, physics, entity_id, time);
 
+        let ambient_speech =
+            if self.current_behavior.borrow().scripted_state() == ScriptedState::Running {
+                Effect::NoEffect
+            } else {
+                self.ambient_speech
+                    .update(world, entity_id, self.alertness.current_level, delta)
+            };
+
         Effect::combine(vec![
+            ambient_speech,
             alertness_effect,
             awareness_effect,
             scent_effect,
@@ -2089,6 +2103,10 @@ impl Script for AnimatedMonsterAI {
         physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        if let MessagePayload::SpeechTiming { concept, seconds } = msg {
+            self.ambient_speech.played(concept, *seconds);
+            return Effect::NoEffect;
+        }
         if matches!(msg, MessagePayload::Resurrected) {
             self.is_dead = false;
             self.handoff_emitted = false;
@@ -2726,6 +2744,43 @@ mod tests {
             total: std::time::Duration::from_millis(100),
         };
         Effect::flatten(vec![monster.update(entity_id, world, &physics, &time)])
+    }
+
+    #[test]
+    fn ambient_voice_is_suppressed_during_death_stun_and_scripted_sequences() {
+        let (mut world, entity) = world_with_monster_and_player(Deg(180.0));
+        world.add_component(entity, (dark::properties::PropVoiceIndex(12),));
+        for mode in 0..4 {
+            let mut monster = AnimatedMonsterAI::new();
+            monster.ambient_speech.played("comattack", 0.0);
+            match mode {
+                1 => monster.is_dead = true,
+                2 => {
+                    monster.stun = Some(StunState {
+                        remaining: 10.0,
+                        single_motion: false,
+                        tags: "stun".into(),
+                    })
+                }
+                3 => {
+                    monster.current_behavior =
+                        Box::new(RefCell::new(ScriptedSequenceBehavior::new(
+                            &world,
+                            entity,
+                            None,
+                            vec![dark::properties::AIScriptedAction {
+                                action_type: dark::properties::AIScriptedActionType::Wait(
+                                    std::time::Duration::from_secs(10),
+                                ),
+                            }],
+                        )))
+                }
+                _ => {}
+            }
+            let speaks = step(&mut monster, &world, entity).iter().any(|effect|
+                matches!(effect, Effect::PlaySpeech { concept, .. } if concept == "atlevelzero"));
+            assert_eq!(speaks, mode == 0, "mode {mode}");
+        }
     }
 
     #[test]

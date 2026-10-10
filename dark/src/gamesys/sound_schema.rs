@@ -61,7 +61,12 @@ impl SoundSchema {
     /// Authored repeat timing, including interval-based environmental layers.
     pub fn loop_params(&self, schema: &str) -> Option<&PropSchemaLoopParams> {
         let id = self.name_to_schema_id.get(&schema.to_ascii_lowercase())?;
-        self.id_to_loop_params.get(id)
+        self.loop_params_by_id(*id)
+    }
+
+    /// Repeat timing for a schema selected by the speech database.
+    pub fn loop_params_by_id(&self, id: i32) -> Option<&PropSchemaLoopParams> {
+        self.id_to_loop_params.get(&id)
     }
 
     pub fn get_random_sample(&self, schema: &str) -> Option<String> {

@@ -25,6 +25,7 @@ use shipyard::{EntityId, Get, View, World};
 const KEY: &str = "shock2vr.grub_ai";
 #[derive(Default, Clone, Serialize, Deserialize)]
 struct GrubState {
+    ambient_speech: super::ambient_speech::AmbientSpeech,
     awareness: MobileAwareness,
     joints: JointTweq,
     leap_remaining: f32,
@@ -143,7 +144,17 @@ impl Script for GrubAI {
         }
         self.state.leap_remaining = (self.state.leap_remaining - dt).max(0.0);
         let (visible, awareness) = self.state.awareness.update(world, physics, entity_id, dt);
-        let mut effects = vec![awareness, self.state.joints.update(entity_id, world, dt)];
+        let ambient_speech = self.state.ambient_speech.update(
+            world,
+            entity_id,
+            self.state.awareness.alertness.current_level,
+            dt,
+        );
+        let mut effects = vec![
+            ambient_speech,
+            awareness,
+            self.state.joints.update(entity_id, world, dt),
+        ];
         let (position, _) = ai_util::get_position_and_forward(world, entity_id);
         let velocity = physics
             .get_velocity(entity_id)
@@ -285,6 +296,10 @@ impl Script for GrubAI {
         _: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        if let MessagePayload::SpeechTiming { concept, seconds } = msg {
+            self.state.ambient_speech.played(concept, *seconds);
+            return Effect::NoEffect;
+        }
         match msg {
             MessagePayload::Slay => self.die(entity_id),
             MessagePayload::SetAlertness { level, pin } => self

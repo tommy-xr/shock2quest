@@ -3,6 +3,7 @@ pub mod ai_util;
 pub mod alertness;
 pub mod steering;
 
+mod ambient_speech;
 mod animated_monster_ai;
 mod behavior;
 mod camera_ai;

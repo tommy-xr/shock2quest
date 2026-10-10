@@ -2332,6 +2332,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$AI_BcstSe",
+            PropAIBroadcastDisabled::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$SpchVoice",
             read_prop_string,
             PropSpeechVoice,
