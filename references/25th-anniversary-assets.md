@@ -629,7 +629,15 @@ Two real caveats before committing to that:
 Worth noting the asset quality is no longer the blocker — the blocker is that the melee/arm
 half of this lives in the unparsed `PMNM` chunk (caveat 1 is invisible to us today).
 
-## 5. What we would need to change
+## 5. Historical spike plan (superseded)
+
+**This section records the original spike, not the current backlog.** The
+[current source-backed patch audit](25th-anniversary-patch-audit.md) and its
+[complete 74-DML/61-NUT inventory](25th-anniversary-patch-inventory.json) replace
+the patch checklist. Current main mounts `shock2.gam` directly from the KPF,
+parses authored weapon clips, enables upgraded terrain by default and implements
+material overlays and plant morphs. The historical outstanding entries below
+must not be filed again without checking their current Rust paths.
 
 Ordered by value-per-unit-effort. Each step is independently shippable and verifiable.
 
@@ -642,7 +650,7 @@ Ordered by value-per-unit-effort. Each step is independently shippable and verif
 | Mount-first, `txt16/`-qualified texture resolution (`AbstractAssetPath::resolve_first` + `dark::util::resolve_texture_name`) | Upgraded encodings actually win; stops props vanishing |
 | DDS decoder (BC1/2/3/7 + uncompressed) in `engine::dds` | The ~3 262 upgraded textures — the actual visual upgrade |
 
-**Still outstanding:**
+**Outstanding at the time of the spike (not current status):**
 
 | # | Change | Unlocks | Effort |
 | --- | --- | --- | --- |
@@ -683,7 +691,7 @@ localization file is supported. SCP's string tables are real text and are fine t
 staged build used for the screenshots does let them override, which is why `$PSI6` appears
 in the psi-amp capture.
 
-### Two engine-side gaps the weapon captures exposed
+### Historical engine-side gaps the weapon captures exposed
 
 Neither is an asset problem, and neither is a 25AE regression — both were verified against
 the original data too:
