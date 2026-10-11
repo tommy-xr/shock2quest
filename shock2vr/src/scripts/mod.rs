@@ -658,7 +658,28 @@ impl<'a> ScriptRestoreContext<'a> {
     }
 }
 
+/// How much of an authored script name the port implements.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScriptSupport {
+    Implemented,
+    /// Registered, but only logs the messages it receives.
+    Stub,
+    /// Registered as deliberately inert (often handled by an engine system).
+    Noop,
+    /// No registry entry.
+    Unregistered,
+}
+
+/// Classify a script name the way the registry resolves it.
+pub fn script_support(script_name: &str) -> ScriptSupport {
+    ScriptWorld::create_script(script_name.to_owned()).support()
+}
+
 pub trait Script {
+    fn support(&self) -> ScriptSupport {
+        ScriptSupport::Implemented
+    }
+
     /// Mobile AI opts into shared voice reactions using its current private state.
     fn ai_speech_context(&self) -> Option<ai::SpeechContext> {
         None
@@ -810,6 +831,10 @@ struct UnimplementedScript {
 }
 
 impl Script for UnimplementedScript {
+    fn support(&self) -> ScriptSupport {
+        ScriptSupport::Stub
+    }
+
     fn handle_message(
         &mut self,
         _entity_id: EntityId,
@@ -1026,6 +1051,10 @@ impl Script for PanicOnMessageScript {
 }
 
 impl Script for PanicOnLoadScript {
+    fn support(&self) -> ScriptSupport {
+        ScriptSupport::Unregistered
+    }
+
     fn initialize(&mut self, _entity_id: EntityId, _world: &World) -> Effect {
         panic!("Unimplemented script: {}", self.name);
     }
@@ -1046,6 +1075,10 @@ impl NoopScript {
     }
 }
 impl Script for NoopScript {
+    fn support(&self) -> ScriptSupport {
+        ScriptSupport::Noop
+    }
+
     fn handle_message(
         &mut self,
         _entity_id: EntityId,
@@ -1803,6 +1836,19 @@ impl ScriptWorld {
         }
 
         ret
+    }
+}
+
+#[cfg(test)]
+mod script_support_tests {
+    use super::*;
+
+    #[test]
+    fn script_support_follows_the_registry_case_insensitively() {
+        assert_eq!(script_support("LaserShot"), ScriptSupport::Implemented);
+        assert_eq!(script_support("TorpedoLift"), ScriptSupport::Stub);
+        assert_eq!(script_support("teleportmarker"), ScriptSupport::Noop);
+        assert_eq!(script_support("NoSuchScript"), ScriptSupport::Unregistered);
     }
 }
 
