@@ -563,6 +563,11 @@ pub struct PropUseMsg(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropLockMsg(pub String);
 
+/// `P$FrobSound`: the schema an object plays when the player frobs it in the
+/// world (ShockDoFrob). Shipped data authors it only on the Art pictures.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropFrobSound(pub String);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPhysState {
     pub position: Vector3<f32>,
@@ -2316,6 +2321,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$UseMsg",
             read_variable_length_string,
             PropUseMsg,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$FrobSound",
+            read_prop_string,
+            PropFrobSound,
             accumulator::latest,
         ),
         define_prop(
