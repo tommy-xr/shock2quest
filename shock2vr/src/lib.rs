@@ -3664,3 +3664,5 @@ mod app_tests {
 }
 
 pub mod tricorder;
+
+pub mod plant_animation;

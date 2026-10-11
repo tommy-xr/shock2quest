@@ -17423,6 +17423,7 @@ impl MissionCore {
                     held_model,
                 );
             }
+            crate::plant_animation::apply(&self.world, *entity_id, &mut scene_objs);
             let is_animated_model = objs.is_animated();
 
             // Authored/scripted per-entity alpha (Renderer\Transparency (alpha):

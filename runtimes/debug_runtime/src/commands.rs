@@ -370,6 +370,8 @@ pub struct SceneObjectSummary {
     pub depth_write: bool,
     /// Authored passes in draw order (empty for ordinary materials).
     pub material_passes: Vec<String>,
+    /// Per-instance weights supplied to deformable object geometry.
+    pub morph_weights: Option<[f32; 3]>,
     pub material_only: bool,
     /// Depth pulled slightly toward the camera on the opaque pass (polygon
     /// offset) - set for flat decal-like models coplanar with world geometry.

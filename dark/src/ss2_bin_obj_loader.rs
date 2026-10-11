@@ -56,6 +56,7 @@ impl Vhot {
 pub struct SystemShock2ObjectMesh {
     pub header: ObjBinHeader,
     pub version: u32,
+    pub shapes: Option<crate::object_shapes::ObjectShapes>,
 
     pub bounding_box: Aabb3<f32>,
     pub materials: Vec<SystemShock2MeshMaterial>,
@@ -76,9 +77,19 @@ pub fn read<T: Read + Seek>(
     let vertices = read_vertices(&header, reader);
     let normals = read_lights(&header, reader);
 
-    let polygons: Vec<SystemShock2ObjectPolygon> =
+    let mut polygons: Vec<SystemShock2ObjectPolygon> =
         read_polygons(&header, reader, common_header.version);
 
+    let mut corner_count = 0;
+    for polygon in &mut polygons {
+        polygon.shape_corner_start = corner_count;
+        corner_count += polygon.vertex_indices.len();
+    }
+    let shapes = if common_header.version == 6 {
+        crate::object_shapes::read(reader, corner_count)
+    } else {
+        None
+    };
     let uvs = read_uvs(&header, reader);
 
     let mut materials = read_materials(&header, reader);
@@ -102,6 +113,7 @@ pub fn read<T: Read + Seek>(
         vhots,
         sub_objects: objs,
         version: common_header.version,
+        shapes,
     }
 }
 
@@ -119,7 +131,7 @@ pub fn to_scene_objects(
         hash_to_material.insert(temp_material.slot_num as u16, temp_material.clone());
     }
 
-    let slot_to_vertices = to_vertices(mesh);
+    let (slot_to_vertices, mut slot_to_deltas) = to_vertices_with_shapes(mesh);
 
     let vertices = slot_to_vertices
         .into_iter()
@@ -166,13 +178,25 @@ pub fn to_scene_objects(
                 texture
             };
 
+            let deltas = slot_to_deltas.remove(&slot);
             let geometry: Rc<Box<dyn engine::scene::Geometry>> = if is_skinned {
-                Rc::new(Box::new(engine::scene::mesh::create(verts)))
+                if let Some(deltas) = deltas {
+                    Rc::new(Box::new(engine::scene::morph_mesh::MorphMesh::new(verts, deltas)))
+                } else { Rc::new(Box::new(engine::scene::mesh::create(verts))) }
             } else {
                 // If not skinned, convert the vertices to non-skinned representation
                 let simpler_vertices =
                     convert_skinned_vertices_to_static_vertices(&verts, &skeleton);
-                Rc::new(Box::new(engine::scene::mesh::create(simpler_vertices)))
+                if let Some(mut deltas) = deltas {
+                    let transform = skeleton.get_transforms()[0];
+                    for vertex in &mut deltas {
+                        for delta in vertex {
+                            delta.position = transform.transform_vector(delta.position);
+                            delta.normal = transform.transform_vector(delta.normal);
+                        }
+                    }
+                    Rc::new(Box::new(engine::scene::morph_mesh::MorphMesh::new(simpler_vertices, deltas)))
+                } else { Rc::new(Box::new(engine::scene::mesh::create(simpler_vertices))) }
             };
 
             let debug_normals_enabled = env::var_os("SS2_DEBUG_NORMALS").is_some();
@@ -753,6 +777,29 @@ pub fn to_vertices_by_material(
 pub fn to_vertices(
     mesh: &SystemShock2ObjectMesh,
 ) -> HashMap<u16, Vec<VertexPositionTextureSkinnedNormal>> {
+    to_vertices_with_shapes(mesh).0
+}
+
+type ShapeVertices = HashMap<u16, Vec<[engine::scene::morph_mesh::Delta; 3]>>;
+fn to_vertices_with_shapes(
+    mesh: &SystemShock2ObjectMesh,
+) -> (
+    HashMap<u16, Vec<VertexPositionTextureSkinnedNormal>>,
+    ShapeVertices,
+) {
+    let mut shape_vertices: ShapeVertices = HashMap::new();
+    let shapes = mesh.shapes.as_ref();
+    // These three GPU-buffer channels implement object_plants.nut only. The
+    // decoder retains arbitrary named targets; egg-pod and SHODAN drivers must
+    // supply their own name/channel mapping rather than reuse this plant map.
+    let shape_indices = shapes.map(|shapes| {
+        ["motion_one", "motion_two", "motion_three"].map(|name| {
+            shapes
+                .names
+                .iter()
+                .position(|s| s == name || (name == "motion_three" && s == "contract"))
+        })
+    });
     let polygons = &mesh.polygons;
     let uvs = &mesh.uvs;
     let vertices = &mesh.vertices;
@@ -797,7 +844,24 @@ pub fn to_vertices(
         if len >= 3 && (solid_color || uv_len >= len) {
             for idx in 1..(len - 1) {
                 let bone_idx = get_bone_index_for_point(mesh, indices[idx]);
-
+                if let (Some(shapes), Some(shape_indices)) = (shapes, shape_indices) {
+                    if shape_indices.iter().any(Option::is_some) {
+                        for corner in [idx, idx + 1, 0] {
+                            let index = shapes.corner_indices[poly.shape_corner_start + corner];
+                            let deltas = shape_indices.map(|shape| {
+                                let mut delta = engine::scene::morph_mesh::Delta::default();
+                                if let (Some(shape), Some(index)) = (shape, index.checked_sub(1)) {
+                                    let source = &shapes.deltas[shape][index as usize];
+                                    delta.position = source.position;
+                                    delta.normal = source.normal;
+                                    delta.uv = source.uv;
+                                }
+                                delta
+                            });
+                            shape_vertices.entry(slot).or_default().push(deltas);
+                        }
+                    }
+                }
                 verts.push(build_vertex(
                     vertices[indices[idx] as usize],
                     uv_for_corner(idx),
@@ -820,7 +884,7 @@ pub fn to_vertices(
         }
     }
 
-    hash_map
+    (hash_map, shape_vertices)
 }
 
 fn get_bone_index_for_point(header: &SystemShock2ObjectMesh, usize: u16) -> u32 {
@@ -877,6 +941,7 @@ fn build_skeleton_for_obj_mesh(
 
 #[derive(Debug, Clone)]
 pub struct SystemShock2ObjectPolygon {
+    pub shape_corner_start: usize,
     pub polygon_type: u8,
     pub vertex_indices: Vec<u16>,
     pub normal_indices: Vec<u16>,
@@ -919,6 +984,7 @@ fn read_polygon<T: Read>(
     }
 
     SystemShock2ObjectPolygon {
+        shape_corner_start: 0,
         polygon_type: poly_type,
         vertex_indices,
         normal_indices,
@@ -1326,6 +1392,7 @@ mod tests {
         let mut material = material_in_slot("purple", 1);
         material.material_type = 1;
         let polygon = SystemShock2ObjectPolygon {
+            shape_corner_start: 0,
             polygon_type: 0x59,
             vertex_indices: vec![0, 1, 2, 3],
             normal_indices: vec![0, 0, 0, 0],
@@ -1420,6 +1487,7 @@ mod tests {
 
     fn polygon_in_slot(slot_index: u16) -> SystemShock2ObjectPolygon {
         SystemShock2ObjectPolygon {
+            shape_corner_start: 0,
             polygon_type: 0x1b,
             vertex_indices: vec![0, 1, 2],
             normal_indices: vec![0, 1, 2],
@@ -1440,6 +1508,7 @@ mod tests {
         SystemShock2ObjectMesh {
             header: header_with_mat_extra(0),
             version: 4,
+            shapes: None,
             bounding_box: Aabb3::new(point3(0.0, 0.0, 0.0), point3(1.0, 1.0, 1.0)),
             materials,
             uvs: vec![Vector2::new(0.0, 0.0); 3],
@@ -1472,6 +1541,7 @@ mod tests {
     #[test]
     fn retained_sub_objects_preserve_the_rig_and_material_selection() {
         let polygon = |vertices| SystemShock2ObjectPolygon {
+            shape_corner_start: 0,
             polygon_type: 0x1b,
             vertex_indices: vertices,
             normal_indices: vec![0; 3],
@@ -1728,5 +1798,40 @@ mod tests {
         assert_eq!(materials[0].transparency, 0.0);
         assert_eq!(materials[1].transparency, 0.9);
         assert_eq!(materials[2].transparency, 0.4);
+    }
+    #[test]
+    fn shape_corner_indices_follow_fan_order_and_survive_material_filtering() {
+        let mut mesh = mesh_with(
+            vec![material_in_slot("leaf", 1), material_in_slot("pot", 2)],
+            vec![polygon_in_slot(1), polygon_in_slot(2)],
+        );
+        mesh.polygons[1].shape_corner_start = 3;
+        let delta = |x| crate::object_shapes::ShapeDelta {
+            position: vec3(x, 0.0, 0.0),
+            normal: vec3(0.0, 0.0, 0.0),
+            uv: Vector2::new(0.0, 0.0),
+        };
+        mesh.shapes = Some(crate::object_shapes::ObjectShapes {
+            names: vec!["motion_one".into()],
+            deltas: vec![vec![delta(1.0), delta(2.0)]],
+            corner_indices: vec![1, 2, 0, 2, 1, 0],
+        });
+        let (_, shapes) = to_vertices_with_shapes(&mesh);
+        assert_eq!(
+            shapes[&1]
+                .iter()
+                .map(|d| d[0].position.x)
+                .collect::<Vec<_>>(),
+            [2.0, 0.0, 1.0]
+        );
+        let filtered = retain_materials(mesh, |name| name == "pot");
+        let (_, shapes) = to_vertices_with_shapes(&filtered);
+        assert_eq!(
+            shapes[&2]
+                .iter()
+                .map(|d| d[0].position.x)
+                .collect::<Vec<_>>(),
+            [1.0, 0.0, 2.0]
+        );
     }
 }
