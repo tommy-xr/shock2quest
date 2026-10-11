@@ -6379,6 +6379,7 @@ impl MissionCore {
             if self.chest_slots.near[i].is_some() {
                 shoulder_releases[i] = false;
                 self.shoulder_backpack.near[i] = false;
+                self.shoulder_backpack.entered[i] = false;
                 self.shoulder_backpack.draws[i] = None;
             }
         }
