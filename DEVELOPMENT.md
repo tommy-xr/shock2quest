@@ -591,7 +591,7 @@ readout retains its cuff mount.
 | Fit | Forward cm | Size | Back cm |
 | --- | --- | --- | --- |
 | Glove default | 0.7 | 0.97 | — |
-| Amp behind cord (default) | 3.5 | 0.90 | 0.8 |
+| Amp behind cord (default) | 5.5 | 0.77 | 0.45 |
 | Amp in front of cord (alternative) | 10.5 | 0.85 | 0.0 |
 
 `psi_band_back_cm` recenters the amp bracelet toward the back of the hand
