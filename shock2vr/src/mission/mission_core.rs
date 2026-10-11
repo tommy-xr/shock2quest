@@ -10237,14 +10237,24 @@ impl MissionCore {
             // a script check: a volley of globs released from one point
             // overlap at the muzzle, and the solver would push them apart
             // (squeezing one into its emitter) before any script could ignore
-            // the contact. Filter those pairs before the solver.
+            // the contact. Filter those pairs before the solver. Each pair is
+            // registered by whichever projectile is created second, which
+            // covers loads too; only bodied, flagged shots pay for the scan.
+            let flagged = physics.get_velocity(created_entity.entity_id).is_some()
+                && world
+                    .borrow::<View<PropPhysDimensions>>()
+                    .unwrap()
+                    .get(created_entity.entity_id)
+                    .is_ok_and(|dimensions| dimensions.point_vs_not_special != 0);
             let others: Vec<EntityId> = world
                 .borrow::<View<PropPhysDimensions>>()
                 .unwrap()
                 .iter()
                 .with_id()
                 .filter(|(other, dimensions)| {
-                    *other != created_entity.entity_id && dimensions.point_vs_not_special != 0
+                    flagged
+                        && *other != created_entity.entity_id
+                        && dimensions.point_vs_not_special != 0
                 })
                 .map(|(other, _)| other)
                 .filter(|other| {
