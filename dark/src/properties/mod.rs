@@ -417,6 +417,11 @@ pub struct PropArmor {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropRequiredStats(pub [i32; 5]);
 
+/// `P$DrugStats`: a stat booster's temporary bonus, in the same STR, END, PSI,
+/// AGI, CYB order (Strength Boost +1 STR, INT Boost +1 PSI).
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropDrugStats(pub [i32; 5]);
+
 /// A container's inventory grid, in cells. The `Contains` link's ordinal is
 /// `y * width + x` against *this* width, so it is what makes a stored cell
 /// mean anything.
@@ -1691,6 +1696,15 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             |reader, len| {
                 assert_eq!(len, 20, "required stats contain five i32 values");
                 PropRequiredStats(std::array::from_fn(|_| read_i32(reader)))
+            },
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DrugStats",
+            |reader, len| {
+                assert_eq!(len, 20, "drug stats contain five i32 values");
+                PropDrugStats(std::array::from_fn(|_| read_i32(reader)))
             },
             identity,
             accumulator::latest,

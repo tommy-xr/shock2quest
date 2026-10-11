@@ -884,7 +884,7 @@ fn active_resurrection_target(world: &World) -> Option<(Vector3<f32>, Quaternion
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PsiKitUseOutcome {
+enum ConsumableUseOutcome {
     NotUsed,
     DecrementedStack,
     DestroyEntity,
@@ -949,26 +949,26 @@ fn spend_player_psi_points(world: &World, amount: i32) -> Option<Effect> {
 }
 
 /// Apply the stateful portion of one psi-kit effect against the live world.
-/// The caller performs canonical entity teardown for [`PsiKitUseOutcome::DestroyEntity`].
-fn apply_psi_kit_use(world: &World, entity_id: EntityId, amount: i32) -> PsiKitUseOutcome {
+/// The caller performs canonical entity teardown for [`ConsumableUseOutcome::DestroyEntity`].
+fn apply_psi_kit_use(world: &World, entity_id: EntityId, amount: i32) -> ConsumableUseOutcome {
     if amount <= 0 {
-        return PsiKitUseOutcome::NotUsed;
+        return ConsumableUseOutcome::NotUsed;
     }
     let is_alive = world
         .borrow::<EntitiesView>()
         .is_ok_and(|entities| entities.is_alive(entity_id));
     if !is_alive {
-        return PsiKitUseOutcome::NotUsed;
+        return ConsumableUseOutcome::NotUsed;
     }
     let stack_count = world
         .borrow::<View<dark::properties::PropStackCount>>()
         .ok()
         .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
     if stack_count.is_some_and(|stack| stack <= 0) {
-        return PsiKitUseOutcome::NotUsed;
+        return ConsumableUseOutcome::NotUsed;
     }
     if !update_player_psi_points(world, |current| current.saturating_add(amount)) {
-        return PsiKitUseOutcome::NotUsed;
+        return ConsumableUseOutcome::NotUsed;
     }
 
     if stack_count.is_some_and(|stack| stack > 1) {
@@ -978,9 +978,58 @@ fn apply_psi_kit_use(world: &World, entity_id: EntityId, amount: i32) -> PsiKitU
         if let Ok(stack) = (&mut stacks).get(entity_id) {
             stack.0 -= 1;
         }
-        PsiKitUseOutcome::DecrementedStack
+        ConsumableUseOutcome::DecrementedStack
     } else {
-        PsiKitUseOutcome::DestroyEntity
+        ConsumableUseOutcome::DestroyEntity
+    }
+}
+
+/// Apply one stat booster against live state: add its timed bonuses and
+/// consume one unit. Only a carried, live, non-empty booster counts.
+fn apply_stat_booster_use(
+    world: &World,
+    entity_id: EntityId,
+    boosts: &[(crate::player_stats::Stat, i32)],
+    duration: std::time::Duration,
+) -> ConsumableUseOutcome {
+    if boosts.is_empty()
+        || !world
+            .borrow::<EntitiesView>()
+            .is_ok_and(|entities| entities.is_alive(entity_id))
+        || !crate::scripts::script_util::player_carried_items(world).contains(&entity_id)
+    {
+        return ConsumableUseOutcome::NotUsed;
+    }
+    let stack_count = world
+        .borrow::<View<dark::properties::PropStackCount>>()
+        .ok()
+        .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
+    if stack_count.is_some_and(|stack| stack <= 0) {
+        return ConsumableUseOutcome::NotUsed;
+    }
+    {
+        let mut quests = world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+        for &(stat, delta) in boosts {
+            quests
+                .player_stats_mut()
+                .apply_modifier(crate::player_stats::TimedStatModifier {
+                    source: "drug".to_owned(),
+                    stat,
+                    delta,
+                    remaining: duration,
+                });
+        }
+    }
+    if stack_count.is_some_and(|stack| stack > 1) {
+        let mut stacks = world
+            .borrow::<ViewMut<dark::properties::PropStackCount>>()
+            .unwrap();
+        if let Ok(stack) = (&mut stacks).get(entity_id) {
+            stack.0 -= 1;
+        }
+        ConsumableUseOutcome::DecrementedStack
+    } else {
+        ConsumableUseOutcome::DestroyEntity
     }
 }
 
@@ -12442,14 +12491,26 @@ impl MissionCore {
                     update_player_psi_points(&self.world, |_| points);
                 }
 
-                Effect::UsePsiKit { entity_id, amount } => {
+                effect @ (Effect::UsePsiKit { entity_id, .. }
+                | Effect::UseStatBooster { entity_id, .. }) => {
                     // This mutation and the consumption below happen while
                     // processing one effect against live state. Two boosters
                     // used in the same update therefore add independently;
                     // a duplicate use of an already-destroyed booster no-ops.
-                    let outcome = apply_psi_kit_use(&self.world, entity_id, amount);
-                    if outcome == PsiKitUseOutcome::NotUsed {
+                    let outcome = match &effect {
+                        Effect::UsePsiKit { amount, .. } => {
+                            apply_psi_kit_use(&self.world, entity_id, *amount)
+                        }
+                        Effect::UseStatBooster {
+                            boosts, duration, ..
+                        } => apply_stat_booster_use(&self.world, entity_id, boosts, *duration),
+                        _ => unreachable!(),
+                    };
+                    if outcome == ConsumableUseOutcome::NotUsed {
                         continue;
+                    }
+                    if matches!(effect, Effect::UseStatBooster { .. }) {
+                        self.refresh_implant_effects();
                     }
 
                     let sound = crate::scripts::script_util::play_environmental_sound(
@@ -12459,7 +12520,7 @@ impl MissionCore {
                         vec![],
                         AudioHandle::new(),
                     );
-                    if outcome == PsiKitUseOutcome::DestroyEntity {
+                    if outcome == ConsumableUseOutcome::DestroyEntity {
                         self.destroy_entity(entity_id);
                     }
                     if !matches!(sound, Effect::NoEffect) {
@@ -23149,7 +23210,7 @@ mod psi_kit_use_tests {
             match effect {
                 Effect::UsePsiKit { entity_id, amount } => {
                     if apply_psi_kit_use(world, entity_id, amount)
-                        == PsiKitUseOutcome::DestroyEntity
+                        == ConsumableUseOutcome::DestroyEntity
                     {
                         // Production performs MissionCore's canonical teardown here;
                         // this state-level regression has no render/physics/script maps.
@@ -23306,7 +23367,7 @@ mod psi_kit_use_tests {
 
         assert_eq!(
             apply_psi_kit_use(&world, booster, 20),
-            PsiKitUseOutcome::DecrementedStack
+            ConsumableUseOutcome::DecrementedStack
         );
         assert_eq!(player_psi_points(&world), 50);
         assert_eq!(
@@ -23327,7 +23388,7 @@ mod psi_kit_use_tests {
 
         assert_eq!(
             apply_psi_kit_use(&world, booster, 20),
-            PsiKitUseOutcome::NotUsed
+            ConsumableUseOutcome::NotUsed
         );
         assert_eq!(player_psi_points(&world), 50);
         assert!(world.borrow::<EntitiesView>().unwrap().is_alive(booster));
@@ -23378,6 +23439,64 @@ mod comestible_use_tests {
             inventory_entity_id: inventory,
         });
         (world, player, food)
+    }
+
+    #[test]
+    fn stat_booster_adds_timed_bonus_and_consumes_one_carried_unit() {
+        use crate::player_stats::Stat;
+        let five_min = std::time::Duration::from_secs(300);
+        let (mut world, _player, booster) = world_with_player(30, true);
+        world.add_unique(QuestInfo::new());
+        world.add_component(booster, dark::properties::PropStackCount(2));
+        let boosts = [(Stat::PsionicAbility, 1)];
+        let base = crate::implants::effective_stats(&world)
+            .unwrap()
+            .psionic_ability;
+
+        assert_eq!(
+            apply_stat_booster_use(&world, booster, &boosts, five_min),
+            ConsumableUseOutcome::DecrementedStack
+        );
+        let effective = || {
+            crate::implants::effective_stats(&world)
+                .unwrap()
+                .psionic_ability
+        };
+        let tick = |secs| {
+            world
+                .borrow::<UniqueViewMut<QuestInfo>>()
+                .unwrap()
+                .player_stats_mut()
+                .tick_modifiers(std::time::Duration::from_secs(secs));
+        };
+        assert_eq!(effective(), base + 1);
+        assert_eq!(
+            world
+                .borrow::<View<dark::properties::PropStackCount>>()
+                .unwrap()
+                .get(booster)
+                .unwrap()
+                .0,
+            1
+        );
+        // A second dose restarts the timer rather than stacking the bonus.
+        tick(240);
+        assert_eq!(
+            apply_stat_booster_use(&world, booster, &boosts, five_min),
+            ConsumableUseOutcome::DestroyEntity
+        );
+        assert_eq!(effective(), base + 1);
+        tick(120);
+        assert_eq!(effective(), base + 1);
+        tick(180);
+        assert_eq!(effective(), base);
+
+        let (world, _player, loose) = world_with_player(30, false);
+        world.add_unique(QuestInfo::new());
+        assert_eq!(
+            apply_stat_booster_use(&world, loose, &boosts, five_min),
+            ConsumableUseOutcome::NotUsed
+        );
     }
 
     fn player_hit_points(world: &World, player: EntityId) -> i32 {
