@@ -38,8 +38,7 @@ const MATERIAL_NAME_LEN: usize = 16;
 const JOINT_STRIDE: usize = 12;
 const VERTEX_STRIDE: usize = 40;
 const INDEX_STRIDE: usize = 2;
-/// Optional morph block strides, kept for bounds-checking even though the data
-/// itself is not consumed.
+/// Named sparse additive morph records, before skeletal skinning.
 const MORPH_TARGET_STRIDE: usize = 16;
 const MORPH_DELTA_STRIDE: usize = 32;
 
@@ -70,6 +69,10 @@ pub struct PmnmMesh {
     pub vertices: Vec<PmnmVertex>,
     /// Triangle list into `vertices`.
     pub indices: Vec<u16>,
+    pub morph_names: Vec<String>,
+    /// Sparse zero-based base-vertex indices, shared by every target.
+    pub morph_indices: Vec<u16>,
+    pub morph_deltas: Vec<Vec<engine::scene::morph_mesh::Delta>>,
 }
 
 fn u32_at(buf: &[u8], offset: usize) -> Option<u32> {
@@ -239,6 +242,48 @@ pub fn read(buf: &[u8], base: usize) -> Option<PmnmMesh> {
         indices.push(v);
     }
 
+    let mut morph_indices = Vec::with_capacity(morph_vertices);
+    let mut seen = vec![false; num_vertices];
+    for i in 0..morph_vertices {
+        let at = base + offsets[6] + i * 2;
+        let index = u16::from_le_bytes(buf.get(at..at + 2)?.try_into().ok()?);
+        if index as usize >= num_vertices || seen[index as usize] {
+            return None;
+        }
+        seen[index as usize] = true;
+        morph_indices.push(index);
+    }
+    let mut morph_names = Vec::with_capacity(morph_targets);
+    let mut morph_deltas = Vec::with_capacity(morph_targets);
+    for target in 0..morph_targets {
+        let at = base + offsets[3] + target * MORPH_TARGET_STRIDE;
+        let raw = buf.get(at..at + MORPH_TARGET_STRIDE)?;
+        let end = raw.iter().position(|b| *b == 0).unwrap_or(raw.len());
+        let name = std::str::from_utf8(&raw[..end]).ok()?;
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_graphic() || b == b' ') {
+            return None;
+        }
+        morph_names.push(name.to_owned());
+        let mut deltas = Vec::with_capacity(morph_vertices);
+        for vertex in 0..morph_vertices {
+            let at = base + offsets[4] + (target * morph_vertices + vertex) * MORPH_DELTA_STRIDE;
+            let values: Vec<f32> = (0..8)
+                .map(|i| f32_at(buf, at + i * 4))
+                .collect::<Option<_>>()?;
+            if values.iter().any(|v| !v.is_finite()) {
+                return None;
+            }
+            // Disk packing is xyz position, xyz normal, uv (not the GPU's
+            // two vec4 packing). Basis records in all shipped meshes are zero.
+            deltas.push(engine::scene::morph_mesh::Delta {
+                position: vec3_at(buf, at)? / SCALE_FACTOR,
+                normal: vec3_at(buf, at + 12)?,
+                uv: vec2(values[6], values[7]),
+            });
+        }
+        morph_deltas.push(deltas);
+    }
+
     trace!(
         "PMNM: {} tris, {} verts, {} materials, {} joints",
         num_indices / 3,
@@ -252,6 +297,9 @@ pub fn read(buf: &[u8], base: usize) -> Option<PmnmMesh> {
         joint_pivots,
         vertices,
         indices,
+        morph_names,
+        morph_indices,
+        morph_deltas,
     })
 }
 
@@ -286,6 +334,34 @@ impl PmnmMesh {
                 bone_weights: v.bone_weights.map(|w| w as f32 * scale),
             }
         })
+    }
+
+    /// Expand the same material index runs as the skinned vertices. Unaffected
+    /// vertices receive zero deltas; material seams retain their own records.
+    pub fn material_morph_deltas(&self) -> Vec<Vec<Vec<engine::scene::morph_mesh::Delta>>> {
+        let mut sparse = vec![None; self.vertices.len()];
+        for (record, index) in self.morph_indices.iter().enumerate() {
+            sparse[*index as usize] = Some(record);
+        }
+        self.materials
+            .iter()
+            .filter(|m| m.index_count > 0)
+            .map(|m| {
+                self.indices[m.index_start..m.index_start + m.index_count]
+                    .iter()
+                    .map(|index| {
+                        self.morph_deltas
+                            .iter()
+                            .map(|target| {
+                                sparse[*index as usize]
+                                    .map(|record| target[record])
+                                    .unwrap_or_default()
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     /// Each material paired with the vertices of **its own slice** of the index
@@ -399,6 +475,94 @@ mod tests {
             b.extend_from_slice(&((i % num_vertices) as u16).to_le_bytes());
         }
         b
+    }
+
+    #[test]
+    #[ignore = "requires extracted owned 25AE mesh directory"]
+    fn retail_morph_corpus() {
+        let root = std::env::var("SHOCK2_PMNM_TEST_DIR").unwrap();
+        let mut meshes = 0;
+        let mut morphs = 0;
+        for entry in std::fs::read_dir(root).unwrap() {
+            let b = std::fs::read(entry.unwrap().path()).unwrap();
+            let Some(base) = find_chunk(&b, 0) else {
+                continue;
+            };
+            let mesh = read(&b, base).expect("every shipped PMNM parses");
+            meshes += 1;
+            if mesh.morph_names.is_empty() {
+                continue;
+            }
+            morphs += 1;
+            assert_eq!(mesh.morph_names[0], "Basis");
+            assert!(
+                mesh.morph_deltas[0]
+                    .iter()
+                    .all(|d| d.position == vec3(0.0, 0.0, 0.0) && d.normal == vec3(0.0, 0.0, 0.0))
+            );
+            assert!(
+                mesh.morph_deltas
+                    .iter()
+                    .skip(1)
+                    .flatten()
+                    .any(|d| d.position != vec3(0.0, 0.0, 0.0))
+            );
+            for ((_, vertices), deltas) in mesh
+                .to_skinned_vertices()
+                .iter()
+                .zip(mesh.material_morph_deltas())
+            {
+                assert_eq!(vertices.len(), deltas.len());
+                assert!(deltas.iter().all(|d| d.len() == mesh.morph_names.len()));
+            }
+        }
+        assert_eq!((meshes, morphs), (66, 31));
+    }
+
+    fn synth_morph() -> Vec<u8> {
+        let mut b = synth();
+        let old = u32_at(&b, 4 + 44).unwrap() as usize;
+        // One named target and one deformation followed by triangle indices
+        // and a sparse zero-based vertex index.
+        b.splice(4 + old..4 + old, [0u8; 48]);
+        b[4 + old..4 + old + 5].copy_from_slice(b"Basis");
+        b[28..32].copy_from_slice(&1u32.to_le_bytes());
+        b[32..36].copy_from_slice(&1u32.to_le_bytes());
+        for (at, value) in [(48, old + 16), (52, old + 48), (56, old + 54)] {
+            b[4 + at..8 + at].copy_from_slice(&(value as u32).to_le_bytes());
+        }
+        b.extend_from_slice(&3u16.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn decodes_sparse_additive_records_and_rejects_truncation_or_nan() {
+        let mut b = synth_morph();
+        let end = b.len();
+        b[end - 2..].copy_from_slice(&1u16.to_le_bytes());
+        let data = 4 + u32_at(&b, 4 + 48).unwrap() as usize;
+        for (i, value) in [1f32, 2., 3., 4., 5., 6., 7., 8.].iter().enumerate() {
+            b[data + i * 4..data + i * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let mesh = read(&b, 4).unwrap();
+        assert_eq!(mesh.morph_names, ["Basis"]);
+        assert_eq!(mesh.morph_indices, [1]);
+        let run = mesh.material_morph_deltas();
+        assert_eq!(run[0][0][0].position, vec3(0., 0., 0.));
+        assert_eq!(run[0][1][0].position, vec3(-1., 3., 2.) / SCALE_FACTOR);
+        assert_eq!(run[0][1][0].normal, vec3(-4., 6., 5.));
+        assert_eq!(run[0][1][0].uv, vec2(7., 8.));
+        assert!(read(&b[..end - 1], 4).is_none());
+        b[data..data + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(read(&b, 4).is_none());
+    }
+
+    #[test]
+    fn rejects_out_of_range_morph_vertex_before_rendering() {
+        assert!(
+            read(&synth_morph(), 4).is_none(),
+            "index 3 exceeds the three base vertices"
+        );
     }
 
     #[test]

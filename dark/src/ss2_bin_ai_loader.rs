@@ -841,7 +841,11 @@ pub fn pmnm_to_scene_objects(
 ) -> Vec<SceneObject> {
     let mut scene_objects = Vec::new();
     let mut rapier_glow_added = false;
-    for (material_name, vertices) in mesh.to_skinned_vertices() {
+    for ((material_name, vertices), deltas) in mesh
+        .to_skinned_vertices()
+        .into_iter()
+        .zip(mesh.material_morph_deltas())
+    {
         if vertices.is_empty() {
             continue;
         }
@@ -855,8 +859,15 @@ pub fn pmnm_to_scene_objects(
             } else {
                 None
             };
-        let geometry: Rc<Box<dyn engine::scene::Geometry>> =
-            Rc::new(Box::new(engine::scene::mesh::create(vertices)));
+        let geometry: Rc<Box<dyn engine::scene::Geometry>> = if mesh.morph_names.is_empty() {
+            Rc::new(Box::new(engine::scene::mesh::create(vertices)))
+        } else {
+            Rc::new(Box::new(engine::scene::morph_mesh::MorphMesh::named(
+                vertices,
+                deltas,
+                mesh.morph_names.clone(),
+            )))
+        };
 
         // PMNM material names carry their authoring extension (`ND-rumbler.psd`);
         // the shipped texture is `ND-rumbler.dds`, which the resolver finds by stem.
