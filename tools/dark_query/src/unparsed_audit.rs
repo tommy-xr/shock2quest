@@ -1,10 +1,14 @@
-//! Chunks with no registered parser, tallied across the gamesys and every
-//! installed mission - the worklist for new property/link support.
+//! Chunks with no registered parser, script names the port does not
+//! implement and receptron effects it does not handle, tallied across the
+//! gamesys and every installed mission - the worklist for parity work.
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
+use dark::properties::{Link, PropPsiPower, PropScripts, ReceptronEffect};
 use dark::ss2_entity_info::SystemShock2EntityInfo;
 use serde_json::json;
+use shipyard::{Get, IntoIter, IntoWithId, View, World};
+use shock2vr::ScriptSupport;
 
 #[derive(Default)]
 struct Tally {
@@ -12,6 +16,8 @@ struct Tally {
     /// Distinct record sizes in bytes (properties and link data only).
     sizes: BTreeSet<u32>,
     sources: BTreeSet<String>,
+    /// How the registry resolves the name (scripts only).
+    support: Option<ScriptSupport>,
 }
 
 #[derive(Default)]
@@ -19,6 +25,11 @@ struct Audit {
     properties: BTreeMap<String, Tally>,
     links: BTreeMap<String, Tally>,
     link_data: BTreeMap<String, Tally>,
+    /// Authored script names (lowercased, as the registry matches them)
+    /// whose registry entry is a stub, a no-op or missing.
+    scripts: BTreeMap<String, Tally>,
+    /// Receptron effect names (`L$Receptron` data) parsed as `Unhandled`.
+    reactions: BTreeMap<String, Tally>,
 }
 
 impl Audit {
@@ -49,6 +60,46 @@ impl Audit {
             tally.sizes.extend(entries.iter().map(|e| e.byte_len));
             tally.sources.insert(source.to_string());
         }
+
+        // Only each record's own properties: inheritance would count a script
+        // once per descendant instead of once per authoring.
+        let mut world = World::new();
+        for props in info.entity_to_properties.values() {
+            let entity = world.add_entity(());
+            for prop in props {
+                prop.initialize(&mut world, entity);
+            }
+        }
+        // Psi power scripts are dispatched by power id, not the registry.
+        let psi_powers = world.borrow::<View<PropPsiPower>>().unwrap();
+        let scripts = world.borrow::<View<PropScripts>>().unwrap();
+        for (entity, prop) in scripts.iter().with_id() {
+            if psi_powers.get(entity).is_ok() {
+                continue;
+            }
+            for name in prop.scripts.iter().filter(|n| !n.is_empty()) {
+                let name = name.to_ascii_lowercase();
+                let support = shock2vr::script_support(&name);
+                if support == ScriptSupport::Implemented {
+                    continue;
+                }
+                let tally = self.scripts.entry(name).or_default();
+                tally.support = Some(support);
+                tally.entries += 1;
+                tally.sources.insert(source.to_string());
+            }
+        }
+
+        let receptrons = info.template_to_links.values().flat_map(|l| &l.to_links);
+        for link in receptrons {
+            if let Link::Receptron(options) = &link.link
+                && let ReceptronEffect::Unhandled(name) = &options.effect
+            {
+                let tally = self.reactions.entry(name.clone()).or_default();
+                tally.entries += 1;
+                tally.sources.insert(source.to_string());
+            }
+        }
     }
 }
 
@@ -64,39 +115,46 @@ pub fn run(as_json: bool) -> Result<()> {
         ("properties", &audit.properties),
         ("links", &audit.links),
         ("link_data", &audit.link_data),
+        ("scripts", &audit.scripts),
+        ("reactions", &audit.reactions),
     ];
     if as_json {
         let mut out = serde_json::Map::new();
-        for (name, chunks) in sections {
-            let rows: Vec<_> = chunks
+        for (section, rows) in sections {
+            let rows: Vec<_> = rows
                 .iter()
-                .map(|(chunk, t)| {
+                .map(|(name, t)| {
                     json!({
-                        "chunk": chunk,
+                        "chunk": name,
                         "entries": t.entries,
                         "sizes": t.sizes,
                         "sources": t.sources,
+                        "support": t.support.map(|s| format!("{s:?}")),
                     })
                 })
                 .collect();
-            out.insert(name.to_string(), json!(rows));
+            out.insert(section.to_string(), json!(rows));
         }
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
 
-    for (name, chunks) in sections {
-        println!("== unparsed {name}: {} chunks", chunks.len());
-        let mut rows: Vec<_> = chunks.iter().collect();
+    for (section, rows) in sections {
+        println!("== unparsed {section}: {}", rows.len());
+        let mut rows: Vec<_> = rows.iter().collect();
         rows.sort_by(|a, b| b.1.entries.cmp(&a.1.entries).then(a.0.cmp(b.0)));
-        for (chunk, t) in rows {
+        for (name, t) in rows {
             let sizes: Vec<String> = t.sizes.iter().map(u32::to_string).collect();
             let in_gamesys = t.sources.contains("shock2.gam");
             let missions = t.sources.len() - usize::from(in_gamesys);
+            let detail = match t.support {
+                Some(support) => format!("{support:?}"),
+                None if sizes.is_empty() => String::new(),
+                None => format!("sizes [{}]", sizes.join(",")),
+            };
             println!(
-                "{chunk:<14} {:>6} entries  sizes [{}]  {}{missions} missions",
+                "{name:<22} {:>6} entries  {detail:<14} {}{missions} missions",
                 t.entries,
-                sizes.join(","),
                 if in_gamesys { "gam + " } else { "" },
             );
         }

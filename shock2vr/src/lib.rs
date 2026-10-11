@@ -89,6 +89,7 @@ pub mod quest_info;
 pub mod research;
 mod runtime_props;
 mod scripts;
+pub use scripts::{ScriptSupport, script_support};
 mod security_alarm;
 pub mod string_table;
 mod systems;

@@ -1078,6 +1078,8 @@ pub enum ReceptronEffect {
     /// Add radiation exposure scaled by `multiplier`. The player authors this
     /// response to the Radiation stimulus with a multiplier of 1.
     Radiate { multiplier: f32 },
+    /// Add toxin exposure from the incoming (amplified) intensity.
+    Toxin,
     /// Freeze an AI for the incoming intensity times this duration multiplier.
     Freeze { duration_multiplier: i32 },
     /// Interrupt AI actions with the authored motion for intensity × multiplier seconds.
@@ -1087,7 +1089,7 @@ pub enum ReceptronEffect {
     },
     /// Deliver the incoming stimulus to object scripts.
     ScriptMessage,
-    /// An effect the game does not implement yet (EnvSound, add_metaprop, toxin, ...).
+    /// An effect the game does not implement yet (EnvSound, add_metaprop, ...).
     Unhandled(String),
 }
 
@@ -1153,6 +1155,7 @@ impl ReceptronOptions {
             "radiate" => ReceptronEffect::Radiate {
                 multiplier: param_56,
             },
+            _ if name.eq_ignore_ascii_case("toxin") => ReceptronEffect::Toxin,
             _ => ReceptronEffect::Unhandled(name),
         };
 
@@ -3737,6 +3740,14 @@ mod tests {
             other.effect,
             ReceptronEffect::Unhandled("EnvSound".to_string())
         );
+    }
+
+    #[test]
+    fn receptron_toxin_is_a_handled_effect() {
+        for name in ["toxin", "Toxin"] {
+            let opts = read_receptron(receptron_payload(12, name, 0.0, 0.0, 0));
+            assert_eq!(opts.effect, ReceptronEffect::Toxin);
+        }
     }
 
     #[test]

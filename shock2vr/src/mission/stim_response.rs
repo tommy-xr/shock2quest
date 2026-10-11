@@ -262,6 +262,7 @@ pub fn resolve_stim_damage(
                 }
             }
             ReceptronEffect::Radiate { .. }
+            | ReceptronEffect::Toxin
             | ReceptronEffect::Freeze { .. }
             | ReceptronEffect::Stun { .. } => {}
             ReceptronEffect::ScriptMessage | ReceptronEffect::Unhandled(_) => {}
@@ -296,6 +297,7 @@ pub fn resolve_stim_radiation(
                 multiplier += factor;
             }
             ReceptronEffect::Damage { .. }
+            | ReceptronEffect::Toxin
             | ReceptronEffect::Freeze { .. }
             | ReceptronEffect::Stun { .. }
             | ReceptronEffect::ScriptMessage
@@ -695,7 +697,7 @@ pub fn hazard_effects(
         match &response.effect {
             ReceptronEffect::Abort => return vec![],
             ReceptronEffect::Amplify { factor } => amplify *= factor,
-            ReceptronEffect::Unhandled(name) if name.eq_ignore_ascii_case("toxin") => toxin = true,
+            ReceptronEffect::Toxin => toxin = true,
             _ => {}
         }
     }
