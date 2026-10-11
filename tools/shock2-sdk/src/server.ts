@@ -127,6 +127,16 @@ function hookSignalCleanup(): void {
       process.kill(process.pid, signal);
     });
   }
+  // A forced exit (the test runner's --test-force-exit after a timed-out test)
+  // skips every dispose; process.kill is synchronous, so it is safe here.
+  process.once("exit", () => {
+    for (const server of liveServers) {
+      server.killLiveProcessTreeForExitCleanup();
+    }
+    for (const child of pendingChildren) {
+      if (child.exitCode === null && child.signalCode === null) killProcessGroup(child.pid);
+    }
+  });
 }
 
 /** Max lines included in a launch-failure error message. */
@@ -260,6 +270,12 @@ export class GameServer extends Game implements AsyncDisposable {
   /** @internal Used by the module-level signal cleanup hook. */
   killProcessTreeForSignalCleanup(): void {
     this.killProcessTree();
+  }
+
+  /** @internal Exit-hook cleanup: skip a child that already exited, whose
+   * group id may belong to someone else by the time this process exits. */
+  killLiveProcessTreeForExitCleanup(): void {
+    if (!this.childIsDead()) this.killProcessTree();
   }
 
   /** Connect to an already-running debug runtime. shutdown() will stop it; dispose will not spawn-kill anything. */

@@ -21,8 +21,20 @@ if (process.env.SHOCK2_E2E === "1" && !process.env.SHOCK2_RUNTIME_BINARY) {
   }
 }
 
+// node's own default is no timeout, so one hung runtime would stall a serial
+// suite forever. Apply a generous default to tests that set no timeout of
+// their own; explicit per-test timeouts and a caller's --test-timeout win.
+// A timed-out test's body never settles, so its `await using` never disposes
+// the runtime and the open handles would keep the file alive anyway:
+// --test-force-exit ends the file once its tests are done, and the SDK's exit
+// hook kills the runtimes it still owns.
+const args = ["--test-force-exit", ...process.argv.slice(2)];
+if (!args.some(arg => arg === "--test-timeout" || arg.startsWith("--test-timeout="))) {
+  args.unshift(`--test-timeout=${process.env.SHOCK2_TEST_TIMEOUT_MS || 600_000}`);
+}
+
 const grouped = process.platform !== "win32";
-const child = spawn(process.execPath, ["--test", ...process.argv.slice(2)], {
+const child = spawn(process.execPath, ["--test", ...args], {
   stdio: "inherit",
   // Give the runner and workers one owned group. SDK runtimes are detached;
   // their worker's signal hook shuts down those separately owned groups.

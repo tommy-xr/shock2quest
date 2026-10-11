@@ -92,6 +92,9 @@ function spawnRuntime(args: string[]): Runtime {
       process.kill(process.pid, signal);
     });
   }
+  // The test runner force-exits a file after a timed-out test, skipping its
+  // finally blocks.
+  process.once("exit", kill);
 
   return {
     child,

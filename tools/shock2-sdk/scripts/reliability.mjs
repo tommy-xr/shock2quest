@@ -47,7 +47,13 @@ let passed = 0;
 for (let i = 1; i <= count; i++) {
   // Serialize files (--test-concurrency=1): each e2e test spawns its own heavy
   // debug runtime, so running them one at a time avoids resource contention.
-  const args = ["--test", "--test-concurrency=1"];
+  // Same hang protection as run-tests.mjs: a hung runtime fails one test.
+  const args = [
+    "--test",
+    "--test-concurrency=1",
+    "--test-force-exit",
+    `--test-timeout=${process.env.SHOCK2_TEST_TIMEOUT_MS || 600_000}`,
+  ];
   if (pattern) args.push(`--test-name-pattern=${pattern}`);
   args.push(...files);
 

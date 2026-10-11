@@ -131,3 +131,47 @@ test("test wrapper preserves successful and failed verdicts", t => {
     assert.match(result.stdout, fail ? /shock2-sdk tests: FAIL/ : /shock2-sdk tests: PASS/);
   }
 });
+
+test("wrapper fails a hung test and stops its runtime when the test sets no timeout", {
+  skip: process.platform === "win32", timeout: 10_000,
+}, async t => {
+  const root = mkdtempSync(join(tmpdir(), "shock2-runner-timeout-"));
+  const pidFile = join(root, "pid");
+  t.after(() => {
+    if (existsSync(pidFile)) {
+      try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch { /* exited */ }
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+  writeFileSync(join(root, "cargo"), `#!${process.execPath}
+const http = require('node:http');
+const id = process.argv[process.argv.indexOf('--instance-id') + 1];
+require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+const server = http.createServer((req, res) => res.end(JSON.stringify({instance_id:id})));
+server.listen(0, '127.0.0.1', () => console.log('SHOCK2QUEST_PORT port='+server.address().port+' pid='+process.pid+' instance_id='+id));
+`, { mode: 0o755 });
+  const fixture = join(root, "fixture.test.mjs");
+  writeFileSync(fixture, `import { GameServer } from ${JSON.stringify(sdk)};
+import { test } from 'node:test';
+test('hangs holding a runtime', async () => {
+  await GameServer.launch({mission:'fake',repoRoot:${JSON.stringify(root)},launchTimeoutMs:2000});
+  await new Promise(() => setInterval(() => {}, 1000));
+});
+`);
+  const env = environment();
+  env.SHOCK2_TEST_TIMEOUT_MS = "1000";
+  delete env.SHOCK2_RUNTIME_BINARY;
+  env.PATH = root + ":" + env.PATH;
+  const child = spawn(process.execPath, [runner, fixture], { env });
+  // SIGTERM the wrapper so it also stops its detached runner group.
+  t.after(() => child.kill("SIGTERM"));
+  let output = "";
+  child.stdout.on("data", chunk => { output += chunk; });
+  child.stderr.on("data", chunk => { output += chunk; });
+  assert.notEqual(await new Promise(resolve => child.once("exit", resolve)), 0);
+  assert.match(output, /timed out after 1000ms/);
+  assert.match(output, /shock2-sdk tests: FAIL/);
+  const pid = readFileSync(pidFile, "utf8");
+  const status = spawnSync("ps", ["-o", "stat=", "-p", pid], { encoding: "utf8" }).stdout.trim();
+  assert.ok(status === "" || status.startsWith("Z"), `runtime ${pid} outlived its test file: ${status}`);
+});
