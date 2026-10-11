@@ -60,7 +60,19 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
       for (const [part, name] of Object.entries(ROOTS[hand])) {
         // Component meshes hang under the button's "<name>_pressed_value" node.
         const node = root.getObjectByName(`${name}_pressed_value`);
-        if (!node) continue;
+        if (!node) {
+          // The Touch Plus profile omits Menu. Keep its recorded presses and
+          // mode highlights visible as a labeled overlay instead of dropping it.
+          if (hand === "L" && part === "menu") {
+            const indicator = document.createElement("span");
+            indicator.textContent = "LEFT MENU";
+            indicator.style.cssText = "position:absolute;left:12px;bottom:12px;padding:6px 10px;border:1px solid;border-radius:4px;background:#101820;font:600 12px monospace;letter-spacing:1px;pointer-events:none";
+            if (getComputedStyle(container).position === "static") container.style.position = "relative";
+            container.appendChild(indicator);
+            parts[part] = { meshes: [], responses: [], indicator };
+          }
+          continue;
+        }
         const meshes = [];
         node.traverse((o) => {
           if (!o.isMesh) return;
@@ -80,12 +92,22 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
       apply();
     });
 
+  function highlight({ meshes, indicator }, on) {
+    meshes.forEach((m) => (m.material = on ? m.userData.hot : m.userData.base));
+    if (indicator) {
+      indicator.dataset.active = String(on);
+      indicator.style.color = on ? accent : "#8b99a3";
+      indicator.style.borderColor = on ? accent : "#46535d";
+      indicator.style.boxShadow = on ? `0 0 12px ${accent}` : "none";
+    }
+  }
+
   function apply() {
     for (const [hand, { parts }] of Object.entries(hands)) {
       const hot = new Set(mode ? mode.hot[hand] : []);
-      for (const [part, { meshes, responses }] of Object.entries(parts)) {
-        const on = hot.has(part);
-        meshes.forEach((m) => (m.material = on ? m.userData.hot : m.userData.base));
+      for (const [part, p] of Object.entries(parts)) {
+        const { responses } = p;
+        highlight(p, hot.has(part));
         // Hot parts are re-posed by the next frame; a replayed stick click is not.
         responses.forEach((r) => { r.value.position.copy(r.rest.p); r.value.quaternion.copy(r.rest.q); });
       }
@@ -103,7 +125,8 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
   const replay = ({ video, timeline }) => {
     const state = sampleInputs(timeline, video.currentTime);
     for (const [hand, { parts }] of Object.entries(hands)) {
-      for (const [part, { meshes, responses }] of Object.entries(parts)) {
+      for (const [part, p] of Object.entries(parts)) {
+        const { meshes, responses } = p;
         const s = state[hand][part];
         responses.forEach((r, i) => {
           if (s) pose(r, s.pose[i]);
@@ -111,8 +134,8 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
         });
         meshes.forEach((m) => {
           m.userData.hot.emissiveIntensity = 0.9; // the idle animation pulses it
-          m.material = s?.pressed ? m.userData.hot : m.userData.base;
         });
+        highlight(p, !!s?.pressed);
       }
     }
   };
