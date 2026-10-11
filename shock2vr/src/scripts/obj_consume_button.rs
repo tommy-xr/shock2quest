@@ -1,11 +1,16 @@
 use dark::properties::{
-    ObjectState, PropConsumeType, PropModelName, PropObjState, PropSymName, PropTweqModelConfig,
+    ObjectState, PropConsumeType, PropLockMsg, PropModelName, PropObjState, PropSymName,
+    PropTweqModelConfig,
 };
 use engine::audio::AudioHandle;
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, View, World};
 
-use crate::{physics::PhysicsWorld, scripts::script_util::play_environmental_sound, time::Time};
+use crate::{
+    physics::PhysicsWorld,
+    scripts::script_util::{localized_property_text, play_environmental_sound},
+    time::Time,
+};
 
 use super::{
     Effect, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
@@ -84,7 +89,10 @@ impl Script for ObjConsumeButton {
                     .find(|item| can_consume_entity(world, entity_id, *item))
                 {
                     Some(item) => self.consume_if_eligible(world, entity_id, item),
-                    None => Effect::NoEffect,
+                    // Without the item, the receptor names what it needs.
+                    None => locked_message(world, entity_id)
+                        .map(|text| Effect::ShowMessage { text })
+                        .unwrap_or(Effect::NoEffect),
                 }
             }
             MessagePayload::TurnOn { from }
@@ -175,6 +183,20 @@ fn consume(world: &World, entity_id: EntityId, entity_to_consume: EntityId) -> E
     Effect::combine(vec![switch_link_efect, destroy_consumee, sound_effect])
 }
 
+/// The receptor's `P$LockMsg` ("Script\\Locked Message"), resolved through
+/// LOCKMSG.STR - e.g. medsci1's aux power slot asks for a charged power cell.
+/// A used receptor needs nothing more, so it stays silent. Any carried item
+/// that fails `can_consume_entity` counts as missing; no shipped consume type
+/// (power cell, sim chips) can be unresearched, so that never misleads.
+fn locked_message(world: &World, entity_id: EntityId) -> Option<String> {
+    if receptor_is_used(world, entity_id) {
+        return None;
+    }
+    let v_lock_msg = world.borrow::<View<PropLockMsg>>().ok()?;
+    let raw = v_lock_msg.get(entity_id).ok()?;
+    localized_property_text(world, &raw.0, "lockmsg.str")
+}
+
 fn can_consume_entity(world: &World, self_id: EntityId, entity_to_consume_id: EntityId) -> bool {
     if receptor_is_used(world, self_id) {
         return false;
@@ -242,6 +264,7 @@ mod tests {
         mission::{GlobalTemplateIdMap, PlayerInfo},
         save_load::{EntitySaveData, to_save_data_with_scripts},
         scripts::{Message, ScriptWorld},
+        string_table::StringTable,
     };
 
     use super::*;
@@ -374,6 +397,41 @@ mod tests {
             loaded_scripts.update(&loaded_world, &PhysicsWorld::new(), &Time::default());
         }
         (before_count.get(), after_count.get())
+    }
+
+    fn frob(world: &World, receptor: EntityId) -> Effect {
+        ObjConsumeButton::new().handle_message(
+            receptor,
+            world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        )
+    }
+
+    #[test]
+    fn frob_without_the_item_shows_the_locked_message() {
+        let mut world = World::new();
+        world.add_unique(StringTable::from_table(
+            "lockmsg.str",
+            HashMap::from([(
+                "auxpower".to_owned(),
+                "Insert charged power cell.".to_owned(),
+            )]),
+        ));
+        let receptor = one_shot_receptor(&mut world);
+        world.add_component(
+            receptor,
+            PropLockMsg("AuxPower: \"Insert charged power cell.\"".to_owned()),
+        );
+
+        assert!(matches!(
+            frob(&world, receptor),
+            Effect::ShowMessage { ref text } if text == "Insert charged power cell."
+        ));
+
+        // Once the receptor shows its final model it needs nothing more.
+        world.add_component(receptor, PropModelName("air_re".to_owned()));
+        assert!(matches!(frob(&world, receptor), Effect::NoEffect));
     }
 
     #[test]

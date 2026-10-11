@@ -1,23 +1,15 @@
-use dark::{importers::resolve_localized_property_string, properties::PropUseMsg};
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use dark::properties::PropUseMsg;
+use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
-use crate::string_table::StringTable;
 
-use super::{Effect, MessagePayload, Script};
+use super::{Effect, MessagePayload, Script, script_util::localized_property_text};
 
-/// Resolve an entity's `P$UseMsg` to the text the player is shown: a key into
-/// USEMSG.STR, or the quoted text the property carries when the key misses.
+/// An entity's `P$UseMsg` text, resolved against USEMSG.STR.
 fn message_text(world: &World, entity_id: EntityId) -> Option<String> {
     let v_use_msg = world.borrow::<View<PropUseMsg>>().ok()?;
     let raw = v_use_msg.get(entity_id).ok()?;
-    let strings = world
-        .borrow::<UniqueView<StringTable>>()
-        .ok()
-        .and_then(|strings| strings.table("usemsg.str").cloned())
-        .unwrap_or_default();
-    let text = resolve_localized_property_string(&raw.0, &strings);
-    (!text.is_empty()).then_some(text)
+    localized_property_text(world, &raw.0, "usemsg.str")
 }
 
 /// `TrapMessage`: on a switch-on, puts its own `P$UseMsg` text on the HUD

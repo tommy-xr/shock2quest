@@ -4034,6 +4034,7 @@ impl MissionCore {
             &[
                 "chargen.str",
                 "usemsg.str",
+                "lockmsg.str",
                 "misc.str",
                 "stathelp.str",
                 "skilhelp.str",
