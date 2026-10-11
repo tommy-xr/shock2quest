@@ -41,7 +41,7 @@ mod energy_weapon;
 mod exp_cookie;
 mod free_modify;
 mod frob_qb;
-mod goo_projectile;
+pub(crate) mod goo_projectile;
 pub mod gui;
 mod hazard_objects;
 pub mod healing_item;

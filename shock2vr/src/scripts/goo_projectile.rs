@@ -55,7 +55,7 @@ impl Script for GooProjectile {
 }
 
 /// The original's point-vs-not-special collision filter, for one pair.
-fn passes_through(world: &World, entity_id: EntityId, other: EntityId) -> bool {
+pub(crate) fn passes_through(world: &World, entity_id: EntityId, other: EntityId) -> bool {
     let dimensions = world.borrow::<View<PropPhysDimensions>>().unwrap();
     let phys_types = world.borrow::<View<PropPhysType>>().unwrap();
     let point_vs_not_special = |entity| {
