@@ -1,5 +1,9 @@
 # Development
 
+For player controls, see the [Quest player guide](docs/playing.md) or
+[desktop runtime guide](runtimes/desktop_runtime/README.md). See the
+[development tools guide](tools/README.md) for tool descriptions and examples.
+
 ## Source Code Overview
 
 - `shock2quest`

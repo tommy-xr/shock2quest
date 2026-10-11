@@ -72,7 +72,7 @@ changes; APK updates do not require copying them again.
 
 Open **Shock2Quest** from your headset's app library (look under **Unknown
 Sources** for sideloaded apps). Accept file-access permission if requested.
-See the [README controls](https://github.com/tommy-xr/shock2quest#controls).
+See the [Quest player guide](https://github.com/tommy-xr/shock2quest/blob/main/docs/playing.md) for controls and VR interactions.
 
 To update, download the newer APK and run `adb install -r` with its filename.
 If Android reports `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, your installed build
