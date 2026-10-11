@@ -552,6 +552,12 @@ pub struct PropObjShortName(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropUseMsg(pub String);
 
+/// `P$LockMsg` ("Script\\Locked Message"): what a locked object tells the
+/// player - a key into LOCKMSG.STR or quoted text, like `P$UseMsg`. Shipped
+/// data authors it only on `ObjConsumeButton` receptors (aux power, sim chips).
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropLockMsg(pub String);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPhysState {
     pub position: Vector3<f32>,
@@ -2293,6 +2299,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$UseMsg",
             read_variable_length_string,
             PropUseMsg,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$LockMsg",
+            read_variable_length_string,
+            PropLockMsg,
             accumulator::latest,
         ),
         define_prop(

@@ -962,6 +962,22 @@ pub fn get_first_link_of_type(
     all_links.get(0).copied()
 }
 
+/// Resolve a localized string property (`P$UseMsg`, `P$LockMsg`, ...) to the
+/// text the player is shown: a key into `table`, or the quoted text the value
+/// carries when the key misses. `None` when that leaves nothing to show.
+pub fn localized_property_text(world: &World, raw: &str, table: &str) -> Option<String> {
+    let empty = HashMap::new();
+    let strings = world
+        .borrow::<UniqueView<crate::string_table::StringTable>>()
+        .ok();
+    let table = strings
+        .as_ref()
+        .and_then(|strings| strings.table(table))
+        .unwrap_or(&empty);
+    let text = dark::importers::resolve_localized_property_string(raw, table);
+    (!text.is_empty()).then_some(text)
+}
+
 /// Every item the player is currently carrying: each wielded/hand-held entity
 /// plus everything nested under it, and the backpack (inventory) entity's
 /// contents - following `Contains` links to depth 2 (mirrors the item set the
