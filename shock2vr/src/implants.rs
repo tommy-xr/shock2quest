@@ -126,12 +126,39 @@ pub fn validate_socket(world: &World, entity: EntityId, slot: usize) -> Result<(
     Ok(())
 }
 
-pub fn effective_stats(world: &World) -> Option<PlayerStats> {
+/// The character sheet with the start marker's `BaseStats` as a per-stat
+/// floor. A new player (new game or direct launch) is seeded from its
+/// mission's marker - Earth's PSI 5 for the training booths - the same way
+/// its weapon and tech skills are; the sheet itself stays the career record.
+pub fn trained_stats(world: &World) -> Option<PlayerStats> {
     let mut stats = world
         .borrow::<UniqueView<QuestInfo>>()
         .ok()?
         .player_stats()
         .clone();
+    let marker = world
+        .borrow::<UniqueView<crate::mission::PlayerInfo>>()
+        .ok()
+        .and_then(|player| {
+            world
+                .borrow::<shipyard::View<dark::properties::PropBaseStats>>()
+                .ok()?
+                .get(player.entity_id)
+                .ok()
+                .copied()
+        });
+    if let Some(dark::properties::PropBaseStats([str, end, psi, agi, cyb])) = marker {
+        stats.strength = stats.strength.max(str);
+        stats.endurance = stats.endurance.max(end);
+        stats.psionic_ability = stats.psionic_ability.max(psi);
+        stats.agility = stats.agility.max(agi);
+        stats.cyber_affinity = stats.cyber_affinity.max(cyb);
+    }
+    Some(stats)
+}
+
+pub fn effective_stats(world: &World) -> Option<PlayerStats> {
+    let mut stats = trained_stats(world)?;
     for id in equipped(world)
         .into_iter()
         .flatten()

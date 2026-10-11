@@ -376,6 +376,12 @@ impl PlayerStats {
         }
     }
 
+    /// Raise `stat` to at least `level` (never lowers it).
+    pub fn lift_stat_to(&mut self, stat: Stat, level: i32) {
+        let value = self.stat_mut(stat);
+        *value = (*value).max(level);
+    }
+
     /// Current level of a trainable skill.
     pub fn skill_level(&self, skill: Skill) -> i32 {
         match skill {
