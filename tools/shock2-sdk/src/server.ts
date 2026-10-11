@@ -134,7 +134,7 @@ function hookSignalCleanup(): void {
       server.killProcessTreeForSignalCleanup();
     }
     for (const child of pendingChildren) {
-      killProcessGroup(child.pid);
+      if (child.exitCode === null && child.signalCode === null) killProcessGroup(child.pid);
     }
   });
 }
@@ -269,7 +269,8 @@ export class GameServer extends Game implements AsyncDisposable {
 
   /** @internal Used by the module-level signal cleanup hook. */
   killProcessTreeForSignalCleanup(): void {
-    this.killProcessTree();
+    // A reaped child's pid (and group id) may already belong to someone else.
+    if (!this.childIsDead()) this.killProcessTree();
   }
 
   /** Connect to an already-running debug runtime. shutdown() will stop it; dispose will not spawn-kill anything. */
