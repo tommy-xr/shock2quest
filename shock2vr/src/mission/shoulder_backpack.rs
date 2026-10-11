@@ -23,6 +23,8 @@ pub(super) struct ShoulderBackpack {
     pub near_slot: [Option<usize>; 2],
     pub draws: [Option<usize>; 2],
     pub blocks_grab: [bool; 2],
+    /// Which slots hold a recallable weapon; set by the mission before `update`.
+    pub stocked: [bool; 2],
     draw_pressed: [bool; 2],
     consumed: [bool; 2],
     pub entered: [bool; 2],
@@ -41,6 +43,7 @@ impl Default for ShoulderBackpack {
             near_slot: [None; 2],
             draws: [None; 2],
             blocks_grab: [false; 2],
+            stocked: [false; 2],
             draw_pressed: [true; 2],
             consumed: [false; 2],
             entered: [false; 2],
@@ -161,9 +164,11 @@ impl ShoulderBackpack {
                     centers
                         .iter()
                         .enumerate()
-                        .filter(|(_, c)| {
-                            (hand.position - **c).magnitude2()
-                                <= (radius() + super::body_inventory::hand_radius()).powi(2)
+                        // Empty hands can only interact with stocked slots.
+                        .filter(|(slot, c)| {
+                            (held[i].is_some() || self.stocked[*slot])
+                                && (hand.position - **c).magnitude2()
+                                    <= (radius() + super::body_inventory::hand_radius()).powi(2)
                         })
                         .min_by(|(_, a), (_, b)| {
                             (hand.position - **a)
@@ -308,7 +313,34 @@ mod tests {
         let mut input = InputContext::default();
         input.left_hand.position = vec3(-0.3, 1.0, -0.4);
         input.right_hand.position = vec3(0.3, 1.0, -0.4);
-        (ShoulderBackpack::default(), input, item)
+        let tracker = ShoulderBackpack {
+            stocked: [true; 2],
+            ..Default::default()
+        };
+        (tracker, input, item)
+    }
+
+    #[test]
+    fn empty_hands_ignore_empty_shoulders() {
+        let (mut tracker, mut input, item) = fixture();
+        tracker.stocked = [false; 2];
+        tracker.update(&input, [None; 2], true, 0.016);
+        input.left_hand.position = tracker.centers.unwrap()[1];
+        for squeeze in [0.0, 1.0, 1.0, 0.0] {
+            input.left_hand.squeeze_value = squeeze;
+            tracker.update(&input, [None; 2], true, 0.016);
+            assert_eq!(
+                tracker.near, [false; 2],
+                "empty slots cannot freeze heading"
+            );
+            assert_eq!(tracker.draws, [None; 2]);
+            assert!(
+                !tracker.blocks_grab[0],
+                "empty slot cannot claim a world grab"
+            );
+        }
+        tracker.update(&input, [Some(item), None], true, 0.016);
+        assert!(tracker.near[0], "a held item can still be stowed");
     }
 
     #[test]

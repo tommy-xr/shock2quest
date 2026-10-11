@@ -5,14 +5,14 @@ import { aimVrHandAt, aimVrHandAtCanvas, normalize, quatConjugate, quatFromTo, q
 
 const enabled = process.env.SHOCK2_E2E === "1";
 const launch = (mission = "debug_interactions") => GameServer.launch({ mission, debugFlags: ["--vr"] });
-async function reach(game: GameServer, hand: "left" | "right", slot: number) {
+async function reach(game: GameServer, hand: "left" | "right", slot: number, near: number | null = slot) {
   const p = (await game.info()).player;
   const center = p.hand_feedback?.chest_slots?.centers?.[slot];
   assert.ok(center);
   await game.input.set(`${hand}_hand.position`, quatRotate(quatConjugate(p.rotation), sub(center, p.position)));
   await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
   await game.step({ frames: 5 });
-  assert.equal((await game.info()).player.hand_feedback?.chest_slots?.near[hand === "left" ? 0 : 1], slot);
+  assert.equal((await game.info()).player.hand_feedback?.chest_slots?.near[hand === "left" ? 0 : 1], near);
 }
 async function grab(game: GameServer, template: number, hand: "left" | "right" = "right") {
   const item = (await game.entities.list()).entities.find(e => e.template_id === template);
@@ -278,25 +278,26 @@ test("an empty chest mount passes world grabs through while an occupied mount ow
   const hypo = entities.find(e => e.template_id === -52);
   const other = entities.find(e => e.template_id === -57);
   assert.ok(hypo && other);
-  const aimThroughMount = async (target: typeof hypo) => {
+  // An empty hand ignores an empty mount entirely; an occupied one claims it.
+  const aimThroughMount = async (target: typeof hypo, near: number | null) => {
     const before = (await game.info()).player;
     await game.player.teleport({ x: target.position[0] - 0.18, y: before.position[1], z: target.position[2] + 0.6 });
     await game.step({ frames: 3 });
-    await reach(game, "right", 0);
+    await reach(game, "right", 0, near);
     const player = (await game.info()).player;
     const center = player.hand_feedback!.chest_slots!.centers![0];
     const rotation = quatMultiply(quatConjugate(player.rotation), quatFromTo([0, 0, -1], normalize(sub(target.position, center))));
     await game.input.set("right_hand.rotation", rotation);
     await game.step({ frames: 3 });
-    assert.equal((await game.info()).player.hand_feedback!.chest_slots!.near[1], 0, "world grab starts inside the chest target");
+    assert.equal((await game.info()).player.hand_feedback!.chest_slots!.near[1], near, "world grab starts inside the chest target");
   };
-  await aimThroughMount(hypo);
+  await aimThroughMount(hypo, null);
   await game.input.set("right_hand.squeeze", 1);
   await game.step({ frames: 5 });
   assert.equal((await game.info()).player.right_hand_entity_id, hypo.id, "empty mount must not swallow the world grab");
   await stow(game, "right", 0);
   assert.equal((await game.info()).player.hand_feedback!.chest_slots!.items[0], hypo.id);
-  await aimThroughMount(other);
+  await aimThroughMount(other, 0);
   await game.input.set("right_hand.squeeze", 1);
   await game.step({ frames: 5 });
   assert.equal((await game.info()).player.right_hand_entity_id, hypo.id, "occupied mount draws its item instead of the world item behind it");
