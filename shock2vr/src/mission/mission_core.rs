@@ -7249,6 +7249,10 @@ impl MissionCore {
                             });
                         }
                     } else if !inspect_only && super::mfd_device::opens_panel(&self.world, entity) {
+                        effects.extend(crate::scripts::world_frob::world_frob_feedback(
+                            &self.world,
+                            entity,
+                        ));
                         self.script_world.dispatch(Message {
                             to: entity,
                             payload: MessagePayload::Frob,
@@ -7268,6 +7272,10 @@ impl MissionCore {
                         self.flat_ui.utilities.inspect_entity(entity);
                     }
                 } else {
+                    effects.extend(crate::scripts::world_frob::world_frob_feedback(
+                        &self.world,
+                        entity,
+                    ));
                     self.script_world.dispatch(Message {
                         to: entity,
                         payload: MessagePayload::Frob,
@@ -18671,6 +18679,7 @@ impl MissionCore {
         msgs: Vec<VirtualHandEffect>,
     ) -> Vec<Effect> {
         let mut deferred = Vec::new();
+        let mut world_frobbed = std::collections::HashSet::new();
         for msg in msgs {
             let world_pickup = matches!(msg, VirtualHandEffect::StoreWorldPickup { .. });
             match msg {
@@ -18705,6 +18714,16 @@ impl MissionCore {
                             target: Some(message.to),
                         });
                     } else {
+                        // Both VR hands can frob one object in a frame;
+                        // retail has one frob input, so it gets one feedback.
+                        if matches!(message.payload, MessagePayload::Frob)
+                            && world_frobbed.insert(message.to)
+                        {
+                            deferred.extend(crate::scripts::world_frob::world_frob_feedback(
+                                &self.world,
+                                message.to,
+                            ));
+                        }
                         self.script_world.dispatch(message);
                     }
                 }

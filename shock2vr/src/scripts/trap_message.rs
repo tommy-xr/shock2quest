@@ -1,16 +1,8 @@
-use dark::properties::PropUseMsg;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, World};
 
 use crate::physics::PhysicsWorld;
 
-use super::{Effect, MessagePayload, Script, script_util::localized_property_text};
-
-/// An entity's `P$UseMsg` text, resolved against USEMSG.STR.
-fn message_text(world: &World, entity_id: EntityId) -> Option<String> {
-    let v_use_msg = world.borrow::<View<PropUseMsg>>().ok()?;
-    let raw = v_use_msg.get(entity_id).ok()?;
-    localized_property_text(world, &raw.0, "usemsg.str")
-}
+use super::{Effect, MessagePayload, Script, world_frob::use_message_text};
 
 /// `TrapMessage`: on a switch-on, puts its own `P$UseMsg` text on the HUD
 /// status-message line (eng2's broken lift buttons). Switch-off shows nothing,
@@ -32,7 +24,7 @@ impl Script for TrapMessage {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::TurnOn { from: _ } => match message_text(world, entity_id) {
+            MessagePayload::TurnOn { from: _ } => match use_message_text(world, entity_id) {
                 Some(text) => Effect::ShowMessage { text },
                 None => Effect::NoEffect,
             },
@@ -46,6 +38,7 @@ mod tests {
     use super::*;
     use crate::physics::PhysicsWorld;
     use crate::string_table::StringTable;
+    use dark::properties::PropUseMsg;
 
     fn world_with(raw: &str, strings: &[(&str, &str)]) -> (World, EntityId) {
         let mut world = World::new();

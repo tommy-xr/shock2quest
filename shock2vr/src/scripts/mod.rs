@@ -130,6 +130,7 @@ mod tweqable;
 mod use_sound;
 mod vaporize_inventory;
 pub(crate) mod weapon_script;
+pub mod world_frob;
 use std::{
     collections::{HashMap, HashSet},
     fmt,
