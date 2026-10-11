@@ -63,17 +63,26 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
       const outward = axis.map(v=>v / length * .25) as Vec3;
       const yaw = 100 * Math.PI / 180;
       const swept = quatRotate([0,Math.sin(yaw / 2),0,Math.cos(yaw / 2)],axis);
-      let crossedChestMount = false;
-      for (const offset of [outward,sub(swept,axis),[.25,0,0],[-.25,0,0]] as Vec3[]) {
+      // The chest mounts sit on the body plane, so reach the nearer one
+      // explicitly rather than relying on the sweep to pass through it. An
+      // empty mount ignores an empty support hand (#2103), so it must neither
+      // claim the hand nor break the support grip.
+      const chestCenters = (await game.info()).player.hand_feedback?.chest_slots?.centers ?? [];
+      const chest = (chestCenters as Vec3[])
+        .slice().sort((a,b) => Math.hypot(...sub(a,socket)) - Math.hypot(...sub(b,socket)))[0];
+      const sweep = [outward,sub(swept,axis),[.25,0,0],[-.25,0,0]] as Vec3[];
+      if (model === "atek_h") {
+        assert.ok(chest,"VR player publishes chest mount centers");
+        sweep.push(sub(chest,socket));
+      }
+      for (const offset of sweep) {
         await place(add(socket,offset));
         await game.step({frames:1});
         const player = (await game.info()).player;
-        crossedChestMount ||= player.hand_feedback?.chest_slots?.near[other === "left" ? 0 : 1] != null;
+        assert.equal(player.hand_feedback?.chest_slots?.near[other === "left" ? 0 : 1] ?? null, null,
+          "an empty chest mount does not claim the support hand");
         assert.equal(player.hand_grips.find(g => g.hand === primary)!.support!.attached,true,
           "fast support movement retains the grip, including across a chest mount");
-      }
-      if (model === "atek_h") {
-        assert.ok(crossedChestMount, "pistol sweep exercises chest mount input arbitration");
       }
       await place(add(socket,[.07,0,0]));
       await game.step({frames:30});
