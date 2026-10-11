@@ -436,6 +436,15 @@ pub struct RuntimePropProjectileRayOrigin(pub Point3<f32>);
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropPlayerFiredProjectile;
 
+/// The AI or turret that fired this projectile. The muzzle can start inside
+/// the shooter's own collision sphere (a turret's authored sphere encloses its
+/// barrel), so a fast (raycast) shot skips its launcher and the launcher's
+/// hitboxes, and a physical shot's contacts with its launcher are filtered out
+/// at launch and again after a load. Saved in
+/// `EntitySaveData::projectile_launchers`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropProjectileLauncher(pub shipyard::EntityId);
+
 /// Marks an object created through Dark's `launchProjectile` path. Its
 /// authored physics model owns idle velocity; an empty skeletal animation
 /// must not zero the launch, and save/load must recreate it as a dynamic body.

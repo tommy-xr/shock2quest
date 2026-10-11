@@ -12,7 +12,8 @@ use crate::{
     mission::entity_creator::CreateEntityOptions,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::{
-        RuntimePropPlayerFiredProjectile, RuntimePropProjectileRayOrigin, RuntimePropTransform,
+        RuntimePropPlayerFiredProjectile, RuntimePropProjectileLauncher,
+        RuntimePropProjectileRayOrigin, RuntimePropTransform,
     },
     scripts::script_util::{choose_impact_spang, play_impact_sound, projectile_contact_effects},
     time::Time,
@@ -72,6 +73,10 @@ impl Script for InternalFastProjectileScript {
         // shot spang on the shooter before it travels. AI and turret
         // projectiles carry no marker and can still hit the player.
         let can_hit_player = !is_player_fired(world, entity_id);
+        let launcher = world
+            .borrow::<View<RuntimePropProjectileLauncher>>()
+            .ok()
+            .and_then(|launchers| launchers.get(entity_id).ok().map(|launcher| launcher.0));
         let maybe_hit_spot = projectile_ray_cast(
             start_point,
             forward,
@@ -79,6 +84,7 @@ impl Script for InternalFastProjectileScript {
             distance,
             world,
             can_hit_player,
+            launcher,
         );
 
         if let Some(RayCastResult {
@@ -245,6 +251,8 @@ fn projectile_ray_cast(
     distance: f32,
     world: &World,
     can_hit_player: bool,
+    // The AI or turret that fired the shot (see `RuntimePropProjectileLauncher`).
+    launcher: Option<EntityId>,
 ) -> Option<RayCastResult> {
     let player_group = if can_hit_player {
         InternalCollisionGroups::PLAYER
@@ -265,7 +273,12 @@ fn projectile_ray_cast(
     // pass finds one, that is a genuine limb hit and wins.
     let mut passed_through: Vec<EntityId> = Vec::new();
     for pass in 0..=MAX_PASS_THROUGH {
-        let is_not_passed_through = |entity_id: EntityId| !passed_through.contains(&entity_id);
+        let is_not_passed_through = |entity_id: EntityId| {
+            !passed_through.contains(&entity_id)
+                && !launcher.is_some_and(|launcher| {
+                    entity_id == launcher || hitbox_belongs_to_entity(world, entity_id, launcher)
+                })
+        };
         let maybe_hit_spot = physics.ray_cast2_with_entity_filter(
             start_point,
             forward,
@@ -462,6 +475,7 @@ mod tests {
                 2.0,
                 &world,
                 false,
+                None,
             )
             .and_then(|hit| hit.maybe_entity_id)
         };
@@ -510,6 +524,7 @@ mod tests {
             10.0,
             &world,
             true,
+            None,
         );
 
         assert_eq!(
@@ -529,12 +544,58 @@ mod tests {
             10.0,
             &world,
             false,
+            None,
         );
 
         assert_eq!(
             hit.and_then(|result| result.maybe_entity_id),
             Some(target),
             "a player-fired ray must reach the target, not the shooter",
+        );
+    }
+
+    /// A turret's muzzle can sit inside its own authored collision sphere, so
+    /// a solid raycast from it reports the turret at distance 0 (#1864 sized
+    /// the spheres to their true radii). The launcher must be skipped.
+    #[test]
+    fn an_ai_shot_skips_the_launcher_whose_collider_contains_the_muzzle() {
+        let mut physics = PhysicsWorld::new();
+        let player_entity = EntityId::from_inner(1).unwrap();
+        let mut player = physics.create_player(vec3(0.0, 0.0, 6.0), player_entity);
+        let turret = EntityId::from_inner(2).unwrap();
+        physics.add_kinematic(
+            turret,
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(2.0, 2.0, 2.0),
+            crate::physics::CollisionGroup::selectable(),
+            false,
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let world = World::new();
+        let cast = |launcher| {
+            projectile_ray_cast(
+                point3(0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, 1.0),
+                &physics,
+                10.0,
+                &world,
+                true,
+                launcher,
+            )
+            .and_then(|result| result.maybe_entity_id)
+        };
+
+        assert_eq!(
+            cast(None),
+            Some(turret),
+            "fixture: the muzzle is inside the turret"
+        );
+        assert_eq!(
+            cast(Some(turret)),
+            Some(player_entity),
+            "the shot must reach the player, not its own turret",
         );
     }
 
@@ -611,6 +672,7 @@ mod tests {
             20.0,
             &world,
             false,
+            None,
         );
 
         assert_eq!(
@@ -684,6 +746,7 @@ mod tests {
             20.0,
             &world,
             false,
+            None,
         );
 
         assert_eq!(
@@ -760,6 +823,7 @@ mod tests {
             20.0,
             &world,
             false,
+            None,
         );
 
         assert_eq!(
@@ -819,6 +883,7 @@ mod tests {
             20.0,
             &world,
             false,
+            None,
         );
 
         assert_eq!(

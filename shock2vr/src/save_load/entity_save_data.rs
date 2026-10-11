@@ -71,6 +71,9 @@ pub struct EntitySaveData {
     /// This is separate from launch provenance: enemy shots are launched too.
     #[serde(default)]
     pub player_fired_projectiles: Vec<u64 /* entity id */>,
+    /// AI/turret shots keep skipping their launcher after load.
+    #[serde(default)]
+    pub projectile_launchers: Vec<(u64 /* projectile */, u64 /* launcher */)>,
     #[serde(default)]
     pub projectile_velocities: HashMap<u64, cgmath::Vector3<f32>>,
     #[serde(default)]
@@ -110,6 +113,7 @@ impl EntitySaveData {
             canonical_template_ids: HashMap::new(),
             launched_projectiles: Vec::new(),
             player_fired_projectiles: Vec::new(),
+            projectile_launchers: Vec::new(),
             projectile_velocities: HashMap::new(),
             thrown_props: HashMap::new(),
             meta_properties: HashMap::new(),
@@ -277,6 +281,20 @@ impl EntitySaveData {
                 world.add_component(*new_entity_id, RuntimePropPlayerFiredProjectile);
             }
         }
+        for (old_projectile, old_launcher) in &self.projectile_launchers {
+            let remap = |id: &u64| {
+                old_entity_id_to_new_entity_id
+                    .get(&EntityId::from_inner(*id).unwrap())
+                    .copied()
+            };
+            if let (Some(projectile), Some(launcher)) = (remap(old_projectile), remap(old_launcher))
+            {
+                world.add_component(
+                    projectile,
+                    crate::runtime_props::RuntimePropProjectileLauncher(launcher),
+                );
+            }
+        }
         for (old_entity_id, meta_properties) in &self.meta_properties {
             let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
             if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
@@ -323,6 +341,42 @@ mod tests {
         let markers = restored.borrow::<View<RuntimePropSearched>>().unwrap();
         assert!(markers.contains(remapped[&searched]));
         assert!(!markers.contains(remapped[&unsearched]));
+    }
+
+    #[test]
+    fn an_ai_shot_keeps_its_launcher_across_a_save() {
+        use crate::mission::{GlobalTemplateIdMap, PlayerInfo};
+        use crate::runtime_props::{RuntimePropDoNotSerialize, RuntimePropProjectileLauncher};
+        let mut world = World::new();
+        let player = world.add_entity(RuntimePropDoNotSerialize);
+        let inventory = world.add_entity(());
+        let turret = world.add_entity(());
+        let shot = world.add_entity((
+            RuntimePropLaunchedProjectile,
+            RuntimePropProjectileLauncher(turret),
+        ));
+        world.add_unique(GlobalTemplateIdMap(HashMap::new()));
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            inventory_entity_id: inventory,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+        });
+        let (saved, _) = crate::save_load::to_save_data(&world);
+        let encoded = serde_json::to_string(&saved).unwrap();
+        let decoded: EntitySaveData = serde_json::from_str(&encoded).unwrap();
+        let mut restored = World::new();
+        for _ in 0..20 {
+            restored.add_entity(());
+        }
+        let (_, remapped) = decoded.instantiate(&mut restored);
+        let launchers = restored
+            .borrow::<View<RuntimePropProjectileLauncher>>()
+            .unwrap();
+        assert_ne!(remapped[&shot], shot);
+        assert_eq!(launchers.get(remapped[&shot]).unwrap().0, remapped[&turret]);
     }
 
     #[test]

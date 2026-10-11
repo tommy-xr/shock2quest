@@ -268,6 +268,13 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, RuntimePropPlayerFiredProjectile);
     }
 
+    if let Some(launcher) = additional_options.projectile_launcher {
+        world.add_component(
+            entity_id,
+            crate::runtime_props::RuntimePropProjectileLauncher(launcher),
+        );
+    }
+
     if additional_options.launch_projectile {
         world.add_component(entity_id, RuntimePropLaunchedProjectile);
     }
@@ -2204,6 +2211,9 @@ pub struct CreateEntityOptions {
     /// The player fired this projectile, so its collision ray must skip the
     /// player's own capsule (see `RuntimePropPlayerFiredProjectile`).
     pub player_fired_projectile: bool,
+    /// The AI or turret that fired this projectile
+    /// (see `RuntimePropProjectileLauncher`).
+    pub projectile_launcher: Option<EntityId>,
     /// Create the authored physics model as a launched dynamic body. Dark's
     /// Tweq emitter calls `launchProjectile`; this keeps frobbable emitted
     /// archetypes from being reduced to kinematic selection colliders.
@@ -2237,6 +2247,7 @@ impl Default for CreateEntityOptions {
             projectile_launch_origin: None,
             projectile_weapon: None,
             player_fired_projectile: false,
+            projectile_launcher: None,
             launch_projectile: false,
             authored_velocity_frame: None,
             shot_modifiers: None,

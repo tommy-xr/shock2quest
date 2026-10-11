@@ -10279,6 +10279,21 @@ impl MissionCore {
                 physics.ignore_collision_pairs(created_entity.entity_id, &others);
             }
         }
+        // The muzzle can sit inside the launcher's own sphere (see
+        // `RuntimePropProjectileLauncher`), at launch and after a load; the
+        // pair is dropped again when either body is removed. Fast shots have
+        // no body and skip the launcher in their own raycast.
+        let launcher = world
+            .borrow::<View<crate::runtime_props::RuntimePropProjectileLauncher>>()
+            .unwrap()
+            .get(created_entity.entity_id)
+            .ok()
+            .copied();
+        if let Some(launcher) =
+            launcher.filter(|_| physics.get_velocity(created_entity.entity_id).is_some())
+        {
+            physics.ignore_collision_pairs(created_entity.entity_id, &[launcher.0]);
+        }
         ret
     }
 
