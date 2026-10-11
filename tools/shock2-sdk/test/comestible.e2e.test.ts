@@ -6,6 +6,7 @@ import type { EntitySummary, UiElement } from "../src/types.js";
 import { earthWorldUse } from "./helpers/earth-world-use.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { clickUiElement } from "./helpers/ui.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
 
 // Production Earth regression for #965. The two concrete mission objects are
@@ -94,6 +95,7 @@ test(
     assert.ok(carried.items.some((item) => item.entity_id === juice.id));
     assert.ok(carried.items.some((item) => item.entity_id === chips.id));
 
+    await installEarthCyberInterface(game);
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
 

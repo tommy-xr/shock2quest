@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { cycleToWeapon, fireOnce } from "./helpers/weapon.js";
 import { aimVrHandAt, quatFromTo } from "./helpers/vr-hand.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 for (const vr of [false, true]) for (const setting of [0, 1]) {
@@ -68,6 +69,7 @@ for (const setting of [0, 1]) {
   test(`deployed proximity setting ${setting} survives save/load at rest`,
     {skip: !enabled, timeout: 180_000}, async () => {
     await using game = await GameServer.launch({mission: "earth.mis"});
+    await installEarthCyberInterface(game);
     try {
       await game.step({frames:30});
       await game.player.setStats({skills:{heavy_weapons:6}});

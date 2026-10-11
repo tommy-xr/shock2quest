@@ -5,6 +5,7 @@ import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 import type { EntitySummary } from "../src/types.js";
 import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 // Releasing a held item while the VR cyber interface is open used to drop it
 // on the floor wherever the hand was pointing - including straight through the
@@ -60,6 +61,7 @@ async function launchWithHeldClip(port: number): Promise<{
     port,
     debugFlags: ["--vr"],
   });
+  await installEarthCyberInterface(game);
   await game.step({ frames: 30 });
 
   const clip = (await game.entities.list()).entities.find(

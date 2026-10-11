@@ -6,6 +6,7 @@ import type { EntitySummary, UiElement } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { clickUiElement } from "./helpers/ui.js";
 import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 // End-to-end regression for #668, reproducing the campaign's exact production
 // path before covering the sibling item and flat presentation:
@@ -382,6 +383,7 @@ test(
     await buyPharmoFriendly(game);
 
     await game.transitionLevel("earth.mis");
+    await installEarthCyberInterface(game);
     await game.step({ frames: 5 });
     assert.deepEqual(
       (await game.info()).player.stats?.os_traits,

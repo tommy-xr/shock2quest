@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { acquireOsUpgrade } from "./helpers/os-upgrade.js";
 import { aimVrHandAtCanvas } from "./helpers/vr-hand.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 test("Smasher waits for release and adds six base damage before target armor", {
   skip: process.env.SHOCK2_E2E !== "1", timeout: 300_000,
@@ -10,6 +11,7 @@ test("Smasher waits for release and adds six base damage before target armor", {
   await using game = await GameServer.launch({ mission: "medsci2.mis" });
   await acquireOsUpgrade(game, "Smasher");
   await game.transitionLevel("earth.mis");
+  await installEarthCyberInterface(game);
   await game.player.spawnItem(-928);
   await game.input.trigger("EquipWrench");
   await game.step({ frames: 5 });
@@ -50,6 +52,7 @@ test("VR Smasher cues charge and ready once on the owning hand", {
     // The MedSci2 machine has a nearby pipe hybrid: a real parry adds a
     // separate pulse. Measure charge cues from Earth's quiet arrival area.
     await flat.transitionLevel("earth.mis");
+    await installEarthCyberInterface(flat);
     await flat.player.spawnItem(-928);
     await flat.input.trigger("EquipWrench");
     await flat.step({ frames: 5 });
