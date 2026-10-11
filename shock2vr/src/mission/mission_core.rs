@@ -10233,6 +10233,41 @@ impl MissionCore {
                     crate::runtime_props::RuntimePropProjectileVelocity(velocity),
                 );
             }
+            // Dark's point-vs-not-special rule is a collision filter, not just
+            // a script check: a volley of globs released from one point
+            // overlap at the muzzle, and the solver would push them apart
+            // (squeezing one into its emitter) before any script could ignore
+            // the contact. Filter those pairs before the solver. Each pair is
+            // registered by whichever projectile is created second, which
+            // covers loads too; only bodied, flagged shots pay for the scan.
+            let flagged = physics.get_velocity(created_entity.entity_id).is_some()
+                && world
+                    .borrow::<View<PropPhysDimensions>>()
+                    .unwrap()
+                    .get(created_entity.entity_id)
+                    .is_ok_and(|dimensions| dimensions.point_vs_not_special != 0);
+            let others: Vec<EntityId> = world
+                .borrow::<View<PropPhysDimensions>>()
+                .unwrap()
+                .iter()
+                .with_id()
+                .filter(|(other, dimensions)| {
+                    flagged
+                        && *other != created_entity.entity_id
+                        && dimensions.point_vs_not_special != 0
+                })
+                .map(|(other, _)| other)
+                .filter(|other| {
+                    crate::scripts::goo_projectile::passes_through(
+                        world,
+                        created_entity.entity_id,
+                        *other,
+                    ) && physics.get_velocity(*other).is_some()
+                })
+                .collect();
+            if !others.is_empty() {
+                physics.ignore_collision_pairs(created_entity.entity_id, &others);
+            }
         }
         ret
     }
