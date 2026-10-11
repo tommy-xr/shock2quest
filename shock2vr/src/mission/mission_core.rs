@@ -6282,13 +6282,26 @@ impl MissionCore {
                 hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
             }
         }
+        let inventory = self
+            .world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .unwrap()
+            .inventory_entity_id;
+        let shoulders_enabled = game_options.presentation_mode == crate::PresentationMode::Vr
+            && !self.use_mode
+            && self.player_is_alive()
+            && self.player_controls_enabled;
+        // Skip the inventory walk whenever the shoulders are inactive.
+        let shoulder_weapons = if shoulders_enabled {
+            super::shoulder_backpack::weapons(&self.world, inventory)
+        } else {
+            [None; 2]
+        };
+        self.shoulder_backpack.stocked = shoulder_weapons.map(|weapon| weapon.is_some());
         let mut shoulder_releases = self.shoulder_backpack.update(
             &body_input,
             held,
-            game_options.presentation_mode == crate::PresentationMode::Vr
-                && !self.use_mode
-                && self.player_is_alive()
-                && self.player_controls_enabled,
+            shoulders_enabled,
             time.elapsed.as_secs_f32(),
         );
         self.holsters.shoulder_priority = self.shoulder_backpack.near;
@@ -6359,11 +6372,6 @@ impl MissionCore {
             body_gear,
             time.elapsed.as_secs_f32(),
         );
-        let inventory = self
-            .world
-            .borrow::<UniqueView<PlayerInfo>>()
-            .unwrap()
-            .inventory_entity_id;
         let chest_merge_targets = std::array::from_fn::<_, 2, _>(|i| {
             held[i].and_then(|item| {
                 self.chest_slots.near[i]
@@ -6452,24 +6460,10 @@ impl MissionCore {
                 }
             }));
         let shoulder_slots = self.shoulder_backpack.near_slot;
-        let inventory = self
-            .world
-            .borrow::<UniqueView<PlayerInfo>>()
-            .unwrap()
-            .inventory_entity_id;
-        let needs_recall = self.shoulder_backpack.draws.iter().any(Option::is_some)
-            || (0..2).any(|i| self.shoulder_backpack.entered[i] && held[i].is_none());
-        let mut recalls = if needs_recall {
-            super::shoulder_backpack::weapons(&self.world, inventory)
-        } else {
-            [None; 2]
-        };
+        let mut recalls = shoulder_weapons;
         for i in 0..2 {
-            if self.shoulder_backpack.entered[i]
-                && (held[i].is_some()
-                    || (pouch_available[i]
-                        && shoulder_slots[i].is_some_and(|slot| recalls[slot].is_some())))
-            {
+            // An empty hand only enters a stocked shoulder.
+            if self.shoulder_backpack.entered[i] && (held[i].is_some() || pouch_available[i]) {
                 effects.push(Effect::HandHaptic {
                     hand: if i == 0 {
                         crate::Handedness::Left
@@ -6498,16 +6492,6 @@ impl MissionCore {
                     self.vr_trigger_safe_latch[i] = Some(true);
                     effects.push(Effect::ShowMessage {
                         text: "Weapon drawn from backpack".to_owned(),
-                    });
-                } else {
-                    effects.push(Effect::ShowMessage {
-                        text: "No weapon stored at this shoulder".to_owned(),
-                    });
-                    effects.push(Effect::PlaySound {
-                        handle: AudioHandle::new(),
-                        name: "repfail".to_owned(),
-                        source: None,
-                        spatial: false,
                     });
                 }
             }

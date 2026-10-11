@@ -122,8 +122,9 @@ the carrying hand. Stow a compact gun, melee weapon, or amp at either thigh by
 releasing it there; squeeze again to retrieve it. Holsters also work while the
 cyber interface is open, including items drawn directly from its inventory.
 An empty hand near a body slot keeps its world trigger; only a squeeze claims it.
-Empty holsters and chest mounts, and the ammo pouch while the other hand has no
-gun, ignore empty hands entirely, so they neither highlight nor shadow nearby targets.
+Empty holsters, chest mounts and shoulders, and the ammo pouch while the other
+hand has no gun, ignore empty hands entirely, so they neither highlight nor shadow
+nearby targets.
 
 **Access and pickups.** Grip nanites, cyber modules, software upgrades, or found
 access cards, then release anywhere to download them. Draw your personal access
