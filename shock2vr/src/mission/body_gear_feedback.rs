@@ -1,5 +1,5 @@
 //! Read-only body gear feedback. Inventory ownership stays in the pouch/holsters.
-use cgmath::{Deg, Matrix4, vec3};
+use cgmath::{Deg, Matrix4, vec3, vec4};
 use engine::scene::{self, SceneObject};
 use shipyard::{EntityId, World};
 
@@ -121,18 +121,19 @@ thread_local! {
     };
 }
 
-/// Shared by chest storage and the ammo pouch; readiness does not color idle rings.
+/// Shared by chest storage and the ammo pouch; readiness does not color idle
+/// rings. RGBA: idle rings are a faint white, targeted ones mostly opaque.
 pub(super) fn badge_color(
     targeted: bool,
     incompatible: bool,
     refusal_flash: bool,
-) -> cgmath::Vector3<f32> {
+) -> cgmath::Vector4<f32> {
     if incompatible || refusal_flash {
-        vec3(0.7, 0.08, 0.02)
+        vec4(0.7, 0.08, 0.02, 0.8)
     } else if targeted {
-        vec3(0.85, 0.85, 0.85)
+        vec4(1.0, 1.0, 1.0, 0.8)
     } else {
-        vec3(0.3, 0.3, 0.3)
+        vec4(1.0, 1.0, 1.0, 0.2)
     }
 }
 
@@ -149,22 +150,27 @@ pub(super) fn badge_frame(
         * Matrix4::from_angle_x(Deg(-60.0))
 }
 
+/// Badge ring diameter and icon size (m); the icon fits inside the rim.
+const BADGE_DIAMETER: f32 = 0.0765;
+const BADGE_ICON: f32 = 0.047;
+
 /// `plate` maps metre-local badge coordinates into world space. Its orientation
 /// is supplied by the body mount, never by the viewing camera.
 pub(super) fn item_badge(
     icon_name: Option<&str>,
     count: Option<u32>,
-    color: cgmath::Vector3<f32>,
+    color: cgmath::Vector4<f32>,
     plate: Matrix4<f32>,
     assets: &mut engine::assets::asset_cache::AssetCache,
 ) -> Vec<SceneObject> {
     let mut ring = RING.with(|geometry| {
         SceneObject::create(
-            std::cell::RefCell::new(scene::color_material::create(color)),
+            std::cell::RefCell::new(scene::color_material::create(color.truncate())),
             geometry.clone(),
         )
     });
-    ring.set_transform(plate * Matrix4::from_scale(0.09));
+    ring.set_transparency(Some(1.0 - color.w));
+    ring.set_transform(plate * Matrix4::from_scale(BADGE_DIAMETER));
     let mut objects = vec![ring];
     if let Some(name) = icon_name {
         if let Some(texture) = assets.get_ext_opt(
@@ -194,8 +200,8 @@ pub(super) fn item_badge(
                 plate
                     * Matrix4::from_translation(vec3(0.0, 0.0, 0.001))
                     * Matrix4::from_nonuniform_scale(
-                        0.055 * width / longest,
-                        0.055 * height / longest,
+                        BADGE_ICON * width / longest,
+                        BADGE_ICON * height / longest,
                         1.0,
                     ),
             );
@@ -218,7 +224,9 @@ pub(super) fn item_badge(
         );
         objects.extend(canvas.render_world_space(
             assets,
-            plate * Matrix4::from_translation(vec3(0.0, 0.0, 0.002)) * Matrix4::from_scale(0.09),
+            plate
+                * Matrix4::from_translation(vec3(0.0, 0.0, 0.002))
+                * Matrix4::from_scale(BADGE_DIAMETER),
             None,
             None,
             0.0,
@@ -269,11 +277,17 @@ mod tests {
     use super::*;
     #[test]
     fn badge_refusal_overrides_target_brightness_without_tinting_idle() {
-        assert_eq!(badge_color(false, false, false), vec3(0.3, 0.3, 0.3));
-        assert_eq!(badge_color(true, false, false), vec3(0.85, 0.85, 0.85));
+        assert_eq!(badge_color(false, false, false), vec4(1.0, 1.0, 1.0, 0.2));
+        assert_eq!(badge_color(true, false, false), vec4(1.0, 1.0, 1.0, 0.8));
         for targeted in [false, true] {
-            assert_eq!(badge_color(targeted, true, false), vec3(0.7, 0.08, 0.02));
-            assert_eq!(badge_color(targeted, false, true), vec3(0.7, 0.08, 0.02));
+            assert_eq!(
+                badge_color(targeted, true, false),
+                vec4(0.7, 0.08, 0.02, 0.8)
+            );
+            assert_eq!(
+                badge_color(targeted, false, true),
+                vec4(0.7, 0.08, 0.02, 0.8)
+            );
         }
     }
 

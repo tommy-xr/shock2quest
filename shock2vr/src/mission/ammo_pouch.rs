@@ -166,7 +166,11 @@ impl AmmoPouch {
             self.incompatible.iter().any(|bad| *bad),
             self.refusal_flash > 0.0,
         );
-        let mut objects = vec![dark::hit_box::draw_debug_wire_sphere(center, RADIUS, color)];
+        let mut objects = vec![dark::hit_box::draw_debug_wire_sphere(
+            center,
+            RADIUS,
+            color.truncate(),
+        )];
         crate::util::tag_render_source(&mut objects, crate::util::render_source::PLAYER_HANDS);
         objects
     }
