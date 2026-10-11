@@ -1,9 +1,12 @@
 pub trait Geometry {
     fn draw(&self);
+    fn morph_names(&self) -> &[String] {
+        &[]
+    }
     fn has_morph(&self) -> bool {
         false
     }
-    fn draw_with_morph(&self, _weights: [f32; 3]) {
+    fn draw_with_morph(&self, _weights: &[f32]) {
         self.draw();
     }
 }

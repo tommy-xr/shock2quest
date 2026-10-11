@@ -16,7 +16,7 @@ use clap::Parser;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     net::SocketAddr,
     sync::Arc,
     thread,
@@ -442,6 +442,7 @@ async fn start_http_server(
         )
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/scene", get(list_scene_objects))
+        .route("/v1/scene/morphs", axum::routing::post(set_morph_weights))
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
         .route("/v1/physics/joints", get(list_physics_joints))
@@ -698,6 +699,8 @@ fn run_game_blocking(
     let mut frame_counter = 0u64;
     // Snapshot of the objects submitted to the renderer on the last drawn
     // frame, served by `/v1/scene`.
+    let mut morph_scene = game.scene_generation();
+    let mut morph_overrides: HashMap<i32, HashMap<String, f32>> = HashMap::new();
     let mut last_scene: Vec<commands::SceneObjectSummary> = Vec::new();
     let mut last_scene_frame = 0u64;
     let mut frames_to_step = 0u32;
@@ -894,6 +897,34 @@ fn run_game_blocking(
                         replay = frames.into();
                     }
                     let _ = reply.send(loaded);
+                }
+                RuntimeCommand::SetMorphWeights {
+                    entity_id,
+                    weights,
+                    reply,
+                } => {
+                    let names: HashSet<&str> = last_scene
+                        .iter()
+                        .filter(|o| o.entity_id == Some(entity_id))
+                        .flat_map(|o| o.morph_names.iter().map(String::as_str))
+                        .collect();
+                    let result = if weights.is_empty() {
+                        morph_overrides.remove(&entity_id);
+                        Ok(())
+                    } else if names.is_empty() {
+                        Err(
+                            "entity has no visible named morph geometry; step and frame it first"
+                                .to_owned(),
+                        )
+                    } else if weights.iter().any(|(name, weight)| {
+                        !names.contains(name.as_str()) || !weight.is_finite() || weight.abs() > 1.0
+                    }) {
+                        Err("unknown morph name or weight outside finite [-1,1]".to_owned())
+                    } else {
+                        morph_overrides.insert(entity_id, weights);
+                        Ok(())
+                    };
+                    let _ = reply.send(result);
                 }
                 other => {
                     process_command(
@@ -1167,6 +1198,24 @@ fn run_game_blocking(
                 );
             }
         }
+        if morph_scene != game.scene_generation() {
+            morph_overrides.clear();
+            morph_scene = game.scene_generation();
+        }
+        for object in &mut scene {
+            let entity = object
+                .debug_tag()
+                .and_then(|tag| tag.entity_id)
+                .map(|id| id as i32);
+            if let Some(weights) = entity.and_then(|id| morph_overrides.get(&id)) {
+                object.morph_weights = object
+                    .geometry
+                    .morph_names()
+                    .iter()
+                    .map(|name| weights.get(name).copied().unwrap_or(0.0))
+                    .collect();
+            }
+        }
         last_scene = summarize_scene(&scene);
         last_scene_frame = frame_counter;
 
@@ -1250,7 +1299,11 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
                 ],
                 transparency: obj.effective_transparency(),
                 depth_write: obj.depth_write,
-                morph_weights: obj.geometry.has_morph().then_some(obj.morph_weights),
+                morph_names: obj.geometry.morph_names().to_vec(),
+                morph_weights: obj
+                    .geometry
+                    .has_morph()
+                    .then_some(obj.morph_weights.clone()),
                 material_passes: obj
                     .material_stack
                     .as_ref()
@@ -1333,7 +1386,8 @@ fn process_command(
         // Step and Screenshot are intercepted in the game loop (deferred replies),
         // and Replay there because it owns the replay queue, so they never
         // reach process_command.
-        RuntimeCommand::Step(..)
+        RuntimeCommand::SetMorphWeights { .. }
+        | RuntimeCommand::Step(..)
         | RuntimeCommand::Screenshot(..)
         | RuntimeCommand::Replay { .. } => {
             unreachable!("Step/Screenshot/Replay are handled in the game loop")
@@ -5021,4 +5075,41 @@ mod shutdown_tests {
         assert_eq!(snapshot.hands.right.squeeze, 0.5);
         assert_eq!(snapshot.hands.right.a, 0.7);
     }
+}
+
+#[derive(Deserialize)]
+struct MorphWeightsRequest {
+    entity_id: i32,
+    weights: HashMap<String, f32>,
+}
+
+/// Session-only named preview weights, replacing the previous blend. Empty
+/// weights releases the override. The actual deformation is shared engine code.
+async fn set_morph_weights(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<MorphWeightsRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let (reply, receive) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::SetMorphWeights {
+            entity_id: request.entity_id,
+            weights: request.weights,
+            reply,
+        })
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "runtime stopped".to_owned(),
+            )
+        })?;
+    receive
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "runtime stopped".to_owned(),
+            )
+        })?
+        .map_err(|reason| (StatusCode::BAD_REQUEST, reason))?;
+    Ok(Json(json!({"success": true})))
 }

@@ -725,6 +725,7 @@ pub struct Game {
     // thread. Shared immutably after init.
     global_context: Arc<GlobalContext>,
     active_game_scene: Box<dyn GameScene>,
+    scene_generation: u64,
     /// Set while a deferred transition is in flight (loading screen showing).
     pending_transition: Option<PendingTransition>,
     /// Set while a cutscene stands in for the scene that queued the transition
@@ -1334,6 +1335,12 @@ impl Game {
 
     /// Name of the currently active scene (e.g. "medsci1.mis"), tracking
     /// level transitions
+    /// Changes on every scene replacement, including reloading the same mission.
+    /// Debug clients use this to discard references to the old scene's entities.
+    pub fn scene_generation(&self) -> u64 {
+        self.scene_generation
+    }
+
     pub fn scene_name(&self) -> &str {
         self.active_game_scene.scene_name()
     }
@@ -1613,6 +1620,7 @@ impl Game {
             asset_cache,
             audio_context,
             active_game_scene,
+            scene_generation: 0,
             pending_transition: None,
             preserved_scene_state: None,
             global_context: Arc::new(global_context),
@@ -2687,6 +2695,7 @@ impl Game {
         self.preserved_scene_state = None;
         self.simulation_input.clear();
         self.active_game_scene = scene;
+        self.scene_generation = self.scene_generation.wrapping_add(1);
         // Whatever hurt the player belongs to the scene being left: a quickload
         // taken mid-fight must not open on a red rim, and the main menu must
         // never show one at all.

@@ -21,6 +21,11 @@ use tokio::sync::oneshot;
 /// Commands that can be sent from HTTP handlers to the game loop
 #[derive(Debug)]
 pub enum RuntimeCommand {
+    SetMorphWeights {
+        entity_id: i32,
+        weights: std::collections::HashMap<String, f32>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Get current game state snapshot
     GetInfo(oneshot::Sender<FrameSnapshot>),
 
@@ -371,7 +376,8 @@ pub struct SceneObjectSummary {
     /// Authored passes in draw order (empty for ordinary materials).
     pub material_passes: Vec<String>,
     /// Per-instance weights supplied to deformable object geometry.
-    pub morph_weights: Option<[f32; 3]>,
+    pub morph_names: Vec<String>,
+    pub morph_weights: Option<Vec<f32>>,
     pub material_only: bool,
     /// Depth pulled slightly toward the camera on the opaque pass (polygon
     /// offset) - set for flat decal-like models coplanar with world geometry.
