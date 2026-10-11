@@ -296,6 +296,7 @@ cargo dq entities earth.mis --filter "*Door*"  # wildcard search across names, p
 cargo dq entities earth.mis --filter "P$SymName:*Robot*"  # property-value filter
 cargo dq entities earth.mis --filter "S$stddoor"          # script filter (inheritance-aware)
 cargo dq entities --only-unparsed              # find entities with unparsed data
+cargo dq unparsed-audit                        # tally chunks with no parser across gamesys + all missions
 
 # Motion database (creature animations, tag-based like the original spew files)
 cargo dq motion human +playspecmotion --limit 5  # creature by name or ActorType id (0=human, 2=droid, ...)

@@ -7,6 +7,7 @@ mod entity_analyzer;
 mod inventory_audit;
 mod motion_analyzer;
 mod speech_analyzer;
+mod unparsed_audit;
 mod weapon_audit;
 
 use data_loader::load_entity_data;
@@ -34,6 +35,13 @@ enum Commands {
         /// Also scan every installed mission
         #[arg(long)]
         all_missions: bool,
+    },
+    /// Tally property, link and link-data chunks no parser is registered for,
+    /// across shock2.gam and every installed mission
+    UnparsedAudit {
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
     },
     /// Export inherited weapon/projectile properties and links as JSON
     WeaponAudit { mission: Option<String> },
@@ -150,6 +158,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::InventoryAudit { all_missions } => inventory_audit::run(all_missions)?,
+        Commands::UnparsedAudit { json } => unparsed_audit::run(json)?,
         Commands::WeaponAudit { mission } => weapon_audit::run(mission.as_deref())?,
         Commands::Entities {
             mission,
