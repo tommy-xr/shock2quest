@@ -24,7 +24,9 @@ test("SHODAN real rifle hits drive both authored screen stages across save/load"
   const shootTo = async (threshold: number) => {
     for (let shot = 0; shot < 15 && await headHp() > threshold; shot++) {
       const head = await find(298); assert.ok(head);
-      await game.player.teleport({ x: head.position[0], y: head.position[1] - 1.04, z: head.position[2] + 2 });
+      // Outside the head's authored 2.376-unit sphere (#1864 imports true
+      // radii) and inside the shields, which block the view from 4.5.
+      await game.player.teleport({ x: head.position[0], y: head.position[1] - 1.04, z: head.position[2] + 3.5 });
       await game.step({ frames: 1 });
       await game.player.aimAt(head.id, { visibility: "required", hitbox: "torso" });
       await game.input.set("right_hand.trigger_value", 1);
