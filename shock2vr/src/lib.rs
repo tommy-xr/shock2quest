@@ -585,7 +585,7 @@ pub fn save_file_path(name: &str) -> std::path::PathBuf {
 /// `VirtualHand` grab-and-hold). `Flat` is the classic flatscreen presentation:
 /// a screen-space 2D HUD, 2D menus, and first-person interaction. The flag is
 /// threaded only to the presentation/interaction edges - the simulation is
-/// shared. See `projects/flatscreen-and-vr-architecture.md`.
+/// shared.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum PresentationMode {
     #[default]

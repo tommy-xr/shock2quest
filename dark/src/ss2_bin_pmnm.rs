@@ -11,7 +11,7 @@
 //! exists only here.
 //!
 //! The layout below was reverse-engineered and validated against all 66 chunks;
-//! see `projects/25th-anniversary-assets.md` for the evidence. Unlike the
+//! see `references/25th-anniversary-assets.md` for the evidence. Unlike the
 //! original LGMM (joint-local positions, per-joint vertex ranges), a `PMNM`
 //! vertex is a modern interleaved skinned vertex in **model space** with four
 //! bone indices and four weights.

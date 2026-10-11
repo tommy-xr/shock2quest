@@ -294,7 +294,7 @@ fn decode_surface(format: BlockFormat, data: &[u8], w: usize, h: usize) -> Optio
 /// resolution - about 1.5 GB if it were all resident, against 681 MB capped at
 /// 256 px. Desktop can afford the full size; Quest cannot, and 256 px is already
 /// the modal size in the upgraded set, so the cap costs little visually.
-/// See `projects/25th-anniversary-assets.md` for the measurements.
+/// See `references/25th-anniversary-assets.md` for the measurements.
 #[cfg(target_os = "android")]
 const MAX_EDGE: Option<u32> = Some(256);
 #[cfg(not(target_os = "android"))]

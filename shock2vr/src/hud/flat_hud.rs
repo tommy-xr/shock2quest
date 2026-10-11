@@ -4,7 +4,7 @@
 //! this draws a classic 2D overlay: a centered crosshair plus health/psi bars,
 //! described on the shared [`UiCanvas`] at the original game's 640x480 virtual
 //! resolution and rendered to a screen-space overlay. Built only in
-//! `PresentationMode::Flat`. See `projects/flatscreen-and-vr-architecture.md`.
+//! `PresentationMode::Flat`.
 
 use cgmath::{Vector2, vec2};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};

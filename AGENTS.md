@@ -744,7 +744,7 @@ The project supports experimental flags for gating in-progress features during d
   under load). Without it, ragdolls use the default reduced-coordinate (multibody)
   rig — joints anchored at the limb articulation points, so limbs structurally can't
   separate — with raised sleep thresholds so the settled corpse goes fully still
-  (and wakes again on contact/impulse). See `projects/ragdoll-settling-followup.md`.
+  (and wakes again on contact/impulse).
 
 - **`nav_bridges`**: reconnect the AI navigation mesh for full-map pathfinding. The
   shipped mission data partitions the walk graph into per-area islands with no links

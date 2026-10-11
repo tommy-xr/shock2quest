@@ -234,8 +234,21 @@ The other fingers remain in 0–1. Save and restart gameplay to load the pose;
 the preview and runtime share the same skeletal blend. Auto-fit continues to
 search the measured 0–1 finger arcs, leaving thumb extension for manual tuning.
 
-To audit inventory model coverage or batch-fit missing pickup poses, see
-[Inventory hand-pose coverage](projects/inventory-grip-coverage.md).
+To audit inventory model coverage or batch-fit missing pickup poses (run from
+the repository root with the remaster data installed):
+
+```sh
+cargo dq inventory-audit --all-missions > /tmp/inventory-audit.json
+cargo run -p debug_runtime --example fit_inventory_grips -- \
+  --models beaker1,beaker2,beakew1,beakew2 \
+  --refit beaker1,beaker2,beakew1,beakew2 --scale 0.55 \
+  --output /tmp/refitted-beakers.json
+```
+
+The fitter fills only missing poses unless a model is listed in `--refit`. It
+reads `assets/vr-grips.json`, uses the production glove rig and `GripSurface`
+auto-fit path, and writes a separate output file (it refuses to overwrite one).
+Inspect the output before replacing the source library.
 
 ### Gameplay music themes
 
@@ -915,8 +928,7 @@ metal sparks, plasticrete dust/chips, glass shards, blood, goo, and electrical
 arcs/glow. Effects repeat automatically; metal and plasticrete decal samples
 sit below their stations. Omit `--vr` for flatscreen, or use `cargo dbgr` for
 headless capture. These are preview effects using installed remaster art;
-campaign impacts and extra material passes are separate work. See
-[the gallery notes](projects/debug-nd-materials.md).
+campaign impacts and extra material passes are separate work.
 
 
 
@@ -1425,8 +1437,7 @@ interface when stowed, with no separate world container panel. Release to
 return it. Nanites/modules and LOG / KEY / MFD / RES / ? sit
 below the original panel, with the HRM plug alongside when applicable.
 `--experimental mfd_device_preview` presents the same compact canvas in flat
-mode for layout checks. See [the spike notes](projects/vr-mfd-device.md) for
-scope, controls, verification and the remaining headset/asset work.
+mode for layout checks.
 
 The experimental body's live developer parameters are `vr_mfd_body`
 (3 = original stepped frame, the default; 0 = `scipass.bin`,

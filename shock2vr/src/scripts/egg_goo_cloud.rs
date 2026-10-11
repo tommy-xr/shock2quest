@@ -1,7 +1,6 @@
 //! EggGooCloud's engine-owned one-shot radius stimulus and particle lifetime.
 //! Its arSrcDesc authors one immediate pulse, radius4, intensity2, raycast,
-//! no dispersion. Period5000 is irrelevant with max_firings1. See
-//! projects/egg-goo-cloud.md for the raw record and original lifecycle source.
+//! no dispersion. Period5000 is irrelevant with max_firings1.
 use dark::properties::{Link, PropParticleLaunchInfo, PropPosition, StimPropagator};
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, View, World};

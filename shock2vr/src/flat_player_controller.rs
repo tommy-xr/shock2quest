@@ -6,8 +6,6 @@
 //! the VR hands do (`HoldItem`, `StoreItem`, `SetPositionRotation`,
 //! `OutMessage { TriggerPull/Release/Frob }`), so `mission_core` processes VR
 //! and flat through one shared path, and the weapon/frob scripts run unchanged.
-//!
-//! See `projects/flatscreen-and-vr-architecture.md` (Slices 5-6).
 
 use cgmath::{
     Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3, Vector2, Vector3, point3,
