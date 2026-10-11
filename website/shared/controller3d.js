@@ -59,25 +59,30 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
       const parts = {};
       for (const [part, name] of Object.entries(ROOTS[hand])) {
         // Component meshes hang under the button's "<name>_pressed_value" node.
-        const node = root.getObjectByName(`${name}_pressed_value`);
-        if (!node) {
-          // The Touch Plus profile omits Menu. Keep its recorded presses and
-          // mode highlights visible as a labeled overlay instead of dropping it.
-          if (hand === "L" && part === "menu") {
-            const indicator = document.createElement("span");
-            indicator.textContent = "LEFT MENU";
-            indicator.style.cssText = "position:absolute;left:12px;bottom:12px;padding:6px 10px;border:1px solid;border-radius:4px;background:#101820;font:600 12px monospace;letter-spacing:1px;pointer-events:none";
-            if (getComputedStyle(container).position === "static") container.style.position = "relative";
-            container.appendChild(indicator);
-            parts[part] = { meshes: [], responses: [], indicator };
+        let node = root.getObjectByName(`${name}_pressed_value`);
+        if (!node && hand === "L" && part === "menu") {
+          // The profile declares Menu, but this GLB bakes it into controller_mesh.
+          // Outline its textured button in that mesh's local coordinates (cm).
+          // Parenting here keeps the glow on the surface when the pair rotates.
+          const body = root.getObjectByName("controller_mesh");
+          if (body) {
+            node = new THREE.Mesh(
+              new THREE.RingGeometry(0.30, 0.40, 48),
+              new THREE.MeshStandardMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+            );
+            node.name = "menu_highlight";
+            const normal = new THREE.Vector3(-0.008, -0.092, -0.996).normalize();
+            node.position.set(1.285, -0.993, -0.231).addScaledVector(normal, 0.025);
+            node.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+            body.add(node);
           }
-          continue;
         }
+        if (!node) continue;
         const meshes = [];
         node.traverse((o) => {
           if (!o.isMesh) return;
           o.userData.base = o.material;
-          o.userData.hot = Object.assign(o.material.clone(), { map: null, color: glow.clone(), emissive: glow.clone(), emissiveIntensity: 0.9 });
+          o.userData.hot = Object.assign(o.material.clone(), { map: null, color: glow.clone(), emissive: glow.clone(), emissiveIntensity: 0.9, opacity: 1 });
           meshes.push(o);
         });
         // Each visual response is a value node moved between authored min/max nodes.
@@ -92,14 +97,8 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
       apply();
     });
 
-  function highlight({ meshes, indicator }, on) {
+  function highlight({ meshes }, on) {
     meshes.forEach((m) => (m.material = on ? m.userData.hot : m.userData.base));
-    if (indicator) {
-      indicator.dataset.active = String(on);
-      indicator.style.color = on ? accent : "#8b99a3";
-      indicator.style.borderColor = on ? accent : "#46535d";
-      indicator.style.boxShadow = on ? `0 0 12px ${accent}` : "none";
-    }
   }
 
   function apply() {
