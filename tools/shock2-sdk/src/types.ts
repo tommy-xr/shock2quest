@@ -1350,7 +1350,7 @@ export interface TracedMessage {
   payload: string;
   /** Physical context for Damage, null for directionless/other messages. */
   impact: TracedDamageImpact | null;
-  /** Sender, for payloads that carry one (TurnOn/TurnOff/Alarm/Reset). */
+  /** Sender (TurnOn/TurnOff/Alarm/Reset), or contact partner (Collided). */
   from: TracedMessageEntity | null;
 }
 
