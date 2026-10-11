@@ -2,7 +2,6 @@ use std::cell::RefCell;
 
 use cgmath::*;
 use dark::motion::MotionQueryItem;
-use rand::Rng;
 use shipyard::*;
 
 use crate::{
@@ -13,8 +12,6 @@ use crate::{
     },
     time::Time,
 };
-
-use super::WanderBehavior;
 
 pub enum NextBehavior {
     NoOpinion,
@@ -133,20 +130,4 @@ pub trait Behavior {
     fn patrol_target(&self) -> Option<EntityId> {
         None
     }
-}
-
-#[allow(dead_code)]
-pub fn random_behavior() -> Box<RefCell<dyn Behavior>> {
-    let mut potential_behaviors: Vec<Box<RefCell<dyn Behavior>>> = vec![
-        // Rc::new(MeleeAttackBehavior),
-        // Rc::new(SearchBehavior),
-        Box::new(RefCell::new(WanderBehavior::new())),
-        //Rc::new(IdleBehavior),
-        // Rc::new(RangedAttackBehavior),
-        //Rc::new(ChaseBehavior),
-        //Rc::new(DieBehavior),
-    ];
-    let mut rng = rand::thread_rng();
-    let idx = rng.gen_range(0..potential_behaviors.len());
-    potential_behaviors.remove(idx)
 }

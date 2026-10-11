@@ -1,5 +1,4 @@
 #![allow(unused_imports)]
-#![allow(dead_code)]
 
 use super::ToolScene;
 use cgmath::Matrix4;
@@ -14,7 +13,6 @@ use std::time::Duration;
 use engine_ffmpeg::{AudioPlayer, VideoPlayer};
 
 pub struct VideoPlayerScene {
-    file_name: String,
     #[cfg(feature = "ffmpeg")]
     video_player: VideoPlayer,
     #[cfg(feature = "ffmpeg")]
@@ -23,13 +21,13 @@ pub struct VideoPlayerScene {
 }
 
 impl VideoPlayerScene {
+    #[cfg_attr(not(feature = "ffmpeg"), allow(unused_variables))]
     pub fn from_file(file_name: String) -> Result<Self, Box<dyn std::error::Error>> {
         #[cfg(feature = "ffmpeg")]
         {
             let video_player = VideoPlayer::from_filename(&file_name)?;
             let audio_clip = Rc::new(AudioPlayer::from_filename(&file_name)?);
             Ok(VideoPlayerScene {
-                file_name,
                 video_player,
                 audio_clip,
                 total_time: Duration::ZERO,
@@ -38,7 +36,6 @@ impl VideoPlayerScene {
         #[cfg(not(feature = "ffmpeg"))]
         {
             Ok(VideoPlayerScene {
-                file_name,
                 total_time: Duration::ZERO,
             })
         }

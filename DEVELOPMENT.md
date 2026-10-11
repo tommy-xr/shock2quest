@@ -120,6 +120,42 @@ Example:
 cargo run -p desktop_runtime -- --vr --experimental physical_held_items
 ```
 
+### Unused code and dependencies
+
+Run `cargo check-unused` to reject compiler-detected dead code, unused imports,
+and unused variables across the host workspace, including tests, examples and
+tools. It uses Clippy as a driver for Rust's compiler lints; Clippy style lints
+are disabled. CI runs it on
+Linux and macOS. The Android package (`shock2quest`) is built separately by the
+Android workflow. This host command uses default features, including FFmpeg.
+
+For unused dependency declarations:
+
+```bash
+cargo install cargo-machete --version 0.9.2 --locked
+cargo machete
+```
+
+CI runs the same pinned version. Review findings before deleting dependencies:
+feature-only dependencies can be necessary without imports. The Android
+`oboe` dependency is explicitly ignored because it configures the audio
+backend's shared C++ runtime.
+
+The compiler cannot identify every unused exported public API, and its results
+depend on the target and features compiled. Existing `allow(dead_code)`
+attributes also suppress findings. To audit those exceptions without editing
+source, run:
+
+```bash
+cargo clippy --workspace --exclude shock2quest --all-targets --no-deps -- -A clippy::all --force-warn dead_code
+```
+
+Keep exceptions narrow and document why the item is retained. For intentional
+unused fields, prefer `expect(dead_code, reason = "...")` so Rust warns when
+the exception is no longer needed. Resource owners may need to live until
+drop even when never read; binary-format fields and other-platform code also
+need review before removal.
+
 ### Song explorer
 
 Open `cargo dx ui --select song/engsong.snc` (or select a `.snc` in the

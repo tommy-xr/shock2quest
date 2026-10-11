@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use super::ToolScene;
 use cgmath::vec2;
 use dark::font::Font;
@@ -13,7 +11,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub struct FontViewerScene {
-    font_file_path: String,
     font: Option<Font>,
     text_string: String,
     font_size: f32,
@@ -48,7 +45,6 @@ impl FontViewerScene {
         };
 
         Ok(FontViewerScene {
-            font_file_path,
             font: Some(font),
             text_string: "0123456789 Ramsey Recruitment".to_string(),
             font_size: 30.0,

@@ -6,6 +6,8 @@ pub const DEFAULT_MISSION: &str = "main_menu";
 pub const MISSION_CONFIG_PATH: &str = "/sdcard/shock2quest/vr-mission.txt";
 
 /// Explicit opt-in for interaction testing outside a benchmark fixture.
+// The host CLI shares this module's mission parser, but does not link the game.
+#[cfg(target_os = "android")]
 pub fn fixed_simulation_enabled() -> bool {
     let path = shock2vr::paths::data_root().join("simulation-clock.txt");
     match fs::read_to_string(path) {

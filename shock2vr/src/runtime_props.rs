@@ -21,11 +21,6 @@ pub struct RuntimePropGloveWeapon {
     pub magazine_anchor: Option<Vector3<f32>>,
 }
 
-// RuntimePropGazeAmount - track how much the player is gazing at a prop
-#[derive(Component)]
-#[allow(dead_code)]
-pub struct RuntimePropGazeAmount(pub f32);
-
 #[derive(Component)]
 pub struct RuntimePropTransform(pub Matrix4<f32>);
 

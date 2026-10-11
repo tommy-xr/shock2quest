@@ -1376,7 +1376,6 @@ dependencies = [
  "glfw",
  "shock2vr",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

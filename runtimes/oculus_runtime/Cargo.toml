@@ -85,6 +85,10 @@ keystore_password = "tommyshock"
 [features]
 linked = []
 
+[package.metadata.cargo-machete]
+# Feature-only dependency: selects the shared C++ runtime for rodio/CPAL on Android.
+ignored = ["oboe"]
+
 # This dependency will only be included when targeting Android
 [target.'cfg(target_os = "android")'.dependencies]
 ndk-glue = "0.6.2"

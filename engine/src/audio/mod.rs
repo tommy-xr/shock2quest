@@ -268,11 +268,12 @@ where
     TCue: Clone,
     TAmbientKey: Hash + Eq + Copy,
 {
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "keeps the audio output alive until this context drops"
+    )]
     stream: OutputStream,
     handle: OutputStreamHandle,
-    #[allow(dead_code)]
-    sinks: Vec<Sink>,
     channel_to_last_handle: HashMap<String, u64>,
     handle_to_sink: HashMap<u64, SinkAdapter<TAmbientKey>>,
     handle_loops: HashMap<u64, LoopPlayback>,
@@ -313,7 +314,6 @@ where
         AudioContext {
             stream,
             handle,
-            sinks: vec![],
             //spatial_sinks: vec![],
             handle_to_sink: HashMap::new(),
             handle_loops: HashMap::new(),

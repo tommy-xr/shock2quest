@@ -11,11 +11,6 @@
 //! measures text and centers it), which keeps layout out of hand-tuned
 //! coordinates.
 
-// Foundational UI toolkit: a few API items (the full alignment variants and
-// geometry/introspection helpers) are intentionally complete ahead of their
-// call sites.
-#![allow(dead_code)]
-
 use std::rc::Rc;
 
 use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
