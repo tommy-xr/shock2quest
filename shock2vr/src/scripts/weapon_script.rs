@@ -547,15 +547,9 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
     let is_gunshot = maybe_projectile.is_some();
 
     // A gun that is not in working order refuses to fire, ahead of the
-    // magazine: an empty broken gun is broken, not empty. The engine refuses
-    // on any state but Normal; this narrower gate still lets an unresearched
-    // annelid weapon fire.
-    if is_gunshot
-        && matches!(
-            crate::scripts::gui::object_state(world, entity_id),
-            ObjectState::Broken | ObjectState::Destroyed
-        )
-    {
+    // magazine: an empty broken gun is broken, not empty. Retail requires
+    // Normal, including for annelid weapons unlocked by completed research.
+    if is_gunshot && crate::scripts::gui::object_state(world, entity_id) != ObjectState::Normal {
         return ShotOutcome::NotWorking;
     }
 
@@ -2153,27 +2147,31 @@ mod tests {
         }
     }
 
-    /// A broken gun is out of the fight until it is repaired: the trigger
-    /// clicks and nothing leaves the barrel.
     #[test]
-    fn a_broken_gun_does_not_fire() {
-        let (world, gun) = gun_world(Some(ObjectState::Broken));
+    fn only_normal_guns_fire_and_restoring_normal_unlocks_them() {
+        for state in [
+            ObjectState::Broken,
+            ObjectState::Destroyed,
+            ObjectState::Unresearched,
+            ObjectState::Locked,
+            ObjectState::Hacked,
+            ObjectState::Unknown(17),
+        ] {
+            let (mut world, gun) = gun_world(Some(state));
+            assert!(
+                matches!(
+                    fire_one_shot(&world, gun, &GunSettingDesc::default()),
+                    ShotOutcome::NotWorking
+                ),
+                "{state:?} must refuse the shot without spending ammo or condition"
+            );
 
-        assert!(
-            matches!(
+            world.add_component(gun, dark::properties::PropObjState(ObjectState::Normal));
+            assert!(matches!(
                 fire_one_shot(&world, gun, &GunSettingDesc::default()),
-                ShotOutcome::NotWorking
-            ),
-            "a broken gun must refuse the shot"
-        );
-
-        // The same gun in working order fires, so the refusal is the object
-        // state and not the fixture.
-        let (world, gun) = gun_world(Some(ObjectState::Normal));
-        assert!(matches!(
-            fire_one_shot(&world, gun, &GunSettingDesc::default()),
-            ShotOutcome::Fired(_)
-        ));
+                ShotOutcome::Fired(_)
+            ));
+        }
     }
 
     /// A gun that authors no object state at all is in working order.
