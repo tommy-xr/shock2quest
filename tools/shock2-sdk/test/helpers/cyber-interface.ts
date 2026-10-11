@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 
 import type { GameServer } from "../../src/index.js";
 
-/** Earth's authored ChangeInterface marker (the training entrance's trap). */
+/**
+ * One of Earth's authored ChangeInterface markers (328 is wired to uninstall
+ * on the Weapons exit). Every ChangeInterface object installs on TurnOn; the
+ * entrance teleport traps would also move the player.
+ */
 const CHANGE_INTERFACE_TEMPLATE = 328;
 
 /**

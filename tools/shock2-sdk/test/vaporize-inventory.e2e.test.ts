@@ -218,7 +218,6 @@ for (const advanced of ADVANCED_EXITS) {
       await using game = await GameServer.launch({
         mission: "earth.mis",
       });
-      await installEarthCyberInterface(game);
       await game.step({ frames: 5 });
 
       // Use one genuine world item as compact setup for each Advanced exit.
@@ -250,7 +249,6 @@ test(
     await using game = await GameServer.launch({
       mission: "earth.mis",
     });
-    await installEarthCyberInterface(game);
     await game.step({ frames: 5 });
 
     // Carry a real mission item through the genuine Technical exit so this

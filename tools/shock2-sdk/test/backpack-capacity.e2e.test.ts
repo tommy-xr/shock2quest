@@ -63,7 +63,6 @@ test(
       mission: "earth.mis",
       port: e2ePort(),
     });
-    await installEarthCyberInterface(game);
     await game.step({ frames: 2 });
 
     // Standard Clips share the `StdClip` combine label, so each one pools
@@ -178,7 +177,6 @@ test(
       mission: "earth.mis",
       port: e2ePort(2),
     });
-    await installEarthCyberInterface(game);
     await game.step({ frames: 30 });
 
     await fillBackpackWithWrenches(game);
@@ -213,7 +211,6 @@ test(
       mission: "earth.mis",
       port: e2ePort(3),
     });
-    await installEarthCyberInterface(game);
     await game.step({ frames: 2 });
 
     await fillBackpackWithWrenches(game);
@@ -329,7 +326,6 @@ test(
       mission: "earth.mis",
       port: e2ePort(5),
     });
-    await installEarthCyberInterface(game);
     await game.step({ frames: 30 });
 
     await fillBackpackWithWrenches(game);

@@ -154,7 +154,6 @@ test(
       mission: "earth.mis",
       debugFlags: ["--vr"],
     });
-    await installEarthCyberInterface(game);
     await game.step({ frames: 5 });
 
     await crossEarthTrainingTripwire(
@@ -341,7 +340,6 @@ test(
       mission: "earth.mis",
       debugFlags: ["--vr"],
     });
-    await installEarthCyberInterface(game);
     await game.step({ frames: 5 });
 
     await crossEarthTrainingTripwire(
@@ -402,7 +400,6 @@ test(
     await using game = await GameServer.launch({
       mission: "earth.mis",
     });
-    await installEarthCyberInterface(game);
     await game.step({ frames: 5 });
 
     // Keep room for three doses after the lesson drains psi to five.

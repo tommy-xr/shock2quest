@@ -11,7 +11,6 @@ test("Smasher waits for release and adds six base damage before target armor", {
   await using game = await GameServer.launch({ mission: "medsci2.mis" });
   await acquireOsUpgrade(game, "Smasher");
   await game.transitionLevel("earth.mis");
-  await installEarthCyberInterface(game);
   await game.player.spawnItem(-928);
   await game.input.trigger("EquipWrench");
   await game.step({ frames: 5 });

@@ -5,7 +5,6 @@ import { savedGamePath } from "./helpers/save.js";
 import { aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 import { GameServer, type UiElement } from "../src/index.js";
 import { canvasCenter, clickCanvasWithRay, clickUiElement, requirePanelPose } from "./helpers/ui.js";
-import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 
@@ -128,7 +127,6 @@ test("armor: powered armor drains only while worn, depletes, and recharges at a 
   assert.equal(await property(game, armor, "ArmorEquipped"), "true", "depletion leaves the suit equipped");
   assert.equal((await game.audio.recent({ sample: "bb07" })).sounds.length, 1);
   await game.transitionLevel("earth.mis");
-  await installEarthCyberInterface(game);
   armor = (await game.entities.byTemplate(-82))[0].id;
   const station = (await game.entities.byTemplate(258))[0];
   assert.ok(station);
