@@ -440,8 +440,8 @@ pub struct RuntimePropPlayerFiredProjectile;
 /// the shooter's own collision sphere (a turret's authored sphere encloses its
 /// barrel), so a fast (raycast) shot skips its launcher and the launcher's
 /// hitboxes, and a physical shot's contacts with its launcher are filtered out
-/// at launch. Not saved: a physical shot saved within a frame or two of firing
-/// can hit its launcher after load - accepted rather than serializing the pair.
+/// at launch and again after a load. Saved in
+/// `EntitySaveData::projectile_launchers`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropProjectileLauncher(pub shipyard::EntityId);
 

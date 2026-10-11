@@ -307,6 +307,18 @@ pub fn to_save_data_with_scripts(
         .map(|(entity_id, _)| entity_id.inner())
         .filter(|entity_id| !entities_to_filter.contains(entity_id))
         .partition(|entity_id| held_entities.contains(entity_id));
+    let world_projectile_launchers = world
+        .borrow::<View<crate::runtime_props::RuntimePropProjectileLauncher>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .map(|(projectile, launcher)| (projectile.inner(), launcher.0.inner()))
+        .filter(|(projectile, launcher)| {
+            !entities_to_filter.contains(projectile)
+                && !entities_to_filter.contains(launcher)
+                && !held_entities.contains(projectile)
+        })
+        .collect();
 
     let raw_holstered: HashMap<u64, crate::runtime_props::RuntimePropHolstered> = world
         .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()
@@ -391,6 +403,7 @@ pub fn to_save_data_with_scripts(
         canonical_template_ids: world_canonical_templates,
         launched_projectiles: world_launched_projectiles,
         player_fired_projectiles: world_player_fired_projectiles,
+        projectile_launchers: world_projectile_launchers,
         projectile_velocities: world_velocities.into_iter().collect(),
         thrown_props,
         meta_properties: world_meta_properties,
@@ -418,6 +431,7 @@ pub fn to_save_data_with_scripts(
         canonical_template_ids: held_canonical_templates,
         launched_projectiles: held_launched_projectiles,
         player_fired_projectiles: held_player_fired_projectiles,
+        projectile_launchers: Vec::new(),
         projectile_velocities: held_velocities.into_iter().collect(),
         thrown_props: HashMap::new(),
         meta_properties: held_meta_properties,
