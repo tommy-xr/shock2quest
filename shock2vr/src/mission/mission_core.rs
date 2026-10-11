@@ -8596,6 +8596,11 @@ impl MissionCore {
             _ => None,
         });
 
+        let corpse_part_links = get_all_links_with_template(world, entity_id, |link| match link {
+            Link::CorpsePart => Some(()),
+            _ => None,
+        });
+
         let did_slay = true;
 
         if let Some(handle) = &self.id_to_physics.get(&entity_id) {
@@ -8672,6 +8677,35 @@ impl MissionCore {
                         ..Default::default()
                     },
                 );
+            }
+
+            // Wreckage (a droid's arms, canopy and torso): each part keeps the
+            // creature's facing and sits at its model's first vhot, which is
+            // authored as the part's offset from the creature's origin.
+            for (template_id, ()) in corpse_part_links {
+                let created = self.create_entity_with_position(
+                    asset_cache,
+                    template_id,
+                    vec3_to_point3(position),
+                    rotation,
+                    Matrix4::identity(),
+                    CreateEntityOptions {
+                        flinderize_debris: true,
+                        ..CreateEntityOptions::default()
+                    },
+                );
+                let vhot = created
+                    .model
+                    .as_ref()
+                    .and_then(|(model, _)| model.vhots().first().map(|vhot| vhot.point));
+                if let Some(vhot) = vhot {
+                    self.set_entity_position_rotation(
+                        created.entity_id,
+                        position + rotation * vhot.to_vec(),
+                        rotation,
+                        vec3(1.0, 1.0, 1.0),
+                    );
+                }
             }
         }
 
