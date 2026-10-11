@@ -21,6 +21,10 @@ impl Script for ResearchableScript {
         let Some(template_id) = entity_class_template_id(world, entity_id) else {
             return Effect::NoEffect;
         };
+        // Only lift the research lock; a researched weapon saved Broken stays broken.
+        if !crate::research::is_unresearched(world, entity_id) {
+            return Effect::NoEffect;
+        }
         let researched = world
             .borrow::<shipyard::UniqueView<QuestInfo>>()
             .map(|quests| quests.research().is_complete(template_id))
@@ -66,5 +70,32 @@ mod tests {
         let effect = ResearchableScript::new().initialize(entity_id, &world);
 
         assert!(matches!(effect, Effect::NoEffect));
+    }
+
+    #[test]
+    fn completed_research_unlocks_only_unresearched_copies() {
+        let mut quests = QuestInfo::new();
+        let research = quests.research_mut();
+        research.begin(-27, 1, 1);
+        research.advance(-27, 60.0, 1, 1.0, 1.0, None, 0);
+        assert!(research.is_complete(-27));
+        let mut world = World::new();
+        world.add_unique(quests);
+        let copy = |state| (RuntimePropCanonicalTemplateId(-27), PropObjState(state));
+        let locked = world.add_entity(copy(ObjectState::Unresearched));
+        let broken = world.add_entity(copy(ObjectState::Broken));
+
+        assert!(matches!(
+            ResearchableScript::new().initialize(locked, &world),
+            Effect::SetObjectState {
+                state: ObjectState::Normal,
+                ..
+            }
+        ));
+        // A researched weapon saved Broken must not be repaired by a reload.
+        assert!(matches!(
+            ResearchableScript::new().initialize(broken, &world),
+            Effect::NoEffect
+        ));
     }
 }

@@ -574,7 +574,6 @@ pub fn opens_panel(world: &shipyard::World, entity: shipyard::EntityId) -> bool 
             "KeyPadUnhackable",
             "HackableCrate",
             "ResearchableScript",
-            "ResearchableUseScript",
             "Chemical",
         ]
         .iter()

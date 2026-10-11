@@ -2,8 +2,8 @@
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::{
-    ObjectState, PropBaseTechDesc, PropChemicalNeeded, PropObjIcon, PropObjShortName, PropObjState,
-    PropResearchText, PropResearchTime,
+    PropBaseTechDesc, PropChemicalNeeded, PropObjIcon, PropObjShortName, PropResearchText,
+    PropResearchTime,
 };
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -54,12 +54,7 @@ pub struct ResearchGui {
 
 impl ResearchGui {
     fn defers_to_use(&self, entity_id: EntityId, world: &World) -> bool {
-        self.usable
-            && !world.borrow::<View<PropObjState>>().is_ok_and(|states| {
-                states
-                    .get(entity_id)
-                    .is_ok_and(|state| state.0 == ObjectState::Unresearched)
-            })
+        self.usable && !crate::research::is_unresearched(world, entity_id)
     }
 }
 
@@ -359,6 +354,8 @@ pub(crate) fn chemical_display_name(world: &World, sym_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+
+    use dark::properties::{ObjectState, PropObjState};
 
     use crate::mission::EntityMetadata;
 
