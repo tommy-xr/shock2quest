@@ -6975,12 +6975,17 @@ impl PhysicsWorld {
             let mut route = None;
             // Bounded inset search: a fist can hold an edge that cannot support
             // the body, so prove the landing capsule fits and stays supported.
-            for inset in [0.4, 0.8] {
-                // Follow the held plane uphill/downhill instead of requiring
-                // every landing to be level with the hand (which rejects ramps).
-                let slope_rise = -(grip.normal.x * direction.x + grip.normal.z * direction.z)
-                    * inset
-                    / grip.normal.y;
+            // Try a landing level with the hand first, then follow the held
+            // plane uphill/downhill (which a ramp needs). A hold on a box
+            // edge reports the corner's bevelled normal, not the level top
+            // beyond it, so the held plane alone misses a pool deck.
+            for (inset, follow_slope) in [(0.4, false), (0.8, false), (0.4, true), (0.8, true)] {
+                let slope_rise = if follow_slope {
+                    -(grip.normal.x * direction.x + grip.normal.z * direction.z) * inset
+                        / grip.normal.y
+                } else {
+                    0.0
+                };
                 let expected_y = grip.point.y + slope_rise;
                 let above =
                     vec_to_nvec(grip.point) + direction * inset + Vector::y() * (slope_rise + 0.3);
@@ -14194,6 +14199,45 @@ mod tests {
             );
             assert!(previous.x <= 2.01, "landing {previous:?}");
         }
+    }
+
+    /// A hold on a box's top edge can report the corner's bevelled 45-degree
+    /// normal (debug_rec_pool's rim does). The landing beyond is level, so
+    /// following that normal as a slope would reject it and strand the swimmer.
+    #[test]
+    fn hand_top_out_lands_level_from_a_bevelled_edge_normal() {
+        let (mut world, mut player) = grip_world();
+        let block = EntityId::from_inner(2030).unwrap();
+        world.add_kinematic(
+            block,
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        world.set_player_translation(vec3(HANG_X, 2.4, 0.0), &mut player);
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        let grip = ClimbGrip {
+            kind: ClimbGripKind::Ledge,
+            entity_id: Some(block),
+            point: vec3(2.0, 3.0, 0.0),
+            normal: vec3(half, half, 0.0),
+        };
+        assert!(world.plan_hand_top_out(grip, &mut player));
+        for _ in 0..240 {
+            step(&mut world, &mut player, 1);
+            if !player.is_topping_out() {
+                break;
+            }
+        }
+        let landed = world.get_player_translation(&player);
+        assert!(
+            landed.x < 1.7 && landed.y > 3.0,
+            "must finish on the top: {landed:?}"
+        );
     }
 
     #[test]
