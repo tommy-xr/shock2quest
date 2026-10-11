@@ -1042,7 +1042,9 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn implant_socket_frames(&self, world: &World) -> [Option<Matrix4<f32>>; 2] {
-        use crate::hud::virtual_arms::{BIO_BAND_RADIUS, GLOVE_PALM_LIFT, implant_socket_frame};
+        use crate::hud::virtual_arms::{
+            BIO_BAND_RADIUS, glove_band_frame, glove_palm_lift, implant_socket_frame,
+        };
         let mut glove = self.glove_renderer.borrow_mut();
         let Some(Some(renderer)) = glove.as_mut() else {
             return [None; 2];
@@ -1061,10 +1063,12 @@ impl PlayerInteraction for VrInteraction {
             let held = crate::wielded_weapon::held_by_hand(world, hand);
             let (root, lift) = if crate::virtual_hand::shows_hand_visual(world, held) {
                 (
-                    Matrix4::from_translation(pose.position)
-                        * Matrix4::from(pose.rotation)
-                        * renderer.wrist_frame(hand),
-                    GLOVE_PALM_LIFT,
+                    glove_band_frame(
+                        Matrix4::from_translation(pose.position)
+                            * Matrix4::from(pose.rotation)
+                            * renderer.wrist_frame(hand),
+                    ),
+                    glove_palm_lift(),
                 )
             } else {
                 let (wrist, radius) = held

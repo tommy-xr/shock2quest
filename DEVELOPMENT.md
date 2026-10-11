@@ -591,6 +591,33 @@ The inventory’s blocked-cell art marks the other slot when capacity is full. T
 required for gestures; recovering tracking cannot manufacture a squeeze or
 release. Socket placement still needs a seated/standing comfort pass on a headset.
 
+**Developer → Hands & gloves** has separate glove and psi-amp bracelet fit
+controls. `glove_band_forward_cm` and `psi_band_forward_cm` move the health/psi
+bracelet and implant socket together along the wrist: positive is toward the
+fingers, negative toward the elbow. Values are physical centimetres, independent
+of the amp's model scale. `glove_band_scale` and `psi_band_scale` uniformly resize
+the bracelet assembly around its wrist axis, preserving the readout's aspect
+ratio. The visible implant and its insertion/removal target follow the same fit.
+These controls apply live in VR gameplay and reset on restart; the glove's ammo
+readout retains its cuff mount.
+
+| Fit | Forward cm | Size | Back cm |
+| --- | --- | --- | --- |
+| Glove default | 0.7 | 0.97 | — |
+| Amp behind cord (default) | 5.5 | 0.77 | 0.45 |
+| Amp in front of cord (alternative) | 10.5 | 0.85 | 0.0 |
+
+`psi_band_back_cm` recenters the amp bracelet toward the back of the hand
+(positive) or palm (negative). This allows a smaller radius to fit both sides
+without sinking one readout into the skin. It moves the implant and its target
+with the bracelet. Set all three amp values when comparing the presets.
+
+`glove_band_palm_lift_cm` sets the extra palm-side clearance before bracelet
+scaling (default 1.2 cm), allowing a snug palm fit without burying the dorsal
+readout. The amp's front alternative sits partly on the back of the hand;
+the behind-cord default stays on the forearm side of the connector. Check cord
+motion and both hands when experimenting with other values.
+
 ### Campaign difficulty
 
 New Game offers Easy, Normal (the default), Hard, and Impossible. Choose a level,

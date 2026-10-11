@@ -249,6 +249,16 @@ dev_params! {
     GLOVE_SIDE_CM = Hands::float("glove_side_cm", "Glove side cm", 0.0, -10.0, 10.0, 0.5),
     /// Controller-local +Y offset, rotating with the hand rather than world up.
     GLOVE_UP_CM = Hands::float("glove_up_cm", "Glove up cm", 0.0, -10.0, 10.0, 0.5),
+    /// Bracelet and implant together, along the wrist toward the fingers.
+    GLOVE_BAND_FORWARD_CM = Hands::float("glove_band_forward_cm", "Glove bracelet forward cm", 0.7, -3.0, 3.0, 0.1),
+    GLOVE_BAND_SCALE = Hands::float("glove_band_scale", "Glove bracelet size", 0.97, 0.7, 1.3, 0.01),
+    /// Additional palm-side cuff thickness, before applying bracelet size.
+    GLOVE_BAND_PALM_LIFT_CM = Hands::float("glove_band_palm_lift_cm", "Glove bracelet palm cm", 1.2, 0.0, 3.0, 0.1),
+    /// Positive is toward the amp's hand; negative is toward its elbow.
+    PSI_BAND_FORWARD_CM = Hands::float("psi_band_forward_cm", "Psi bracelet forward cm", 5.5, -5.0, 14.0, 0.1),
+    PSI_BAND_SCALE = Hands::float("psi_band_scale", "Psi bracelet size", 0.77, 0.7, 1.5, 0.01),
+    /// Center the band on the forearm before reducing its radius; positive is dorsal.
+    PSI_BAND_BACK_CM = Hands::float("psi_band_back_cm", "Psi bracelet back cm", 0.45, -2.0, 2.0, 0.1),
     /// Fit-scene-only model size, about the hand origin; does not rescale tracking.
     GLOVE_FIT_SIZE = Fit::float("glove_fit_size", "Glove size", 1.0, 0.5, 1.5, 0.01),
     /// Hide the fit gloves to compare the real hand silhouette in passthrough.
