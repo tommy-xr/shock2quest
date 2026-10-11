@@ -306,10 +306,13 @@ impl PhysicsWorld {
                     for id in &group.limbs {
                         let limb = &self.query_hitboxes.limbs[id];
                         let a = weapon_entity.inner() as u128;
-                        let b = id.inner() as u128;
-                        if limb.owner == weapon_entity
-                            || self.ignored_collision_pairs.contains(&(a.min(b), a.max(b)))
-                        {
+                        // An exemption against the limb's creature (a shot and
+                        // its launcher) covers all of that creature's limbs.
+                        let ignored = |other: EntityId| {
+                            let b = other.inner() as u128;
+                            self.ignored_collision_pairs.contains(&(a.min(b), a.max(b)))
+                        };
+                        if limb.owner == weapon_entity || ignored(*id) || ignored(limb.owner) {
                             continue;
                         }
                         if let Ok(Some(contact)) = query::contact(
@@ -648,6 +651,16 @@ mod tests {
         limb(&mut physics, id(1), 0.0);
         physics.query_hitboxes.commit();
         physics.ignore_collision_pairs(id(20), &[id(1)]);
+        assert!(physics.query_hitbox_contacts().is_empty());
+    }
+
+    #[test]
+    fn an_ignored_owner_suppresses_contacts_with_all_of_its_limbs() {
+        let mut physics = PhysicsWorld::new();
+        weapon(&mut physics, CollisionGroup::held_melee());
+        limb(&mut physics, id(1), 0.0);
+        physics.query_hitboxes.commit();
+        physics.ignore_collision_pairs(id(20), &[id(50)]);
         assert!(physics.query_hitbox_contacts().is_empty());
     }
 
