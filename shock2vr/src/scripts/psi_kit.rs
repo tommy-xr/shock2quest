@@ -5,20 +5,25 @@ use crate::physics::PhysicsWorld;
 use super::{Effect, MessagePayload, Script};
 
 /// The retail psi hypo (`PsiKitScript`): inventory use restores 30 psi on Easy, 20 otherwise, and
-/// consumes one unit from its stack.
+/// consumes one unit from its stack. `PsiFullScript` uses the same behavior with
+/// a 100-point budget on every difficulty.
 ///
 /// At an already-full pool the original reports `misc\\PsiMaxed` and leaves
 /// the stack untouched. This port does not yet have a generic HUD-text effect,
 /// but preserves the consequential behavior: no refill and no consumption.
-pub struct PsiKitScript;
+pub struct PsiKitScript {
+    kind: PsiKitKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PsiKitKind {
+    Hypo,
+    AnnelidPatch,
+}
 
 impl PsiKitScript {
-    /// Retail `PsiKitScript` uses a 20-point psi bonus (also stated for the Psi
-    /// Hypo in the original System Shock 2 manual).
-    const RESTORE_AMOUNT: i32 = 20;
-
-    pub fn new() -> Self {
-        Self
+    pub fn new(kind: PsiKitKind) -> Self {
+        Self { kind }
     }
 }
 
@@ -30,20 +35,30 @@ impl Script for PsiKitScript {
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        if !matches!(msg, MessagePayload::Frob) {
+        if !matches!(msg, MessagePayload::Frob)
+            || super::gui::object_state(world, entity_id) != dark::properties::ObjectState::Normal
+        {
             return Effect::NoEffect;
         }
 
         Effect::UsePsiKit {
             entity_id,
             amount: super::healing_item::HealingItemScript::retail_amount(
-                if world
-                    .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-                    .is_ok_and(|q| q.difficulty() == dark::gamesys::Difficulty::Easy)
-                {
-                    30
-                } else {
-                    Self::RESTORE_AMOUNT
+                match self.kind {
+                    // Retail allobjs.osm: PsiFullScript overrides the amount
+                    // getter (0x10022ad0) with 100, bypassing the hypo's Easy
+                    // multiplier. Its inherited frob still applies Pharmo-Friendly.
+                    PsiKitKind::AnnelidPatch => 100,
+                    PsiKitKind::Hypo => {
+                        if world
+                            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+                            .is_ok_and(|q| q.difficulty() == dark::gamesys::Difficulty::Easy)
+                        {
+                            30
+                        } else {
+                            20
+                        }
+                    }
                 },
                 super::healing_item::HealingItemScript::pharmo_friendly(world),
             ),
@@ -60,7 +75,7 @@ mod tests {
         scripts::{Effect, MessagePayload, Script},
     };
 
-    use super::PsiKitScript;
+    use super::{PsiKitKind, PsiKitScript};
 
     fn world_with_booster() -> (World, shipyard::EntityId) {
         let mut world = World::new();
@@ -73,7 +88,7 @@ mod tests {
         for difficulty in dark::gamesys::Difficulty::ALL {
             let (world, booster) = world_with_booster();
             world.add_unique(crate::quest_info::QuestInfo::with_difficulty(difficulty));
-            let effect = PsiKitScript::new().handle_message(
+            let effect = PsiKitScript::new(PsiKitKind::Hypo).handle_message(
                 booster,
                 &world,
                 &PhysicsWorld::new(),
@@ -101,7 +116,7 @@ mod tests {
             .player_stats_mut()
             .add_os_trait(crate::scripts::gui::TRAIT_PHARMO_FRIENDLY);
         world.add_unique(quests);
-        let effect = PsiKitScript::new().handle_message(
+        let effect = PsiKitScript::new(PsiKitKind::Hypo).handle_message(
             booster,
             &world,
             &PhysicsWorld::new(),
@@ -113,7 +128,7 @@ mod tests {
     #[test]
     fn frob_requests_one_atomic_twenty_point_use() {
         let (world, booster) = world_with_booster();
-        let effect = PsiKitScript::new().handle_message(
+        let effect = PsiKitScript::new(PsiKitKind::Hypo).handle_message(
             booster,
             &world,
             &PhysicsWorld::new(),
@@ -129,9 +144,73 @@ mod tests {
     }
 
     #[test]
+    fn registered_annelid_patch_restores_one_hundred_with_only_the_trait_bonus() {
+        for difficulty in dark::gamesys::Difficulty::ALL {
+            for pharmo in [false, true] {
+                let (world, patch) = world_with_booster();
+                let mut quests = crate::quest_info::QuestInfo::with_difficulty(difficulty);
+                if pharmo {
+                    quests
+                        .player_stats_mut()
+                        .add_os_trait(crate::scripts::gui::TRAIT_PHARMO_FRIENDLY);
+                }
+                world.add_unique(quests);
+                let mut script = crate::scripts::ScriptWorld::create_script("PsiFullScript".into());
+                assert!(matches!(script.initialize(patch, &world), Effect::NoEffect));
+                let effect = script.handle_message(
+                    patch,
+                    &world,
+                    &PhysicsWorld::new(),
+                    &MessagePayload::Frob,
+                );
+                assert!(matches!(effect, Effect::UsePsiKit { entity_id, amount }
+                    if entity_id == patch && amount == if pharmo { 120 } else { 100 }));
+            }
+        }
+    }
+
+    #[test]
+    fn psi_items_require_normal_state_before_consumption() {
+        use dark::properties::{ObjectState, PropObjState};
+        for kind in [PsiKitKind::Hypo, PsiKitKind::AnnelidPatch] {
+            for state in [
+                ObjectState::Unresearched,
+                ObjectState::Broken,
+                ObjectState::Destroyed,
+                ObjectState::Locked,
+                ObjectState::Hacked,
+                ObjectState::Unknown(17),
+            ] {
+                let (mut world, item) = world_with_booster();
+                world.add_component(item, PropObjState(state));
+                let mut script = PsiKitScript::new(kind);
+                assert!(matches!(
+                    script.handle_message(
+                        item,
+                        &world,
+                        &PhysicsWorld::new(),
+                        &MessagePayload::Frob
+                    ),
+                    Effect::NoEffect
+                ));
+                world.add_component(item, PropObjState(ObjectState::Normal));
+                assert!(matches!(
+                    script.handle_message(
+                        item,
+                        &world,
+                        &PhysicsWorld::new(),
+                        &MessagePayload::Frob
+                    ),
+                    Effect::UsePsiKit { .. }
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn unrelated_messages_do_nothing() {
         let (world, booster) = world_with_booster();
-        let effect = PsiKitScript::new().handle_message(
+        let effect = PsiKitScript::new(PsiKitKind::Hypo).handle_message(
             booster,
             &world,
             &PhysicsWorld::new(),
