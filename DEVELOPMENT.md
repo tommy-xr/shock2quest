@@ -122,9 +122,10 @@ cargo run -p desktop_runtime -- --vr --experimental physical_held_items
 
 ### Unused code and dependencies
 
-Run `cargo check-unused` to reject compiler-detected dead code across the host
-workspace, including tests, examples and tools. It uses Clippy as a driver for
-Rust's `dead_code` lint; other Clippy style lints are disabled. CI runs it on
+Run `cargo check-unused` to reject compiler-detected dead code, unused imports,
+and unused variables across the host workspace, including tests, examples and
+tools. It uses Clippy as a driver for Rust's compiler lints; Clippy style lints
+are disabled. CI runs it on
 Linux and macOS. The Android package (`shock2quest`) is built separately by the
 Android workflow. This host command uses default features, including FFmpeg.
 
