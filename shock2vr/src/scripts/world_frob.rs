@@ -67,7 +67,7 @@ mod tests {
     use crate::string_table::StringTable;
 
     fn world_with_strings() -> World {
-        let mut world = World::new();
+        let world = World::new();
         world.add_unique(StringTable::from_table(
             "usemsg.str",
             [(
