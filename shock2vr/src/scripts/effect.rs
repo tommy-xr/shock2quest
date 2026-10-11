@@ -616,7 +616,8 @@ pub enum Effect {
     },
 
     /// Apply a carried stat booster's timed bonuses to the player and consume
-    /// one unit. Reusing a booster refreshes its timer rather than stacking.
+    /// one unit. Reusing a booster restarts its timer rather than stacking.
+    /// Like psi stat bonuses, the remaining time survives level changes and saves.
     UseStatBooster {
         entity_id: EntityId,
         boosts: Vec<(crate::player_stats::Stat, i32)>,
