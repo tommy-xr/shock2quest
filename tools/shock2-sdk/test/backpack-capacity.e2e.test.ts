@@ -7,6 +7,7 @@ import type { UiElement } from "../src/types.js";
 import { earthWorldUse } from "./helpers/earth-world-use.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 // Retail parity: a full backpack REJECTS a transfer into it (panel Take,
 // flat/VR world pickup, VR strip deposit) rather than silently absorbing the
@@ -249,6 +250,7 @@ test(
       port: e2ePort(4),
       debugFlags: ["--vr"],
     });
+    await installEarthCyberInterface(game);
     await game.step({ frames: 30 });
 
     await fillBackpackWithWrenches(game);

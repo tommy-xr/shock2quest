@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 import { clickUiElement } from "./helpers/ui.js";
 
 const options = { skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000 };
 
 test("Earth maintenance allowance survives reload without upgrading the career", options, async () => {
   await using game = await GameServer.launch({ mission: "earth.mis" });
+  // Models a player already through the training entrance (which installs it).
+  await installEarthCyberInterface(game);
   await game.step({ frames: 5 });
   const [tool] = await game.entities.byTemplate(264);
   const [gun] = await game.entities.byTemplate(246);

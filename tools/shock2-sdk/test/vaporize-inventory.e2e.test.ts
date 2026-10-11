@@ -5,6 +5,7 @@ import { GameServer } from "../src/index.js";
 import type { EntitySummary, UiElement } from "../src/types.js";
 import { crossEarthTrainingTripwire } from "./helpers/earth-tripwire.js";
 import { teleportVerified } from "./helpers/teleport.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 // Earth training gives the player temporary supplies which must not escape the
 // Basic/Advanced rooms. Each authored exit tripwire SwitchLinks to a
@@ -162,6 +163,7 @@ test(
     await using game = await GameServer.launch({
       mission: "earth.mis",
     });
+    await installEarthCyberInterface(game);
     await game.step({ frames: 5 });
 
     const acquired = await acquireBasicItemsNormally(game);

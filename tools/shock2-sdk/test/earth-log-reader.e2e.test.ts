@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { UiPanel } from "../src/types.js";
 import { dataRoot } from "./helpers/crf.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 // Regression for #1061: SCP overrides Earth log 1/24's deck icon from the
 // base game's RickIcon to RamsIcon. The replacement layers supply the reader
@@ -38,6 +39,7 @@ async function verifyEarthLogReader(presentation: "flat" | "vr"): Promise<void> 
     mission: "earth.mis",
     debugFlags: presentation === "vr" ? ["--vr"] : [],
   });
+  await installEarthCyberInterface(game);
   await game.step({ frames: 5 });
 
   const [disc] = await game.entities.byTemplate(EARTH_TRAINING_LOG);

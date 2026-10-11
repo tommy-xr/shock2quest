@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { UiElement } from "../src/types.js";
 import { earthWorldUse } from "./helpers/earth-world-use.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
@@ -27,6 +28,7 @@ test(
     await using game = await GameServer.launch({
       mission: "earth.mis",
     });
+    await installEarthCyberInterface(game);
     await game.step({ frames: 30 });
 
     const [pistol] = await game.entities.byTemplate(PISTOL_OBJ);

@@ -9,6 +9,7 @@ import { teleportVerified } from "./helpers/teleport.js";
 import { clickUiElement } from "./helpers/ui.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
 import { fireOnce } from "./helpers/weapon.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 // Honest Earth Psionic Training regression for #548. Runtime ids are
 // discovered on every launch; positive template ids are stable mission object
@@ -507,11 +508,21 @@ test(
     assert.equal(player.right_hand_entity_id, null);
     assert.equal((await game.entities.byTemplate(PSI_AMP)).length, 0);
 
-    // Reopen the strip after cleanup: API and the captured visible UI must both
-    // show an actually-empty inventory, not a stale destroyed-item snapshot.
+    // The exit tripwire's authored Inverter turns ChangeInterface marker 332
+    // off, so leaving training uninstalls the interface again.
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 3 });
     assert.equal((await game.ui.state()).mode, "shooter");
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 3 });
+    assert.equal((await game.ui.state()).strip, null, "the psionic exit uninstalls the interface");
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 3 });
+
+    // Reinstall and reopen the strip after cleanup: API and the captured
+    // visible UI must both show an actually-empty inventory, not a stale
+    // destroyed-item snapshot.
+    await installEarthCyberInterface(game);
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
     const reopened = await game.ui.state();
