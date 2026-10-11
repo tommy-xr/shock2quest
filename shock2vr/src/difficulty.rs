@@ -128,6 +128,30 @@ fn reconstruction_cost_for(difficulty: Difficulty) -> i32 {
     }
 }
 
+/// Enemy AI pace on Normal: the factor its animation clock, procedural turning
+/// and attack cooldowns run at.
+const AI_SPEED: f32 = 1.0;
+
+/// How fast enemy AI runs on this campaign: Normal plays at [`AI_SPEED`], and
+/// each step away from it adds or removes the `ai_difficulty_speed` dev param
+/// (Easy slower, Hard faster, Impossible twice as much faster).
+pub fn ai_speed(world: &World) -> f32 {
+    ai_speed_for(
+        campaign_difficulty(world),
+        crate::dev_params::get(crate::dev_params::AI_DIFFICULTY_SPEED),
+    )
+}
+
+fn ai_speed_for(difficulty: Difficulty, modifier: f32) -> f32 {
+    let steps = match difficulty {
+        Difficulty::Easy => -1.0,
+        Difficulty::Normal => 0.0,
+        Difficulty::Hard => 1.0,
+        Difficulty::Impossible => 2.0,
+    };
+    AI_SPEED + modifier * steps
+}
+
 /// The campaign's difficulty, defaulting for a world without a character sheet
 /// (debug scenes).
 fn campaign_difficulty(world: &World) -> Difficulty {
@@ -221,6 +245,14 @@ mod tests {
                 replicator_multiplier: [1.0, 0.85, 1.0, 1.25, 2.0, 1.0],
             }),
             ..Default::default()
+        }
+    }
+    #[test]
+    fn ai_speed_steps_by_the_modifier_from_normal() {
+        let speeds = Difficulty::ALL.map(|difficulty| ai_speed_for(difficulty, 0.15));
+        let expected = [0.85, 1.0, 1.15, 1.3];
+        for (speed, expected) in speeds.iter().zip(expected) {
+            assert!((speed - expected).abs() < 1e-6, "{speeds:?}");
         }
     }
     #[test]

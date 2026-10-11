@@ -346,7 +346,8 @@ impl Script for TurretAI {
                         muzzle_transform,
                         target_position,
                     ));
-                    self.pose.fire_cooldown = 1.0;
+                    // Refire paces with the difficulty, like creature attacks.
+                    self.pose.fire_cooldown = 1.0 / crate::difficulty::ai_speed(world);
                 }
             }
         }

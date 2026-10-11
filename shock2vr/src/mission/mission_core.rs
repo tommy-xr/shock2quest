@@ -783,16 +783,24 @@ impl PlayerLifeState {
 }
 
 /// A creature's authored `P$TimeWarp`: the factor every motion's duration is
-/// scaled by (below 1.0 plays faster). Root-motion distance is unchanged, so
+/// scaled by (below 1.0 plays faster), divided by the AI speed its script
+/// published (the difficulty's pace). Root-motion distance is unchanged, so
 /// ground speed scales by its inverse. Missing or invalid values play at the
 /// authored rate; the clamp keeps `Duration` arithmetic in range.
 fn creature_time_warp(world: &World, entity_id: EntityId) -> f32 {
-    world
+    let authored = world
         .borrow::<View<dark::properties::PropTimeWarp>>()
         .ok()
         .and_then(|warps| warps.get(entity_id).ok().map(|warp| warp.0))
         .filter(|warp| warp.is_finite() && *warp > 0.0)
-        .map_or(1.0, |warp| warp.clamp(0.1, 10.0))
+        .unwrap_or(1.0);
+    let speed = world
+        .borrow::<View<crate::runtime_props::RuntimePropAIAnimationSpeed>>()
+        .ok()
+        .and_then(|speeds| speeds.get(entity_id).ok().map(|speed| speed.0))
+        .filter(|speed| speed.is_finite() && *speed > 0.0)
+        .unwrap_or(1.0);
+    (authored / speed).clamp(0.1, 10.0)
 }
 
 /// Seed the death camera's fall direction from where the player died, so a
@@ -15026,6 +15034,12 @@ impl MissionCore {
                                     crate::runtime_props::RuntimePropLocomotionScale(scale),
                                 );
                             }
+                            AIPropertyUpdate::AnimationSpeed { speed } => {
+                                self.world.add_component(
+                                    entity_id,
+                                    crate::runtime_props::RuntimePropAIAnimationSpeed(speed),
+                                );
+                            }
                             AIPropertyUpdate::FlightVelocity { velocity } => {
                                 self.world.add_component(
                                     entity_id,
@@ -22516,6 +22530,18 @@ mod time_warp_tests {
     fn extreme_warp_is_clamped_into_duration_range() {
         assert_eq!(warp_of(Some(1e-30)), 0.1);
         assert_eq!(warp_of(Some(1e30)), 10.0);
+    }
+
+    #[test]
+    fn published_ai_speed_divides_the_authored_warp() {
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        world.add_component(entity, dark::properties::PropTimeWarp(0.9));
+        world.add_component(
+            entity,
+            crate::runtime_props::RuntimePropAIAnimationSpeed(1.5),
+        );
+        assert!((creature_time_warp(&world, entity) - 0.6).abs() < 1e-6);
     }
 }
 

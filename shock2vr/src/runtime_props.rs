@@ -55,6 +55,12 @@ pub struct RuntimePropAITargetAwareness {
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropLocomotionScale(pub f32);
 
+/// The pace an AI's animation clock runs at, published by its script: the
+/// difficulty's AI speed, or 1.0 while a scripted sequence plays. Absent = 1.0,
+/// so non-AI animation players keep their authored rate.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropAIAnimationSpeed(pub f32);
+
 /// Consume-on-read velocity for skeletal flyers, whose clips contain no stride.
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropFlightVelocity(pub Vector3<f32>);

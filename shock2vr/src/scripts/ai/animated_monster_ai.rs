@@ -351,6 +351,9 @@ pub struct AnimatedMonsterAI {
     /// the script's knowledge exactly (including forgetting) without
     /// per-frame effect churn
     published_awareness: Option<(cgmath::Vector3<f32>, bool)>,
+    /// Animation pace last published to the ECS (see `pace`), so it is sent
+    /// only when it changes
+    published_animation_speed: Option<f32>,
     /// Throttle between door interactions (open / locked-door give-up)
     door_cooldown: f32,
     /// The door this AI is standing off from, and how long it has waited, while
@@ -427,6 +430,7 @@ impl AnimatedMonsterAI {
             last_known_player_pos: None,
             combat_team: None,
             published_awareness: None,
+            published_animation_speed: None,
             door_cooldown: 0.0,
             door_wait: None,
             frustration_cooldown: 0.0,
@@ -463,6 +467,7 @@ impl AnimatedMonsterAI {
             last_known_player_pos: None,
             combat_team: None,
             published_awareness: None,
+            published_animation_speed: None,
             door_cooldown: 0.0,
             door_wait: None,
             frustration_cooldown: 0.0,
@@ -680,8 +685,10 @@ impl AnimatedMonsterAI {
         // body, and re-asserting the held heading every frame keeps the clip's
         // own root rotation from turning the entity on top of its pose.
         heading_held: bool,
+        // The difficulty's AI speed (see `pace`), scaling the procedural turn.
+        pace: f32,
     ) -> Effect {
-        let turn_velocity = self.current_behavior.borrow().turn_speed().0;
+        let turn_velocity = self.current_behavior.borrow().turn_speed().0 * pace;
         let delta =
             clamp_to_minimal_delta_angle(steering_output.desired_heading - self.current_heading);
 
@@ -1975,12 +1982,31 @@ impl Script for AnimatedMonsterAI {
         self.bar_pivot_while_stalled(stall_seconds, may_turn);
         let (turn_clip_effect, heading_held) =
             self.update_turn_clip(entity_id, steering_output.desired_heading, time, may_turn);
+        // The difficulty's AI speed - animation, turning and flight - except
+        // over a scripted performance, which plays at its authored rate. The
+        // animation clock advances before scripts update, so a sequence's
+        // first frame or two still run at the previous pace.
+        let pace = if self.current_behavior.borrow().scripted_state() == ScriptedState::Running {
+            1.0
+        } else {
+            crate::difficulty::ai_speed(world)
+        };
+        let animation_speed_effect = if self.published_animation_speed != Some(pace) {
+            self.published_animation_speed = Some(pace);
+            Effect::SetAIProperty {
+                entity_id,
+                update: crate::scripts::AIPropertyUpdate::AnimationSpeed { speed: pace },
+            }
+        } else {
+            Effect::NoEffect
+        };
         let rotation_effect = self.apply_steering_output(
             steering_output,
             time,
             entity_id,
             door_wait_seconds.is_some() || self.current_behavior.borrow().holds_position(),
             heading_held,
+            pace,
         );
 
         let rotation_effect = if crate::creature::is_flying_creature(world, entity_id) {
@@ -1990,7 +2016,9 @@ impl Script for AnimatedMonsterAI {
                 .get(entity_id)
                 .map(|p| p.0)
                 .unwrap_or(1.4 / SCALE_FACTOR)
-                * 7.5;
+                * 7.5
+                // Flight has no root motion for the animation pace to carry.
+                * pace;
             let moving = self.current_behavior.borrow().is_locomotion()
                 && !self.current_behavior.borrow().holds_position()
                 && door_wait_seconds.is_none()
@@ -2096,6 +2124,7 @@ impl Script for AnimatedMonsterAI {
             ambient_speech,
             alertness_effect,
             awareness_effect,
+            animation_speed_effect,
             scent_effect,
             behavior_change_effect,
             steering_effects,
@@ -3764,6 +3793,7 @@ mod tests {
                 entity_id,
                 false,
                 held,
+                1.0,
             )]);
             assert_eq!(
                 locomotion_scale(&effects),

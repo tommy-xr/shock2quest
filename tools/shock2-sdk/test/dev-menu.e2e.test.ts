@@ -366,8 +366,9 @@ for (const vr of [false, true]) {
 
       await press(back);
       await press(back);
-      // Root also contains the invulnerability parameter; scroll once to
-      // expose Locked in the last visible row.
+      // Root also contains the invulnerability and AI-speed parameters; scroll
+      // twice to expose Locked in the last visible row.
+      await press([447, 308]);
       await press([447, 308]);
       await press(category(8)); // Locked
       await press(category(0)); // Hands & gloves
