@@ -1,0 +1,1357 @@
+{
+  "audited_main": "e3def9742d2828443e75cff28e5d330d862cd377",
+  "archive": "mods/sshock2ee.kpf",
+  "archive_sha256": "22663dae9b7118781e7ea6dc4ff329c6ecc2b7436918abff1d85961e7ce72011",
+  "entries": [
+    {
+      "path": "dbmods/MTKI-fixTripwireTx.dml",
+      "sha256": "12c1d0d392c0a816fdaf51d524e683ae87cb1e85534071ab8cbe1f0c13ffce10",
+      "bytes": 969,
+      "fingerprint": "none declared",
+      "group": "mp",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "No KEX multiplayer peer/ownership layer; do not classify network-only repairs as single-player defects. Mixed local helpers discussed separately."
+    },
+    {
+      "path": "dbmods/ND-alpha-sign-fix.dml",
+      "sha256": "506de5132b45b8cc32711a35fe50f808fa6ffefc51f1395b3bc5990c072883cd",
+      "bytes": 281,
+      "fingerprint": "none declared",
+      "group": "alpha",
+      "classification": "confirmed gap",
+      "rust_reference": "dark/src/util/render_material.rs",
+      "assessment": "Authored property removals/render order are absent; #2201; visual severity unverified."
+    },
+    {
+      "path": "dbmods/ND-apparitions.dml",
+      "sha256": "c0c2ab2a04ac031e2f38c31f764e5ed7aeed9c986f32d45408c834f44d5a1957",
+      "bytes": 241,
+      "fingerprint": "none declared",
+      "group": "ghost",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/apparition.rs",
+      "assessment": "ApparBegin explicitly uses spatial=false; ND_Apparition uses local spatial audio; #2199."
+    },
+    {
+      "path": "dbmods/ND-global_achievements.dml",
+      "sha256": "8d5c4e65c215935c8a58a63ef4a57cb03b5f061c5d4f1806af9a1d1c511f2dbe",
+      "bytes": 504,
+      "fingerprint": "GAM shockscp.gam",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/ND-grub.dml",
+      "sha256": "c0a94b8c2036c97ad96917064f3ce0e373fe16365b78d93ae26656cb948db668",
+      "bytes": 477,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "dbmods/ND-heartpillowfix.dml",
+      "sha256": "96ebe754cfccf3f4e33b595296a73ed0a284e35fcb5ed36cd13a55231e13ae14",
+      "bytes": 35,
+      "fingerprint": "none declared",
+      "group": "alpha",
+      "classification": "confirmed gap",
+      "rust_reference": "dark/src/util/render_material.rs",
+      "assessment": "Authored property removals/render order are absent; #2201; visual severity unverified."
+    },
+    {
+      "path": "dbmods/ND-lipsync.dml",
+      "sha256": "4f4b9fd5b6cad123d7b37f2a41c436b18867b0ccaf611f9fbb8642fa1fe9a03e",
+      "bytes": 955,
+      "fingerprint": "none declared",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "dbmods/ND-materials.dml",
+      "sha256": "896dd192b13f6392ae8681bb622e104b684ee1b2c90c35df1959797da8ef862f",
+      "bytes": 2507,
+      "fingerprint": "none declared",
+      "group": "impact",
+      "classification": "implemented",
+      "rust_reference": "shock2vr/src/scripts/script_util.rs",
+      "assessment": "ballistic_impact_appearance plus particle_effects.rs replace material spangs/decal selection; Rust effects, not Squirrel execution. Stimulus definitions active, sample create_obj receptrons commented out."
+    },
+    {
+      "path": "dbmods/ND-mp-scpfixes.dml",
+      "sha256": "cd93fe5db27c16bcf4d827f66873fe81e3124eeb24bcd74ff61fd2810e3af157",
+      "bytes": 2066,
+      "fingerprint": "GAM shockscp.gam",
+      "group": "mp",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "No KEX multiplayer peer/ownership layer; do not classify network-only repairs as single-player defects. Mixed local helpers discussed separately."
+    },
+    {
+      "path": "dbmods/ND-poster.dml",
+      "sha256": "e049b9c40b4b55c7fdddf88732595da7ee6ac6b9ab075491f59bc2d0eb8272a3",
+      "bytes": 92,
+      "fingerprint": "none declared",
+      "group": "misc",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/vr_config.rs",
+      "assessment": "Base gamesys with project VR poses; optional pipe wrench and miscellaneous KEX archetype changes not automatically enabled; see notes."
+    },
+    {
+      "path": "dbmods/ND-protocoldroid.dml",
+      "sha256": "0a7ae677850d197925c396c04cb3d6ca16c9831132fa8d34f33df9a1933fdc8a",
+      "bytes": 8284,
+      "fingerprint": "GAM shockscp.gam",
+      "group": "droid",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/base_monster.rs",
+      "assessment": "No ND damage/corpse archetype wiring under GAM shockscp.gam; #2185 depends on #2195."
+    },
+    {
+      "path": "dbmods/ND-shodan.dml",
+      "sha256": "67dd2e01a9b31dba417cb5d16b5a60199756436f6d72f0a66900dafea4c46d1f",
+      "bytes": 320,
+      "fingerprint": "none declared",
+      "group": "shodan",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Legacy screen fades exist; four ND screens/eyes/mouth/hijack wiring absent; #2184, #2180."
+    },
+    {
+      "path": "dbmods/ND-wormskin_fix.dml",
+      "sha256": "dc65f8489677509d77e71b480e8800c9f9339b0a1e6066d9ef7ef5b876875a9d",
+      "bytes": 44,
+      "fingerprint": "none declared",
+      "group": "alpha",
+      "classification": "confirmed gap",
+      "rust_reference": "dark/src/util/render_material.rs",
+      "assessment": "Authored property removals/render order are absent; #2201; visual severity unverified."
+    },
+    {
+      "path": "dbmods/command1.mis/ND-envmap.dml",
+      "sha256": "da0bc3e1f64284c4df59540528c3d56c4739f1f17ebabd3001b3e6993d9ff742",
+      "bytes": 132,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/command1.mis/achievements.dml",
+      "sha256": "3ffa4657d1648789e134c5f2a90d43c4ea3b07729557301d33220f3e0cadc6da",
+      "bytes": 535,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/command2.mis/ND-envmap.dml",
+      "sha256": "5481fe56526c2b2234b4c652035d2613b205e63fe46782ffcd505fe2ef78afb0",
+      "bytes": 132,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/command2.mis/command2.dml",
+      "sha256": "c465eacbfab370f48ec22c057f342a730ac9930c7d0dd3bc2c67d25a060dfaba",
+      "bytes": 4334,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional. Also removes Frozen from droid 2401."
+    },
+    {
+      "path": "dbmods/earth.mis/ND-envmap.dml",
+      "sha256": "3b8ebe4965983e70ff6beb8be3bb942111673c23d9a2e0b56376d8c875e4495a",
+      "bytes": 129,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/earth.mis/achievements.dml",
+      "sha256": "00d7801fe9d8d95b03236fcc2a737a06624be83fe3c04c7fba8961514423d045",
+      "bytes": 952,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/earth.mis/mp-respawn.dml",
+      "sha256": "3bfdb05ee90a97be17b129229befd1b506fd11f72c33c9cc1e68d172a3c0f423",
+      "bytes": 264,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "mp",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "No KEX multiplayer peer/ownership layer; do not classify network-only repairs as single-player defects. Mixed local helpers discussed separately."
+    },
+    {
+      "path": "dbmods/earth.mis/tutorial_pistol_fix.dml",
+      "sha256": "617b0c79049923daaefeb56028b4cd9e41eddbad3511c745a3308670f369ff13",
+      "bytes": 256,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "campaign",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/data_files.rs",
+      "assessment": "Base campaign selected; SCP data/patch applicability tracked in #2195, not blanket retail parity."
+    },
+    {
+      "path": "dbmods/eng1.mis/ND-envmap.dml",
+      "sha256": "9b4c85a7bc9299fc176def91dcc213f804761c608aa1c8850e327402ff6c8aa7",
+      "bytes": 128,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/eng1.mis/achievements.dml",
+      "sha256": "ed8a729a6aabdb51ca193398f5c4958f6dbdd6a94c09992786865c25caf91db9",
+      "bytes": 742,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/eng1.mis/eng1.dml",
+      "sha256": "713dd8fa5ddf78d8805a0db3e9da03af2e5aaf025f4eefe7334e5b57666d25d3",
+      "bytes": 789,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "dbmods/eng2.mis/ND-envmap.dml",
+      "sha256": "e8cec3cc737c3ea0cfb67cb0d52cb8281aa75c1412a686f671d4da1435cae0b6",
+      "bytes": 128,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/eng2.mis/eng2.dml",
+      "sha256": "94bc6a0192e59289dd48e17075ae2f12aa9d0b854eb5e46412609c1ddf052110",
+      "bytes": 1410,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional. Also moves Seat1..Seat4; gated campaign data difference, not facial animation."
+    },
+    {
+      "path": "dbmods/hydro1.mis/ND-envmap.dml",
+      "sha256": "9879d86fcc1f7614a6df6a2e0eb91df49f44199ddc4eb0d844543c4b9045a361",
+      "bytes": 130,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/hydro1.mis/achievements.dml",
+      "sha256": "49e03857e9fe7e3d2118111f4d65e2a1aed6ccfd29c26963fc285dbf8b72560f",
+      "bytes": 385,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/hydro1.mis/turnbull.dml",
+      "sha256": "93e2886b0d260e7e90276e51ddb0df697d70757a6085d058152fb6f22db0e5f2",
+      "bytes": 800,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "campaign",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/data_files.rs",
+      "assessment": "Base campaign selected; SCP data/patch applicability tracked in #2195, not blanket retail parity."
+    },
+    {
+      "path": "dbmods/hydro2.mis/ND-alpha-sign-fix.dml",
+      "sha256": "901e0238771a517420982192ecc3ca38568afd83fd2381b476e7513cc4607e8b",
+      "bytes": 373,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "alpha",
+      "classification": "confirmed gap",
+      "rust_reference": "dark/src/util/render_material.rs",
+      "assessment": "Authored property removals/render order are absent; #2201; visual severity unverified."
+    },
+    {
+      "path": "dbmods/hydro2.mis/ND-envmap.dml",
+      "sha256": "79af19e37a5db92d7cf4992aa62f715fffa8d4141839f7a9b0303da60f962016",
+      "bytes": 130,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/hydro2.mis/achievements.dml",
+      "sha256": "1b04730634ca39b36123d64c9f04274d749472f07f545dd076c291f028f24c52",
+      "bytes": 385,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/hydro2.mis/hydro2.dml",
+      "sha256": "c4823f5179d4509a50e68c88997ef45f24fae0d911707739853b4a995a4d920c",
+      "bytes": 2460,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "dbmods/hydro3.mis/ND-envmap.dml",
+      "sha256": "1a03ac6fceb1db01281bb18095ba30b0091a12adb88ea4ff2b30dff7040619bd",
+      "bytes": 130,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/hydro3.mis/achievements.dml",
+      "sha256": "8d0c217764bcd683414e76490782a440ed1dce1392a8a5bac831c0ef40738c62",
+      "bytes": 385,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/many.mis/ND-decorations.dml",
+      "sha256": "2590889c8aed2f45684f54e1747b090cf55fd37ede4f779bb370c3f583970515",
+      "bytes": 447,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "decor",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/mission/entity_creator.rs",
+      "assessment": "No authored MedSci PODD_OPEN or Many crystal override mapping; #2196; requires SCP identity."
+    },
+    {
+      "path": "dbmods/many.mis/ND-envmap.dml",
+      "sha256": "123782728f633f72ce7ea5cec8eb913ffa0e5ce59c46cf755f9ddc14042dd565",
+      "bytes": 128,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/many.mis/achievements.dml",
+      "sha256": "8420570d84eeae796a94a54def273798f3e3ce359d40545529985c40b5859422",
+      "bytes": 802,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/medsci1.mis/ND-decorations.dml",
+      "sha256": "ed360ae18308d35423b87ae5ffa59fe8a78ec2af74de7b96d5481cc5666ed46b",
+      "bytes": 1841,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "decor",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/mission/entity_creator.rs",
+      "assessment": "No authored MedSci PODD_OPEN or Many crystal override mapping; #2196; requires SCP identity."
+    },
+    {
+      "path": "dbmods/medsci1.mis/ND-envmap.dml",
+      "sha256": "bb1e9e4847e652bc0d78c5fcba7d9b580cb28e461545b959d2dbc7f22074048e",
+      "bytes": 131,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/medsci1.mis/achievements.dml",
+      "sha256": "041547d9f07ad042a1262f1cd2c85874632f6fa40f4d1361b8458142c5e8b786",
+      "bytes": 821,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/medsci1.mis/cs0601.dml",
+      "sha256": "83ec4db3c58da3c0a8544a120e390103813b6c18896020ba71c62410bd5f0284",
+      "bytes": 1155,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "dbmods/medsci1.mis/medsci1.dml",
+      "sha256": "64433fce38fb51879204a2cb9a2681ed60daf1a370dc5643fb7f4cd847efb058",
+      "bytes": 2300,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "dbmods/medsci1.mis/no-minimap.dml",
+      "sha256": "604d6f525f86397c25ff9e3a30d27e80e5c78deec13ce8d667efb818bd962922",
+      "bytes": 372,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ui",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/ui/mod.rs",
+      "assessment": "Shared canvas and native VR input replace KEX overlays; locale/layout excluded from gameplay defect count."
+    },
+    {
+      "path": "dbmods/medsci2.mis/ND-envmap.dml",
+      "sha256": "3e3b37ca353ec7015d49d3cbb5fae005139ead4e34202d1db1a77605aeced359",
+      "bytes": 131,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/medsci2.mis/achievements.dml",
+      "sha256": "248ad535ed67284b8b3de8834f83af07c00bf794636861355f111755048c03ea",
+      "bytes": 359,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/medsci2.mis/medsci2.dml",
+      "sha256": "63f8585630f8c471d7f3dccb38a8e8df17f8bfdf76f08fb093e4cd14871c2605",
+      "bytes": 754,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "dbmods/ops1.mis/ND-envmap.dml",
+      "sha256": "562f0e7d8240b6b57146fa6a8d02be462f63b457d0fa2c6bc50d9fe831191096",
+      "bytes": 128,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/ops1.mis/ND-shodancutscene.dml",
+      "sha256": "12e44c3af5b09f70963b47f5716c333e1fe0267f51592d1b7da1b7189c0d12c6",
+      "bytes": 2317,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "shodan",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Legacy screen fades exist; four ND screens/eyes/mouth/hijack wiring absent; #2184, #2180."
+    },
+    {
+      "path": "dbmods/ops2.mis/ND-envmap.dml",
+      "sha256": "84b719bea08c172ea6ff2304ce94ced63cd64711e999d6b8f28ecb30265f2438",
+      "bytes": 128,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/ops3.mis/ND-envmap.dml",
+      "sha256": "4a99e3528103997d98e0208207ea788b8d8de2dcd3399d115eb09833e0f2a4ce",
+      "bytes": 128,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/ops3.mis/achievements.dml",
+      "sha256": "5765b04467a0bf056265793215d02740e3625a7c48e45e569f349fda0f90000e",
+      "bytes": 393,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/ops3.mis/ops3.dml",
+      "sha256": "be71415a76e73d05b20d3f7f51d2f89e61631b03c01a2bdbb814007ff882a568",
+      "bytes": 3185,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "dbmods/ops4.mis/ND-envmap.dml",
+      "sha256": "a7a092e606006f98da9f1aee7934ad33cae2f76f115b076d18254abf724cc888",
+      "bytes": 128,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/ops4.mis/achievements.dml",
+      "sha256": "aa779a1961b8ec0ff5957cfd78b121bdfaea6c50d7142bdd28aaca191aa8ec5c",
+      "bytes": 615,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/rec1.mis/ND-envmap.dml",
+      "sha256": "1cb2e5aff71984fd7101eaf44a4233d9089169e84326ad353d1ad5ab0613428d",
+      "bytes": 128,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/rec1.mis/achievements.dml",
+      "sha256": "7fccf82547ecf86f6648371e66894d61a1f9c59ba35e04120051c6d03677f46d",
+      "bytes": 684,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/rec1.mis/cs2601.dml",
+      "sha256": "5113b187fe573428dbe60422dc109ca62e84a071152f54df8ec5fdf6940f31a8",
+      "bytes": 1513,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "dbmods/rec1.mis/lipsynctest.dml",
+      "sha256": "d62016811203f2a9b08e280013c2f0419b028039c2c8cee3527fa23f373bdf62",
+      "bytes": 1624,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional. Despite its name, active Cortez rewiring duplicates cs2601.dml; only model swap is commented."
+    },
+    {
+      "path": "dbmods/rec1.mis/rec1.dml",
+      "sha256": "7f855fad1743f86021283f38dd407ad9abe18cd5a90ebefae4eb822c75f65581",
+      "bytes": 831,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "dbmods/rec2.mis/ND-envmap.dml",
+      "sha256": "d495220352f527c12888d6ab19be2e9332f41024625779b91620fe38e8696f3e",
+      "bytes": 128,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/rec2.mis/achievements.dml",
+      "sha256": "66ed13b2b235f04ed508e412fde853380579dfaeaabd23bbbfbb7fb95755ccd2",
+      "bytes": 318,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/rec2.mis/rec2.dml",
+      "sha256": "84b08f7fe247f57cbd0bd61aa7ed6a640f7c78543755479aeede6ae8f84adfa5",
+      "bytes": 833,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "dbmods/rec3.mis/ND-envmap.dml",
+      "sha256": "ac62b406684516a6ec3b4ac4889bb72d18df94379bbd585a33b9d1b7efdccb8d",
+      "bytes": 128,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/rec3.mis/achievements.dml",
+      "sha256": "ae98641b4f60112a990bb8daa9b85ac1889e4a7b7bcd41b979bdac0b4b772d9f",
+      "bytes": 716,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/rick1.mis/ND-envmap.dml",
+      "sha256": "55cf8956434b6bf4c74c8509232c22136230403b483b593cc7e2563a518e9379",
+      "bytes": 129,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/rick1.mis/achievements.dml",
+      "sha256": "b48cfcc96068f3c644c5141f93af0bd0a22e3114ccd67b9dd5321d15c9e69880",
+      "bytes": 740,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/rick2.mis/ND-envmap.dml",
+      "sha256": "8d8f918c1ef9d9cefda428e8c05d92b51982f468da399c9cc38a61abfae682b5",
+      "bytes": 129,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/rick3.mis/ND-envmap.dml",
+      "sha256": "2f87591b2c6e052cf116cf611786e371c7a2cc5d73e78f95e53b559d58c12201",
+      "bytes": 129,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/shockscp.gam.dml",
+      "sha256": "7c07e35da2eb3d01b010315bc698f79487738aef26bdbd3045868ba0207ed8e9",
+      "bytes": 1023,
+      "fingerprint": "filename: shockscp.gam",
+      "group": "campaign",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/data_files.rs",
+      "assessment": "Base campaign selected; SCP data/patch applicability tracked in #2195, not blanket retail parity."
+    },
+    {
+      "path": "dbmods/shodan.mis/ND-envmap.dml",
+      "sha256": "370de4bd0545068599e865a438a9dc3c126fe04d0b92841d43dc7922523da105",
+      "bytes": 130,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "dbmods/shodan.mis/achievements.dml",
+      "sha256": "1348c3595892fc563793c9c16e5a8c06a74ea7602f5a0db0dc2250a07d423adb",
+      "bytes": 281,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "dbmods/shodan.mis/no_music.dml",
+      "sha256": "b1140e68bd62c869ff4e16dd4c6f6f0d9250d917c8ca243c24bf00f5faa08f7b",
+      "bytes": 670,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "campaign",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/data_files.rs",
+      "assessment": "Base campaign selected; SCP data/patch applicability tracked in #2195, not blanket retail parity."
+    },
+    {
+      "path": "dbmods/station.mis/ND-envmap.dml",
+      "sha256": "17801b9233fa05f3c12cb246e0023cce9d3b84f91ee7cfc1eb33f4b4d6248796",
+      "bytes": 162,
+      "fingerprint": "QVAR \"scplevel\" == 1",
+      "group": "env",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/lib.rs",
+      "assessment": "env family mounted, no ENVMAPVAR mission selector; #2202 conditional on SCP."
+    },
+    {
+      "path": "sq_scripts/ND-Vocalize.nut",
+      "sha256": "6815da42f792bf16b0da5d2b36ebb066e2d37ff73cc86d4c9555625a298aba4c",
+      "bytes": 4168,
+      "fingerprint": "none declared",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "sq_scripts/ND-mp-scpfixes.nut",
+      "sha256": "80b91acf87bebef8726ed3b32bbd3d4cea1bf4448c39c2023eec2e0e0f655215",
+      "bytes": 23768,
+      "fingerprint": "none declared",
+      "group": "mp",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "No KEX multiplayer peer/ownership layer; do not classify network-only repairs as single-player defects. Mixed local helpers discussed separately."
+    },
+    {
+      "path": "sq_scripts/achievements.nut",
+      "sha256": "53a59f3c2b38edb67eb4bd8f4244c05993ee78ffea6fa9d102d9680e589ab159",
+      "bytes": 6329,
+      "fingerprint": "none declared",
+      "group": "ach",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "KEX platform achievement integration is outside this single-player recreation; mixed SCP overrides require campaign applicability review."
+    },
+    {
+      "path": "sq_scripts/animations_weapons.nut",
+      "sha256": "78fb27bf50760513530879eb837a59dbb697b6f2ec8682e22b7a06b61a06db05",
+      "bytes": 33222,
+      "fingerprint": "none declared",
+      "group": "weapon",
+      "classification": "implemented",
+      "rust_reference": "dark/src/weapon_animation.rs",
+      "assessment": "Authored animation data parsed and driven by flat_weapon_animation.rs; VR has separate physical handling. Not a claim all KEX helpers are identical."
+    },
+    {
+      "path": "sq_scripts/debug/debug_handler.nut",
+      "sha256": "fa41fc66d6e938b78037145a38e5a0cb002c508ba69c7287bdcbbcf35b3b240b",
+      "bytes": 42681,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui.nut",
+      "sha256": "b4bbba4f92f7382ebdb35c954ca14219965cdbf1540f3e5b6a135eda580b315e",
+      "bytes": 62520,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui_archetypes.nut",
+      "sha256": "0bd7d32bfc779d6919e465fd7ba3a51abfc7001361a74156d7a406054a0612ae",
+      "bytes": 4594,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui_cheats.nut",
+      "sha256": "b560bfc3a9ad4ea2ef3e2fc7f3ad6d7e18e0934d15d06f6e860d5136b9e41f75",
+      "bytes": 44338,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui_inspector.nut",
+      "sha256": "c51fda9bd01911c16874fa2ed3d3ddb20fad909fc2cbbd382bb67db7ff1e38e6",
+      "bytes": 10600,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui_messages.nut",
+      "sha256": "f7a89f8093858e32bdbbeabef2079463bd05d260aa4d261ff32a9619e6362b03",
+      "bytes": 5247,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui_motions.nut",
+      "sha256": "476c574a15251f8cb393f627a179baa4b5d7f09dc3ca6413686c14b17d9b99ab",
+      "bytes": 7778,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui_objects.nut",
+      "sha256": "9b70a414a476e48b162d5eca0f63a77fbdf0362579b209059b3f5340a8f934b6",
+      "bytes": 3311,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui_project.nut",
+      "sha256": "9523e388cc77a68850d58c299bf35bb9b5d24cece0975886a2705cfb777c5406",
+      "bytes": 31504,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui_shapes.nut",
+      "sha256": "bf766a9a444d505578ba906f9f7d015dfeb6fd2122dd1b86f60abb4c1c4ff5a6",
+      "bytes": 3019,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui_squirrel.nut",
+      "sha256": "8f875b2ff41891346316b00b6b60aa6b02e33caf0ae26985ed0a94d3e781efd8",
+      "bytes": 4333,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui_stats.nut",
+      "sha256": "067328b495b6738384c400a561f2c62bfdfe67f3dc3d92a544710ac7877cf60e",
+      "bytes": 8221,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/debug/debug_ui_view.nut",
+      "sha256": "ea54429bf7053c777a4239621d38320467ecf3ca55e09cbbed50219f7bf3811b",
+      "bytes": 14594,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/defines/defines_cheats.nut",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/defines/defines_cutscenes.nut",
+      "sha256": "5c0969570d57f1075f65df32e81a6ef511689fd5e125963717d954eb1bec7f58",
+      "bytes": 23323,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Credits camera tours plus test/liptest definitions; registration alone does not establish campaign trigger reachability."
+    },
+    {
+      "path": "sq_scripts/defines/defines_links.nut",
+      "sha256": "067160ddea8173d2af6185f8cfbf89c620cc9b305d1798d5f2340b31c208cd13",
+      "bytes": 8108,
+      "fingerprint": "none declared",
+      "group": "core",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "Rust effects/ECS replace native Squirrel service wrappers; actual behavioral consumers classified separately."
+    },
+    {
+      "path": "sq_scripts/defines/defines_motions.nut",
+      "sha256": "96229dd1af5cca02b58d168e8bbad09919e27063b7648999a4000738e32ccb09",
+      "bytes": 10362,
+      "fingerprint": "none declared",
+      "group": "core",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "Rust effects/ECS replace native Squirrel service wrappers; actual behavioral consumers classified separately."
+    },
+    {
+      "path": "sq_scripts/defines/defines_props.nut",
+      "sha256": "c5b44605dbf0a4e63cdd4b05966725b194f556edc733ddfb819a780798a824dc",
+      "bytes": 96963,
+      "fingerprint": "none declared",
+      "group": "core",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "Rust effects/ECS replace native Squirrel service wrappers; actual behavioral consumers classified separately."
+    },
+    {
+      "path": "sq_scripts/defines/defines_schemas.nut",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/defines/defines_windows.nut",
+      "sha256": "c6bf98772a8fb405feac8d663aa3e217c4c4002c8187abd0274eeb2ddb9df552",
+      "bytes": 2209,
+      "fingerprint": "none declared",
+      "group": "window",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/mission/entity_creator.rs",
+      "assessment": "No ND_WindowResizer conversion or stable mission override table; #2197."
+    },
+    {
+      "path": "sq_scripts/dev_notes.nut",
+      "sha256": "758ab4cc6ed4e3a28ee2d94385704120535678ac744fdaf3d2336a26d4e6531d",
+      "bytes": 189,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/effects_electrical_projectiles.nut",
+      "sha256": "450e66537053c1df3fae1ec7b32776f202222aeeb1f500b451a1cbaf43df7af0",
+      "bytes": 11754,
+      "fingerprint": "none declared",
+      "group": "electric",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/particle_effects.rs",
+      "assessment": "EMP authored riders implemented, Fusion uses project recipe; exact Droid Spark/Fusion parity not established. Do not infer absence from file format."
+    },
+    {
+      "path": "sq_scripts/effects_hitspangs.nut",
+      "sha256": "0b6367eed6aefc6fd92bd94775c1b5a55020e404b94ea37adc4322b3fccb416f",
+      "bytes": 24028,
+      "fingerprint": "none declared",
+      "group": "impact",
+      "classification": "implemented",
+      "rust_reference": "shock2vr/src/scripts/script_util.rs",
+      "assessment": "ballistic_impact_appearance plus particle_effects.rs replace material spangs/decal selection; Rust effects, not Squirrel execution."
+    },
+    {
+      "path": "sq_scripts/fix_cheeseborger.nut",
+      "sha256": "4cdc3566e2a6619f33f64f7a62cdbd448278f6a177a344b3b2849f6a3d5ab148",
+      "bytes": 679,
+      "fingerprint": "none declared",
+      "group": "cheese",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/mission/mission_core.rs",
+      "assessment": "apply_comestible_use consumes at full HP; SCP Borg/full-health guard is distinct; #2203 conditional attachment."
+    },
+    {
+      "path": "sq_scripts/fix_objconsumebutton.nut",
+      "sha256": "c737c4ef161d88ee8dbedcc07a6f3af5ecd750c9878cec2549639a86f0838de7",
+      "bytes": 2922,
+      "fingerprint": "none declared",
+      "group": "consume",
+      "classification": "implemented",
+      "rust_reference": "shock2vr/src/scripts/obj_consume_button.rs",
+      "assessment": "Consumes required item and drives one-shot switch/tweq lifecycle; native messages adapted to shared Effect path."
+    },
+    {
+      "path": "sq_scripts/fix_shodanteleportblock.nut",
+      "sha256": "f63277dfeba0553f99c41b95b151b0b2c3568d8687a2ad017bc23abb21104cc5",
+      "bytes": 500,
+      "fingerprint": "none declared",
+      "group": "teleport",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/mission/mission_core.rs",
+      "assessment": "Effect::PsiTeleport sets markers without ops1/shodan guard; #2200; native registration needs confirmation."
+    },
+    {
+      "path": "sq_scripts/fix_windowsize_override.nut",
+      "sha256": "ade0f4bf48cf2e1aa8b610c3a988c7bbd9c28da19403841e7bb1ffd31d3dbdb8",
+      "bytes": 1206,
+      "fingerprint": "none declared",
+      "group": "window",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/mission/entity_creator.rs",
+      "assessment": "No ND_WindowResizer conversion or stable mission override table; #2197."
+    },
+    {
+      "path": "sq_scripts/gamesys_misc.nut",
+      "sha256": "ece0e37e170a8950480cee5d6fa9da52ca42d9b76bd0e278cedbff004856393a",
+      "bytes": 1053,
+      "fingerprint": "none declared",
+      "group": "misc",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/vr_config.rs",
+      "assessment": "Base gamesys with project VR poses; optional pipe wrench and miscellaneous KEX archetype changes not automatically enabled; see notes. XYZ/Raypoint/Origin debug; SHODAN Fake Camera -> citcam active; alpha experiments commented."
+    },
+    {
+      "path": "sq_scripts/gamesys_weapons.nut",
+      "sha256": "7bdbe3fd6f385e9d7b2a8b39abe0e862e4499920b7eda742172dbc8a44c9333a",
+      "bytes": 1274,
+      "fingerprint": "none declared",
+      "group": "misc",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/vr_config.rs",
+      "assessment": "Base gamesys with project VR poses; optional pipe wrench and miscellaneous KEX archetype changes not automatically enabled; see notes. Weapon offsets, prism casing GunFlash/velocity and flash properties are active definitions; exact normal attachment/equivalence unverified."
+    },
+    {
+      "path": "sq_scripts/impactor.nut",
+      "sha256": "c7e7b107a13b5a2e6bf8161af652d0cb8ea624d6ed670c359ff652e8de6de143",
+      "bytes": 8941,
+      "fingerprint": "none declared",
+      "group": "impact",
+      "classification": "implemented",
+      "rust_reference": "shock2vr/src/scripts/script_util.rs",
+      "assessment": "ballistic_impact_appearance plus particle_effects.rs replace material spangs/decal selection; Rust effects, not Squirrel execution."
+    },
+    {
+      "path": "sq_scripts/libs/ND.nut",
+      "sha256": "f452974417183b8aeec5f2fe31bc42da3d38541f1abd979fdea3e926ed0d4d8e",
+      "bytes": 742,
+      "fingerprint": "none declared",
+      "group": "core",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "Rust effects/ECS replace native Squirrel service wrappers; actual behavioral consumers classified separately."
+    },
+    {
+      "path": "sq_scripts/libs/animation_handler.nut",
+      "sha256": "bc1bac5fd6fe48ca9cc71193db6a1150ec74d68a863887ef4ec487c38ba52881",
+      "bytes": 8155,
+      "fingerprint": "none declared",
+      "group": "core",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "Rust effects/ECS replace native Squirrel service wrappers; actual behavioral consumers classified separately."
+    },
+    {
+      "path": "sq_scripts/libs/archetype_system.nut",
+      "sha256": "2b418414b7264d063efb8236fd397b0e2eb27940ad2d36fe156bf496f43e1fbc",
+      "bytes": 22069,
+      "fingerprint": "none declared",
+      "group": "core",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "Rust effects/ECS replace native Squirrel service wrappers; actual behavioral consumers classified separately."
+    },
+    {
+      "path": "sq_scripts/libs/cutscene_handler.nut",
+      "sha256": "c60ebd5684d5b854c1d133dde5d758bb04275c47dd743a13efe61fae059ed369",
+      "bytes": 19425,
+      "fingerprint": "none declared",
+      "group": "core",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "Rust effects/ECS replace native Squirrel service wrappers; actual behavioral consumers classified separately."
+    },
+    {
+      "path": "sq_scripts/libs/helpers.nut",
+      "sha256": "76ec1502bc91d018fc026c8f5b8e462e63a47cf5b0b5d658deed909ea1418c9b",
+      "bytes": 41026,
+      "fingerprint": "none declared",
+      "group": "core",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "Rust effects/ECS replace native Squirrel service wrappers; actual behavioral consumers classified separately."
+    },
+    {
+      "path": "sq_scripts/libs/multiplayer_handler.nut",
+      "sha256": "027efe98a5207b2f7066f9b4cbb5bb7a2652c3023f56e5adbca559c9ce7c24a2",
+      "bytes": 1958,
+      "fingerprint": "none declared",
+      "group": "mp",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "No KEX multiplayer peer/ownership layer; do not classify network-only repairs as single-player defects. Mixed local helpers discussed separately."
+    },
+    {
+      "path": "sq_scripts/libs/player.nut",
+      "sha256": "b18965c18493cd1b04373ca74f215217ede4ece61117883fee24372d97c5846f",
+      "bytes": 25587,
+      "fingerprint": "none declared",
+      "group": "core",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "Rust effects/ECS replace native Squirrel service wrappers; actual behavioral consumers classified separately."
+    },
+    {
+      "path": "sq_scripts/libs/pointrig.nut",
+      "sha256": "d719b6df43e041c455bd7607aaabfd3f5937388545e2d4319734c0fb1fc07bcc",
+      "bytes": 34048,
+      "fingerprint": "none declared",
+      "group": "core",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/scripts/mod.rs",
+      "assessment": "Rust effects/ECS replace native Squirrel service wrappers; actual behavioral consumers classified separately."
+    },
+    {
+      "path": "sq_scripts/libs/ui.nut",
+      "sha256": "b3466236afed861e2d835914a3b612ae385f4e0e5fc695c595418260e28bff5f",
+      "bytes": 55781,
+      "fingerprint": "none declared",
+      "group": "ui",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/ui/mod.rs",
+      "assessment": "Shared canvas and native VR input replace KEX overlays; locale/layout excluded from gameplay defect count."
+    },
+    {
+      "path": "sq_scripts/libs/ui_handler.nut",
+      "sha256": "e38892d04a938ea5149551afb8a33d02039d986baf2354d69a6c0cf2b2b458cd",
+      "bytes": 9802,
+      "fingerprint": "none declared",
+      "group": "ui",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/ui/mod.rs",
+      "assessment": "Shared canvas and native VR input replace KEX overlays; locale/layout excluded from gameplay defect count."
+    },
+    {
+      "path": "sq_scripts/libs/viewmodel.nut",
+      "sha256": "aa92193db279ebeb3ef8ca6421627830265dcb1ab19d593471bae24bdb451282",
+      "bytes": 23167,
+      "fingerprint": "none declared",
+      "group": "weapon",
+      "classification": "implemented",
+      "rust_reference": "dark/src/weapon_animation.rs",
+      "assessment": "Authored animation data parsed and driven by flat_weapon_animation.rs; VR has separate physical handling. Not a claim all KEX helpers are identical."
+    },
+    {
+      "path": "sq_scripts/libs/weapon_handler.nut",
+      "sha256": "0e428dbf491aa58941b20f50cece63ff85ec3283fc7b42773d583324e464286c",
+      "bytes": 25037,
+      "fingerprint": "none declared",
+      "group": "weapon",
+      "classification": "implemented",
+      "rust_reference": "dark/src/weapon_animation.rs",
+      "assessment": "Authored animation data parsed and driven by flat_weapon_animation.rs; VR has separate physical handling. Not a claim all KEX helpers are identical."
+    },
+    {
+      "path": "sq_scripts/modelchecklist.nut",
+      "sha256": "a36a9de9a31d776d934f837e009af7bdeb5cb269ad8cb1624a3f9e00b7a96aed",
+      "bytes": 28053,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/modelpreview.nut",
+      "sha256": "5026629cf998cb3e81950ff92c604457d538ac463aed27b7376d868c3c1994ec",
+      "bytes": 1119,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/monster_script.nut",
+      "sha256": "56fe2c8050157ac496aa67b571743698f008a1cb2d25a22c364a70cc39aa2aa2",
+      "bytes": 1440,
+      "fingerprint": "none declared",
+      "group": "face",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Face/Vocalize speaker lifecycle and morph timing not consumed; #2180; SCP gates remain conditional."
+    },
+    {
+      "path": "sq_scripts/object_botmvein.nut",
+      "sha256": "881ba57921edacf755b7f46f204fbc38feef93c71136f500f94ad7a518d79441",
+      "bytes": 236,
+      "fingerprint": "none declared",
+      "group": "vein",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/mission/entity_creator.rs",
+      "assessment": "Authored vein 30 animation/20 model frames at 20Hz absent; #2186."
+    },
+    {
+      "path": "sq_scripts/object_cryodoor.nut",
+      "sha256": "57f9240d6405af0896db0b8651b7f4f3cdd4c6236c1e663200f1ca82d4175567",
+      "bytes": 335,
+      "fingerprint": "none declared",
+      "group": "decor",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/mission/entity_creator.rs",
+      "assessment": "No authored MedSci PODD_OPEN or Many crystal override mapping; #2196; requires SCP identity."
+    },
+    {
+      "path": "sq_scripts/object_egg.nut",
+      "sha256": "3f3bdddcd7f6885d7cd7873f202c2d181e2cf965cb4e08d279edcd73fbb30485",
+      "bytes": 1252,
+      "fingerprint": "none declared",
+      "group": "egg",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/base_egg.rs",
+      "assessment": "Hatching logic exists; named rig opening morph is separate #2183."
+    },
+    {
+      "path": "sq_scripts/object_grub.nut",
+      "sha256": "9d4a69f76c39a521716a8f6c1e86762138ba5d9f21dfee73275a5a71e1c1e6b5",
+      "bytes": 309,
+      "fingerprint": "none declared",
+      "group": "grub",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/ai/grub_ai.rs",
+      "assessment": "AI exists; NDgrub 20 frames at 20Hz absent; #2198. Corpse DML is commented out."
+    },
+    {
+      "path": "sq_scripts/object_pipewrench.nut",
+      "sha256": "3d1633f3513adfc86cf6a339292d7df37f7df51b8528817f56c00043ff885c9b",
+      "bytes": 321,
+      "fingerprint": "none declared",
+      "group": "misc",
+      "classification": "intentionally different",
+      "rust_reference": "shock2vr/src/vr_config.rs",
+      "assessment": "Base gamesys with project VR poses; optional pipe wrench and miscellaneous KEX archetype changes not automatically enabled; see notes."
+    },
+    {
+      "path": "sq_scripts/object_plants.nut",
+      "sha256": "fed6a36fdcc8b2e25a3be1d12055c4cb4720659935af73797f94bcaeea6f0e7f",
+      "bytes": 2946,
+      "fingerprint": "none declared",
+      "group": "plants",
+      "classification": "implemented",
+      "rust_reference": "shock2vr/src/plant_animation.rs",
+      "assessment": "Authored three-channel plant driver present on main via #2189 / 889808af; #2182 closed."
+    },
+    {
+      "path": "sq_scripts/object_protocoldroid.nut",
+      "sha256": "67a7e9823143edf0e47a0614c45a40c24aab33e0e7c31995b30c07c8f516e671",
+      "bytes": 6553,
+      "fingerprint": "none declared",
+      "group": "droid",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/base_monster.rs",
+      "assessment": "No ND damage/corpse archetype wiring under GAM shockscp.gam; #2185 depends on #2195."
+    },
+    {
+      "path": "sq_scripts/object_raytester.nut",
+      "sha256": "ceedd7dc801f86530c4c81b94f232b1a0d25056c0d208d82e0314534165c5d1a",
+      "bytes": 1888,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/object_shodan.nut",
+      "sha256": "63755439755bf04e88d6dba6e3fd05e8ba4e2abd53fd00a1e24a32df4377aa28",
+      "bytes": 4203,
+      "fingerprint": "none declared",
+      "group": "shodan",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/cs9.rs",
+      "assessment": "Legacy screen fades exist; four ND screens/eyes/mouth/hijack wiring absent; #2184, #2180."
+    },
+    {
+      "path": "sq_scripts/object_xerxes.nut",
+      "sha256": "fd8be4abe70ac2652d392b8a60fecf28da6cebba2bc65cc067f1c8bc672c2124",
+      "bytes": 73,
+      "fingerprint": "none declared",
+      "group": "debug",
+      "classification": "irrelevant/debug/commented-out",
+      "rust_reference": "AGENTS.md",
+      "assessment": "Debug tools, constants or commented experiments; no supported campaign behavior established."
+    },
+    {
+      "path": "sq_scripts/visuals_monsteridles.nut",
+      "sha256": "16035dddacc7258980692c0c1d9e237c3909d2865dbb63293450c011f2b0ddb1",
+      "bytes": 1294,
+      "fingerprint": "none declared",
+      "group": "idle",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/scripts/ai/animated_monster_ai.rs",
+      "assessment": "Authored worm idle morph absent; #2181; big_head_mode is an explicit cheat, not default retail behavior."
+    },
+    {
+      "path": "sq_scripts/windowresizer.nut",
+      "sha256": "e925b6ac42ac8de07dcb487e373c6d384997a5e1d91ae36a3cd22e8c1e9f8e99",
+      "bytes": 29747,
+      "fingerprint": "none declared",
+      "group": "window",
+      "classification": "confirmed gap",
+      "rust_reference": "shock2vr/src/mission/entity_creator.rs",
+      "assessment": "No ND_WindowResizer conversion or stable mission override table; #2197."
+    }
+  ]
+}
