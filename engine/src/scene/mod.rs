@@ -95,3 +95,5 @@ pub mod self_depth;
 pub mod world_wave;
 
 pub mod uv_motion;
+
+pub mod morph_mesh;

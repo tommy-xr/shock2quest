@@ -554,6 +554,8 @@ export interface SceneObjectSummary {
   depth_write: boolean;
   /** Authored material passes in draw order. */
   material_passes?: string[];
+  /** Per-instance weights on deformable LGMD object geometry. */
+  morph_weights?: Vec3 | null;
   material_only?: boolean;
   /** Explicit renderer composition layer. */
   render_layer: "world" | "scene_overlay" | "scene_ui" | "system_overlay";

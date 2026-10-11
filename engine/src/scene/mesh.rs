@@ -137,3 +137,20 @@ impl Drop for Mesh {
         }
     }
 }
+
+impl Mesh {
+    /// Replace vertex data without allocating a new VAO/VBO per frame.
+    pub fn update<T: Vertex>(&self, vertices: &[T]) {
+        assert_eq!(vertices.len(), self.triangle_count as usize);
+        unsafe {
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
+            gl::BufferSubData(
+                gl::ARRAY_BUFFER,
+                0,
+                (vertices.len() * T::get_total_size() as usize) as isize,
+                vertices.as_ptr() as *const c_void,
+            );
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+        }
+    }
+}

@@ -145,6 +145,8 @@ pub struct SceneObject {
     pub depth_write: bool,
     /// Visual displacement for this object, including its self-depth passes.
     pub world_wave: super::world_wave::WorldWave,
+    /// Per-instance shape weights, shared by color, overlays and self-depth.
+    pub morph_weights: [f32; 3],
     /// Parts sharing an ID hide one another, without occluding other transparency.
     pub self_depth_group: Option<u64>,
     render_layer: RenderLayer,
@@ -420,6 +422,7 @@ impl SceneObject {
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
             world_wave: Default::default(),
+            morph_weights: [0.0; 3],
             self_depth_group: None,
             render_layer: RenderLayer::World,
             projection_override: None,
@@ -701,6 +704,7 @@ impl SceneObject {
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
             world_wave: Default::default(),
+            morph_weights: [0.0; 3],
             self_depth_group: None,
             render_layer: RenderLayer::World,
             projection_override: None,
@@ -726,6 +730,7 @@ impl SceneObject {
             skinning_data: self.skinning_data,
             depth_write: self.depth_write,
             world_wave: self.world_wave,
+            morph_weights: self.morph_weights,
             self_depth_group: self.self_depth_group,
             render_layer: self.render_layer,
             projection_override: self.projection_override,
@@ -839,7 +844,7 @@ impl SceneObject {
                 }
             }
         }
-        self.geometry.draw();
+        self.geometry.draw_with_morph(self.morph_weights);
         if matches!(
             blend,
             BlendMode::AdditiveAlpha | BlendMode::AlphaOverlay | BlendMode::Authored(_, _)
@@ -985,8 +990,10 @@ mod tests {
             offset_per_height: vec3(0.1, 0.03, 0.0),
             origin_y: 1.0,
         };
+        object.morph_weights = [0.2, -0.3, 0.4];
         let depth = object.self_depth_object().unwrap();
         assert_eq!(depth.world_wave, object.world_wave);
+        assert_eq!(depth.morph_weights, object.morph_weights);
         assert!(Rc::ptr_eq(&depth.material, &base));
         assert!(depth.material_stack.is_none());
         assert_eq!(depth.transparency_override, Some(0.0));

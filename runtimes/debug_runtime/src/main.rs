@@ -1250,6 +1250,7 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
                 ],
                 transparency: obj.effective_transparency(),
                 depth_write: obj.depth_write,
+                morph_weights: obj.geometry.has_morph().then_some(obj.morph_weights),
                 material_passes: obj
                     .material_stack
                     .as_ref()
