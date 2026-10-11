@@ -87,6 +87,20 @@ pub fn load_gamesys_with_mission(mission_name: &str) -> Result<SystemShock2Entit
     Ok(merged_entity_info)
 }
 
+/// Load a mission's own entity data, without merging the gamesys into it
+pub fn load_mission_only(mission_name: &str) -> Result<SystemShock2EntityInfo> {
+    let (properties, links, links_with_data) = get();
+    let mut mission_reader = open_data_file(mission_name)?;
+    let table_of_contents = ss2_chunk_file_reader::read_table_of_contents(&mut mission_reader);
+    Ok(ss2_entity_info::new(
+        &table_of_contents,
+        &links,
+        &links_with_data,
+        &properties,
+        &mut mission_reader,
+    ))
+}
+
 /// Load entity data based on optional mission parameter
 pub fn load_entity_data(mission: Option<&str>) -> Result<SystemShock2EntityInfo> {
     match mission {
