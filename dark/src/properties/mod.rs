@@ -2683,6 +2683,18 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$CfgTweqSc",
+            PropTweqScaleConfig::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$StTweqSca",
+            PropTweqScaleState::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$StTweqRot",
             PropTweqRotateState::read,
             identity,

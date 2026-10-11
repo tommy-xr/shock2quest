@@ -103,7 +103,8 @@ use crate::{
         speech_registry::SpeechVoiceRegistry,
     },
     systems::{
-        run_attachment_update, run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs,
+        run_attachment_update, run_bitmap_animation, run_scale_tweq, run_tweq, turn_off_tweqs,
+        turn_on_tweqs,
     },
     time::Time,
     util::{debug_entity, get_email_sound_file, get_entity_position, has_refs, vec3_to_point3},
@@ -7835,6 +7836,7 @@ impl MissionCore {
         }
 
         self.world.run(run_tweq);
+        self.world.run(run_scale_tweq);
         self.world.run(run_bitmap_animation);
 
         self.gui.update();
@@ -15282,6 +15284,32 @@ impl MissionCore {
                     if let Some(rigid_body_handle) = self.id_to_physics.get(&entity_id) {
                         self.physics.set_translation(*rigid_body_handle, position);
                     };
+                }
+                Effect::SetScale { entity_id, scale } => {
+                    let alive = self
+                        .world
+                        .borrow::<EntitiesView>()
+                        .unwrap()
+                        .is_alive(entity_id);
+                    if alive {
+                        self.world
+                            .add_component(entity_id, dark::properties::PropScale(scale));
+                    }
+                    // A rigid body's transform is rebuilt from PropScale every
+                    // physics sync; anything else only when it is placed.
+                    let pose = (!self.id_to_physics.contains_key(&entity_id))
+                        .then(|| {
+                            self.world
+                                .borrow::<View<PropPosition>>()
+                                .unwrap()
+                                .get(entity_id)
+                                .ok()
+                                .map(|pose| (pose.position, pose.rotation))
+                        })
+                        .flatten();
+                    if let Some((position, rotation)) = pose {
+                        self.set_entity_position_rotation(entity_id, position, rotation, scale);
+                    }
                 }
                 Effect::SetRotation {
                     entity_id,
