@@ -16398,9 +16398,25 @@ impl MissionCore {
         if !options.debug_show_ids {
             highlighted.retain(|e| is_hud_selectable(&self.world, *e));
         }
+        // Flat only: VR names objects solely in the inventory bar's frame. While
+        // the bar is up (use mode) it owns the readout in both presentations.
+        if options.presentation_mode != crate::PresentationMode::Vr
+            && self.flat_ui.strip_entity().is_none()
+        {
+            // One name frame, independent of damage flashes.
+            let rollover = self
+                .name_strip_world_pick(options)
+                .filter(|entity| options.debug_show_ids || is_hud_selectable(&self.world, *entity));
+            ret.extend(draw_item_name(
+                asset_cache,
+                rollover,
+                &self.world,
+                screen_size,
+                options.debug_show_ids,
+            ));
+        }
         for hit_entity in highlighted {
-            // What the highlight frames. Resolved once, so the brackets and
-            // the label can never frame different things.
+            // Resolve once so brackets and the health bar frame the same object.
             let Some(bounds) = self.selection_bounds(hit_entity) else {
                 continue;
             };
@@ -16413,17 +16429,6 @@ impl MissionCore {
                 view,
                 projection,
                 screen_size,
-            ));
-
-            ret.extend(draw_item_name(
-                asset_cache,
-                bounds,
-                hit_entity,
-                &self.world,
-                view,
-                projection,
-                screen_size,
-                options.debug_show_ids,
             ));
 
             ret.extend(draw_health_bar(
