@@ -17,6 +17,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  unused-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+      - name: Install dependency checker
+        run: cargo install cargo-machete --version 0.9.2 --locked
+      - name: Check unused dependencies
+        run: cargo machete
+
   build:
     strategy:
       fail-fast: false
@@ -32,7 +44,7 @@ jobs:
       # Install Linux-specific dependencies
       - name: Install ALSA (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev ffmpeg libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev libavfilter-dev libswresample-dev libswscale-dev pkg-config yasm
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev ffmpeg libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev libavfilter-dev libswresample-dev libswscale-dev pkg-config yasm
 
       # Install macOS-specific dependencies
       - name: Install macOS dependencies
@@ -56,6 +68,12 @@ jobs:
       # forces a fully cold build. Replaces the previous target-only cache.
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+
+      # Includes tools omitted by the runtime build/test list below. Android
+      # has its own build; this host check uses the default FFmpeg features.
+      - name: Check unused code (Unix)
+        if: runner.os != 'Windows'
+        run: cargo check-unused
 
       # Actual build steps.
       # Build and test both run in --release so the optimized dependency tree

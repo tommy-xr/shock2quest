@@ -86,8 +86,6 @@ where
     PixelFormat: Pixel<Subpixel = u8> + image::PixelWithColorType,
 {
     atlases: Vec<TextureAtlas<PixelFormat>>,
-    #[allow(dead_code)]
-    current_atlas_idx: u8,
     current_atlas_pixel_y: u32,
     current_atlas_pixel_x: u32,
     current_row_max_height: u32,
@@ -103,7 +101,6 @@ where
         let atlases = vec![TextureAtlas::<Rgb<u8>>::new_rgb(width, height)];
         TexturePacker {
             atlases,
-            current_atlas_idx: 0,
             current_atlas_pixel_x: 0,
             current_atlas_pixel_y: 0,
             current_row_max_height: 16,
@@ -116,7 +113,6 @@ where
         let atlases = vec![TextureAtlas::<Rgba<u8>>::new_rgba(width, height)];
         TexturePacker {
             atlases,
-            current_atlas_idx: 0,
             current_atlas_pixel_x: 0,
             current_atlas_pixel_y: 0,
             current_row_max_height: 16,

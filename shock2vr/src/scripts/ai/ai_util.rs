@@ -29,10 +29,6 @@ use crate::{
     },
 };
 
-///
-/// random_binomial
-///
-/// Returns a random number between -1 and 1, where values around 0 are more likely
 /// Tell every watchdog that this AI is standing still on purpose (or is free
 /// to move again). Published by the AI script BEFORE it steers - see
 /// `MovementHold`.
@@ -54,13 +50,6 @@ pub fn movement_hold(world: &World, entity_id: EntityId) -> MovementHold {
         .and_then(|g| g.0.clone())
         .map(|service| service.movement_hold(entity_id.inner()))
         .unwrap_or_default()
-}
-
-pub fn random_binomial() -> f32 {
-    let mut rng = thread_rng();
-    let a = rng.gen_range(0.0..1.0);
-    let b = rng.gen_range(0.0..1.0);
-    a - b
 }
 
 /// Height to fall back on when the creature has no definition (world units)

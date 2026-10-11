@@ -1031,29 +1031,6 @@ struct PanicOnLoadScript {
     name: String,
 }
 
-impl PanicOnLoadScript {
-    #[allow(dead_code)]
-    pub fn new(name: &str) -> PanicOnLoadScript {
-        PanicOnLoadScript {
-            name: name.to_owned(),
-        }
-    }
-}
-
-#[allow(dead_code)]
-struct PanicOnMessageScript;
-impl Script for PanicOnMessageScript {
-    fn handle_message(
-        &mut self,
-        _entity_id: EntityId,
-        _world: &World,
-        _physics: &PhysicsWorld,
-        _msg: &MessagePayload,
-    ) -> Effect {
-        panic!("Panic for this script");
-    }
-}
-
 impl Script for PanicOnLoadScript {
     fn support(&self) -> ScriptSupport {
         ScriptSupport::Unregistered
@@ -1255,7 +1232,6 @@ impl ScriptWorld {
             "internal_weapon_settings" => gui_script(Box::new(WeaponSettingsGui)),
             "internal_psi_hack" => gui_script(Box::new(gui::psi_hack::PsiHackGui)),
             "internal_psi_powers" => gui_script(Box::new(PsiPowersGui)),
-            // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
             "internal_explosion" => Box::new(InternalExplosion::new()),
             "internal_egg_goo_cloud" => Box::new(egg_goo_cloud::EggGooCloud::default()),
             "internal_radiation_source" => Box::new(InternalRadiationSource),
@@ -1499,7 +1475,6 @@ impl ScriptWorld {
             "ammoscript" => Box::new(NoopScript::new()),
             //"BaseElevator" => Box::new(UnimplementedScript::new(&name)),
             "baselight" => Box::new(BaseLight::new()),
-            //"baseai" => Box::new(PanicOnLoadScript::new(&script_name)),
             "baseai" => Box::new(NoopScript::new()),
             "basemonster" => Box::new(BaseMonster::new()),
             "cameraalert" => Box::new(CameraAlert::new()),

@@ -20,20 +20,10 @@ pub trait VisibilityEngine {
     }
 }
 
-#[allow(dead_code)]
 pub struct AlwaysVisible;
 
 impl VisibilityEngine for AlwaysVisible {
     fn is_visible(&mut self, _entity_id: EntityId) -> bool {
         true
-    }
-}
-
-#[allow(dead_code)]
-pub struct NeverVisible;
-
-impl VisibilityEngine for NeverVisible {
-    fn is_visible(&mut self, _entity_id: EntityId) -> bool {
-        false
     }
 }

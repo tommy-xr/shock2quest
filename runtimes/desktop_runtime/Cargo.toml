@@ -12,7 +12,6 @@ engine = { path = "../../engine" }
 dark = { path = "../../dark" }
 cgmath = "0.18.0"
 tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
 clap = { version = "4.3.5", features = ["derive"] }
 
 # FFmpeg is disabled on Windows due to build complexity

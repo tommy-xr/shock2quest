@@ -291,7 +291,6 @@ pub fn main() {
     // glfw: initialize and configure
     // ------------------------------
 
-    //tracing_subscriber::fmt::init();
     let args = Args::parse();
     // Seed before any HTTP server or game starts: later live writes must win.
     if args.debug_physics {

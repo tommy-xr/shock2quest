@@ -3,7 +3,6 @@ mod chase_entity_steering_strategy;
 mod chase_player_steering_strategy;
 mod collision_avoidance_steering_strategy;
 mod path_follow_steering_strategy;
-mod wander_steering_strategy;
 mod whisker_avoidance;
 
 pub use chained_steering_strategy::*;

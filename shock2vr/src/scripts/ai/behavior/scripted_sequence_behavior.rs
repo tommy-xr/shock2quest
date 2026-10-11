@@ -374,15 +374,6 @@ impl ScriptedAction for PlayAnimationScriptedAction {
     }
 }
 
-#[allow(dead_code)]
-pub struct IdleScriptedAction;
-
-impl ScriptedAction for IdleScriptedAction {
-    fn animation(self: &IdleScriptedAction) -> Vec<MotionQueryItem> {
-        vec![MotionQueryItem::new("idlegesture")]
-    }
-}
-
 /// Sends a named script message (as a Signal) to the performing entity's own
 /// scripts - e.g. the apparition sequences bracket their performance with
 /// ScriptMessage("ApparBegin") / ScriptMessage("ApparEnd"), which the

@@ -1,4 +1,5 @@
 [alias]
+check-unused = "clippy --workspace --exclude shock2quest --all-targets --no-deps -- -A clippy::all -D dead_code"
 dv = "run -p dark_viewer --"
 dq = "run -p dark_query --"
 dx = "run -p dark_explorer --"
