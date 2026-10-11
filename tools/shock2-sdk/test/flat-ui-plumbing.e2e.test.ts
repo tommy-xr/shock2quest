@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 
-// End-to-end test for the flat-UI plumbing (projects/flat-ui.md PR 1):
+// End-to-end test for the flat-UI plumbing:
 // - GET /v1/ui reports the flat UI mode ("shooter" by default)
 // - InputAction::ToggleUseMode flips it to "use" and back (the original
 //   game's Tab metagame mode - mode tracking only at this stage)

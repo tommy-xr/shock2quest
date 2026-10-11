@@ -5,7 +5,7 @@ import { GameServer, type UiElement, type UiState } from "../src/index.js";
 import { fireOnce } from "./helpers/weapon.js";
 
 // End-to-end test for the BIOFULL/AMMOFULL expanded readouts in use mode
-// (flat UI 5, projects/flat-ui.md §1.2 / §6 PR 5):
+// (flat UI 5):
 //
 //   - Entering use mode (Tab) expands the compact bottom readouts: BIO.PCX ->
 //     BIOFULL.PCX (bottom-left) and AMMOBACK -> AMMOFULL.PCX (bottom-right).

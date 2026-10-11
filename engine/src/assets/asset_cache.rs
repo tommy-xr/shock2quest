@@ -15,7 +15,7 @@ pub struct AssetCache {
     base_path: String,
     importer_to_assets: ImporterAssetMap,
     // `Arc` (not `Rc`) so the `Send + Sync` asset-path layer can be cloned out and handed
-    // to a background level-parse thread (projects/loading-screen.md).
+    // to a background level-parse thread.
     path: Arc<Box<dyn AbstractAssetPath>>,
 }
 

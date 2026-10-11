@@ -165,7 +165,7 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
         Box::new(NoAssetsScene::new(&status))
     }),
     // Visual-only scene to inspect the loading screen UI
-    // (projects/loading-screen.md, PR 1) independent of any real loading.
+    // independent of any real loading.
     ("debug_loading", |_global, _options, _assets, _audio| {
         Box::new(LoadingScene::new_demo())
     }),

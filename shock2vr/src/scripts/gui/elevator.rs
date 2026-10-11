@@ -11,7 +11,7 @@ use crate::gui;
 use crate::scripts::Effect;
 
 /// The five main-tram elevator stops, decoded from the gamesys `Elev` file-var
-/// (`Eng1, medsci1, Hydro2, ops2, Rec1` - projects/flat-ui-panels.md §2.1),
+/// (`Eng1, medsci1, Hydro2, ops2, Rec1`),
 /// index 0 = deck 1. Kept as a verified hardcode with this citation; the
 /// gamesys param reader that would source it lands with the trainer PR (§7.1
 /// PR C2). Deck 6 (the Rec<->Command tram) is a separate elevator, never on
@@ -76,8 +76,7 @@ impl ElevatorContext {
 
 /// Whether a floor (`deck` 1..=5) is reachable given the `ElevState` quest bit
 /// (raw value). The original gates the panel on `ElevState`: 0 = no power,
-/// 1 = partial ("worm goo") lockout, 2 = fully accessible
-/// (projects/flat-ui-panels.md §2.1).
+/// 1 = partial ("worm goo") lockout, 2 = fully accessible.
 ///
 fn is_floor_available(elev_state: u32, deck: usize) -> bool {
     match elev_state {
@@ -235,8 +234,7 @@ impl Gui<ElevatorGuiState, ElevatorGuiMsg> for ElevatorGui {
     }
 }
 
-/// The floor-name text drawn inside a button (`TEXT_X 60` from the original,
-/// projects/flat-ui-panels.md §2.1).
+/// The floor-name text drawn inside a button (`TEXT_X 60` from the original).
 fn floor_text(label: &str, button_position: Vector2<f32>) -> GuiComponent<ElevatorGuiMsg> {
     gui::text(label)
         .with_position(vec2(button_position.x + 60.0, button_position.y + 30.0))

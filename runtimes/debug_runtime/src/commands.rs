@@ -623,8 +623,7 @@ pub struct QuestBitsResult {
 
 /// Flat-mode UI state snapshot (`GET /v1/ui`): "shooter" or "use", plus the
 /// open MFD panel and the use-mode inventory strip (entity binding + labeled
-/// clickable elements with canvas and normalized-screen rects). See
-/// projects/flat-ui.md.
+/// clickable elements with canvas and normalized-screen rects).
 #[derive(Debug, Serialize)]
 pub struct UiStateResult {
     pub mode: String,

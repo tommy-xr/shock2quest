@@ -721,7 +721,7 @@ pub struct Game {
     options: GameOptions,
     pub asset_cache: AssetCache,
     // `Arc` so the gamesys + definitions can be cloned into a background level-parse
-    // thread (projects/loading-screen.md). Shared immutably after init.
+    // thread. Shared immutably after init.
     global_context: Arc<GlobalContext>,
     active_game_scene: Box<dyn GameScene>,
     /// Set while a deferred transition is in flight (loading screen showing).
@@ -889,7 +889,7 @@ pub struct PlayerStateSnapshot {
     pub collected_logs: Vec<crate::quest_info::CollectedLog>,
     /// The automap locations explored in the current mission (ascending).
     /// Empty when the scene has no `QuestInfo` or no automap. Persisted per
-    /// mission in `QuestInfo`. See `projects/flat-ui-panels.md` §5.
+    /// mission in `QuestInfo`.
     pub explored_map_locations: Vec<i32>,
 }
 

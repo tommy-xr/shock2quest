@@ -1,4 +1,4 @@
-//! Flat-mode MFD panel host (projects/flat-ui.md §5.2, PR 2).
+//! Flat-mode MFD panel host.
 //!
 //! The flat presentation of the shared `Gui` layer: default VR opens the same
 //! object-bound panel as a world quad (`GuiManager` + `ProxyGuiScript`), while
@@ -106,7 +106,7 @@ pub enum FlatUiDragAction {
 /// wield gesture: a second press on the just-lifted item's slot within this
 /// window/radius wields it instead of placing (the original equips from the
 /// inventory; with a single flat pointer button a double-click is the
-/// faithful mapping - projects/flat-ui.md §1.5).
+/// faithful mapping).
 const DOUBLE_CLICK_WINDOW_FRAMES: u32 = 20;
 const DOUBLE_CLICK_RADIUS: f32 = 24.0;
 
@@ -269,7 +269,7 @@ pub struct FlatUiHost {
     components: Vec<GuiComponentRenderInfo>,
     /// Tab metagame ("use") mode: the top-docked inventory strip, bound to
     /// the player's `internal_inventory` entity. `Some` exactly while flat
-    /// use mode is on (projects/flat-ui.md §5.2, PR 4).
+    /// use mode is on.
     strip: Option<StripSlot>,
     /// The item lifted onto the cursor (the original's "cursor IS the item"
     /// drag, §2.4). `Some` between a lift and the place/throw that clears it.
@@ -856,7 +856,7 @@ impl FlatUiHost {
     /// Take the item off the cursor (clearing it), returning its entity id.
     /// The caller returns it to the backpack - the original refuses to leave
     /// the metagame while `drag_obj` is set, so Tab-out re-homes the item
-    /// rather than losing it (projects/flat-ui.md §1.5).
+    /// rather than losing it.
     pub fn take_cursor_item(&mut self) -> Option<EntityId> {
         self.last_lift = None;
         self.cursor_item.take().map(|c| c.entity)
@@ -1095,7 +1095,7 @@ impl FlatUiHost {
     /// LMB on a strip item lifts it onto the cursor, LMB on another slot
     /// places/swaps, LMB on the bare view throws it into the world. A
     /// bare-view click closes the MFD panel but never the strip - use mode is
-    /// left by Tab (projects/flat-ui.md §5.2).
+    /// left by Tab.
     pub fn update(
         &mut self,
         world: &World,

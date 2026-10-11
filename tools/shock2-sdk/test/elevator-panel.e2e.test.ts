@@ -5,8 +5,8 @@ import { GameServer } from "../src/index.js";
 import type { UiElement, UiState } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
-// End-to-end test for the flat-mode elevator MFD (projects/flat-ui-panels.md
-// §2, PR A - "flat UI 6a"): frobbing the medsci1 Master Elevator Button opens
+// End-to-end test for the flat-mode elevator MFD (PR A -
+// "flat UI 6a"): frobbing the medsci1 Master Elevator Button opens
 // ElevatorGui in the left MFD, whose floor buttons are now semantically
 // labeled from MISC.STR (`ElevLevel<n>`), the current deck is lit + inert, and
 // floors gate on the `ElevState` quest bit. With no power the original draws

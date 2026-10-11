@@ -2,7 +2,7 @@
 //!
 //! A `GameScene` that draws the original animated loading screen while a level
 //! loads, so the window keeps presenting frames instead of freezing on a black
-//! frame (projects/loading-screen.md). The original screen is a 3-layer composite,
+//! frame. The original screen is a 3-layer composite,
 //! all shipped in `intrface.crf`:
 //!
 //! 1. `LOADING.PCX` — the 640x480 backdrop (frame + bracket).

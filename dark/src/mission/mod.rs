@@ -123,7 +123,7 @@ pub struct SystemShock2Level {
     pub water_render_info: WaterRenderInfo,
 }
 
-// Capstone for the loading-screen "foundation track" (projects/loading-screen.md, PR
+// Capstone for the loading-screen "foundation track" (PR
 // S1+S2): the full level-parse output is now `Send + Sync`, so it can cross to a worker
 // thread for background loading (PR 3). This guard fails to compile if any future field
 // reintroduces a non-thread-safe type (e.g. an `Rc`).
@@ -173,7 +173,7 @@ pub struct UVCalculationInfo {
 // `read` takes only the `Send + Sync` asset-path layer + base path, NOT `&mut
 // AssetCache`. With no `AssetCache` in scope it cannot touch the GPU — the level parse
 // is GL-free *by construction*, so it can run on a worker thread (the background-load
-// goal, projects/loading-screen.md).
+// goal).
 pub fn read<T: io::Read + io::Seek>(
     asset_paths: &dyn AbstractAssetPath,
     base_path: &str,

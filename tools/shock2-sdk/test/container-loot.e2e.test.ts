@@ -5,7 +5,7 @@ import { GameServer } from "../src/index.js";
 import type { UiElement } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
-// End-to-end test for container loot (projects/flat-ui.md PR 3, resolves #433;
+// End-to-end test for container loot (flat UI PR 3, resolves #433;
 // supersedes PR #439, salvaging its interaction semantics and scenario shape):
 //
 //  1. Containment at creation: an entity with an incoming `Contains` link has

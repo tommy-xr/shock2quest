@@ -4,8 +4,8 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
-// End-to-end test for the flat-mode automap panel (projects/flat-ui-panels.md
-// §5, flat UI 6c): visited-region tracking (persisted in QuestInfo), the
+// End-to-end test for the flat-mode automap panel (flat UI
+// 6c): visited-region tracking (persisted in QuestInfo), the
 // room->MapLoc reveal wiring, the MapRef world->page transform driving the
 // player marker, and the wide unbound (sticky) panel opened by ToggleMap.
 //

@@ -14984,7 +14984,7 @@ mod tests {
         );
     }
 
-    /// Issue #603 / `projects/climbing.md`: entering a descent **from the top
+    /// Issue #603: entering a descent **from the top
     /// lip**. The player stands on the landing whose floor is flush with the
     /// ladder's top (eng1's Engine Core shaft: landing feet at y -12.80, top
     /// rung capped at -12.80), steps off into the shaft, and - still looking

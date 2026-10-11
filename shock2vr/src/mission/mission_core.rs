@@ -2478,7 +2478,7 @@ pub struct GlobalGunSettingTexts(pub [HashMap<String, String>; 2]);
 
 /// The synthetic player-owned entity hosting the automap panel (`MapGui`).
 /// Created at mission init; `Effect::ToggleMap` opens/closes its panel in the
-/// flat host. See `projects/flat-ui-panels.md` §5.
+/// flat host.
 #[derive(Unique, Clone, Copy)]
 pub struct MapPanelEntity(pub EntityId);
 
@@ -3271,8 +3271,8 @@ pub struct MissionCore {
     /// "Use" (metagame) mode, toggled by `Effect::ToggleUseMode` (Tab on
     /// flat; a free hand's lower face button in VR). One mode, two
     /// presentations: flat
-    /// shows the cursor + top-docked inventory strip on screen
-    /// (`projects/flat-ui.md`); VR presents the same strip canvas on a
+    /// shows the cursor + top-docked inventory strip on screen;
+    /// VR presents the same strip canvas on a
     /// head-anchored world panel - the "cyber interface" - with the world
     /// dimmed behind it and the wielded weapon safed. Unlike the pause menu,
     /// the world keeps simulating while it is up.
@@ -3400,7 +3400,6 @@ pub struct MissionCore {
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
     /// `GuiManager` for the corresponding object-bound world panel.
-    /// See `projects/flat-ui.md` §5.2.
     pub flat_ui: crate::mission::flat_ui_host::FlatUiHost,
 
     /// Whether ordinary movement/hand/pointer input reaches the active player.
@@ -10505,8 +10504,8 @@ impl MissionCore {
     /// Drop out of the flat "use" (metagame) mode: put the inventory strip
     /// away and let go of anything on the cursor. The cursor item was never
     /// removed from the backpack (the host only hid it from the strip), so
-    /// clearing the cursor is enough - the item is already reachable there
-    /// (projects/flat-ui.md §1.5), and a save or transition mid-drag serializes
+    /// clearing the cursor is enough - the item is already reachable there,
+    /// and a save or transition mid-drag serializes
     /// it correctly with no orphan.
     ///
     /// Shared by `ToggleUseMode` and `CloseUseMode` so the two exits from use
@@ -18270,8 +18269,8 @@ impl MissionCore {
     }
 
     /// Whether the runtime should show a 2D cursor instead of captured
-    /// mouse-look: an MFD panel is open, or "use" mode is active
-    /// (projects/flat-ui.md §5.2). Only the flat desktop runtime consults
+    /// mouse-look: an MFD panel is open, or "use" mode is active.
+    /// Only the flat desktop runtime consults
     /// this; in VR (where use mode is the cyber interface) no runtime reads
     /// it, so the mode's truthy answer there is inert.
     pub fn wants_pointer(&self) -> bool {

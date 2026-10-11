@@ -68,8 +68,8 @@ const OVERLOAD_METER: Rect = Rect::new(
 /// access), so it is unit-testable.
 ///
 /// `use_mode` is the whole shooter/interface split: the original turns the
-/// crosshair overlay off while the cursor is up (`ShockOverlayMouseMode`,
-/// projects/flat-ui.md §2.1), and the bottom readouts move to the interface
+/// crosshair overlay off while the cursor is up (`ShockOverlayMouseMode`),
+/// and the bottom readouts move to the interface
 /// canvas - so in use mode this draws neither.
 pub(crate) fn build_flat_hud_canvas(
     use_mode: bool,

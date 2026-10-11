@@ -433,7 +433,6 @@ pub enum Effect {
     /// 3D view, as the original game does on Tab. Currently only tracks the
     /// mode (introspectable via the debug runtime's `GET /v1/ui`); the cursor
     /// and panel presentation land with the flat UI host. No-op in VR.
-    /// See `projects/flat-ui.md`.
     ToggleUseMode,
 
     /// Leave the flat-mode "use" (metagame) mode and dismiss any open MFD
@@ -445,7 +444,7 @@ pub enum Effect {
     /// Open the presentation's object-bound panel slot - a flat MFD or a VR
     /// world quad - emitted by `GuiScript` when its entity is frobbed. This
     /// mirrors the original engine's frob-script overlay flow
-    /// (`cShockGameSrv::Keypad`). See `projects/flat-ui.md` §5.2.
+    /// (`cShockGameSrv::Keypad`).
     BeginPsiHack {
         amp: EntityId,
         target: EntityId,
@@ -535,7 +534,7 @@ pub enum Effect {
     /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
     /// `M` key, `kOverlayMap 26`). Opens the wide map MFD bound to the
     /// synthetic map-panel entity, or closes it if it is already open. No-op in
-    /// VR and in scenes without a map panel. See `projects/flat-ui-panels.md` §5.
+    /// VR and in scenes without a map panel.
     ToggleMap,
 
     /// Mark an automap location as explored for the current mission (persisted

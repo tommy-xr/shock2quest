@@ -7,7 +7,7 @@ use super::{Effect, MessagePayload, Script};
 
 pub struct CoreRoom {
     /// The room's automap location (`PropMapLoc`), if it is mapped. The player
-    /// entering the room reveals this location (projects/flat-ui-panels.md §5).
+    /// entering the room reveals this location.
     map_location: Option<i32>,
 }
 impl CoreRoom {

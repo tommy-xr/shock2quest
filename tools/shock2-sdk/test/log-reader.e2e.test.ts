@@ -13,7 +13,7 @@ import {
 import { teleportVerified } from "./helpers/teleport.js";
 
 // End-to-end test for the flat-mode audio-log/email reader MFD + persistent
-// log collection (projects/flat-ui-panels.md §1, flat UI 6b).
+// log collection.
 //
 // The honest-play payoff: the medsci1 Amanpour "New code" audio log (mission
 // object id 1608, deck-2 log 20) must surface the Cryo Recovery A keypad code
