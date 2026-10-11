@@ -135,7 +135,7 @@ impl EntitySaveData {
         let mut old_entity_id_to_new_entity_id = HashMap::new();
 
         for entity_id_inner in self.all_entities.iter() {
-            let new_entity = world.add_entity(());
+            let new_entity = world.add_entity((crate::runtime_props::RuntimePropRestoredPosition,));
             old_entity_id_to_new_entity_id
                 .insert(EntityId::from_inner(*entity_id_inner).unwrap(), new_entity);
         }

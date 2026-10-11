@@ -1,9 +1,12 @@
+mod elevator_cargo;
 mod entity_save_data;
 mod held_item_save_data;
 mod player_vitals;
 mod save_data;
 mod save_files;
 
+pub use elevator_cargo::ElevatorCargo;
+pub(crate) use elevator_cargo::ElevatorRooms;
 pub use entity_save_data::*;
 pub use held_item_save_data::*;
 pub use player_vitals::*;
@@ -37,12 +40,12 @@ fn get_held_items(world: &World) -> HashSet<u64> {
 
     if let Some(left_hand) = player.left_hand_entity_id {
         out.insert(left_hand.inner());
-        add_contained_entities(&mut out, world, 2, left_hand);
+        add_contained_entities(&mut out, world, left_hand);
     }
 
     if let Some(right_hand) = player.right_hand_entity_id {
         out.insert(right_hand.inner());
-        add_contained_entities(&mut out, world, 2, right_hand);
+        add_contained_entities(&mut out, world, right_hand);
     }
 
     for (entity, _) in world
@@ -52,29 +55,22 @@ fn get_held_items(world: &World) -> HashSet<u64> {
         .with_id()
     {
         out.insert(entity.inner());
-        add_contained_entities(&mut out, world, 2, entity);
+        add_contained_entities(&mut out, world, entity);
     }
 
     out.insert(player.inventory_entity_id.inner());
-    add_contained_entities(&mut out, world, 2, player.inventory_entity_id);
+    add_contained_entities(&mut out, world, player.inventory_entity_id);
 
     out
 }
 
-fn add_contained_entities(
-    set: &mut HashSet<u64>,
-    world: &World,
-    link_depth: u32,
-    entity_id: EntityId,
-) {
-    if link_depth == 0 {
-        return;
-    }
+fn add_contained_entities(set: &mut HashSet<u64>, world: &World, entity_id: EntityId) {
     script_util::for_each_link(world, entity_id, &mut |link| {
         if matches!(link.link, Link::Contains(_)) {
             if let Some(to_ent_id) = link.to_entity_id {
-                set.insert(to_ent_id.0.inner());
-                add_contained_entities(set, world, link_depth - 1, to_ent_id.0);
+                if set.insert(to_ent_id.0.inner()) {
+                    add_contained_entities(set, world, to_ent_id.0);
+                }
             }
         }
     });
@@ -111,10 +107,30 @@ pub fn to_save_data_with_scripts(
     world: &World,
     script_world: Option<&ScriptWorld>,
 ) -> (EntitySaveData, HeldItemSaveData) {
+    to_transition_save_data(world, script_world, None)
+}
+
+pub(crate) fn to_transition_save_data(
+    world: &World,
+    script_world: Option<&ScriptWorld>,
+    elevator_marker: Option<i32>,
+) -> (EntitySaveData, HeldItemSaveData) {
     let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let template_id_to_entity_id = world.borrow::<UniqueView<GlobalTemplateIdMap>>().unwrap();
 
-    let held_entities = get_held_items(world);
+    let mut held_entities = get_held_items(world);
+    let elevator_cargo =
+        elevator_marker.and_then(|marker| ElevatorCargo::collect(world, marker, &held_entities));
+    if let Some(cargo) = &elevator_cargo {
+        for id in cargo.offsets.keys() {
+            held_entities.insert(*id);
+            add_contained_entities(
+                &mut held_entities,
+                world,
+                EntityId::from_inner(*id).unwrap(),
+            );
+        }
+    }
 
     let entities_to_filter = get_entities_to_filter_out(world);
 
@@ -374,11 +390,21 @@ pub fn to_save_data_with_scripts(
             saved
                 .0
                 .iter()
-                .filter(|(id, _)| !entities_to_filter.contains(id) && !held_entities.contains(id))
+                .filter(|(id, _)| {
+                    !entities_to_filter.contains(id)
+                        && (!held_entities.contains(id)
+                            || elevator_cargo
+                                .as_ref()
+                                .is_some_and(|cargo| cargo.offsets.contains_key(id)))
+                })
                 .map(|(id, value)| (*id, *value))
                 .collect()
         })
         .unwrap_or_default();
+    // Unlike inventory, loose elevator cargo still owns a physics body and
+    // must retain its live motion and already-spent impact damage state.
+    let (cargo_thrown_props, thrown_props) =
+        partition_map(thrown_props, |id| held_entities.contains(id));
     let world_entity_data = EntitySaveData {
         security_alarm: Some(crate::security_alarm::status(world)),
         player_trail: world
@@ -433,12 +459,13 @@ pub fn to_save_data_with_scripts(
         player_fired_projectiles: held_player_fired_projectiles,
         projectile_launchers: Vec::new(),
         projectile_velocities: held_velocities.into_iter().collect(),
-        thrown_props: HashMap::new(),
+        thrown_props: cargo_thrown_props,
         meta_properties: held_meta_properties,
         script_states: held_script_states,
     };
 
     let held_metadata = HeldItemSaveData {
+        elevator_cargo,
         entity_in_left_hand: player.left_hand_entity_id.map(|ent| ent.inner()),
         entity_in_right_hand: player.right_hand_entity_id.map(|ent| ent.inner()),
         held_entities: held_entity_data,

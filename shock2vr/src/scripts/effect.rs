@@ -46,6 +46,12 @@ pub enum GlobalEffect {
         file_name: String,
     },
 
+    /// Retail SMF_ELEVATOR: carry eligible objects from the departure room.
+    ElevatorTransition {
+        level_file: String,
+        marker: i32,
+    },
+
     TransitionLevel {
         level_file: String,
         loc: Option<i32>,

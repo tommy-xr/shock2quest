@@ -172,6 +172,11 @@ pub struct RuntimePropObjectArticulation(
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropModelBoundsPhysics;
 
+/// The saved position is already a live body origin. Rebuilding a pickup must
+/// not apply the authored-placement lift again on every load or deck visit.
+#[derive(Component)]
+pub struct RuntimePropRestoredPosition;
+
 // RuntimePropDoNotSerialize - runtime prop to signal that this prop should not be serialized
 #[derive(Component)]
 pub struct RuntimePropDoNotSerialize;
