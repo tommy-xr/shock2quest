@@ -99,6 +99,24 @@ pub(crate) fn backfill_legacy_held_research_components(
     }
 }
 
+pub fn is_unresearched(world: &World, entity_id: EntityId) -> bool {
+    world.borrow::<View<PropObjState>>().is_ok_and(|states| {
+        states
+            .get(entity_id)
+            .is_ok_and(|state| state.0 == dark::properties::ObjectState::Unresearched)
+    })
+}
+
+/// Whether scanning or frobbing `entity_id` is a research action. A
+/// `ResearchableUseScript` item (INT Boost, Worm Launcher, ...) only is until
+/// researched; after that it is used like any other item.
+pub fn offers_research(world: &World, entity_id: EntityId) -> bool {
+    use crate::scripts::script_util::entity_has_script;
+    entity_has_script(world, entity_id, "ResearchableScript")
+        || (entity_has_script(world, entity_id, "ResearchableUseScript")
+            && is_unresearched(world, entity_id))
+}
+
 fn backfill_component<T>(
     world: &mut World,
     entity_id: EntityId,
@@ -629,5 +647,27 @@ mod tests {
                 .0,
             ObjectState::Unresearched
         );
+    }
+
+    #[test]
+    fn use_items_offer_research_only_until_researched() {
+        use dark::properties::{ObjectState, PropScripts};
+        let mut world = World::new();
+        let scripts = |name: &str| PropScripts {
+            scripts: vec![name.to_owned()],
+            inherits: false,
+        };
+        let specimen = world.add_entity((
+            scripts("ResearchableScript"),
+            PropObjState(ObjectState::Normal),
+        ));
+        let usable = world.add_entity((
+            scripts("ResearchableUseScript"),
+            PropObjState(ObjectState::Unresearched),
+        ));
+        assert!(offers_research(&world, specimen));
+        assert!(offers_research(&world, usable));
+        world.add_component(usable, PropObjState(ObjectState::Normal));
+        assert!(!offers_research(&world, usable));
     }
 }

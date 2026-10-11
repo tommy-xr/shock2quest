@@ -7293,7 +7293,8 @@ impl MissionCore {
                     if !inspect_only && has_script("Chemical") {
                         self.flat_ui.utilities.open_research(None);
                         effects.push(Effect::UseResearchChemical { entity_id: entity });
-                    } else if !inspect_only && has_script("ResearchableScript") {
+                    } else if !inspect_only && crate::research::offers_research(&self.world, entity)
+                    {
                         let template = crate::scripts::script_util::entity_class_template_id(
                             &self.world,
                             entity,

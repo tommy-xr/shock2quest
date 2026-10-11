@@ -45,7 +45,18 @@ pub(crate) mod layout {
     pub const REPORTS: Rect = Rect::new(13.0, 243.0, 142.0, 22.0);
 }
 
-pub struct ResearchGui;
+/// The Research MFD for a researchable item. `ResearchableUseScript` items
+/// (INT Boost, Worm Launcher, ...) set `usable`: once researched, frobbing them
+/// is a normal use, so the panel stays shut and leaves the frob to their other script.
+pub struct ResearchGui {
+    pub usable: bool,
+}
+
+impl ResearchGui {
+    fn defers_to_use(&self, entity_id: EntityId, world: &World) -> bool {
+        self.usable && !crate::research::is_unresearched(world, entity_id)
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct ResearchGuiState {
@@ -240,7 +251,14 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
         }
     }
 
-    fn on_frob(&self, entity_id: EntityId, _world: &World) -> Effect {
+    fn opens_on_frob(&self, entity_id: EntityId, world: &World) -> bool {
+        !self.defers_to_use(entity_id, world)
+    }
+
+    fn on_frob(&self, entity_id: EntityId, world: &World) -> Effect {
+        if self.defers_to_use(entity_id, world) {
+            return Effect::NoEffect;
+        }
         tracing::info!(?entity_id, "researchable frob opened Research MFD");
         Effect::BeginResearch { entity_id }
     }
@@ -337,6 +355,8 @@ pub(crate) fn chemical_display_name(world: &World, sym_name: &str) -> String {
 mod tests {
     use std::collections::HashMap;
 
+    use dark::properties::{ObjectState, PropObjState};
+
     use crate::mission::EntityMetadata;
 
     use super::*;
@@ -360,5 +380,29 @@ mod tests {
         )])));
 
         assert_eq!(chemical_display_name(&world, "Chem #7"), "Californium (Cf)");
+    }
+
+    #[test]
+    fn usable_item_opens_research_only_until_researched() {
+        let mut world = World::new();
+        let item = world.add_entity(PropObjState(ObjectState::Unresearched));
+        let usable = ResearchGui { usable: true };
+        assert!(usable.opens_on_frob(item, &world));
+        assert!(matches!(
+            usable.on_frob(item, &world),
+            Effect::BeginResearch { entity_id } if entity_id == item
+        ));
+
+        world.add_component(item, PropObjState(ObjectState::Normal));
+        assert!(!usable.opens_on_frob(item, &world));
+        assert!(matches!(usable.on_frob(item, &world), Effect::NoEffect));
+
+        // Plain research specimens keep opening the Research MFD.
+        let specimen = ResearchGui { usable: false };
+        assert!(specimen.opens_on_frob(item, &world));
+        assert!(matches!(
+            specimen.on_frob(item, &world),
+            Effect::BeginResearch { .. }
+        ));
     }
 }

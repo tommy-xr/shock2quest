@@ -1439,7 +1439,6 @@ impl ScriptWorld {
 
             // eng1
             "healinggland" => Box::new(UnimplementedScript::new(&script_name)),
-            "researchableusescript" => Box::new(UnimplementedScript::new(&script_name)),
             "beakerscript" => Box::new(crate::item_tools::ItemTool),
             "trapmetapropbylist" => Box::new(NoopScript::new()),
 
@@ -1512,9 +1511,11 @@ impl ScriptWorld {
             "infocomputer" => Box::new(UnimplementedScript::new(&script_name)),
             "reducepsi" => Box::new(ReducePsi::new()),
             "replicatorscript" => gui_script(Box::new(ReplicatorGui)),
-            "researchablescript" => Box::new(CompositeScript::new(vec![
+            "researchablescript" | "researchableusescript" => Box::new(CompositeScript::new(vec![
                 Box::new(ResearchableScript::new()),
-                gui_script(Box::new(ResearchGui)),
+                gui_script(Box::new(ResearchGui {
+                    usable: script_name.eq_ignore_ascii_case("researchableusescript"),
+                })),
             ])),
             "setupinitialdebrief" => {
                 Box::new(setup_initial_debrief::SetupInitialDebriefScript::new())

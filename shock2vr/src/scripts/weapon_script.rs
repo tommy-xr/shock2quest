@@ -548,9 +548,8 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
 
     // A gun that is not in working order refuses to fire, ahead of the
     // magazine: an empty broken gun is broken, not empty. The engine refuses
-    // on any state but Normal; the gate is narrower here because the annelid
-    // weapons ship Unresearched and the port cannot research them yet, so the
-    // wider gate would leave them permanently unusable.
+    // on any state but Normal; this narrower gate still lets an unresearched
+    // annelid weapon fire.
     if is_gunshot
         && matches!(
             crate::scripts::gui::object_state(world, entity_id),
