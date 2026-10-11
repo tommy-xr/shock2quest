@@ -131,7 +131,7 @@ function hookSignalCleanup(): void {
   // skips every dispose; process.kill is synchronous, so it is safe here.
   process.once("exit", () => {
     for (const server of liveServers) {
-      server.killProcessTreeForSignalCleanup();
+      server.killLiveProcessTreeForExitCleanup();
     }
     for (const child of pendingChildren) {
       if (child.exitCode === null && child.signalCode === null) killProcessGroup(child.pid);
@@ -269,7 +269,12 @@ export class GameServer extends Game implements AsyncDisposable {
 
   /** @internal Used by the module-level signal cleanup hook. */
   killProcessTreeForSignalCleanup(): void {
-    // A reaped child's pid (and group id) may already belong to someone else.
+    this.killProcessTree();
+  }
+
+  /** @internal Exit-hook cleanup: skip a child that already exited, whose
+   * group id may belong to someone else by the time this process exits. */
+  killLiveProcessTreeForExitCleanup(): void {
     if (!this.childIsDead()) this.killProcessTree();
   }
 

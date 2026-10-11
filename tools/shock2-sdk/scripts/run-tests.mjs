@@ -30,7 +30,7 @@ if (process.env.SHOCK2_E2E === "1" && !process.env.SHOCK2_RUNTIME_BINARY) {
 // hook kills the runtimes it still owns.
 const args = ["--test-force-exit", ...process.argv.slice(2)];
 if (!args.some(arg => arg === "--test-timeout" || arg.startsWith("--test-timeout="))) {
-  args.unshift(`--test-timeout=${process.env.SHOCK2_TEST_TIMEOUT_MS ?? 600_000}`);
+  args.unshift(`--test-timeout=${process.env.SHOCK2_TEST_TIMEOUT_MS || 600_000}`);
 }
 
 const grouped = process.platform !== "win32";

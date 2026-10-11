@@ -259,7 +259,7 @@ click); tracking channels are not. The format and mapping are documented in
   runtime exits by itself after ten quiet minutes instead of holding ~700 MB.
   In-flight requests - including a long `step({ duration: "600s" })` - count as
   activity.
-- `scripts/run-tests.mjs` gives every test without its own `timeout` a
+- `scripts/run-tests.mjs` (and `scripts/reliability.mjs`) gives every test without its own `timeout` a
   10-minute default (`SHOCK2_TEST_TIMEOUT_MS` overrides it; a `--test-timeout`
   argument wins) and passes `--test-force-exit`, so a hung runtime fails one
   test instead of stalling the suite. The SDK kills the runtimes a
