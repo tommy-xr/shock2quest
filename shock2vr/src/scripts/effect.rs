@@ -307,6 +307,11 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// Resolve a world slot-machine wager atomically in the effect applier.
+    PlaySlotMachine {
+        entity_id: EntityId,
+    },
+
     /// Award nanites (the game's money) directly to the player's persistent
     /// stat balance - the collect side of the "nanites as a player stat"
     /// model. Emitted by `internal_nanites_script` on Frob.

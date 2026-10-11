@@ -95,6 +95,7 @@ mod shodan_shield;
 mod stat_booster;
 mod std_door;
 pub(crate) use std_door::player_door_frob_blocked;
+mod slot_machine;
 mod tool_consumable;
 mod transluce;
 mod trap_collide_off;
@@ -1468,7 +1469,7 @@ impl ScriptWorld {
             "poweredarmor" => Box::new(implant::Implant::powered_armor()),
 
             // ops2
-            "slotmachine" => Box::new(UnimplementedScript::new(&script_name)),
+            "slotmachine" => Box::new(slot_machine::SlotMachine),
 
             // rec1
             // elevator buttons

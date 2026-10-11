@@ -948,6 +948,21 @@ organ's research applies the gamesys damage bonus against enemies linked to that
 organ, including limb hits. Toxin-A must be researched before an environmental
 regulator will accept it.
 
+#### Casino slot machine (`debug_slot`)
+
+`cargo dbgr --mission debug_slot` (or add `--vr`) starts beside an ordinary
+retail Slot Machine with 20 nanites. Use it to gamble: each press costs 2,
+then immediately reports a loss, a 4-nanite win, or a 400-nanite jackpot with
+the retail message and sound. There is no reel animation or separate panel.
+Reload level (`DebugReloadLevel`) resets the fixture and bankroll.
+
+This is the same script used by the seven casino machines in `rec3.mis`
+and the machine in `ops2.mis`.
+It is separate from the PDA slot minigame. Outcomes use retail's roll
+thresholds (0.001 jackpot, through 0.98 loss, otherwise win); the fixture
+does not force outcomes. Insufficient funds produces the cost message and
+does not play or pay out.
+
 #### Material effects gallery (`debug_nd_materials`)
 
 Run `cargo dr --mission debug_nd_materials --vr` for a walkable gallery of

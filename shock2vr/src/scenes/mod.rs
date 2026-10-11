@@ -42,6 +42,7 @@ pub mod debug_protocol_droid;
 pub mod debug_psi;
 pub mod debug_ragdoll;
 pub mod debug_research;
+pub mod debug_slot;
 pub mod debug_turret;
 pub mod debug_weapons;
 pub mod developer;
@@ -191,6 +192,7 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
         debug_research::create_debug_research_scene,
     ),
     ("debug_annelid", create_debug_annelid_scene),
+    ("debug_slot", debug_slot::create_debug_slot_scene),
     ("debug_camera", DebugCameraScene::new),
     ("debug_protocol_droid", DebugProtocolDroidScene::new),
     ("debug_turret", DebugTurretScene::new),
