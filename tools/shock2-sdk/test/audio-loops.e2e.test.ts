@@ -35,7 +35,11 @@ test("live audio loops retire on scene changes and out-of-radius movement", {
 
   await game.player.teleport({ x: 1000, y: 1000, z: 1000 });
   await game.step({ frames: 2 });
-  assert.deepEqual((await game.audio.loops()).loops, [], "no beds outside every authored radius");
+  // Camera motors are positional scene loops owned by scanning actions, not
+  // radius-controlled ambient beds. Distance attenuates them without retirement.
+  assert.deepEqual((await game.audio.loops()).loops.filter(loop =>
+    loop.owner === "ambient_emitter" || loop.owner === "environmental"), [],
+    "no beds outside every authored radius");
 
   // Two non-overlapping parts of the authored environmental spheres (929/935).
   await game.player.teleport({ x: -8, y: -0.244, z: -54.334 });
@@ -51,7 +55,9 @@ test("live audio loops retire on scene changes and out-of-radius movement", {
 
   await game.player.teleport({ x: 1000, y: 1000, z: 1000 });
   await game.step({ frames: 2 });
-  assert.deepEqual((await game.audio.loops()).loops, [], "leaving an environmental region stops its bed");
+  assert.deepEqual((await game.audio.loops()).loops.filter(loop =>
+    loop.owner === "ambient_emitter" || loop.owner === "environmental"), [],
+    "leaving an environmental region stops its bed");
   await game.player.teleport({ x: 11, y: -0.244, z: -54.334 });
   await game.step({ frames: 2 });
   assert.ok((await game.audio.loops()).loops.some(loop => loop.owner === "environmental"),
