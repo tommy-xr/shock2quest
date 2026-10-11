@@ -18,14 +18,17 @@ for (const vr of [false, true]) {
     await game.player.teleport({ x: -13.42, y: -5.04, z: 29.52 });
     await game.step({ frames: 2 });
     await game.player.teleport({ x: spawn[0], y: spawn[1], z: spawn[2] });
-    let performed = false, ambush = false;
+    let performed = false, ambush = false, spoke = false;
     for (let second = 0; second < 20; second++) {
       await game.step({ frames: 60 });
       const animation = await game.entities.animation(watts.id);
       performed ||= animation?.clip === "humdthtk";
+      // Sample now: the recent-audio ring buffer evicts the speech during
+      // the long rest below.
+      spoke ||= (await game.audio.recent({ sample: "cs0601" })).sounds.length > 0;
       const current = (await game.entities.detail(hybrid.id)).position;
       ambush ||= Math.hypot(...current.map((v, i) => v - start[i])) > 10;
-      if (performed && ambush) break;
+      if (performed && ambush && spoke) break;
     }
     assert.ok(performed, "Watts plays the authored cs43 performance");
     assert.ok(ambush, "the final Frob triggers the ambush before any 30-second watchdog");
@@ -33,7 +36,6 @@ for (const vr of [false, true]) {
     const resting = await game.entities.animation(watts.id);
     assert.equal(resting?.clip, null, "Watts does not stand up into an idle animation after dying");
     assert.equal(resting?.last_clip, "humdthtk", "hold the performance's terminal pose");
-    const speech = await game.audio.recent({ sample: "cs0601" });
-    assert.ok(speech.sounds.length > 0, "the opening Frob plays Watts's speech");
+    assert.ok(spoke, "the opening Frob plays Watts's speech");
   });
 }
