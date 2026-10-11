@@ -44,8 +44,8 @@ if (!process.env.SHOCK2_RUNTIME_BINARY) {
   }
 }
 
-// File-level summary events count actual tests, unlike Node's overall verdict:
-// an empty file can itself count as a pass when a filter matches nothing.
+// Count real passing test events: Node can report an empty file as a pass
+// when a filter matches nothing.
 const summaryDir = mkdtempSync(join(tmpdir(), "shock2-reliability-summary-"));
 process.on("exit", () => rmSync(summaryDir, { recursive: true, force: true }));
 const summaryPath = join(summaryDir, "summary.jsonl");
