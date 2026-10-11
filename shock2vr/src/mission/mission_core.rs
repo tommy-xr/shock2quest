@@ -23391,45 +23391,49 @@ mod psi_kit_use_tests {
 
     #[test]
     fn psi_kit_clamps_to_max_and_consumes_only_one_stack_unit() {
-        let mut world = world_with_player(45);
-        let booster = world.add_entity(PropStackCount(2));
+        for (initial, amount) in [(45, 20), (0, 100), (0, 120)] {
+            let mut world = world_with_player(initial);
+            let booster = world.add_entity(PropStackCount(2));
 
-        assert_eq!(
-            apply_psi_kit_use(&world, booster, 20),
-            ConsumableUseOutcome::DecrementedStack
-        );
-        assert_eq!(player_psi_points(&world), 50);
-        assert_eq!(
-            world
-                .borrow::<View<PropStackCount>>()
-                .unwrap()
-                .get(booster)
-                .unwrap()
-                .0,
-            1
-        );
+            assert_eq!(
+                apply_psi_kit_use(&world, booster, amount),
+                ConsumableUseOutcome::DecrementedStack
+            );
+            assert_eq!(player_psi_points(&world), 50);
+            assert_eq!(
+                world
+                    .borrow::<View<PropStackCount>>()
+                    .unwrap()
+                    .get(booster)
+                    .unwrap()
+                    .0,
+                1
+            );
+        }
     }
 
     #[test]
     fn psi_kit_at_full_pool_leaves_the_source_untouched() {
-        let mut world = world_with_player(50);
-        let booster = world.add_entity(PropStackCount(1));
+        for amount in [20, 100, 120] {
+            let mut world = world_with_player(50);
+            let booster = world.add_entity(PropStackCount(1));
 
-        assert_eq!(
-            apply_psi_kit_use(&world, booster, 20),
-            ConsumableUseOutcome::NotUsed
-        );
-        assert_eq!(player_psi_points(&world), 50);
-        assert!(world.borrow::<EntitiesView>().unwrap().is_alive(booster));
-        assert_eq!(
-            world
-                .borrow::<View<PropStackCount>>()
-                .unwrap()
-                .get(booster)
-                .unwrap()
-                .0,
-            1
-        );
+            assert_eq!(
+                apply_psi_kit_use(&world, booster, amount),
+                ConsumableUseOutcome::NotUsed
+            );
+            assert_eq!(player_psi_points(&world), 50);
+            assert!(world.borrow::<EntitiesView>().unwrap().is_alive(booster));
+            assert_eq!(
+                world
+                    .borrow::<View<PropStackCount>>()
+                    .unwrap()
+                    .get(booster)
+                    .unwrap()
+                    .0,
+                1
+            );
+        }
     }
 }
 

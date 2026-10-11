@@ -173,7 +173,7 @@ use self::internal_frob_move::InternalFrobMove;
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::picture_swap::PictureSwap;
 use self::psi_amp_script::PsiAmpScript;
-use self::psi_kit::PsiKitScript;
+use self::psi_kit::{PsiKitKind, PsiKitScript};
 use self::psi_mine::PsiMine;
 use self::put_bomb_in_replicator::PutBombInReplicator;
 use self::radiation::RadPatchScript;
@@ -1409,7 +1409,8 @@ impl ScriptWorld {
             ])),
             "ectoplasm" => Box::new(UnimplementedScript::new(&script_name)),
             "medpatchscript" => Box::new(HealingItemScript::new(HealingItemKind::MedPatch)),
-            "psikitscript" => Box::new(PsiKitScript::new()),
+            "psikitscript" => Box::new(PsiKitScript::new(PsiKitKind::Hypo)),
+            "psifullscript" => Box::new(PsiKitScript::new(PsiKitKind::AnnelidPatch)),
             "psimine" => Box::new(PsiMine::new()),
             "computer" => gui_script(Box::new(ComputerGui::default())),
             "lightsoundon" => Box::new(light_sound::LightSoundOn),
