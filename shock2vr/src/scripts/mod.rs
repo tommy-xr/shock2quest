@@ -740,6 +740,11 @@ pub trait Script {
         self.handle_message(entity_id, world, physics, msg)
     }
 
+    /// Last authored worm deformation, retained while AI updates are suppressed.
+    fn monster_idle_weight(&self) -> Option<f32> {
+        None
+    }
+
     /// Read-only view of native AI stasis, shared by animation/physics gates.
     fn stasis(&self) -> Option<&stasis::StasisState> {
         None
@@ -886,6 +891,11 @@ impl CompositeScript {
 }
 
 impl Script for CompositeScript {
+    fn monster_idle_weight(&self) -> Option<f32> {
+        self.scripts
+            .iter()
+            .find_map(|s| s.script.monster_idle_weight())
+    }
     fn build_gui(
         &mut self,
         entity_id: EntityId,
@@ -1639,6 +1649,13 @@ impl ScriptWorld {
         }
 
         Ok(())
+    }
+
+    pub fn monster_idle_weight(&self, entity: EntityId) -> Option<f32> {
+        self.entity_to_scripts
+            .get(&entity)?
+            .iter()
+            .find_map(|s| s.script.monster_idle_weight())
     }
 
     pub fn stasis(&self, entity: EntityId, world: &World) -> Option<&stasis::StasisState> {

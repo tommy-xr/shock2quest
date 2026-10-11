@@ -17485,6 +17485,9 @@ impl MissionCore {
                 );
             }
             crate::plant_animation::apply(&self.world, *entity_id, &mut scene_objs);
+            if let Some(weight) = self.script_world.monster_idle_weight(*entity_id) {
+                crate::monster_idle::apply(&mut scene_objs, weight);
+            }
             let is_animated_model = objs.is_animated();
 
             // Authored/scripted per-entity alpha (Renderer\Transparency (alpha):

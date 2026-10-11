@@ -43,7 +43,7 @@ for (const vr of [false, true]) {
     }
     assert.equal((await set(first, {})).status, 200);
     await game.step({ frames: 1 });
-    assert.ok((await shapes(first)).every((o) => o.morph_weights?.every((w) => w === 0)));
+    assert.ok((await shapes(first)).every((o) => o.morph_weights?.every((w, i) => o.morph_names?.[i] === "worm" || w === 0)));
     assert.ok((await shapes(second)).every((o) => o.morph_weights?.[o.morph_names!.indexOf("worm")] === 1));
     assert.equal((await set(first, { MouthShapeH: 1 })).status, 200);
     await game.input.trigger("DebugReloadLevel");
@@ -52,7 +52,7 @@ for (const vr of [false, true]) {
     const reloaded = (await game.entities.list({ filter: "OG-Pipe", limit: 100 })).entities;
     assert.ok(reloaded.length > 0);
     for (const entity of reloaded) {
-      assert.ok((await shapes(entity.id)).every((o) => o.morph_weights?.every((w) => w === 0)),
+      assert.ok((await shapes(entity.id)).every((o) => o.morph_weights?.every((w, i) => o.morph_names?.[i] === "worm" || w === 0)),
         "reloading the same scene clears old entity preview weights");
     }
   });
