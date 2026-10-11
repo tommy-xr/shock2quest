@@ -4,10 +4,14 @@ use crate::physics::PhysicsWorld;
 
 use super::{Effect, MessagePayload, Script, script_util::send_to_all_switch_links};
 
-#[allow(dead_code)]
-pub struct TrapOnFilter {}
-impl TrapOnFilter {}
-impl Script for TrapOnFilter {
+/// Relay only TurnOff over SwitchLinks, matching retail allobjs.osm.
+pub struct TrapOffFilter {}
+impl TrapOffFilter {
+    pub fn new() -> TrapOffFilter {
+        TrapOffFilter {}
+    }
+}
+impl Script for TrapOffFilter {
     fn handle_message(
         &mut self,
         entity_id: EntityId,
