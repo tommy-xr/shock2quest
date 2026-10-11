@@ -4,10 +4,12 @@ use cgmath::{InnerSpace, Vector3};
 use dark::{
     SCALE_FACTOR,
     mission::{room::Room, room_database::RoomDatabase},
-    properties::{Link, Links, PropDestLoc, PropElevAble, PropPosition, PropStartLoc},
+    properties::{Link, Links, PropElevAble, PropPosition},
 };
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, Unique, UniqueView, View, World};
+
+use crate::mission::find_start_marker;
 
 /// Authored room planes, independent of the vertically shifted room sensors.
 #[derive(Unique)]
@@ -31,11 +33,85 @@ fn contains(room: &Room, point: Vector3<f32>) -> bool {
     })
 }
 
+/// Overlap shallower than this is grazing contact, left to the solver.
+/// Cabins differ slightly between decks (eng1's walls sit 0.02 closer).
+const EMBED_TOLERANCE: f32 = 0.05;
+
+/// Fallback directions around the arrival point, nearest-first in order.
+const FALLBACK_RING: [(f32, f32); 8] = [
+    (1.0, 0.0),
+    (-1.0, 0.0),
+    (0.0, 1.0),
+    (0.0, -1.0),
+    (0.7071, 0.7071),
+    (0.7071, -0.7071),
+    (-0.7071, 0.7071),
+    (-0.7071, -0.7071),
+];
+/// Just outside the player capsule (radius 0.48) that spawns at the arrival
+/// point after cargo is placed.
+const FALLBACK_RADIUS: f32 = 0.6;
+/// Stacked rings, so a large load still finds room before overlapping.
+const FALLBACK_HEIGHTS: [f32; 3] = [0.0, 0.4, 0.8];
+
+fn fallback_spots(arrival: Vector3<f32>) -> impl Iterator<Item = Vector3<f32>> {
+    FALLBACK_HEIGHTS.into_iter().flat_map(move |y| {
+        FALLBACK_RING
+            .iter()
+            .map(move |(x, z)| arrival + Vector3::new(x * FALLBACK_RADIUS, y, z * FALLBACK_RADIUS))
+    })
+}
+
+/// The elevator's StartLoc marker position. Unlike a player spawn, cargo
+/// needs the exact marker: a near match would move some other room's items.
+fn elevator_marker(world: &World, marker: i32) -> Option<Vector3<f32>> {
+    find_start_marker(world, marker, true).map(|found| found.position)
+}
+
+/// Move a restored entity before its first step, keeping its physics state in sync.
+fn set_restored_position(world: &mut World, entity: EntityId, position: Vector3<f32>) {
+    let Some(mut prop) = world
+        .borrow::<View<PropPosition>>()
+        .unwrap()
+        .get(entity)
+        .ok()
+        .cloned()
+    else {
+        return;
+    };
+    prop.position = position;
+    prop.cell = 0;
+    let state = world
+        .borrow::<View<dark::properties::PropPhysState>>()
+        .unwrap()
+        .get(entity)
+        .ok()
+        .cloned();
+    if let Some(mut state) = state {
+        state.position = position;
+        world.add_component(entity, state);
+    }
+    world.add_component(entity, prop);
+}
+
 impl ElevatorCargo {
-    /// Retail's ElevatorFixup falls back to the player's arrival point when
-    /// translated cargo intersects destination geometry. Cabins differ slightly
+    fn remapped<'a>(
+        &'a self,
+        remap: &'a HashMap<EntityId, EntityId>,
+    ) -> impl Iterator<Item = (EntityId, Vector3<f32>)> + 'a {
+        self.offsets.iter().filter_map(|(old, offset)| {
+            let entity = EntityId::from_inner(*old).and_then(|id| remap.get(&id))?;
+            Some((*entity, *offset))
+        })
+    }
+
+    /// Like the original, cargo that would sink into destination geometry
+    /// or leave the elevator's room falls back to the player's arrival point. Cabins differ slightly
     /// between decks; letting the solver eject an embedded item can lose it
-    /// through a wall before the player gets control.
+    /// through a wall before the player gets control. Cargo overlapping other
+    /// cargo kept that arrangement from the departure deck, so it is ignored.
+    /// Recovered items spread over rings around the arrival point so they do
+    /// not start inside each other; past the last ring they overlap there.
     pub(crate) fn recover_blocked_cargo(
         &self,
         world: &mut World,
@@ -43,57 +119,59 @@ impl ElevatorCargo {
         remap: &HashMap<EntityId, EntityId>,
         arrival: Vector3<f32>,
     ) {
-        for old in self.offsets.keys() {
-            let Some(&entity) = EntityId::from_inner(*old).and_then(|id| remap.get(&id)) else {
-                continue;
-            };
-            let Some(bounds) = physics.entity_world_aabb(entity) else {
-                continue;
-            };
-            let size = bounds.max - bounds.min;
-            let center = Vector3::new(bounds.min.x, bounds.min.y, bounds.min.z) + size * 0.5;
-            if physics.placement_box_is_clear(
-                center,
-                cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                size,
-                &[entity],
-            ) {
-                continue;
-            }
-            let mut position = world
+        let cargo: Vec<_> = self.remapped(remap).map(|(entity, _)| entity).collect();
+        // Depth against the level mesh reads shallow once an item is well past
+        // a wall face, so an item must also stay inside the elevator's room.
+        let room = elevator_marker(world, self.marker).and_then(|origin| {
+            let rooms = world.borrow::<UniqueView<ElevatorRooms>>().ok()?;
+            rooms
+                .0
+                .rooms
+                .iter()
+                .find(|room| contains(room, origin))
+                .cloned()
+        });
+        let blocked_by = |physics: &crate::physics::PhysicsWorld, entity, ignored: &[EntityId]| {
+            let outside = room.as_ref().is_some_and(|room| {
+                physics.entity_body_pose(entity).is_some_and(|pose| {
+                    let t = pose.translation.vector;
+                    !contains(room, Vector3::new(t.x, t.y, t.z))
+                })
+            });
+            outside || physics.entity_is_embedded(entity, ignored, EMBED_TOLERANCE)
+        };
+        let mut blocked: Vec<_> = cargo
+            .iter()
+            .copied()
+            .filter(|&entity| blocked_by(physics, entity, &cargo))
+            .collect();
+        blocked.sort_by_key(|entity| entity.inner());
+        for entity in blocked {
+            let rotation = world
                 .borrow::<View<PropPosition>>()
                 .unwrap()
                 .get(entity)
-                .unwrap()
-                .clone();
-            position.position = arrival;
-            physics.set_position_rotation2(entity, arrival, position.rotation);
-            let state = world
-                .borrow::<View<dark::properties::PropPhysState>>()
-                .unwrap()
-                .get(entity)
-                .ok()
-                .cloned();
-            if let Some(mut state) = state {
-                state.position = arrival;
-                world.add_component(entity, state);
-            }
-            world.add_component(entity, position);
+                .map(|position| position.rotation)
+                .unwrap_or(cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0));
+            // First spot clear of terrain and everything already placed.
+            let spot = fallback_spots(arrival)
+                .find(|&spot| {
+                    physics.set_position_rotation2(entity, spot, rotation);
+                    !blocked_by(physics, entity, &[entity])
+                })
+                .unwrap_or(arrival);
+            physics.set_position_rotation2(entity, spot, rotation);
+            set_restored_position(world, entity, spot);
         }
     }
 
-    /// Retail shkmulti.cpp TransportCore selects the room of DestLoc, not the
-    /// player, and carries only ElevAble roots (plus their contained objects).
+    /// The departure room is the elevator marker's room, not the player's;
+    /// only ElevAble roots (plus their contained objects) travel.
     pub(crate) fn collect(world: &World, marker: i32, carried: &HashSet<u64>) -> Option<Self> {
         let rooms = world.borrow::<UniqueView<ElevatorRooms>>().ok()?;
-        let positions = world.borrow::<View<PropPosition>>().unwrap();
-        let destinations = world.borrow::<View<PropDestLoc>>().unwrap();
-        let origin = (&destinations, &positions)
-            .iter()
-            .find(|(loc, _)| loc.0 == marker)?
-            .1
-            .position;
+        let origin = elevator_marker(world, marker)?;
         let room = rooms.0.rooms.iter().find(|room| contains(room, origin))?;
+        let positions = world.borrow::<View<PropPosition>>().unwrap();
         let eligible = world.borrow::<View<PropElevAble>>().unwrap();
         // Contained loot can retain an old world position. Only its container
         // decides whether it travels; carried gear already has its own path.
@@ -121,46 +199,15 @@ impl ElevatorCargo {
     /// Apply before creating models/physics so no body is built at its old
     /// deck's coordinates. Retail translates offsets without rotating them.
     pub(crate) fn place(&self, world: &mut World, remap: &HashMap<EntityId, EntityId>) {
-        let destination = {
-            let starts = world.borrow::<View<PropStartLoc>>().unwrap();
-            let positions = world.borrow::<View<PropPosition>>().unwrap();
-            (&starts, &positions)
-                .iter()
-                .find(|(loc, _)| loc.0 == self.marker)
-                .map(|(_, pos)| pos.position)
-        };
-        let Some(destination) = destination else {
+        let Some(destination) = elevator_marker(world, self.marker) else {
             tracing::warn!("Elevator destination has no StartLoc {}", self.marker);
             return;
         };
-        for (old, offset) in &self.offsets {
-            let Some(entity) = EntityId::from_inner(*old).and_then(|id| remap.get(&id)) else {
-                continue;
-            };
-            let position = world
-                .borrow::<View<PropPosition>>()
-                .unwrap()
-                .get(*entity)
-                .ok()
-                .cloned();
-            if let Some(mut position) = position {
-                // Retail lifts cargo half a Dark unit to keep settled objects
-                // out of the destination floor. Orientation remains unchanged.
-                position.position =
-                    destination + offset + Vector3::new(0.0, 0.5 / SCALE_FACTOR, 0.0);
-                position.cell = 0;
-                let state = world
-                    .borrow::<View<dark::properties::PropPhysState>>()
-                    .unwrap()
-                    .get(*entity)
-                    .ok()
-                    .cloned();
-                if let Some(mut state) = state {
-                    state.position = position.position;
-                    world.add_component(*entity, state);
-                }
-                world.add_component(*entity, position);
-            }
+        // Retail lifts cargo half a Dark unit to keep settled objects out of
+        // the destination floor. Orientation remains unchanged.
+        let lift = Vector3::new(0.0, 0.5 / SCALE_FACTOR, 0.0);
+        for (entity, offset) in self.remapped(remap) {
+            set_restored_position(world, entity, destination + offset + lift);
         }
     }
 }
@@ -170,7 +217,7 @@ mod tests {
     use super::*;
     use cgmath::{Point3, Quaternion, vec3};
     use collision::{Aabb3, Plane};
-    use dark::properties::{ToLink, WrappedEntityId};
+    use dark::properties::{PropStartLoc, ToLink, WrappedEntityId};
 
     fn position(x: f32) -> PropPosition {
         PropPosition {
@@ -181,14 +228,13 @@ mod tests {
     }
 
     #[test]
-    fn blocked_arrival_recovers_to_player_but_clear_cargo_keeps_its_offset() {
+    fn blocked_arrival_recovers_near_player_but_clear_cargo_keeps_its_offset() {
         use crate::physics::{CollisionGroup, DynamicPhysicsOptions, PhysicsShape, PhysicsWorld};
         let mut world = World::new();
         let wall = world.add_entity(());
-        let blocked = world.add_entity(position(0.0));
-        let clear = world.add_entity(position(3.0));
         let mut physics = PhysicsWorld::new();
         let rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        // Spans x -0.5..0.5.
         physics.add_kinematic_shape(
             wall,
             vec3(0.0, 0.0, 0.0),
@@ -198,11 +244,75 @@ mod tests {
             CollisionGroup::entity(),
             false,
         );
-        for (entity, x) in [(blocked, 0.0), (clear, 3.0)] {
+        // Two items inside the wall, one grazing its face, one in the open.
+        let xs = [0.0, 0.1, 0.59, 3.0];
+        let items: Vec<_> = xs
+            .iter()
+            .map(|&x| {
+                let entity = world.add_entity(position(x));
+                physics.add_dynamic(
+                    entity,
+                    vec3(x, 0.0, 0.0),
+                    rotation,
+                    vec3(0.0, 0.0, 0.0),
+                    PhysicsShape::Sphere(0.1),
+                    CollisionGroup::entity(),
+                    false,
+                    DynamicPhysicsOptions::default(),
+                );
+                entity
+            })
+            .collect();
+        let cargo = ElevatorCargo {
+            marker: 22,
+            offsets: items
+                .iter()
+                .zip(xs)
+                .map(|(entity, x)| (entity.inner(), vec3(x, 0.0, 0.0)))
+                .collect(),
+        };
+        let arrival = vec3(5.0, 0.0, 0.0);
+        let remap = items.iter().map(|&entity| (entity, entity)).collect();
+        cargo.recover_blocked_cargo(&mut world, &mut physics, &remap, arrival);
+
+        let positions = world.borrow::<View<PropPosition>>().unwrap();
+        let at = |i: usize| positions.get(items[i]).unwrap().position;
+        let (first, second) = (at(0), at(1));
+        for recovered in [first, second] {
+            assert!((recovered - arrival).magnitude() < 1.0);
+        }
+        // Radius-0.1 spheres: anything closer than 0.2 starts interpenetrating.
+        assert!((first - second).magnitude() >= 0.2);
+        assert_eq!(at(2), vec3(0.59, 0.0, 0.0), "grazing a wall is not blocked");
+        assert_eq!(at(3), vec3(3.0, 0.0, 0.0));
+        let body_x = |i: usize| {
+            physics
+                .entity_body_pose(items[i])
+                .unwrap()
+                .translation
+                .vector
+                .x
+        };
+        assert_eq!(body_x(0), first.x);
+        assert_eq!(body_x(1), second.x);
+    }
+
+    /// The level mesh only reports shallow depth for an item already past a
+    /// wall face; leaving the elevator's room is what catches it.
+    #[test]
+    fn cargo_outside_the_elevator_room_recovers_inside_it() {
+        use crate::physics::{CollisionGroup, DynamicPhysicsOptions, PhysicsShape, PhysicsWorld};
+        let mut world = fixture();
+        let mut physics = PhysicsWorld::new();
+        let (inside, outside) = (
+            world.add_entity(position(1.0)),
+            world.add_entity(position(3.0)),
+        );
+        for (entity, x) in [(inside, 1.0), (outside, 3.0)] {
             physics.add_dynamic(
                 entity,
                 vec3(x, 0.0, 0.0),
-                rotation,
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
                 vec3(0.0, 0.0, 0.0),
                 PhysicsShape::Sphere(0.1),
                 CollisionGroup::entity(),
@@ -213,34 +323,21 @@ mod tests {
         let cargo = ElevatorCargo {
             marker: 22,
             offsets: HashMap::from([
-                (blocked.inner(), vec3(0.0, 0.0, 0.0)),
-                (clear.inner(), vec3(3.0, 0.0, 0.0)),
+                (inside.inner(), vec3(1.0, 0.0, 0.0)),
+                (outside.inner(), vec3(3.0, 0.0, 0.0)),
             ]),
         };
-        let arrival = vec3(5.0, 0.0, 0.0);
-        cargo.recover_blocked_cargo(
-            &mut world,
-            &mut physics,
-            &HashMap::from([(blocked, blocked), (clear, clear)]),
-            arrival,
-        );
+        let remap = HashMap::from([(inside, inside), (outside, outside)]);
+        cargo.recover_blocked_cargo(&mut world, &mut physics, &remap, vec3(0.0, 0.0, 0.0));
         let positions = world.borrow::<View<PropPosition>>().unwrap();
-        assert_eq!(positions.get(blocked).unwrap().position, arrival);
-        assert_eq!(positions.get(clear).unwrap().position, vec3(3.0, 0.0, 0.0));
-        assert_eq!(
-            physics
-                .entity_body_pose(blocked)
-                .unwrap()
-                .translation
-                .vector
-                .x,
-            5.0
-        );
+        assert_eq!(positions.get(inside).unwrap().position, vec3(1.0, 0.0, 0.0));
+        // The room spans -2..2; the first ring spot is 0.6 from the arrival.
+        assert!(positions.get(outside).unwrap().position.magnitude() < 1.0);
     }
 
     fn fixture() -> World {
         let mut world = World::new();
-        world.add_entity((PropDestLoc(22), position(0.0)));
+        world.add_entity((PropStartLoc(22), position(0.0)));
         world.add_unique(ElevatorRooms(RoomDatabase {
             rooms: vec![Room {
                 obj_id: 1,

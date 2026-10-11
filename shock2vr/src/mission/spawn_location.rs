@@ -6,9 +6,9 @@ use dark::{
     ss2_entity_info::SystemShock2EntityInfo,
 };
 use num_traits::Zero;
-use shipyard::{Get, IntoIter, IntoWithId, View, World};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 
-use crate::scripts::script_util::{get_all_links_of_type, get_first_link_of_type};
+use crate::scripts::script_util::get_first_link_of_type;
 
 #[derive(Clone)]
 pub enum SpawnLocation {
@@ -36,55 +36,9 @@ impl SpawnLocation {
                 start_rotation = *rotation;
             }
             Self::Marker(loc) => {
-                world.run(
-                    |v_position: View<PropPosition>, v_start_loc: View<PropStartLoc>| {
-                        // The best StartLoc marker that links to a LandingPoint (the
-                        // intended path when the retail data provides one).
-                        let mut landing_spawn_entity_id = None;
-                        let mut landing_delta = u32::MAX;
-                        // Fallback: the best StartLoc marker's OWN position. Some
-                        // retail StartLoc markers have NO LandingPoint link at all
-                        // (e.g. station.mis obj 132 "Starting_Location", the
-                        // post-career recruit-deck spawn at loc 2501). Without this
-                        // fallback such markers resolve to the world origin - see #454.
-                        let mut marker_spawn: Option<(Vector3<f32>, Quaternion<f32>)> = None;
-                        let mut marker_delta = u32::MAX;
-                        for (entity_id, start_loc) in (&v_start_loc).iter().with_id() {
-                            // HACK: Find the location that matches the best...
-                            // aka, why is the eng dest loc 21 but the medsci 12??
-                            // Ideally, this should be an exact match, but not sure why the spawn points are off in some cases...
-                            let diff = start_loc.0.abs_diff(*loc);
-
-                            if diff < marker_delta {
-                                if let Ok(marker_pos) = v_position.get(entity_id) {
-                                    marker_delta = diff;
-                                    marker_spawn = Some((marker_pos.position, marker_pos.rotation));
-                                }
-                            }
-
-                            // Prefer markers that actually link to a landing point.
-                            let all_links =
-                                get_all_links_of_type(world, entity_id, Link::LandingPoint);
-
-                            if diff < landing_delta && !all_links.is_empty() {
-                                landing_delta = diff;
-                                landing_spawn_entity_id =
-                                    get_first_link_of_type(world, entity_id, Link::LandingPoint);
-                            }
-                        }
-
-                        // Landing-point link wins when present; otherwise fall back to
-                        // the matched marker's own position (never the world origin).
-                        if let Some(entity_id) = landing_spawn_entity_id {
-                            let spawn_pos = v_position.get(entity_id).unwrap();
-                            start_pos = spawn_pos.position;
-                            start_rotation = spawn_pos.rotation;
-                        } else if let Some((pos, rot)) = marker_spawn {
-                            start_pos = pos;
-                            start_rotation = rot;
-                        }
-                    },
-                );
+                if let Some(marker) = find_start_marker(world, *loc, false) {
+                    (start_pos, start_rotation) = marker.spawn;
+                }
             }
             Self::MapDefault => {
                 world.run(|v_position: View<PropPosition>| {
@@ -100,6 +54,52 @@ impl SpawnLocation {
         };
         (start_pos, start_rotation)
     }
+}
+
+/// A resolved `PropStartLoc` marker.
+pub struct StartMarker {
+    /// The marker's own position.
+    pub position: Vector3<f32>,
+    /// Where the player lands: the linked LandingPoint, else the marker itself.
+    /// Some retail markers have no LandingPoint (e.g. station.mis obj 132, the
+    /// post-career recruit-deck spawn at loc 2501) - see #454.
+    pub spawn: (Vector3<f32>, Quaternion<f32>),
+}
+
+/// The StartLoc marker for `loc`: one linked to a LandingPoint wins, then the
+/// closest value (only `loc` itself when `exact`). Decks can author unlinked
+/// copies of a marker (ops2 has five StartLoc 22s), so the link picks the one
+/// the player actually spawns from.
+pub fn find_start_marker(world: &World, loc: i32, exact: bool) -> Option<StartMarker> {
+    let v_position = world.borrow::<View<PropPosition>>().unwrap();
+    let v_start_loc = world.borrow::<View<PropStartLoc>>().unwrap();
+    let mut best: Option<((bool, u32), Option<EntityId>, PropPosition)> = None;
+    for (entity_id, start_loc) in v_start_loc.iter().with_id() {
+        if exact && start_loc.0 != loc {
+            continue;
+        }
+        let Ok(position) = v_position.get(entity_id) else {
+            continue;
+        };
+        // HACK: closest rather than exact - why is the eng dest loc 21 but
+        // the medsci 12? Ideally this would be an exact match.
+        let landing = get_first_link_of_type(world, entity_id, Link::LandingPoint);
+        let rank = (landing.is_none(), start_loc.0.abs_diff(loc));
+        if best
+            .as_ref()
+            .is_none_or(|(best_rank, ..)| rank < *best_rank)
+        {
+            best = Some((rank, landing, position.clone()));
+        }
+    }
+    let (_, landing, marker) = best?;
+    let spawn = landing
+        .and_then(|id| v_position.get(id).ok())
+        .unwrap_or(&marker);
+    Some(StartMarker {
+        position: marker.position,
+        spawn: (spawn.position, spawn.rotation),
+    })
 }
 
 #[cfg(test)]
@@ -167,5 +167,62 @@ mod tests {
         );
 
         assert_eq!(start_pos, landing_pos);
+    }
+
+    /// Decks can author several StartLocs with the same value (ops2 has five
+    /// 22s); the one linked to a LandingPoint is the marker, whatever the order.
+    #[test]
+    fn landing_linked_marker_wins_over_unlinked_duplicates() {
+        let mut world = World::new();
+        world.add_entity((PropStartLoc(22), position(Vector3::new(-3.0, 0.0, 0.0))));
+        let landing = world.add_entity((position(Vector3::new(9.0, 0.0, 0.0)),));
+        let marker_pos = Vector3::new(1.0, 0.0, 0.0);
+        world.add_entity((
+            PropStartLoc(22),
+            position(marker_pos),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(landing)),
+                    link: Link::LandingPoint,
+                }],
+            },
+        ));
+        world.add_entity((PropStartLoc(22), position(Vector3::new(3.0, 0.0, 0.0))));
+
+        let marker = find_start_marker(&world, 22, false).unwrap();
+        assert_eq!(marker.position, marker_pos);
+        assert_eq!(marker.spawn.0, Vector3::new(9.0, 0.0, 0.0));
+    }
+
+    /// Elevator cargo needs the exact marker even when a linked one with a
+    /// different value would win a player spawn.
+    #[test]
+    fn exact_lookup_ignores_linked_markers_of_other_values() {
+        let mut world = World::new();
+        let landing = world.add_entity((position(Vector3::new(9.0, 0.0, 0.0)),));
+        world.add_entity((
+            PropStartLoc(21),
+            position(Vector3::new(-3.0, 0.0, 0.0)),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(landing)),
+                    link: Link::LandingPoint,
+                }],
+            },
+        ));
+        let exact_pos = Vector3::new(1.0, 0.0, 0.0);
+        world.add_entity((PropStartLoc(22), position(exact_pos)));
+
+        assert_eq!(
+            find_start_marker(&world, 22, false).unwrap().position.x,
+            -3.0
+        );
+        assert_eq!(
+            find_start_marker(&world, 22, true).unwrap().position,
+            exact_pos
+        );
+        assert!(find_start_marker(&world, 23, true).is_none());
     }
 }

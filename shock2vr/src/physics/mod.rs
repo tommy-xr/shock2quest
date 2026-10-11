@@ -5313,8 +5313,7 @@ impl PhysicsWorld {
     }
 
     /// Validate a placed solid volume against terrain and live physical objects.
-    /// Sensors (selection proxies/triggers) do not occupy space. Read body poses
-    /// directly so kinematic doors moved since the last step are checked too.
+    /// Sensors (selection proxies/triggers) do not occupy space.
     pub fn placement_box_is_clear(
         &self,
         center: Vector3<f32>,
@@ -5337,11 +5336,62 @@ impl PhysicsWorld {
         {
             return false;
         }
+        !self.solid_obstacles(ignored).any(|(other_pose, other)| {
+            rapier3d::parry::query::intersection_test(&pose, &shape, &other_pose, other)
+                .unwrap_or(true)
+        })
+    }
+
+    /// Whether `entity`'s own solid colliders sink deeper than `tolerance` into
+    /// terrain or a live solid outside `ignored`; grazing contact does not
+    /// count. Level geometry is a two-sided triangle mesh, so an item already
+    /// well past a wall face reads shallow - callers that care check that
+    /// separately.
+    pub(crate) fn entity_is_embedded(
+        &self,
+        entity: EntityId,
+        ignored: &[EntityId],
+        tolerance: f32,
+    ) -> bool {
+        let Some(body) = self
+            .entity_id_to_body
+            .get(&entity)
+            .and_then(|handle| self.rigid_body_set.get(*handle))
+        else {
+            return false;
+        };
+        body.colliders()
+            .iter()
+            .filter_map(|handle| self.collider_set.get(*handle))
+            .filter(|collider| !collider.is_sensor())
+            .any(|collider| {
+                let pose =
+                    body.position() * collider.position_wrt_parent().copied().unwrap_or_default();
+                self.solid_obstacles(ignored).any(|(other_pose, other)| {
+                    rapier3d::parry::query::contact(
+                        &pose,
+                        collider.shape(),
+                        &other_pose,
+                        other,
+                        0.0,
+                    )
+                    .map_or(true, |contact| contact.is_some_and(|c| c.dist < -tolerance))
+                })
+            })
+    }
+
+    /// Enabled solid colliders that occupy space (terrain, entities, hitboxes)
+    /// at their current body poses. Read body poses directly so kinematic
+    /// doors moved since the last step are seen where they now are.
+    fn solid_obstacles<'a>(
+        &'a self,
+        ignored: &'a [EntityId],
+    ) -> impl Iterator<Item = (Isometry<Real>, &'a dyn rapier3d::parry::shape::Shape)> + 'a {
         let groups = (InternalCollisionGroups::WORLD
             | InternalCollisionGroups::ENTITIES
             | InternalCollisionGroups::HITBOX)
             .bits;
-        !self.collider_set.iter().any(|(_, collider)| {
+        self.collider_set.iter().filter_map(move |(_, collider)| {
             if !collider.is_enabled()
                 || collider.is_sensor()
                 || collider.collision_groups().memberships.bits() & groups == 0
@@ -5349,17 +5399,16 @@ impl PhysicsWorld {
                     .iter()
                     .any(|id| collider.user_data == id.inner() as u128)
             {
-                return false;
+                return None;
             }
-            let other_pose = collider
+            let pose = collider
                 .parent()
                 .and_then(|h| self.rigid_body_set.get(h))
                 .map(|body| {
                     body.position() * collider.position_wrt_parent().copied().unwrap_or_default()
                 })
                 .unwrap_or(*collider.position());
-            rapier3d::parry::query::intersection_test(&pose, &shape, &other_pose, collider.shape())
-                .unwrap_or(true)
+            Some((pose, collider.shape()))
         })
     }
 

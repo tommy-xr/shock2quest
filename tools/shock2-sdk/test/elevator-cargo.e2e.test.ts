@@ -39,6 +39,33 @@ async function dropItem(game: GameServer, name: string) {
   return game.entities.detail(item.entity_id);
 }
 
+// Each deck's elevator marker (StartLoc 22 with LandingPoint links), by
+// mission object id. Cargo keeps its offset from this marker between decks.
+const ELEVATOR_MARKER: Record<string, number> = {
+  "medsci1.mis": 169,
+  "eng1.mis": 464,
+  "hydro2.mis": 1167,
+  "ops2.mis": 560,
+  "rec1.mis": 273,
+};
+
+async function cargoOffset(game: GameServer, template: number) {
+  const { mission } = await game.info();
+  const [marker] = await game.entities.byTemplate(ELEVATOR_MARKER[mission]);
+  const cargo = await game.entities.byTemplate(template);
+  assert.ok(marker, `missing elevator marker on ${mission}`);
+  assert.equal(cargo.length, 1, `cargo must exist exactly once on ${mission}`);
+  return cargo[0].position.map((v, i) => v - marker.position[i]);
+}
+
+// The arrival point sits ~1.2 units from the marker, so cargo that fell back
+// there fails this; the vertical slack covers the arrival lift and settling.
+function assertKeptOffset(before: number[], after: number[], mission: string) {
+  const horizontal = Math.hypot(after[0] - before[0], after[2] - before[2]);
+  assert.ok(horizontal < 0.5 && Math.abs(after[1] - before[1]) < 0.5,
+    `cargo must keep its elevator offset on ${mission}: ${before} -> ${after}`);
+}
+
 // Negative-first: the unmodified runtime arrives in eng1 with zero Wrenches
 // of the provisioned archetype. Ordinary travel leaves it in medsci1.
 // IDs of provisioned archetypes are stable; runtime IDs are rediscovered after
@@ -61,17 +88,23 @@ test("elevator transports loose cargo without duplicating it; other levels persi
     // Mission-file marker 169 is both DestLoc 22 and StartLoc 22.
     const [marker] = await game.entities.byTemplate(169);
     assert.ok(marker);
-    await teleportVerified(game, { x: marker.position[0], y: marker.position[1] + 1, z: marker.position[2] });
+    const start = await game.player.position();
+    // Drop from the cabin's middle (its landing point), clear of the wall panel.
+    const [landing] = await game.entities.byTemplate(106);
+    assert.ok(landing);
+    await teleportVerified(game, { x: landing.position[0], y: landing.position[1], z: landing.position[2] });
     const dropped = await dropItem(game, "Wrench");
     cargoTemplate = dropped.template_id;
+    // A drop at the feet can land on the player's capsule; step away so it settles.
+    await teleportVerified(game, start);
+    await game.step({ frames: 120 });
     stashPosition = (await game.entities.detail(stash.entity_id)).position;
+    const departed = await cargoOffset(game, cargoTemplate);
+    // Cabin walls differ above the floor; a ledge drop would rightly fall back.
+    assert.ok(departed[1] < -1.2, `the wrench must rest on the cabin floor: ${departed}`);
     await ride(game, /engineering/i);
     assert.equal((await game.info()).mission, "eng1.mis");
-    const carried = await game.entities.byTemplate(cargoTemplate);
-    assert.equal(carried.length, 1, "loose elevator cargo must arrive exactly once");
-    const player = await game.player.position();
-    assert.ok(Math.hypot(carried[0].position[0] - player.x, carried[0].position[1] - player.y,
-      carried[0].position[2] - player.z) < 5, "cargo must arrive in the destination elevator");
+    assertKeptOffset(departed, await cargoOffset(game, cargoTemplate), "eng1.mis");
     assert.equal((await game.entities.byTemplate(stashTemplate)).length, 0, "other rooms must stay behind");
     await game.save(save);
   }
@@ -80,11 +113,11 @@ test("elevator transports loose cargo without duplicating it; other levels persi
     await using game = await GameServer.launch({ mission: "earth.mis" });
     await game.load(save);
     assert.equal((await game.info()).mission, "eng1.mis");
-    assert.equal((await game.entities.byTemplate(cargoTemplate)).length, 1);
+    const departed = await cargoOffset(game, cargoTemplate);
     await ride(game, /med\s*\/?\s*sci/i);
     assert.equal((await game.info()).mission, "medsci1.mis");
-    assert.equal((await game.entities.byTemplate(cargoTemplate)).length, 1,
-      "return trip must not resurrect the departure copy");
+    // cargoOffset also asserts one copy: the return trip must not resurrect the departure copy.
+    assertKeptOffset(departed, await cargoOffset(game, cargoTemplate), "medsci1.mis");
     const [stash] = await game.entities.byTemplate(stashTemplate);
     assert.ok(stash, "an item left in an inactive level must survive a cold save/load");
     assert.ok(Math.hypot(...stash.position.map((v, i) => v - stashPosition[i])) < 0.1,
@@ -100,10 +133,10 @@ test("elevator transports loose cargo without duplicating it; other levels persi
       [/recreation/i, "rec1.mis"],
       [/med\s*\/?\s*sci/i, "medsci1.mis"],
     ] as const) {
+      const departed = await cargoOffset(game, cargoTemplate);
       await ride(game, floor);
       assert.equal((await game.info()).mission, mission);
-      assert.equal((await game.entities.byTemplate(cargoTemplate)).length, 1,
-        `cargo must travel exactly once to ${mission}`);
+      assertKeptOffset(departed, await cargoOffset(game, cargoTemplate), mission);
     }
   }
 });
