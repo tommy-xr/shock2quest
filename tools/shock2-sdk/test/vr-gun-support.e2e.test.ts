@@ -64,7 +64,17 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
       const yaw = 100 * Math.PI / 180;
       const swept = quatRotate([0,Math.sin(yaw / 2),0,Math.cos(yaw / 2)],axis);
       let crossedChestMount = false;
-      for (const offset of [outward,sub(swept,axis),[.25,0,0],[-.25,0,0]] as Vec3[]) {
+      // The chest mounts sit on the body plane, so reach the nearer one
+      // explicitly rather than relying on the sweep to pass through it.
+      const chestCenters = (await game.info()).player.hand_feedback?.chest_slots?.centers ?? [];
+      const chest = (chestCenters as Vec3[])
+        .slice().sort((a,b) => Math.hypot(...sub(a,socket)) - Math.hypot(...sub(b,socket)))[0];
+      const sweep = [outward,sub(swept,axis),[.25,0,0],[-.25,0,0]] as Vec3[];
+      if (model === "atek_h") {
+        assert.ok(chest,"VR player publishes chest mount centers");
+        sweep.push(sub(chest,socket));
+      }
+      for (const offset of sweep) {
         await place(add(socket,offset));
         await game.step({frames:1});
         const player = (await game.info()).player;

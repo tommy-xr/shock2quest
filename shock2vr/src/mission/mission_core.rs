@@ -6346,9 +6346,11 @@ impl MissionCore {
             time.elapsed.as_secs_f32(),
         );
         self.chest_slots.body_pose = self.holsters.body_pose;
-        self.chest_slots.shoulder_priority = std::array::from_fn(|i| {
-            self.shoulder_backpack.near[i] || self.holsters.near[i].is_some()
-        });
+        // Chest mounts are small, deliberate targets; with the chest on the
+        // body plane they sit inside the broad shoulder zone, so the shoulder
+        // yields to them below rather than the reverse.
+        self.chest_slots.shoulder_priority =
+            std::array::from_fn(|i| self.holsters.near[i].is_some());
         let chest_contents = self.chest_slots.occupants(&self.world);
         self.chest_slots.matching_slots = held.map(|item| {
             chest_contents.map(|stored| {
@@ -6373,6 +6375,13 @@ impl MissionCore {
             body_gear,
             time.elapsed.as_secs_f32(),
         );
+        for i in 0..2 {
+            if self.chest_slots.near[i].is_some() {
+                shoulder_releases[i] = false;
+                self.shoulder_backpack.near[i] = false;
+                self.shoulder_backpack.draws[i] = None;
+            }
+        }
         let chest_merge_targets = std::array::from_fn::<_, 2, _>(|i| {
             held[i].and_then(|item| {
                 self.chest_slots.near[i]
