@@ -508,6 +508,7 @@ pub fn fire_ranged_weapon(
                 root_transform: projectile_transform,
                 options: CreateEntityOptions {
                     launch_projectile: true,
+                    projectile_launcher: Some(entity_id),
                     ..CreateEntityOptions::default()
                 },
             });
@@ -657,6 +658,7 @@ pub fn fire_ranged_projectile(
                 root_transform: projectile_transform,
                 options: CreateEntityOptions {
                     launch_projectile: true,
+                    projectile_launcher: Some(entity_id),
                     ..CreateEntityOptions::default()
                 },
             },

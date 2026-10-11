@@ -10203,6 +10203,16 @@ impl MissionCore {
             } else {
                 id_to_physics.insert(created_entity.entity_id, rigid_body);
                 physics.set_velocity(created_entity.entity_id, (x_velocity / SCALE_FACTOR) * 1.5);
+                // The muzzle can sit inside the launcher's own sphere (see
+                // `RuntimePropProjectileLauncher`); the pair is dropped again
+                // when either body is removed.
+                if let Ok(launcher) = world
+                    .borrow::<View<crate::runtime_props::RuntimePropProjectileLauncher>>()
+                    .unwrap()
+                    .get(created_entity.entity_id)
+                {
+                    physics.ignore_collision_pairs(created_entity.entity_id, &[launcher.0]);
+                }
             }
         };
 
