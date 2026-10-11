@@ -438,9 +438,10 @@ pub struct RuntimePropPlayerFiredProjectile;
 
 /// The AI or turret that fired this projectile. The muzzle can start inside
 /// the shooter's own collision sphere (a turret's authored sphere encloses its
-/// barrel), so a physical shot's contacts with its launcher are filtered out at
-/// launch. Not saved: a shot restored mid-flight has long since cleared its
-/// muzzle.
+/// barrel), so a fast (raycast) shot skips its launcher and the launcher's
+/// hitboxes, and a physical shot's contacts with its launcher are filtered out
+/// at launch. Not saved: a physical shot saved within a frame or two of firing
+/// can hit its launcher after load - accepted rather than serializing the pair.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropProjectileLauncher(pub shipyard::EntityId);
 
