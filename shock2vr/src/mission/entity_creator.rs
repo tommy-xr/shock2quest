@@ -1568,7 +1568,7 @@ fn create_physics_representation_unfiltered(
             v_phys_dimensions.get(entity_id).ok(),
         ) {
             (Some(phys_type), Some(dimensions))
-                if !frob_info.world_action.contains(FrobFlag::MOVE) =>
+                if !frob_info.world_action.contains(FrobFlag::MOVE) && !flinderize_debris =>
             {
                 // `P$PhysType` and `P$PhysDims` are inherited independently, so
                 // an object can end up declaring a shape its dimensions never

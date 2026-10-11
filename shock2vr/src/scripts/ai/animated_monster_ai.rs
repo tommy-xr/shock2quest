@@ -1031,7 +1031,7 @@ impl AnimatedMonsterAI {
         // later than they were dealt).
         self.death_elapsed = 0.0;
 
-        // A creature that authors Corpse/Flinderize links bursts instead of
+        // A creature that authors Corpse/CorpsePart/Flinderize links bursts instead of
         // leaving a body: droids link a `Corpse` explosion (plus `Flinderize`
         // parts), and organics that gib - the Overlord's viral explosion and
         // its limb/organ flinders - do the same. `Effect::SlayEntity` spawns

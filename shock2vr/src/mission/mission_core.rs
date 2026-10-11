@@ -8681,7 +8681,9 @@ impl MissionCore {
 
             // Wreckage (a droid's arms, canopy and torso): each part keeps the
             // creature's facing and sits at its model's first vhot, which is
-            // authored as the part's offset from the creature's origin.
+            // authored as the part's offset from the creature's origin. Like
+            // retail, a part whose spot is outside the world (a droid dying
+            // against a wall) is dropped.
             for (template_id, ()) in corpse_part_links {
                 let created = self.create_entity_with_position(
                     asset_cache,
@@ -8698,10 +8700,18 @@ impl MissionCore {
                     .model
                     .as_ref()
                     .and_then(|(model, _)| model.vhots().first().map(|vhot| vhot.point));
-                if let Some(vhot) = vhot {
+                let part_position =
+                    position + vhot.map_or(Vector3::zero(), |v| rotation * v.to_vec());
+                let outside_world = self
+                    .spatial_data
+                    .as_deref()
+                    .is_some_and(|spatial| spatial.get_cell_from_position(part_position).is_none());
+                if outside_world {
+                    self.destroy_entity(created.entity_id);
+                } else if vhot.is_some() {
                     self.set_entity_position_rotation(
                         created.entity_id,
-                        position + rotation * vhot.to_vec(),
+                        part_position,
                         rotation,
                         vec3(1.0, 1.0, 1.0),
                     );
@@ -14318,7 +14328,7 @@ impl MissionCore {
                         // multibody rig is the default; `ragdoll_impulse` falls back
                         // to the legacy impulse-joint rig. Without the flag (or for
                         // non-ragdoll-able entities), fall back to the plain removal.
-                        // An entity replaced by its own Corpse/Flinderize links
+                        // An entity replaced by its own Corpse/CorpsePart/Flinderize links
                         // (a droid's explosion and parts, an Overlord's gibs)
                         // never ragdolls: the spawned links are the body, and a
                         // ragdoll on top would leave a corpse the explosion was
