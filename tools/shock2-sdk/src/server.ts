@@ -127,6 +127,16 @@ function hookSignalCleanup(): void {
       process.kill(process.pid, signal);
     });
   }
+  // A forced exit (the test runner's --test-force-exit after a timed-out test)
+  // skips every dispose; process.kill is synchronous, so it is safe here.
+  process.once("exit", () => {
+    for (const server of liveServers) {
+      server.killProcessTreeForSignalCleanup();
+    }
+    for (const child of pendingChildren) {
+      killProcessGroup(child.pid);
+    }
+  });
 }
 
 /** Max lines included in a launch-failure error message. */
