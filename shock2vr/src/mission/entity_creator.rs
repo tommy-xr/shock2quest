@@ -1575,7 +1575,7 @@ fn create_physics_representation_unfiltered(
             v_phys_dimensions.get(entity_id).ok(),
         ) {
             (Some(phys_type), Some(dimensions))
-                if !frob_info.world_action.contains(FrobFlag::MOVE) =>
+                if !frob_info.world_action.contains(FrobFlag::MOVE) && !flinderize_debris =>
             {
                 // `P$PhysType` and `P$PhysDims` are inherited independently, so
                 // an object can end up declaring a shape its dimensions never
@@ -1689,7 +1689,15 @@ fn create_physics_representation_unfiltered(
                 abs_dimensions,
                 frob_group,
             );
-        } else if frob_info.world_action.contains(FrobFlag::MOVE) {
+        } else if frob_info.world_action.contains(FrobFlag::MOVE)
+            // Frobbable wreckage (a droid's searchable torso) is still loose
+            // debris: simulate it like a carryable item rather than leave it
+            // hanging where it spawned as a fixture.
+            || (flinderize_debris
+                && v_phys_type
+                    .get(entity_id)
+                    .is_ok_and(|phys| phys.phys_type == PhysicsModelType::SPHERE))
+        {
             let shape = PhysicsShape::Cuboid(abs_dimensions * 1.0);
             rigid_body_handle = physics.add_dynamic(
                 entity_id,
@@ -2224,7 +2232,7 @@ pub struct CreateEntityOptions {
     /// as `RuntimePropShotModifiers` so its damage and speed follow the fire
     /// mode that launched it. `None` for anything that is not a gun shot.
     pub shot_modifiers: Option<crate::runtime_props::RuntimePropShotModifiers>,
-    /// This entity was created as a Flinderize target. Keeping this separate
+    /// This entity was created as a Flinderize or CorpsePart target. Keeping this separate
     /// from the general model-bounds fallback lets only launched debris turn a
     /// dimension-less moving sphere into a simulated body.
     pub flinderize_debris: bool,

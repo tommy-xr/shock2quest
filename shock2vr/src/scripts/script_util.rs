@@ -449,7 +449,7 @@ pub fn get_all_links_with_template<TData>(
 /// links when they die instead of leaving a body behind.
 pub fn has_death_links(world: &World, entity_id: EntityId) -> bool {
     !get_all_links_with_template(world, entity_id, |link| match link {
-        Link::Corpse(_) | Link::Flinderize(_) => Some(()),
+        Link::Corpse(_) | Link::CorpsePart | Link::Flinderize(_) => Some(()),
         _ => None,
     })
     .is_empty()

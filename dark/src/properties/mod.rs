@@ -751,6 +751,9 @@ pub enum Link {
     /// (e.g. Standard Bullet -> Standard Clip).
     Clip,
     Corpse(CorpseOptions),
+    /// Creature archetype -> a body part spawned at its first vhot when the
+    /// creature dies (a droid's arms, canopy and torso).
+    CorpsePart,
     /// Enemy archetype -> researchable organ granting a damage bonus against it.
     Organ,
     Flinderize(FlinderizeOptions),
@@ -1601,6 +1604,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_link("L$LandingPo", |_| Link::LandingPoint),
         define_link("L$Replicato", |_| Link::Replicator),
         define_link("L$Mutate", |_| Link::Mutate),
+        define_link("L$CorpsePar", |_| Link::CorpsePart),
         define_link("L$SpawnPoin", |_| Link::SpawnPoint),
         define_link("L$Spawned", |_| Link::Spawned),
         define_link("L$HackingLi", |_| Link::Hacking),
