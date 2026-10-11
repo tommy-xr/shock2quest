@@ -21,6 +21,10 @@ function savePath(saveName: string): string | undefined {
     .find(existsSync);
 }
 
+async function model(game: GameServer, id: number) {
+  return (await game.entities.detail(id)).properties.find((p) => p.name === "Model")?.value;
+}
+
 async function turret709(game: GameServer) {
   return (await game.entities.list({ limit: 10_000 })).entities.find(
     (entity) => entity.template_id === 709,
@@ -31,10 +35,11 @@ async function turret709(game: GameServer) {
 // then the fresh process looks up only "rick2.mis" and reconstructs turret709
 // from the pristine mission. The test owns its save and needs no campaign data.
 test(
-  "Rick2.mis: a destroyed mission entity stays absent across a fresh process",
+  "Rick2.mis: a destroyed mission entity stays destroyed across a fresh process",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     const saveName = `rick2_mixed_case_${Date.now()}`;
+    let shell: unknown;
     try {
       {
         await using game = await GameServer.launch({
@@ -49,16 +54,17 @@ test(
 
         const turret = await turret709(game);
         assert.ok(turret, "Rick2 must contain mission turret709 before damage");
+        const pristine = await model(game, turret.id);
         await game.entities.sendMessage(turret.id, {
           type: "Damage",
           amount: 1_000,
         });
         await game.step({ frames: 5 });
-        assert.equal(
-          await turret709(game),
-          undefined,
-          "ordinary lethal Damage must remove mission turret709 before save",
-        );
+        // CameraDeath (#2102) keeps the destroyed turret's damaged shell.
+        const destroyed = await turret709(game);
+        assert.ok(destroyed, "a destroyed Rick turret keeps its shell");
+        shell = await model(game, destroyed.id);
+        assert.notEqual(shell, pristine, "ordinary lethal Damage must destroy mission turret709 before save");
         assert.equal((await game.save(saveName)).success, true);
       }
 
@@ -73,10 +79,12 @@ test(
         assert.equal(loaded.success, true);
         assert.equal(loaded.mission, "Rick2.mis");
         await game.step({ frames: 5 });
+        const restored = await turret709(game);
+        assert.ok(restored, "the destroyed shell survives the save");
         assert.equal(
-          await turret709(game),
-          undefined,
-          "the fresh process must use the saved Rick2 entity snapshot",
+          await model(game, restored.id),
+          shell,
+          "the fresh process must use the saved Rick2 entity snapshot, not the pristine turret",
         );
       }
     } finally {
