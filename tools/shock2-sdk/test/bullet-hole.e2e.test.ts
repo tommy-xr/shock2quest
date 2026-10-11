@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
 
 // End-to-end test for the bullet-hole decal's lifetime (#447): the
 // "Bullet Hit" sprite rides the "Standard Terr Spang" a wall hit spawns, and
@@ -48,7 +48,22 @@ test(
     );
 
     // Fire at the wall the default facing (yaw 0) looks at.
-    await game.input.set("head.look", [0, 0]);
+    // Aim at level geometry: the spawn's straight-ahead line now meets the
+    // Air Duct object, and a hit on an object leaves a spang but no decal.
+    const position = await game.player.position();
+    const eye: [number, number, number] = [position.x, position.y + PLAYER_EYE_HEIGHT_WORLD, position.z];
+    let wall: [number, number, number] | undefined;
+    for (let step = 0; step < 16 && !wall; step++) {
+      const yaw = (step * Math.PI) / 8;
+      const hit = await game.raycast({
+        start: eye,
+        end: [eye[0] + Math.sin(yaw) * 15, eye[1], eye[2] - Math.cos(yaw) * 15],
+      });
+      // Level geometry reports its surface material; objects do not.
+      if (hit.surface_material && (hit.distance ?? 0) > 2 && hit.hit_point) wall = hit.hit_point;
+    }
+    assert.ok(wall, "a wall must be in reach of the spawn");
+    await game.input.lookAtWorldPoint(wall);
     await game.step({ frames: 5 });
     await game.input.set("right_hand.trigger", 1.0);
     await game.step({ frames: 2 });
