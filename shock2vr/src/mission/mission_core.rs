@@ -17539,6 +17539,8 @@ impl MissionCore {
             if let Some(weight) = self.script_world.monster_idle_weight(*entity_id) {
                 crate::monster_idle::apply(&mut scene_objs, weight);
             }
+            self.script_world
+                .apply_morph_weights(*entity_id, &mut scene_objs);
             let is_animated_model = objs.is_animated();
 
             // Authored/scripted per-entity alpha (Renderer\Transparency (alpha):

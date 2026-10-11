@@ -745,6 +745,10 @@ pub trait Script {
         None
     }
 
+    /// Script-owned visual pose, projected onto the model's authored names.
+    /// Progress lives in the script's save hooks, not a second ECS timer.
+    fn visit_morph_weights(&self, _visit: &mut dyn FnMut(&[(&'static str, f32)])) {}
+
     /// Read-only view of native AI stasis, shared by animation/physics gates.
     fn stasis(&self) -> Option<&stasis::StasisState> {
         None
@@ -896,6 +900,13 @@ impl Script for CompositeScript {
             .iter()
             .find_map(|s| s.script.monster_idle_weight())
     }
+
+    fn visit_morph_weights(&self, visit: &mut dyn FnMut(&[(&'static str, f32)])) {
+        for instance in &self.scripts {
+            instance.script.visit_morph_weights(visit);
+        }
+    }
+
     fn build_gui(
         &mut self,
         entity_id: EntityId,
@@ -1657,6 +1668,29 @@ impl ScriptWorld {
             .get(&entity)?
             .iter()
             .find_map(|s| s.script.monster_idle_weight())
+    }
+
+    pub fn apply_morph_weights(
+        &self,
+        entity: EntityId,
+        objects: &mut [engine::scene::SceneObject],
+    ) {
+        let Some(scripts) = self.entity_to_scripts.get(&entity) else {
+            return;
+        };
+        for script in scripts {
+            script.script.visit_morph_weights(&mut |weights| {
+                for object in objects.iter_mut() {
+                    let names = object.geometry.morph_names();
+                    for (index, name) in names.iter().enumerate() {
+                        if let Some((_, weight)) = weights.iter().find(|(key, _)| *key == name) {
+                            object.morph_weights.resize(names.len(), 0.0);
+                            object.morph_weights[index] = *weight;
+                        }
+                    }
+                }
+            });
+        }
     }
 
     pub fn stasis(&self, entity: EntityId, world: &World) -> Option<&stasis::StasisState> {

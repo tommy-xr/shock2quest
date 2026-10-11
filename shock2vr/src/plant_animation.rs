@@ -54,7 +54,17 @@ pub fn apply(world: &World, entity: EntityId, objects: &mut [SceneObject]) {
     }
     let weights = weights(time.total.as_secs_f64(), position.position);
     for object in objects {
-        object.morph_weights = weights.to_vec();
+        object.morph_weights = object
+            .geometry
+            .morph_names()
+            .iter()
+            .map(|name| match name.as_str() {
+                "motion_one" => weights[0],
+                "motion_two" => weights[1],
+                "motion_three" | "contract" => weights[2],
+                _ => 0.0,
+            })
+            .collect();
     }
 }
 
