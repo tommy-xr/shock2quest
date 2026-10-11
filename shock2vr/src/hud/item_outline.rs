@@ -329,7 +329,7 @@ fn mini_frame_canvas(screen_size: Vector2<f32>, name: Option<&str>) -> crate::ui
         canvas.text_native_fit(
             Rect::new(x + 12.0, 0.0, 239.0, 10.0),
             name,
-            "mainfont.fon",
+            crate::ui::MFD_FONT,
             HAlign::Left,
             VAlign::Middle,
         );
@@ -338,12 +338,10 @@ fn mini_frame_canvas(screen_size: Vector2<f32>, name: Option<&str>) -> crate::ui
 }
 
 /// Draw once per eye, from the active rollover (never the damaged-object list).
-/// The same resolved canvas is used by flat and VR; object bounds have no role
-/// in placing either the frame or its name.
+/// Flat only; VR names objects in the inventory bar's mini-frame.
 pub fn draw_item_name(
     asset_cache: &mut AssetCache,
     entity_id: Option<EntityId>,
-    fallback_name: Option<&str>,
     world: &World,
     screen_size: Vector2<f32>,
     debug_show_ids: bool,
@@ -367,7 +365,7 @@ pub fn draw_item_name(
             .map(|template_id| (template_id, entity_id.inner()));
         Some(format_hover_label(&item_name, hit_points, debug_identity))
     });
-    mini_frame_canvas(screen_size, name.as_deref().or(fallback_name)).render_screen_space(
+    mini_frame_canvas(screen_size, name.as_deref()).render_screen_space(
         asset_cache,
         screen_size,
         crate::ui::ScaleMode::Stretch,
@@ -410,8 +408,9 @@ mod tests {
                 text,
                 UiElement::Text {
                     fit_to_rect: true,
+                    font,
                     ..
-                }
+                } if font == crate::ui::MFD_FONT
             ));
         }
     }

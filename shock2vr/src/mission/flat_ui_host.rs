@@ -1793,17 +1793,17 @@ impl FlatUiHost {
                 canvas.text_native_fit(
                     text,
                     preview.status.text(),
-                    NAME_STRIP_FONT,
+                    MFD_FONT,
                     HAlign::Left,
                     VAlign::Middle,
                 );
             } else if let Some(name) = self.name_strip.as_deref() {
-                canvas.text_native_fit(text, name, NAME_STRIP_FONT, HAlign::Left, VAlign::Middle);
+                canvas.text_native_fit(text, name, MFD_FONT, HAlign::Left, VAlign::Middle);
             } else if self.shoulder_weapons.iter().any(Option::is_some) {
                 canvas.text_native_fit(
                     text,
                     "L / R: shoulder recall",
-                    NAME_STRIP_FONT,
+                    MFD_FONT,
                     HAlign::Left,
                     VAlign::Middle,
                 );
@@ -2865,7 +2865,7 @@ mod tests {
             })
             .expect("the readout should draw its name");
         assert_eq!(text.0, "Laser Rapier");
-        assert_eq!(text.1, NAME_STRIP_FONT);
+        assert_eq!(text.1, MFD_FONT);
         assert!(text.2, "an unbounded object name must ellipsize");
         // The line is laid out inside the frame's opaque plate (`FRAME.PCX` is
         // 16 tall, of which only y0..12 is plate - below that is its bevel),
