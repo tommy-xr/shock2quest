@@ -1155,7 +1155,7 @@ impl ReceptronOptions {
             "radiate" => ReceptronEffect::Radiate {
                 multiplier: param_56,
             },
-            "toxin" => ReceptronEffect::Toxin,
+            _ if name.eq_ignore_ascii_case("toxin") => ReceptronEffect::Toxin,
             _ => ReceptronEffect::Unhandled(name),
         };
 
@@ -3744,8 +3744,10 @@ mod tests {
 
     #[test]
     fn receptron_toxin_is_a_handled_effect() {
-        let opts = read_receptron(receptron_payload(12, "toxin", 0.0, 0.0, 0));
-        assert_eq!(opts.effect, ReceptronEffect::Toxin);
+        for name in ["toxin", "Toxin"] {
+            let opts = read_receptron(receptron_payload(12, name, 0.0, 0.0, 0));
+            assert_eq!(opts.effect, ReceptronEffect::Toxin);
+        }
     }
 
     #[test]

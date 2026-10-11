@@ -1264,6 +1264,8 @@ impl ScriptWorld {
             // Implemented
             "basebutton" => Box::new(BaseButton::new()),
             "baseelevator" => Box::new(BaseElevator::new()),
+            // Mission setup attaches this to the player itself.
+            "playerscript" => Box::new(player_script::PlayerScript),
             "destroyallbyname" => Box::new(DestroyAllByName::new()),
             "levelchangebutton" => Box::new(LevelChangeButton::new()),
             "logdiscscript" => gui_script(Box::new(MediaGui)),
@@ -1846,6 +1848,7 @@ mod script_support_tests {
     #[test]
     fn script_support_follows_the_registry_case_insensitively() {
         assert_eq!(script_support("LaserShot"), ScriptSupport::Implemented);
+        assert_eq!(script_support("PlayerScript"), ScriptSupport::Implemented);
         assert_eq!(script_support("TorpedoLift"), ScriptSupport::Stub);
         assert_eq!(script_support("teleportmarker"), ScriptSupport::Noop);
         assert_eq!(script_support("NoSuchScript"), ScriptSupport::Unregistered);

@@ -4,10 +4,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
-use dark::properties::{Link, PropScripts, ReceptronEffect};
+use dark::properties::{Link, PropPsiPower, PropScripts, ReceptronEffect};
 use dark::ss2_entity_info::SystemShock2EntityInfo;
 use serde_json::json;
-use shipyard::{IntoIter, View, World};
+use shipyard::{Get, IntoIter, IntoWithId, View, World};
 use shock2vr::ScriptSupport;
 
 #[derive(Default)]
@@ -61,9 +61,22 @@ impl Audit {
             tally.sources.insert(source.to_string());
         }
 
+        // Only each record's own properties: inheritance would count a script
+        // once per descendant instead of once per authoring.
         let mut world = World::new();
-        info.initialize_world_with_entities(&mut world, Default::default(), |_| true);
-        for prop in world.borrow::<View<PropScripts>>().unwrap().iter() {
+        for props in info.entity_to_properties.values() {
+            let entity = world.add_entity(());
+            for prop in props {
+                prop.initialize(&mut world, entity);
+            }
+        }
+        // Psi power scripts are dispatched by power id, not the registry.
+        let psi_powers = world.borrow::<View<PropPsiPower>>().unwrap();
+        let scripts = world.borrow::<View<PropScripts>>().unwrap();
+        for (entity, prop) in scripts.iter().with_id() {
+            if psi_powers.get(entity).is_ok() {
+                continue;
+            }
             for name in prop.scripts.iter().filter(|n| !n.is_empty()) {
                 let name = name.to_ascii_lowercase();
                 let support = shock2vr::script_support(&name);
