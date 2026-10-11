@@ -525,3 +525,74 @@ mod joint_tests {
         assert!(!state.joints[2].contains(TweqAnimationState::REVERSE));
     }
 }
+
+/// `P$CfgTweqScale`: Dark's vector tweq config (`sTweqVectorConfig`, 48 bytes)
+/// driving the object's scale - shockwave rings growing from nothing, worm goo
+/// breathing, the explosion sprites' fixed 2x/3x size.
+#[derive(Debug, Component, Clone, Deserialize, Serialize)]
+pub struct PropTweqScaleConfig {
+    pub animation_config: TweqAnimationConfig,
+    pub halt: TweqHalt,
+    /// `TWEQ_CC_MUL`: each step multiplies by the rate instead of adding it.
+    pub multiply: bool,
+    /// Per-axis rate (per 100 ms), low and high limits; a zero rate is unused.
+    pub axes: [TweqAxisLimits; 3],
+    /// 1-based index of the axis whose halt decides the tweq's; 0 = any axis.
+    pub primary_axis: u8,
+}
+
+impl PropTweqScaleConfig {
+    pub fn read<T: io::Seek + io::Read>(reader: &mut T, _len: u32) -> PropTweqScaleConfig {
+        let _tweq_type = read_u8(reader);
+        let curve = read_u8(reader);
+        let animation_config = TweqAnimationConfig::from_bits_truncate(read_u8(reader).into());
+        let halt =
+            num_traits::FromPrimitive::from_u8(read_u8(reader)).unwrap_or(TweqHalt::Continue);
+        let _misc = read_u16(reader);
+        let _rate = read_u16(reader);
+        let mut axes = [TweqAxisLimits {
+            rate: 0.0,
+            low: 0.0,
+            high: 0.0,
+        }; 3];
+        for axis in axes.iter_mut() {
+            axis.rate = read_single(reader);
+            axis.low = read_single(reader);
+            axis.high = read_single(reader);
+        }
+        let primary_axis = read_u8(reader);
+        for _ in 0..3 {
+            let _pad = read_u8(reader);
+        }
+        PropTweqScaleConfig {
+            animation_config,
+            halt,
+            multiply: curve & (1 << 2) != 0,
+            axes,
+            primary_axis,
+        }
+    }
+}
+
+/// `P$StTweqScale`: the scale tweq's on/off and per-axis direction flags
+/// (`sTweqVectorState`).
+#[derive(Debug, Component, Clone, Deserialize, Serialize)]
+pub struct PropTweqScaleState {
+    pub animation_state: TweqAnimationState,
+    pub axis_states: [TweqAnimationState; 3],
+}
+
+impl PropTweqScaleState {
+    pub fn read<T: io::Seek + io::Read>(reader: &mut T, _len: u32) -> PropTweqScaleState {
+        let animation_state = TweqAnimationState::from_bits_truncate(read_u16(reader).into());
+        let _misc = read_u16(reader);
+        let mut axis_states = [TweqAnimationState::empty(); 3];
+        for axis in axis_states.iter_mut() {
+            *axis = TweqAnimationState::from_bits_truncate(read_u32(reader));
+        }
+        PropTweqScaleState {
+            animation_state,
+            axis_states,
+        }
+    }
+}

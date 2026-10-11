@@ -985,6 +985,12 @@ pub enum Effect {
         hand: crate::Handedness,
         pulse: crate::haptics::HapticPulse,
     },
+    /// Set an entity's `PropScale` and the rendered transform built from it
+    /// (a scale tweq's per-frame size).
+    SetScale {
+        entity_id: EntityId,
+        scale: Vector3<f32>,
+    },
     PlaySound {
         handle: AudioHandle,
         name: String,
