@@ -983,6 +983,55 @@ fn apply_psi_kit_use(world: &World, entity_id: EntityId, amount: i32) -> PsiKitU
     }
 }
 
+/// Apply one stat booster against live state: add its timed bonuses and
+/// consume one unit. Only a carried, live, non-empty booster counts.
+fn apply_stat_booster_use(
+    world: &World,
+    entity_id: EntityId,
+    boosts: &[(crate::player_stats::Stat, i32)],
+    duration: std::time::Duration,
+) -> PsiKitUseOutcome {
+    if boosts.is_empty()
+        || !world
+            .borrow::<EntitiesView>()
+            .is_ok_and(|entities| entities.is_alive(entity_id))
+        || !crate::scripts::script_util::player_carried_items(world).contains(&entity_id)
+    {
+        return PsiKitUseOutcome::NotUsed;
+    }
+    let stack_count = world
+        .borrow::<View<dark::properties::PropStackCount>>()
+        .ok()
+        .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
+    if stack_count.is_some_and(|stack| stack <= 0) {
+        return PsiKitUseOutcome::NotUsed;
+    }
+    {
+        let mut quests = world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+        for &(stat, delta) in boosts {
+            quests
+                .player_stats_mut()
+                .apply_modifier(crate::player_stats::TimedStatModifier {
+                    source: "drug".to_owned(),
+                    stat,
+                    delta,
+                    remaining: duration,
+                });
+        }
+    }
+    if stack_count.is_some_and(|stack| stack > 1) {
+        let mut stacks = world
+            .borrow::<ViewMut<dark::properties::PropStackCount>>()
+            .unwrap();
+        if let Ok(stack) = (&mut stacks).get(entity_id) {
+            stack.0 -= 1;
+        }
+        PsiKitUseOutcome::DecrementedStack
+    } else {
+        PsiKitUseOutcome::DestroyEntity
+    }
+}
+
 /// Move a still-live entity's containment link and mark it as no longer
 /// world-referenced. Effects are processed sequentially, so an earlier effect
 /// in the same batch may already have consumed the requested item.
@@ -12405,6 +12454,31 @@ impl MissionCore {
                     }
                 }
 
+                Effect::UseStatBooster {
+                    entity_id,
+                    boosts,
+                    duration,
+                } => {
+                    let outcome = apply_stat_booster_use(&self.world, entity_id, &boosts, duration);
+                    if outcome == PsiKitUseOutcome::NotUsed {
+                        continue;
+                    }
+                    self.refresh_implant_effects();
+                    let sound = crate::scripts::script_util::play_environmental_sound(
+                        &self.world,
+                        entity_id,
+                        "activate",
+                        vec![],
+                        AudioHandle::new(),
+                    );
+                    if outcome == PsiKitUseOutcome::DestroyEntity {
+                        self.destroy_entity(entity_id);
+                    }
+                    if !matches!(sound, Effect::NoEffect) {
+                        effects.push_front(sound);
+                    }
+                }
+
                 effect @ (Effect::UseComestible { entity_id, .. }
                 | Effect::UseLiquor { entity_id }) => {
                     // Resolve the heal and source lifetime against the same
@@ -23290,6 +23364,49 @@ mod comestible_use_tests {
             inventory_entity_id: inventory,
         });
         (world, player, food)
+    }
+
+    #[test]
+    fn stat_booster_adds_timed_bonus_and_consumes_one_carried_unit() {
+        use crate::player_stats::Stat;
+        let five_min = std::time::Duration::from_secs(300);
+        let (mut world, _player, booster) = world_with_player(30, true);
+        world.add_unique(QuestInfo::new());
+        world.add_component(booster, dark::properties::PropStackCount(2));
+        let boosts = [(Stat::PsionicAbility, 1)];
+        let base = crate::implants::effective_stats(&world)
+            .unwrap()
+            .psionic_ability;
+
+        assert_eq!(
+            apply_stat_booster_use(&world, booster, &boosts, five_min),
+            PsiKitUseOutcome::DecrementedStack
+        );
+        let effective = || {
+            crate::implants::effective_stats(&world)
+                .unwrap()
+                .psionic_ability
+        };
+        assert_eq!(effective(), base + 1);
+        // A second dose refreshes the same modifier instead of stacking.
+        assert_eq!(
+            apply_stat_booster_use(&world, booster, &boosts, five_min),
+            PsiKitUseOutcome::DestroyEntity
+        );
+        assert_eq!(effective(), base + 1);
+        world
+            .borrow::<UniqueViewMut<QuestInfo>>()
+            .unwrap()
+            .player_stats_mut()
+            .tick_modifiers(five_min);
+        assert_eq!(effective(), base);
+
+        let (world, _player, loose) = world_with_player(30, false);
+        world.add_unique(QuestInfo::new());
+        assert_eq!(
+            apply_stat_booster_use(&world, loose, &boosts, five_min),
+            PsiKitUseOutcome::NotUsed
+        );
     }
 
     fn player_hit_points(world: &World, player: EntityId) -> i32 {

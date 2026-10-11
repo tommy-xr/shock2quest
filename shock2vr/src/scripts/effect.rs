@@ -615,6 +615,14 @@ pub enum Effect {
         amount: i32,
     },
 
+    /// Apply a carried stat booster's timed bonuses to the player and consume
+    /// one unit. Reusing a booster refreshes its timer rather than stacking.
+    UseStatBooster {
+        entity_id: EntityId,
+        boosts: Vec<(crate::player_stats::Stat, i32)>,
+        duration: std::time::Duration,
+    },
+
     /// Atomically use one food/drink or diagnostic module against the live
     /// player, decrementing a stack or destroying its final item. Even full
     /// health consumes one; healing is clamped to the authored maximum.

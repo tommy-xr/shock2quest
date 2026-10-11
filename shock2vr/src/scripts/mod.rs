@@ -92,6 +92,7 @@ mod room_trigger;
 pub mod script_util;
 mod setup_initial_debrief;
 mod shodan_shield;
+mod stat_booster;
 mod std_door;
 pub(crate) use std_door::player_door_frob_blocked;
 mod tool_consumable;
@@ -1355,8 +1356,7 @@ impl ScriptWorld {
             "speedpatch" => Box::new(UnimplementedScript::new(&script_name)), // speed boost
             "radpatch" => Box::new(RadPatchScript),
             "autoinstallsoft" => Box::new(AutoInstallSoft::new()), // auto install software
-            "strboost" => Box::new(UnimplementedScript::new(&script_name)), // strength boost
-            "intboost" => Box::new(UnimplementedScript::new(&script_name)),
+            "strboost" | "intboost" => Box::new(stat_booster::StatBooster),
             "statboostimplant" => Box::new(implant::Implant::default()),
 
             // earth:
