@@ -4844,7 +4844,7 @@ async fn get_audio_loops(
 /// HTTP handler for the recently delivered script messages (receiver, payload
 /// variant, Damage impact geometry, and sender where the payload carries one).
 /// Pairs with `/v1/audio/recent` for debugging "why did all of this fire at once".
-/// High-frequency payloads (hover, sensor/collision) are filtered out. Reads a
+/// Hover/sensor payloads are filtered; collisions have an independent budget. Reads a
 /// process-wide log, so no game-loop round-trip is needed.
 async fn get_recent_messages() -> Json<Value> {
     Json(serde_json::json!({ "messages": shock2vr::message_trace::recent() }))
