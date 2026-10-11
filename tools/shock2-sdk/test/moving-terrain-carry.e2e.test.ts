@@ -64,6 +64,14 @@ test(
     assert.equal(boarding.moved, true, "player should walk through the tram doorway");
     await game.step({ frames: 10 });
 
+    // Walk clear of the doorway pillar so the real button face is visible.
+    const approach = await game.player.moveTo({
+      x: tram.position[0] - 0.9, y: -16.4, z: tram.position[2],
+    });
+    assert.ok(approach.moved && !approach.blocked,
+      `the car aisle must admit the approach: ${JSON.stringify(approach)}`);
+    await game.step({ frames: 2 });
+
     const playerBefore = await game.player.position();
     const tramBefore = (await game.entities.detail(tram.id)).position;
 

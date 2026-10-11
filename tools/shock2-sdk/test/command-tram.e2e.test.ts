@@ -71,6 +71,17 @@ test(
     );
     await game.step({ frames: 10 });
 
+    // From the doorway the remaster car's pillar hides the button. Walk down
+    // the aisle before aiming; the button must remain genuinely visible.
+    const approach = await game.player.moveTo({
+      x: tram.position[0] - 0.9,
+      y: boardingTarget.y,
+      z: tram.position[2],
+    });
+    assert.ok(approach.moved && !approach.blocked,
+      `the car aisle must admit the approach: ${JSON.stringify(approach)}`);
+    await game.step({ frames: 2 });
+
     const playerBefore = await game.player.position();
     const tramBefore = (await game.entities.detail(tram.id)).position;
     const frontBefore = (await game.entities.detail(tramFront.id)).position;
