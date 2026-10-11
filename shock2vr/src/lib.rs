@@ -32,6 +32,7 @@ mod rapier;
 pub mod reference_grid;
 pub mod save_load;
 pub mod scenes;
+mod slot_machine;
 pub mod time;
 pub mod user_settings;
 pub mod vr_comfort;

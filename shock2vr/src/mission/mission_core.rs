@@ -12768,6 +12768,14 @@ impl MissionCore {
                     effects.extend(pickup_feedback(&self.world, asset_cache, entity_id));
                 }
 
+                Effect::PlaySlotMachine { entity_id } => {
+                    effects.extend(Effect::flatten(vec![crate::slot_machine::play(
+                        &self.world,
+                        entity_id,
+                        rand::random(),
+                    )]));
+                }
+
                 Effect::AwardNanites { amount } => {
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                     let balance = quests.player_stats_mut().award_nanites(amount);
