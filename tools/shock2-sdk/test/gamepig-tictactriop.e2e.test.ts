@@ -1,24 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
-import { clickUiElement } from "./helpers/ui.js";
-import { clickWorldPanelElement } from "./helpers/vr-hand.js";
+import { openGamePig } from "./helpers/gamepig.js";
 
 for (const vr of [false, true]) {
   test(`Tic-Tac-Triop plays against Xerxes (${vr ? "VR" : "flat"})`,
     { skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000 }, async () => {
       await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: vr ? ["--vr"] : [] });
-      await game.step({ frames: 2 });
-      if (vr) await game.input.set("left_hand.squeeze", 1);
-      const handheld = await game.player.spawnItem("Gameboy", vr ? { hand: "left" } : undefined);
-      await game.step({ frames: 2 });
-      const cart = await game.player.spawnItem("TTT Cart");
-      await game.entities.sendMessage(cart.entity_id, { type: "Frob" });
-      await game.entities.sendMessage(handheld.entity_id, { type: "Frob" });
-      await game.step({ frames: 2 });
-      const click: typeof clickUiElement = vr
-        ? (g, element) => clickWorldPanelElement(g, [188, 296, 0], 1, element)
-        : clickUiElement;
+      const { handheld, click } = await openGamePig(game, vr, "TTT Cart");
       let ui = await game.ui.state();
       const select = ui.active_panel?.elements.find(e => e.label === "game-8");
       assert.ok(select, "installed Tic-Tac-Triop must be selectable");
