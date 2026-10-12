@@ -76,11 +76,25 @@ test("hazards: authored Engineering room accumulates radiation only while occupi
   assert.equal((await game.info()).player.radiation_level, exposed, "exit removes ambient exposure without curing stored radiation");
   const cleanup = (await game.entities.list({ filter: "RadBeGone" })).entities.find(e => e.template_id === 178);
   assert.ok(cleanup);
+  const radiationFx = (await game.entities.list()).entities.filter(e =>
+    /^(Radiation FX [12]|NuRadSteam|Rad Light [12])$/.test(e.name));
+  const lights = radiationFx.filter(e => e.name.startsWith("Rad Light"));
+  assert.ok(lights.length > 0, "authored radiation lights accompany the particles");
   await game.entities.sendMessage(cleanup.id, { type: "TurnOn" });
   await game.step({ frames: 2 });
+  for (const light of lights) {
+    const detail = await game.entities.detail(light.id);
+    assert.ok(detail, "radiation light must survive long enough to shut down before ReallySlay");
+    assert.equal(Number(detail.properties.find(p => p.name === "AnimLightIntensity")?.value), 0,
+      "Slain must extinguish the radiation light before delayed destruction");
+  }
   assert.equal(await game.quests.get("EngineRadClear"), "incomplete", "retail sets the raw quest flag to 1");
   const afterCleanup = (await game.info()).player.radiation_level;
   assert.equal(afterCleanup, exposed, "reactor cleanup does not cure the player");
+  await game.step({ frames: 10 });
+  const survivors = new Set((await game.entities.list()).entities.map(e => e.id));
+  assert.ok(radiationFx.every(e => !survivors.has(e.id)),
+    "ReallySlay removes both radiation lights and particle-only Rad FX after 100 ms");
   await game.player.teleport({ x: room.position[0], y: room.position[1] - .5, z: room.position[2] });
   await game.step({ frames: 60 });
   assert.equal((await game.info()).player.radiation_level, afterCleanup, "reactor cleanup disables subsequent room exposure");

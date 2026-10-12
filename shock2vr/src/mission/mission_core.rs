@@ -10586,6 +10586,16 @@ impl MissionCore {
     }
 
     fn remove_entity_single(&mut self, entity_id: EntityId) {
+        // Lightmap/object-light intensities outlive their ECS owner. Clear
+        // the slot while its number is still available, including direct
+        // DestroyEntity paths that do not send a script Slay notification.
+        if let Some(controller) = &mut self.animated_lightmaps {
+            if let Ok(lights) = self.world.borrow::<View<PropAnimLight>>() {
+                if let Ok(light) = lights.get(entity_id) {
+                    controller.set_light_intensity(light.light_number, 0.0);
+                }
+            }
+        }
         // Shipyard recycles entity ids, so stale per-entity animation state
         // must not outlive the entity (a recycled id would inherit it).
         self.id_to_animation_player.remove(&entity_id);
