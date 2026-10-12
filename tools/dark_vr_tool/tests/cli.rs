@@ -20,6 +20,8 @@ from pathlib import Path
 root = Path(os.environ['DVR_TEST_ROOT'])
 a = sys.argv[1:]
 with (root / 'calls').open('a') as f: f.write(json.dumps(a) + '\n')
+if a == ['version']:
+    print('Android Debug Bridge test fixture'); sys.exit(0)
 if a == ['devices', '-l']:
     print(os.environ.get('DVR_TEST_DEVICES', 'List of devices attached\nquest device model:Quest_3'))
     sys.exit(0)
@@ -44,14 +46,18 @@ if a[0] == 'pull':
     Path(a[2]).write_bytes(src.read_bytes()); sys.exit(0)
 if a[0] == 'push':
     src = Path(a[1])
+    if os.environ.get('DVR_TEST_PUSH_FAIL') == src.name:
+        print('no space left on device', file=sys.stderr); sys.exit(1)
     dest = Path(a[2].replace('/sdcard/shock2quest', str(root / 'data'))) / src.name
     if src.is_dir(): shutil.copytree(src, dest, dirs_exist_ok=True)
     else: shutil.copy2(src, dest)
-    sys.exit(0)
+    print('Copied ' + src.name); sys.exit(0)
 if a[0] == 'tcpip':
     print('restarting in TCP mode port: ' + a[1]); sys.exit(0)
 if a[0] == 'install':
     assert a[1] == '-r' and Path(a[2]).is_file()
+    if os.environ.get('DVR_TEST_INSTALL_FAIL'):
+        print('INSTALL_FAILED_UPDATE_INCOMPATIBLE', file=sys.stderr); sys.exit(1)
     print('Success'); sys.exit(0)
 raise RuntimeError(a)
 "#).unwrap();
@@ -103,6 +109,97 @@ else:
         );
         out
     }
+    #[cfg(feature = "installer")]
+    fn installer_command(&self) -> Command {
+        let source = self.dir.path().join("game ' files");
+        fs::create_dir_all(source.join("mods")).unwrap();
+        fs::create_dir_all(source.join("cutscenes/enhanced")).unwrap();
+        fs::write(source.join("sshock2.kpf"), "game").unwrap();
+        fs::write(source.join("mods/test.kpf"), "mod").unwrap();
+        fs::write(source.join("cutscenes/enhanced/test.avi"), "video").unwrap();
+        let apk = self.dir.path().join("build ' test.apk");
+        fs::write(&apk, "apk").unwrap();
+        let mut cmd = self.command(&["install"]);
+        cmd.arg("--source")
+            .arg(source)
+            .arg("--apk")
+            .arg(apk)
+            .arg("--adb")
+            .arg(self.dir.path().join("adb"));
+        cmd
+    }
+}
+
+#[cfg(feature = "installer")]
+#[test]
+fn installer_installs_apk_and_every_asset_before_reporting_success() {
+    let h = Harness::new();
+    let out = h.installer_command().output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = String::from_utf8_lossy(&out.stdout);
+    assert!(log.contains("Installation complete"));
+    assert!(log.find("Success").unwrap() < log.find("Copied sshock2.kpf").unwrap());
+    assert!(log.find("Copied cutscenes").unwrap() < log.find("Installation complete").unwrap());
+    assert!(
+        h.dir
+            .path()
+            .join("data/cutscenes/enhanced/test.avi")
+            .is_file()
+    );
+}
+
+#[cfg(feature = "installer")]
+#[test]
+fn installer_failures_never_report_success_or_continue_to_next_stage() {
+    for (flag, value, expected, forbidden) in [
+        (
+            "DVR_TEST_INSTALL_FAIL",
+            "1",
+            "INSTALL_FAILED_UPDATE_INCOMPATIBLE",
+            "push",
+        ),
+        (
+            "DVR_TEST_PUSH_FAIL",
+            "mods",
+            "no space left on device",
+            "cutscenes",
+        ),
+        ("DVR_TEST_DEVICES", "", "Connect and unlock", "install"),
+    ] {
+        let h = Harness::new();
+        let out = h.installer_command().env(flag, value).output().unwrap();
+        assert!(!out.status.success());
+        let log = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(log.contains(expected), "{log}");
+        assert!(!log.contains("Installation complete"));
+        assert!(
+            !fs::read_to_string(h.dir.path().join("calls"))
+                .unwrap()
+                .contains(forbidden)
+        );
+    }
+}
+
+#[cfg(feature = "installer")]
+#[test]
+fn installer_rejects_bad_local_inputs_before_device_access() {
+    let h = Harness::new();
+    let mut command = h.installer_command();
+    fs::remove_file(h.dir.path().join("game ' files/sshock2.kpf")).unwrap();
+    assert!(!command.output().unwrap().status.success());
+    assert!(!h.dir.path().join("calls").exists());
+    let mut command = h.installer_command();
+    fs::remove_file(h.dir.path().join("build ' test.apk")).unwrap();
+    assert!(!command.output().unwrap().status.success());
+    assert!(!h.dir.path().join("calls").exists());
 }
 #[test]
 fn build_never_calls_adb_and_run_deploy_build_before_device_selection() {
