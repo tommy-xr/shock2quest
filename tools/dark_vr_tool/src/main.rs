@@ -730,6 +730,7 @@ mod tests {
         let listing = format!("0\trec-11\t\n{listing}");
         assert_eq!(parse_recordings(&listing).len(), 2);
     }
+    #[cfg(unix)] // Exercises Android shell quoting through a local POSIX shell.
     #[test]
     fn shell_paths_are_literal() {
         let input = "a' b; $(echo unsafe)";

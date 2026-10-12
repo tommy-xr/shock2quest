@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 import plistlib
 import tempfile
@@ -40,7 +41,8 @@ class PackagingTests(unittest.TestCase):
             self.assertEqual((app / "Contents/Helpers/adb").read_bytes(), b"adb")
             self.assertEqual((app / "Contents/Resources/shock2quest.apk").read_bytes(), (root / "game.apk").read_bytes())
             self.assertTrue((app / "Contents/Resources/NOTICE.txt").is_file())
-            self.assertTrue((app / "Contents/Helpers/adb").stat().st_mode & 0o111)
+            if os.name != "nt":  # Windows does not preserve Unix executable bits.
+                self.assertTrue((app / "Contents/Helpers/adb").stat().st_mode & 0o111)
             with self.assertRaisesRegex(ValueError, "already exists"):
                 package.mac_app(root / "ui", files, root, "0.2.3")
 
