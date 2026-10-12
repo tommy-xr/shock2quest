@@ -5,13 +5,16 @@ use crate::{
 };
 use dark::properties::{
     FrobFlag, Link, Links, PropAI, PropFrobInfo, PropImmobile, PropPsiNotPullable, PropRenderType,
-    RenderType,
+    PropRotatingDoor, PropTranslatingDoor, RenderType,
 };
 use shipyard::{EntityId, Get, IntoIter, UniqueView, View, World};
 
 pub const POWER: i32 = -1022;
 // Port interaction tuning, in world units. The power's data[0] is not a verified range.
 pub const RANGE: f32 = 12.0;
+/// Aim assist half-angle: an exact ray rarely lands on a patch lying flat a
+/// few metres away, especially from a tracked hand.
+pub const AIM_CONE_DEGREES: f32 = 8.0;
 
 pub struct Flight {
     pub item: EntityId,
@@ -127,8 +130,14 @@ pub(crate) fn resolve_ray(
     origin: cgmath::Point3<f32>,
     forward: cgmath::Vector3<f32>,
 ) -> Option<EntityId> {
+    use cgmath::{EuclideanSpace, InnerSpace};
     let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
-    // The first obstruction wins: ineligible props and world walls cannot be skipped.
+    let own = [
+        amp,
+        player.entity_id,
+        player.left_hand_entity_id.unwrap_or(player.entity_id),
+        player.right_hand_entity_id.unwrap_or(player.entity_id),
+    ];
     let hit = physics.ray_cast2_with_entity_filter(
         origin,
         forward,
@@ -139,17 +148,56 @@ pub(crate) fn resolve_ray(
             | InternalCollisionGroups::HITBOX,
         Some(amp),
         true,
-        &|id| {
-            id != player.entity_id
-                && Some(id) != player.left_hand_entity_id
-                && Some(id) != player.right_hand_entity_id
-        },
-    )?;
-    let entity = crate::util::resolve_proxy_entity(world, hit.maybe_entity_id?);
-    if !eligible(world, entity) {
-        return None;
+        &|id| !own.contains(&id),
+    );
+    // A pickup under the exact aim wins, and a door keeps its trigger rather
+    // than losing it to an item nearby. Anything else - floor, walls, set
+    // dressing - falls through to the cone.
+    if let Some(entity) = hit
+        .and_then(|hit| hit.maybe_entity_id)
+        .map(|id| crate::util::resolve_proxy_entity(world, id))
+    {
+        if eligible(world, entity) {
+            return Some(entity);
+        }
+        if is_door(world, entity) {
+            return None;
+        }
     }
-    Some(entity)
+    // Otherwise take the item nearest the aim inside the cone, in plain sight
+    // of the caster.
+    let forward = forward.normalize();
+    let min_cos = AIM_CONE_DEGREES.to_radians().cos();
+    let mut candidates: Vec<_> = physics
+        .dynamic_bodies()
+        .filter_map(|(entity, position)| {
+            let offset = position - origin.to_vec();
+            let distance = offset.magnitude();
+            let cos = offset.dot(forward) / distance;
+            (distance <= RANGE && cos >= min_cos).then_some((entity, position, cos))
+        })
+        .collect();
+    candidates.sort_by(|a, b| b.2.total_cmp(&a.2));
+    candidates
+        .into_iter()
+        .find(|(entity, position, _)| {
+            pullable(world, *entity)
+                && !route_blocked(
+                    physics,
+                    origin.to_vec(),
+                    *position,
+                    &[own[0], own[1], own[2], own[3], *entity],
+                )
+                && !contained(world, *entity)
+        })
+        .map(|(entity, _, _)| entity)
+}
+
+fn is_door(world: &World, entity: EntityId) -> bool {
+    let (translating, rotating) = world
+        .borrow::<(View<PropTranslatingDoor>, View<PropRotatingDoor>)>()
+        .unwrap();
+    translating.contains(entity) || rotating.contains(entity)
 }
 
 #[cfg(test)]
@@ -180,6 +228,149 @@ mod tests {
             !route_blocked(&physics, from, to, &[door]),
             "own equipment can be excluded"
         );
+    }
+
+    /// A small loose item 4 units down -X, a wall slot at x=-2, and a player
+    /// parked far away so its capsule cannot intercept the rays.
+    fn cone_fixture() -> (World, PhysicsWorld, EntityId, EntityId, EntityId) {
+        use crate::physics::{CollisionGroup, DynamicPhysicsOptions, PhysicsShape};
+        use cgmath::{Quaternion, vec3};
+        let mut world = World::new();
+        let amp = world.add_entity(());
+        let player_id = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: vec3(100.0, 100.0, 100.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player_id,
+            left_hand_entity_id: Some(amp),
+            right_hand_entity_id: None,
+            inventory_entity_id: player_id,
+        });
+        let item = world.add_entity(PropFrobInfo {
+            world_action: FrobFlag::MOVE,
+            inventory_action: FrobFlag::empty(),
+            tool_action: FrobFlag::empty(),
+        });
+        let mut physics = PhysicsWorld::new();
+        physics.add_dynamic(
+            item,
+            vec3(-4.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.1, 0.02, 0.1)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        let mut player = physics.create_player(vec3(100.0, 100.0, 100.0), player_id);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        (world, physics, amp, item, player_id)
+    }
+
+    fn aim(physics: &PhysicsWorld, world: &World, amp: EntityId, degrees: f32) -> Option<EntityId> {
+        // From 1 unit up, the item sits ~14 degrees below level; aim that much
+        // down, then swing `degrees` off to the side.
+        let down = (1.0f32 / 4.0).atan();
+        let side = degrees.to_radians();
+        let forward = cgmath::vec3(
+            -down.cos() * side.cos(),
+            -down.sin(),
+            down.cos() * side.sin(),
+        );
+        resolve_ray(
+            world,
+            physics,
+            amp,
+            cgmath::Point3::new(0.0, 1.0, 0.0),
+            forward,
+        )
+    }
+
+    #[test]
+    fn a_near_miss_inside_the_cone_still_finds_a_flat_item() {
+        let (world, physics, amp, item, _) = cone_fixture();
+        assert_eq!(aim(&physics, &world, amp, 0.0), Some(item));
+        assert_eq!(
+            aim(&physics, &world, amp, AIM_CONE_DEGREES - 2.0),
+            Some(item)
+        );
+        assert_eq!(aim(&physics, &world, amp, AIM_CONE_DEGREES + 4.0), None);
+    }
+
+    fn add_slab(
+        world: &mut World,
+        physics: &mut PhysicsWorld,
+        player_id: EntityId,
+        center: cgmath::Vector3<f32>,
+        size: cgmath::Vector3<f32>,
+    ) -> EntityId {
+        let slab = world.add_entity(());
+        physics.add_kinematic(
+            slab,
+            center,
+            cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            cgmath::vec3(0.0, 0.0, 0.0),
+            size,
+            crate::physics::CollisionGroup::entity(),
+            false,
+        );
+        let mut player = physics.create_player(cgmath::vec3(100.0, 100.0, 100.0), player_id);
+        physics.update(cgmath::vec3(0.0, 0.0, 0.0), &mut player);
+        slab
+    }
+
+    #[test]
+    fn the_cone_cannot_see_through_cover() {
+        use cgmath::vec3;
+        let (mut world, mut physics, amp, item, player_id) = cone_fixture();
+        assert_eq!(aim(&physics, &world, amp, -5.0), Some(item));
+        // A slab beside the aim: the exact ray passes it, the sight line does not.
+        add_slab(
+            &mut world,
+            &mut physics,
+            player_id,
+            vec3(-3.0, 0.5, 0.3),
+            vec3(0.1, 1.0, 0.8),
+        );
+        assert_eq!(aim(&physics, &world, amp, -5.0), None);
+    }
+
+    #[test]
+    fn a_door_under_the_aim_keeps_the_trigger() {
+        use cgmath::vec3;
+        let (mut world, mut physics, amp, item, player_id) = cone_fixture();
+        // A slab beyond the item, under a 6 degree aim: set dressing there
+        // falls through to the cone, a door does not.
+        let slab = add_slab(
+            &mut world,
+            &mut physics,
+            player_id,
+            vec3(-6.0, -0.5, 0.6),
+            vec3(0.1, 1.0, 0.6),
+        );
+        assert_eq!(aim(&physics, &world, amp, 6.0), Some(item));
+        let rest = vec3(-6.0, -0.5, 0.6);
+        let identity = cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        world.add_component(
+            slab,
+            PropRotatingDoor {
+                door_type: 0,
+                closed: 0.0,
+                open: 90.0,
+                speed: 1.0,
+                axis: 1,
+                state: 0,
+                clockwise: false,
+                base_closed_location: rest,
+                base_open_location: rest,
+                base_location: rest,
+                base_rotation: identity,
+                base_closed_rotation: identity,
+                base_open_rotation: identity,
+                progress: 0.0,
+            },
+        );
+        assert_eq!(aim(&physics, &world, amp, 6.0), None);
     }
 
     #[test]

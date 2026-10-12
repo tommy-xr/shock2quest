@@ -4119,6 +4119,18 @@ impl PhysicsWorld {
 
     /// Levitate a loose dynamic item without bypassing its collision shape.
     /// Returns the previous gravity scale for restoration on arrival/cancellation.
+    /// Every dynamic (loose) body with its position: the candidates a psi
+    /// pull's aim cone can pick from.
+    pub(crate) fn dynamic_bodies(&self) -> impl Iterator<Item = (EntityId, Vector3<f32>)> + '_ {
+        self.entity_id_to_body
+            .iter()
+            .filter_map(|(entity, handle)| {
+                let body = self.rigid_body_set.get(*handle)?;
+                body.is_dynamic()
+                    .then(|| (*entity, nvec_to_cgmath(*body.translation())))
+            })
+    }
+
     pub(crate) fn begin_psi_pull(&mut self, entity: EntityId) -> Option<f32> {
         let body = self
             .entity_id_to_body
