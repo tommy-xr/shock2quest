@@ -272,7 +272,10 @@ click); tracking channels are not. The format and mapping are documented in
   message and full callstack — `launch()` sets `RUST_BACKTRACE=1` for the
   spawned runtime (export `RUST_BACKTRACE=full` yourself for more frames).
 - Writing a new scenario test: copy `test/pathfinding.e2e.test.ts`. Gate
-  long-running tests behind `SHOCK2_E2E=1` so `npm test` stays fast.
+  long-running tests behind `SHOCK2_E2E=1` so `npm test` stays fast. Save/load
+  regressions should create their own saves within the test run. Historical
+  private campaign saves are not maintained as fixtures; pre-v1 save schemas
+  may change without migrations.
 - The e2e suite runs **serially** (`--test-concurrency=1`): each test spawns its
   own heavy debug runtime, so one-at-a-time avoids resource contention. Ports
   no longer need hand-syncing across files - omit `port` and each runtime gets

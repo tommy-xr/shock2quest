@@ -6,7 +6,6 @@ import { test } from "node:test";
 import { findRepoRoot, GameServer } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const reproSave = process.env.SHOCK2_RICK2_MIXED_CASE_SAVE;
 const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8295);
 
 function savePath(saveName: string): string | undefined {
@@ -91,53 +90,5 @@ test(
       const path = savePath(saveName);
       if (path) rmSync(path);
     }
-  },
-);
-
-// The private checkpoint was written immediately after mission turret709 was
-// destroyed with ordinary Crystal Shard edges. Its active mission and current
-// entity snapshot are both keyed `Rick2.mis`. Before #905, cold load lowercased
-// only the lookup, missed that exact snapshot, and silently rebuilt pristine
-// mission entities even though global player state restored correctly.
-test(
-  "Rick2.mis: cold load restores a mixed-case mission entity snapshot",
-  {
-    skip: !e2eEnabled || !reproSave || !existsSync(reproSave),
-    timeout: 600_000,
-  },
-  async () => {
-    assert.ok(
-      reproSave,
-      "SHOCK2_RICK2_MIXED_CASE_SAVE must name the private repro save",
-    );
-    await using game = await GameServer.launch({
-      mission: "earth.mis",
-      port: basePort + 2,
-      debugFlags: ["--save-file", reproSave],
-      echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
-      repoRoot: process.env.SHOCK2_REPO_ROOT,
-    });
-    await game.step({ frames: 10 });
-
-    const info = await game.info();
-    const position = await game.player.position();
-    assert.equal(info.mission, "Rick2.mis");
-    assert.equal(info.player.hit_points, 24);
-    assert.equal(info.player.stats?.cyber_modules, 175);
-    assert.ok(
-      Math.hypot(
-        position.x - 156.13382,
-        position.y - 92.82399,
-        position.z + 10.840119,
-      ) < 0.2,
-      `global player pose must still restore exactly: ${JSON.stringify(position)}`,
-    );
-
-    const restoredTurret709 = await turret709(game);
-    assert.equal(
-      restoredTurret709,
-      undefined,
-      `destroyed mission turret709 must remain absent after cold load; got ${JSON.stringify(restoredTurret709)}`,
-    );
   },
 );
