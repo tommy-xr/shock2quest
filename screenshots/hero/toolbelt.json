@@ -14,9 +14,9 @@
     ]
   },
   "presentation": "Vr",
-  "revision": "cbffd499b7f2b667c1eaf133b194f6ede45f533c",
-  "runtimeRevision": "6c565da7a35a066193fbaa848907ef95e01de50d",
-  "runtimeSha256": "c34d5d485b0cf7f74f82c12cfcfdc28f0e7eb2680f4f87491a63ec1a136a0063",
+  "revision": "13512633c7ac0ec424d206fa588abadfbce882a9",
+  "runtimeRevision": "93f3fe412bd91080c2f3e193cf3deb3d0c50d62d",
+  "runtimeSha256": "a759a8ec3b03e128ecb2afa79d991d98f5a1ddddeface1623fc8c7fcca617703",
   "assetRoot": "/Users/bryphe/ss2-25th",
   "assetFiles": [
     "sshock2.kpf",
@@ -63,7 +63,7 @@
   },
   "evidence": {
     "crate": {
-      "entity": 555,
+      "entity": 1081,
       "objState": {
         "before": "Locked",
         "after": "Hacked"
@@ -98,21 +98,21 @@
     ],
     "loot": [
       {
-        "id": 248,
+        "id": 493,
         "name": "Medical Kit"
       },
       {
-        "id": 1082,
+        "id": 598,
         "name": "Small Standard Clip"
       }
     ],
     "stowed": {
-      "entity": 1082,
+      "entity": 598,
       "name": "Small Standard Clip",
       "inBackpack": true,
       "worldBodies": 0
     },
-    "hitPoints": 35
+    "hitPoints": 40
   },
   "video": {
     "file": "toolbelt.mp4",
@@ -132,7 +132,7 @@
       "tricorderHand": null,
       "scans": 0,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "draw",
@@ -140,7 +140,7 @@
       "tricorderHand": 0,
       "scans": 0,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "raise",
@@ -148,7 +148,7 @@
       "tricorderHand": 0,
       "scans": 0,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "raise",
@@ -156,7 +156,7 @@
       "tricorderHand": 0,
       "scans": 0,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "raise",
@@ -164,7 +164,7 @@
       "tricorderHand": 0,
       "scans": 0,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "raise",
@@ -172,7 +172,7 @@
       "tricorderHand": 0,
       "scans": 0,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "scan",
@@ -180,7 +180,7 @@
       "tricorderHand": 0,
       "scans": 0,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "scan",
@@ -188,7 +188,7 @@
       "tricorderHand": 0,
       "scans": 0,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "scan",
@@ -196,359 +196,359 @@
       "tricorderHand": 0,
       "scans": 0,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "scan",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "read",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "read",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "start",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "start",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "start",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "start",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "start",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "hack",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "loot",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "loot",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "loot",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "point-loot",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "point-loot",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "pull",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "stow",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "stow",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "stow",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "stow",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "stow",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "release",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "lower",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "lower",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "loot",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "loot",
       "mode": "device",
       "tricorderHand": 0,
       "scans": 1,
-      "panel": 555,
-      "hitPoints": 35
+      "panel": 1081,
+      "hitPoints": 40
     },
     {
       "phase": "return",
@@ -556,7 +556,7 @@
       "tricorderHand": null,
       "scans": 1,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "loop",
@@ -564,7 +564,7 @@
       "tricorderHand": null,
       "scans": 1,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "loop",
@@ -572,7 +572,7 @@
       "tricorderHand": null,
       "scans": 1,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     },
     {
       "phase": "loop",
@@ -580,7 +580,7 @@
       "tricorderHand": null,
       "scans": 1,
       "panel": null,
-      "hitPoints": 35
+      "hitPoints": 40
     }
   ]
 }
