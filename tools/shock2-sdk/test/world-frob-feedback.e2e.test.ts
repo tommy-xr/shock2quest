@@ -46,9 +46,10 @@ test(
 
     await worldFrob(game, 1355, { x: -18.9, y: -6.0, z: -51.0 });
 
+    // The required SCP archive overrides Psi1 from the base USEMSG.STR.
     assert.ok(
       (await game.ui.state()).messages.includes(
-        "Cybernetic Upgrade Unit for Psionic Projection",
+        "Cybernetic upgrade unit for psionic disciplines",
       ),
       "the trainer's P$UseMsg key should resolve against USEMSG.STR",
     );
