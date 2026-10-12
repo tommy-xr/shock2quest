@@ -95,12 +95,13 @@ export const HERO = "../screenshots/hero/";
 
 // Camera feeds: [capture, caption].
 export const SHOTS = [
-  ["rec1", "Recreation · pistol"],
+  ["rec1", "Recreation · dual pistols"],
   ["toolbelt", "Recreation · tricorder hack"],
   ["hydro1", "Hydroponics · assault rifle"],
   ["ops2", "Operations · psi amp + laser"],
   ["medsci1-melee", "MedSci · pistol + wrench"],
   ["rick1", "Rickenbacker · ladder, holster draw"],
+  ["command1", "Command · pump shotgun"],
 ];
 
 export const LINKS = {

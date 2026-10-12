@@ -33,6 +33,9 @@ const REST_LEFT = [-0.18, -0.35, -0.4];
 const REST_RIGHT = [0.18, -0.4, -0.35];
 // A rifle at low ready: the support hand sits under the handguard, in view.
 const RIFLE_RIGHT = [0.18, -0.3, -0.3];
+// A long gun shouldered, aimed down its length.
+const SHOULDER_RIGHT = [0.16, -0.27, -0.4];
+const RACK_RIGHT = [0.15, -0.31, -0.35];
 // A melee weapon held up and ready, in frame.
 const READY_LEFT = [-0.16, -0.24, -0.45];
 
@@ -106,24 +109,71 @@ const SHOTS = [
     melee: true,
   },
   {
-    // Single weapon.
+    // Dual-wielded pistols.
     name: "rec1",
     mission: "rec1.mis",
     player: [-10.6, -2.9, -101.0],
     subject: "Red Monkey",
-    loadout: { right: "Pistol" },
-    hands: { right: AIM_RIGHT, left: REST_LEFT },
-    // Raise the pistol from the hip, settle, fire twice.
+    // Creatures move slower on easy, so the monkey's charge stays in frame.
+    difficulty: "easy",
+    loadout: { right: "Pistol", left: "Pistol" },
+    hands: { right: AIM_RIGHT, left: AIM_LEFT },
+    // Raise both pistols from the hip and fire alternately, ending before the
+    // charging monkey closes in under the sights. Each pistol's own shot
+    // interval keeps a hand's pulls ~0.5 s apart.
     clip: {
-      seconds: 2.0,
+      seconds: 1.05,
+      everyPullFires: true,
       hands: {
         right: [
           { t: 0, value: REST_RIGHT },
-          { t: 0.6, value: AIM_RIGHT },
+          { t: 0.3, value: AIM_RIGHT },
         ],
-        left: [{ t: 0, value: REST_LEFT }],
+        left: [
+          { t: 0, value: REST_LEFT },
+          { t: 0.35, value: AIM_LEFT },
+        ],
       },
-      trigger: { right: [1.0, 1.5] },
+      trigger: { right: [0.35, 0.85], left: [0.5, 1.0] },
+    },
+  },
+  {
+    // Pump-action shotgun: fire, rack the pump with the support hand, fire.
+    name: "command1",
+    mission: "command1.mis",
+    // The computer room, lit green by its terminals.
+    player: [-325.6, -0.4, 81.1],
+    // A suffix match: "Midwife" alone also matches the MidwifeGoto marker.
+    subject: "*Midwife",
+    loadout: { right: "Shotgun" },
+    hands: { right: SHOULDER_RIGHT },
+    twoHanded: "right",
+    stats: { strength: 5, skills: { standard_weapons: 6 } },
+    // Three shots, the pump racked between each: the pump alone paces it.
+    clip: {
+      seconds: 2.3,
+      // The gun dips and draws back as each rack yanks the pump.
+      hands: {
+        right: [0.45, 1.1, 1.75].flatMap((t) => [
+          { t, value: SHOULDER_RIGHT },
+          { t: t + 0.17, value: RACK_RIGHT },
+          { t: t + 0.4, value: SHOULDER_RIGHT },
+        ]),
+      },
+      trigger: { right: [0.35, 0.95, 1.6] },
+      // Each pull fires only if the pump was racked since the last.
+      everyPullFires: true,
+      pump: [
+        { t: 0.45, value: 0 },
+        { t: 0.62, value: 1 },
+        { t: 0.8, value: 0 },
+        { t: 1.1, value: 0 },
+        { t: 1.27, value: 1 },
+        { t: 1.45, value: 0 },
+        { t: 1.75, value: 0 },
+        { t: 1.92, value: 1 },
+        { t: 2.1, value: 0 },
+      ],
     },
   },
 ];
@@ -186,6 +236,7 @@ try {
 async function captureShot(shot) {
   const game = await GameServer.launch({
     mission: shot.mission,
+    difficulty: shot.difficulty,
     debugFlags: ["--vr", "--window-size", "1920x1080"],
     repoRoot,
   });
@@ -238,6 +289,7 @@ async function captureShot(shot) {
     console.log(`${shot.name}: ${result.full_path} ${result.resolution.join("x")}`);
     const provenance = {
       mission: shot.mission,
+      difficulty: shot.difficulty,
       settings: captureSettings,
       lighting: (await game.devParams.list()).params
         .filter((param) => ["ambient_light_intensity", "held_light_floor"].includes(param.key))
@@ -276,6 +328,18 @@ async function recordClip(game, shot, subjectId) {
   const { clip } = shot;
   const frames = Math.round(clip.seconds * 60);
   const sink = await frameSink(game, shot.name);
+  // Rounds left in each pulling hand's gun, for `everyPullFires`.
+  const ammo = async () => {
+    const { player } = await game.info();
+    const held = { left: player.wielded_entity_id, right: player.right_hand_entity_id };
+    const rounds = {};
+    for (const hand of Object.keys(clip.trigger)) {
+      const detail = await game.entities.detail(held[hand]);
+      rounds[hand] = Number(detail.properties.find((p) => p.name === "Ammo")?.value);
+    }
+    return rounds;
+  };
+  const ammoBefore = clip.everyPullFires ? await ammo() : undefined;
   let point;
   try {
     for (let frame = 0; frame < frames; frame++) {
@@ -286,6 +350,7 @@ async function recordClip(game, shot, subjectId) {
       // A destroyed subject keeps its last aim.
       if (!clip.fixedAim || !point) point = (await aimPoints(game, subjectId)) ?? point;
       await trackSubject(game, point, t, hands);
+      if (clip.pump) await rackPump(game, shot.twoHanded, sampleTrack(clip.pump, t));
       for (const [hand, pulls] of Object.entries(clip.trigger ?? {})) {
         const pulled = pulls.some((at) => t >= at && t < at + 0.12);
         await game.input.set(`${hand}_hand.trigger`, pulled ? 1 : 0);
@@ -304,10 +369,34 @@ async function recordClip(game, shot, subjectId) {
       const hp = Number(detail?.properties.find((p) => p.name === "HitPoints")?.value ?? 0);
       assert.ok(hp <= 0, `${shot.name}: the subject survived (${hp} hp)`);
     }
+    if (clip.everyPullFires) {
+      const ammoAfter = await ammo();
+      for (const [hand, pulls] of Object.entries(clip.trigger)) {
+        const fired = ammoBefore[hand] - ammoAfter[hand];
+        assert.equal(fired, pulls.length, `${shot.name}: every ${hand} pull must fire`);
+      }
+    }
     return sink.finish();
   } finally {
     await sink.dispose();
   }
+}
+
+/** Slide the support hand along the pump's rail to `fraction` (0 forward, 1 racked). */
+async function rackPump(game, primary, fraction) {
+  const { player } = await game.info();
+  const socket = player.hand_grips.find((g) => g.hand === primary)?.support;
+  assert.ok(socket?.attached && socket.pump, "the support hand must hold the pump");
+  const { controller_position: p, controller_rotation: q } = socket;
+  const delta = fraction - socket.pump.fraction;
+  const travel = socket.pump.world_travel;
+  await setHandWorldPose(
+    game,
+    player,
+    primary === "left" ? "right" : "left",
+    [p.x + travel.x * delta, p.y + travel.y * delta, p.z + travel.z * delta],
+    [q.v.x, q.v.y, q.v.z, q.s],
+  );
 }
 
 /** Spawn `template` in front of the player (SpawnDebugMonster) and return it. */
