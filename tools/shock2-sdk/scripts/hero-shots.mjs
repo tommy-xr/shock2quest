@@ -190,7 +190,8 @@ const SHOTS = [
       shots: [0.15, 0.7], // Pulls, in seconds, before it runs dry and after the reload.
       glance: 0.75, // How far the eyes drop from the subject toward the pouch...
       gunGlance: 0.85, // ...and then onto the magazine well.
-      low: [0.12, -0.3, -0.4], // The pistol at low ready while the hand draws.
+      tilt: 3, // Metres the pistol's aim lifts above the subject while the eyes are down.
+      low: [0.12, -0.38, -0.4], // The pistol at low ready while the hand draws.
       seat: [0.02, -0.4, -0.34], // Pistol brought down to the belly to take the clip.
     },
   },
@@ -650,7 +651,7 @@ async function recordReload(game, shot, subjectId, held) {
     assert.equal(await rounds(), 0, `${shot.name}: the pistol must run dry`);
 
     // 2. Glance down; the left hand drops to the pouch, the gun to low ready.
-    const draw = 36;
+    const draw = 54;
     // The belt follows the head, so the pouch is re-read every frame.
     const pouchOf = (player) => {
       const center = player.hand_feedback?.ammo_pouch?.center;
@@ -658,6 +659,8 @@ async function recordReload(game, shot, subjectId, held) {
       return center;
     };
     const head = point("head");
+    // Muzzle up while the eyes are down, so the locked-back slide shows side-on.
+    const tilted = (s) => point("torso").map((v, i) => v + (i === 1 ? reload.tilt * s : 0));
     let leftOffset = shot.hands.left;
     let pouch;
     for (let f = 1; f <= draw; f++) {
@@ -673,21 +676,21 @@ async function recordReload(game, shot, subjectId, held) {
       const want = toOffset(eye, look, pouch.map((v, i) => v - palmFromHand[i]));
       leftOffset = lerp(shot.hands.left, want, s);
       await pose(look, { left: leftOffset, right: lerp(shot.hands.right, reload.low, s) }, {
-        left: lerp(eye, pouch, 2), right: point("torso"),
+        left: lerp(eye, pouch, 2), right: tilted(s),
       });
     }
     await game.input.set("left_hand.squeeze", 1);
-    for (let f = 0; f < 6; f++) {
+    for (let f = 0; f < 12; f++) {
       const { player } = await game.info();
       pouch = pouchOf(player);
       const look = glance(eyeOf(player), head, pouch, reload.glance);
-      await pose(look, { left: leftOffset, right: reload.low }, { left: lerp(eyeOf(player), pouch, 2), right: point("torso") });
+      await pose(look, { left: leftOffset, right: reload.low }, { left: lerp(eyeOf(player), pouch, 2), right: tilted(1) });
     }
     const clip = (await game.info()).player.wielded_entity_id;
     assert.ok(clip != null, `${shot.name}: the pouch must put a clip in the left hand`);
 
     // 3. Carry the clip up under the pistol and seat it from below.
-    const carry = 42;
+    const carry = 72;
     const from = (await game.entities.detail(clip)).position;
     let look;
     for (let f = 1; f <= carry && (await rounds()) === 0; f++) {
@@ -705,7 +708,7 @@ async function recordReload(game, shot, subjectId, held) {
       await pose(look, { left: leftOffset, right: lerp(reload.low, reload.seat, s) }, {
         // Up and forward in the view's frame, so the clip's yaw stays put
         // whatever the loop is correcting.
-        left: fromOffset(eye, look, leftOffset.map((v, i) => v + [0, 1, -0.6][i])), right: point("torso"),
+        left: fromOffset(eye, look, leftOffset.map((v, i) => v + [0, 1, -0.6][i])), right: tilted(1),
       });
     }
     const loaded = await rounds();
@@ -713,7 +716,7 @@ async function recordReload(game, shot, subjectId, held) {
 
     // 4. Let go, bring both hands back up on the subject.
     await game.input.set("left_hand.squeeze", 0);
-    const recover = 30;
+    const recover = 36;
     const lastLeft = leftOffset;
     for (let f = 1; f <= recover; f++) {
       const s = ease(f / recover);
@@ -722,7 +725,7 @@ async function recordReload(game, shot, subjectId, held) {
       const eye = eyeOf(player);
       const back = glance(eye, look, point("head"), s);
       await pose(back, { left: lerp(lastLeft, shot.hands.left, s), right: lerp(reload.seat, shot.hands.right, s) }, {
-        left: point("torso"), right: point("torso"),
+        left: point("torso"), right: tilted(1 - s),
       });
     }
 
