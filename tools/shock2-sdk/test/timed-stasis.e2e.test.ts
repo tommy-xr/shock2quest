@@ -93,11 +93,19 @@ for (const scenario of ["refresh", "save", "area", "death"] as const) {
         return;
       }
       await game.step({ frames: 60 });
+      const wormWeight = async () => {
+        const objects = (await game.scene.objects({ entityId: target.id })).objects;
+        const shape = objects.find(o => o.morph_names?.includes("worm"));
+        assert.ok(shape, "the frozen hybrid remains rendered with its worm target");
+        return shape.morph_weights?.[shape.morph_names!.indexOf("worm")] ?? 0;
+      };
+      const frozenWorm = await wormWeight();
       const frozen = await game.entities.animation(target.id);
       assert.ok(frozen);
       await game.step({ frames: 120 });
       const held = await game.entities.animation(target.id);
       assert.ok(held);
+      assert.equal(await wormWeight(), frozenWorm, "stasis holds the authored idle deformation");
       // Gravity/contact resolution may translate the body; joint offsets must
       // retain the same pose rather than advancing animation.
       const poseError = (joints: number[][]) =>
@@ -145,6 +153,7 @@ for (const scenario of ["refresh", "save", "area", "death"] as const) {
           "load preserves remaining duration",
         );
         await game.step({ frames: 2 });
+        assert.equal(await wormWeight(), frozenWorm, "save/load preserves the frozen morph and phase state");
         const pose = await game.entities.animation(target.id);
         assert.ok(pose);
         assert.ok(
@@ -165,6 +174,7 @@ for (const scenario of ["refresh", "save", "area", "death"] as const) {
         undefined,
         "stasis expires at the deadline",
       );
+      assert.notEqual(await wormWeight(), frozenWorm, "the idle driver resumes after stasis expiry");
       const thawed = await game.entities.animation(target.id);
       await game.step({ frames: 30 });
       assert.notDeepEqual(

@@ -3675,4 +3675,5 @@ mod app_tests {
 
 pub mod tricorder;
 
+pub mod monster_idle;
 pub mod plant_animation;

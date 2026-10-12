@@ -15,6 +15,7 @@ pub struct BaseMonster {
     stasis: Option<super::stasis::StasisState>,
     hydrated_ai: bool,
     speech: SpeechEvents,
+    idle: Option<crate::monster_idle::MonsterIdle>,
 }
 
 impl BaseMonster {
@@ -24,10 +25,15 @@ impl BaseMonster {
             stasis: None,
             hydrated_ai: false,
             speech: SpeechEvents::default(),
+            idle: None,
         }
     }
 }
 impl Script for BaseMonster {
+    fn monster_idle_weight(&self) -> Option<f32> {
+        self.idle.as_ref().map(|idle| idle.weight())
+    }
+
     fn stasis(&self) -> Option<&super::stasis::StasisState> {
         self.stasis.as_ref()
     }
@@ -42,8 +48,8 @@ impl Script for BaseMonster {
             .map(|key| self.ai.save_state().map(|state| (key.to_owned(), state)))
             .transpose()?;
         super::ScriptState::encode(
-            4,
-            &(&self.stasis, child, &self.speech),
+            5,
+            &(&self.stasis, child, &self.speech, &self.idle),
             "shock2vr.ai_stasis",
         )
     }
@@ -52,13 +58,15 @@ impl Script for BaseMonster {
         state: &super::ScriptState,
         context: &super::ScriptRestoreContext<'_>,
     ) -> Result<(), super::ScriptStateError> {
-        let (stasis, child, speech): (
+        let (stasis, child, speech, idle): (
             Option<super::stasis::StasisState>,
             Option<(String, super::ScriptState)>,
             SpeechEvents,
-        ) = state.decode(4, "shock2vr.ai_stasis")?;
+            Option<crate::monster_idle::MonsterIdle>,
+        ) = state.decode(5, "shock2vr.ai_stasis")?;
         self.stasis = stasis;
         self.speech = speech;
+        self.idle = idle;
         self.hydrated_ai = false;
         if let Some((key, saved)) = child {
             self.ai = match key.as_str() {
@@ -77,7 +85,9 @@ impl Script for BaseMonster {
             self.hydrated_ai = true;
         }
         // Reject malformed state through the same typed decoder error path.
-        if self.stasis.as_ref().is_some_and(|state| !state.valid()) {
+        if self.stasis.as_ref().is_some_and(|state| !state.valid())
+            || self.idle.as_ref().is_some_and(|idle| !idle.valid())
+        {
             return Err(super::ScriptStateError::InvalidPayload {
                 script_key: "shock2vr.ai_stasis".to_owned(),
                 message: "invalid stasis state".to_owned(),
@@ -101,6 +111,9 @@ impl Script for BaseMonster {
     }
 
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        if self.idle.is_none() {
+            self.idle = crate::monster_idle::MonsterIdle::for_entity(world, entity_id);
+        }
         let v_ai = world.borrow::<View<PropAI>>().unwrap();
         let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
 
@@ -167,6 +180,13 @@ impl Script for BaseMonster {
                 return Effect::NoEffect;
             }
             self.stasis = None;
+        }
+        if let Some(idle) = self.idle.as_mut() {
+            idle.update(
+                time.total.as_secs_f64(),
+                super::ai::ai_util::is_killed(entity_id, world)
+                    || crate::monster_idle::dead_mode(world, entity_id),
+            );
         }
         let ai_effect = self.ai.update(entity_id, world, physics, time);
         let voice = self
@@ -310,6 +330,7 @@ mod tests {
             stasis: None,
             hydrated_ai: false,
             speech: SpeechEvents::default(),
+            idle: None,
         };
         let saved = original.save_state().unwrap();
         let mut restored = BaseMonster::new();
@@ -334,6 +355,7 @@ mod tests {
             stasis: None,
             hydrated_ai: false,
             speech: SpeechEvents::default(),
+            idle: Some(serde_json::from_str(r#"{"phase":0.9,"weight":1.25}"#).unwrap()),
         };
         let physics = PhysicsWorld::new();
         script.handle_message(
@@ -354,6 +376,7 @@ mod tests {
             },
         );
         assert_eq!(count.get(), 0);
+        assert_eq!(script.monster_idle_weight(), Some(1.25));
         script.handle_message(
             entity,
             &world,
@@ -395,6 +418,7 @@ mod tests {
         let saved = script.save_state().unwrap();
         let remap = HashMap::new();
         script.stasis = None;
+        script.idle = None;
         script
             .restore_state(
                 &saved,
@@ -414,6 +438,8 @@ mod tests {
             },
         );
         assert!(script.stasis().is_none());
+        let resumed_weight = script.monster_idle_weight().unwrap();
+        assert!((resumed_weight - (13.4_f32.sin() + 0.5)).abs() < 1e-6);
         assert_eq!(count.get(), 3, "bookkeeping is retained and AI resumes");
         script.handle_message(
             entity,
@@ -427,5 +453,19 @@ mod tests {
         script.update(entity, &world, &physics, &Time::default());
         assert!(script.stasis().is_none());
         assert_eq!(count.get(), 4, "death update must not wait for expiry");
+        assert_eq!(script.monster_idle_weight(), Some(resumed_weight));
+        world.add_component(entity, PropHitPoints { hit_points: 12 });
+        world.add_component(
+            entity,
+            dark::properties::PropAIMode {
+                mode: dark::properties::AIMode::Dead,
+            },
+        );
+        script.update(entity, &world, &physics, &Time::default());
+        assert_eq!(
+            script.monster_idle_weight(),
+            Some(resumed_weight),
+            "AI mode 5 also suppresses writes with positive HP"
+        );
     }
 }
