@@ -19,7 +19,7 @@ import {
   add, drawPersonalCard, normalize, quatConjugate, quatFromTo, quatMultiply, quatNormalize, quatRotate, scale, sub,
 } from "../dist/test/helpers/vr-hand.js";
 import { hasHackTexture as has } from "../dist/test/helpers/hack.js";
-import { property } from "../dist/test/helpers/hrm.js";
+import { nodeOverlay, property } from "../dist/test/helpers/hrm.js";
 import { carriedNaniteTotal } from "../dist/test/helpers/nanites.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -228,10 +228,8 @@ try {
   // Node states from the board art: hrmon = lit, hrmburn = burned, hrmmine =
   // a critical node that would ruin the crate.
   const nodeState = (p, label) => {
-    const [x, y] = button(p, label).rect;
     const states = { "hrmon.pcx": "lit", "hrmburn.pcx": "burned", "hrmmine.pcx": "mine" };
-    const art = p.elements.find((e) => e.kind === "image" && e.rect[0] === x && e.rect[1] === y
-      && states[e.texture?.toLowerCase()]);
+    const art = nodeOverlay(p.elements, button(p, label));
     return art ? states[art.texture.toLowerCase()] : "free";
   };
   const lines = [];
