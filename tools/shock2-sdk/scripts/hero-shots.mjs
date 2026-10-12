@@ -19,6 +19,7 @@ import {
   attachSupportHand,
   faceTarget,
   GameServer,
+  handPoseAimedAt,
   quatMultiply,
   quatRotate,
   sampleTrack,
@@ -176,6 +177,27 @@ const SHOTS = [
       ],
     },
   },
+  {
+    // Reload: shoot the pistol dry, draw a clip from the belt pouch, seat it,
+    // shoot again. A protocol droid walks slowly enough to wait for it.
+    name: "ops3",
+    mission: "ops3.mis",
+    player: [23.5, -7.8, 149.8],
+    subject: "Protocol Droid",
+    loadout: { right: "Pistol" },
+    hands: { right: AIM_RIGHT, left: REST_LEFT },
+    // An untrained pistol will not fire.
+    stats: { skills: { standard_weapons: 3 } },
+    reload: {
+      spare: -31, // A standard clip, offered by the pouch.
+      emptyAt: [22.6, -7.8, 131.6], // The mission start, out of the droid's earshot.
+      keep: 2, // Rounds left for the clip to fire before it runs dry.
+      glance: 0.75, // How far (by angle) the eyes drop from the subject to the pouch...
+      gunGlance: 0.85, // ...and then onto the magazine well.
+      low: [0.12, -0.3, -0.4], // The pistol at low ready while the hand draws.
+      seat: [0.02, -0.4, -0.34], // Pistol brought down to the belly to take the clip.
+    },
+  },
 ];
 
 const { values } = parseArgs({
@@ -303,6 +325,7 @@ async function captureShot(shot) {
     };
     if (shot.clip) provenance.clip = await recordClip(game, shot, subject.id);
     if (shot.melee) provenance.melee = await recordMelee(game, shot, subject.id, held);
+    if (shot.reload) provenance.reload = await recordReload(game, shot, subject.id, held);
     await writeProvenance(shot.name, provenance);
   } finally {
     await game.shutdown();
@@ -538,6 +561,171 @@ async function recordMelee(game, shot, subjectId, held) {
       ...sink.finish(),
       hp: [beforeSwingHp, afterSwingHp],
     };
+  } finally {
+    await sink.dispose();
+  }
+}
+
+/**
+ * Shoot the pistol dry, draw a clip from the belt pouch with the free left
+ * hand, seat it in the magazine well and shoot again. The pouch reach and the
+ * insert are closed loops on the palm and the clip's own position, so no grip
+ * offset is assumed; the insert and both volleys are asserted.
+ */
+async function recordReload(game, shot, subjectId, held) {
+  const { reload } = shot;
+  const rounds = async () =>
+    Number((await game.entities.detail(held.right)).properties.find((p) => p.name === "Ammo")?.value);
+  const pull = async (pulled) => game.input.set("right_hand.trigger", pulled ? 1 : 0);
+  let point = await aimPoints(game, subjectId);
+
+  // Off camera: a spare clip into the pack for the pouch to offer, then the
+  // magazine emptied into the ceiling down to its last rounds - from
+  // `emptyAt`, beyond the subject's hearing, so it is not drawn in.
+  await game.player.spawnItem(reload.spare);
+  const [ex, ey, ez] = reload.emptyAt;
+  await game.player.teleport({ x: ex, y: ey, z: ez });
+  await game.step({ frames: 5 });
+  for (let pulls = 0; (await rounds()) > reload.keep; pulls++) {
+    assert.ok(pulls < 40, `${shot.name}: the pistol would not empty`);
+    const { player } = await game.info();
+    const ceiling = player.position.map((v, i) => v + (i === 1 ? 10 : 0));
+    await aimHandsAt(game, point("head"), { right: shot.hands.right }, ceiling);
+    await pull(true);
+    await game.step({ frames: 2 });
+    await pull(false);
+    await game.step({ frames: 40 });
+  }
+  const [x, y, z] = shot.player;
+  await game.player.teleport({ x, y, z });
+  await game.step({ frames: 5 });
+  point = (await aimPoints(game, subjectId)) ?? point;
+
+  const sink = await frameSink(game, shot.name);
+  let t = 0;
+  const eyeOf = (player) => player.position.map((v, i) => v + (i === 1 ? player.camera_offset[1] : 0));
+  // `world` as an offset from the eye in the yaw frame of a view toward `look`
+  // (what `handPoseAimedAt` takes), and back.
+  const yawTo = (eye, look) => Math.atan2(-(look[0] - eye[0]), -(look[2] - eye[2]));
+  const rotateY = (v, a) => [v[0] * Math.cos(a) + v[2] * Math.sin(a), v[1], -v[0] * Math.sin(a) + v[2] * Math.cos(a)];
+  const toOffset = (eye, look, world) => rotateY(world.map((v, i) => v - eye[i]), -yawTo(eye, look));
+  const fromOffset = (eye, look, offset) => rotateY(offset, yawTo(eye, look)).map((v, i) => v + eye[i]);
+  const lerp = (a, b, s) => a.map((v, i) => v + (b[i] - v) * s);
+  const ease = (s) => s * s * (3 - 2 * s);
+  // A look point `g` of the way, by angle, from looking at `a` to looking at `b`.
+  const glance = (eye, a, b, g) => {
+    const unit = (p) => {
+      const d = p.map((v, i) => v - eye[i]);
+      return d.map((v) => v / Math.hypot(...d));
+    };
+    return lerp(unit(a), unit(b), g).map((v, i) => eye[i] + v * 5);
+  };
+  // One frame: eyes on `look`, each hand at its eye-frame offset, aimed at
+  // `aims[hand]`. Tracks where the left hand was sent, in world space.
+  let leftWorld;
+  const pose = async (look, offsets, aims) => {
+    const { player } = await game.info();
+    await game.input.lookAtWorldPoint(look);
+    if (offsets.left) leftWorld = fromOffset(eyeOf(player), look, offsets.left);
+    for (const [hand, offset] of Object.entries(offsets)) {
+      const p = handPoseAimedAt(player.position, player.rotation, player.camera_offset[1], look, offset, aims[hand]);
+      await game.input.set(`${hand}_hand.position`, p.position);
+      await game.input.set(`${hand}_hand.rotation`, p.rotation);
+    }
+    await sink.step();
+    t += 1 / 60;
+  };
+  // Hold on the subject for `seconds`, pulling the trigger at `pulls` (clip-relative).
+  const engage = async (seconds, pulls = []) => {
+    for (const end = t + seconds; t < end; ) {
+      point = (await aimPoints(game, subjectId)) ?? point;
+      await trackSubject(game, point, t, { right: shot.hands.right, left: shot.hands.left });
+      await pull(pulls.some((at) => t >= at && t < at + 0.12));
+      await sink.step();
+      t += 1 / 60;
+    }
+    await pull(false);
+  };
+
+  try {
+    // 1. The last rounds.
+    await engage(0.9, [0.15, 0.7]);
+    assert.equal(await rounds(), 0, `${shot.name}: the pistol must run dry`);
+
+    // 2. Glance down; the left hand drops to the pouch, the gun to low ready.
+    const draw = 36;
+    const { player: start } = await game.info();
+    const pouch = start.hand_feedback?.ammo_pouch?.center;
+    assert.ok(pouch, `${shot.name}: no ammo pouch`);
+    const head = point("head");
+    let leftOffset = shot.hands.left;
+    for (let f = 1; f <= draw; f++) {
+      const s = ease(f / draw);
+      const { player } = await game.info();
+      const eye = eyeOf(player);
+      const look = glance(eye, head, pouch, s * reload.glance);
+      // The pouch takes the palm, not the controller origin: aim the hand so
+      // its palm lands there.
+      const palm = player.hand_feedback?.glove_contacts?.centers[0];
+      const palmFromHand = palm && leftWorld ? palm.map((v, i) => v - leftWorld[i]) : [0, 0, 0];
+      const want = toOffset(eye, look, pouch.map((v, i) => v - palmFromHand[i]));
+      leftOffset = lerp(shot.hands.left, want, s);
+      await pose(look, { left: leftOffset, right: lerp(shot.hands.right, reload.low, s) }, {
+        left: lerp(eye, pouch, 2), right: point("torso"),
+      });
+    }
+    await game.input.set("left_hand.squeeze", 1);
+    for (let f = 0; f < 6; f++) {
+      const { player } = await game.info();
+      const look = glance(eyeOf(player), head, pouch, reload.glance);
+      await pose(look, { left: leftOffset, right: reload.low }, { left: lerp(eyeOf(player), pouch, 2), right: point("torso") });
+    }
+    const clip = (await game.info()).player.wielded_entity_id;
+    assert.ok(clip != null, `${shot.name}: the pouch must put a clip in the left hand`);
+
+    // 3. Carry the clip up under the pistol and seat it from below.
+    const carry = 42;
+    const from = (await game.entities.detail(clip)).position;
+    let look;
+    for (let f = 1; f <= carry && (await rounds()) === 0; f++) {
+      const s = ease(f / carry);
+      const [{ player }, gun, mag] = await Promise.all([
+        game.info(), game.entities.detail(held.right), game.entities.detail(clip),
+      ]);
+      const eye = eyeOf(player);
+      const anchor = gun.magazine_anchor;
+      const below = anchor.map((v, i) => v - (i === 1 ? 0.15 : 0));
+      const want = s < 0.75 ? lerp(from, below, s / 0.75) : lerp(below, anchor, (s - 0.75) / 0.25);
+      look = glance(eye, glance(eye, head, pouch, reload.glance), anchor, s * reload.gunGlance);
+      // Move the hand by the clip's error from where it should be.
+      leftOffset = toOffset(eye, look, leftWorld.map((v, i) => v + want[i] - mag.position[i]));
+      await pose(look, { left: leftOffset, right: lerp(reload.low, reload.seat, s) }, {
+        left: anchor.map((v, i) => v + (i === 1 ? 1 : 0)), right: point("torso"),
+      });
+    }
+    const loaded = await rounds();
+    assert.ok(loaded > 0, `${shot.name}: the clip must seat`);
+
+    // 4. Let go, bring both hands back up on the subject.
+    await game.input.set("left_hand.squeeze", 0);
+    const recover = 30;
+    const lastLeft = leftOffset;
+    for (let f = 1; f <= recover; f++) {
+      const s = ease(f / recover);
+      point = (await aimPoints(game, subjectId)) ?? point;
+      const { player } = await game.info();
+      const eye = eyeOf(player);
+      const back = glance(eye, look, point("head"), s);
+      await pose(back, { left: lerp(lastLeft, shot.hands.left, s), right: lerp(reload.seat, shot.hands.right, s) }, {
+        left: point("torso"), right: point("torso"),
+      });
+    }
+
+    // 5. Back in the fight.
+    const resumed = t;
+    await engage(1.0, [resumed + 0.15, resumed + 0.7]);
+    assert.equal(await rounds(), loaded - 2, `${shot.name}: both shots after the reload must fire`);
+    return { ...sink.finish(), rounds: { loaded, after: loaded - 2 } };
   } finally {
     await sink.dispose();
   }

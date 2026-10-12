@@ -102,6 +102,7 @@ export const SHOTS = [
   ["medsci1-melee", "MedSci · pistol + wrench"],
   ["rick1", "Rickenbacker · ladder, holster draw"],
   ["command1", "Command · pump shotgun"],
+  ["ops3", "Operations · pouch reload"],
 ];
 
 export const LINKS = {
