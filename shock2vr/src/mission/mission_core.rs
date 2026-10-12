@@ -17766,10 +17766,12 @@ impl MissionCore {
             &self.world,
             asset_cache,
         ));
+        // Flat aims the amp with the crosshair; only a hand needs its beam.
         scene.extend(crate::weapon_attachments::render_lasers(
             &self.world,
             &self.physics,
-            options.presentation_mode == crate::PresentationMode::Vr,
+            options.presentation_mode == crate::PresentationMode::Vr
+                && crate::user_settings::get().vr.psi_pointer,
         ));
         {
             let blades = self

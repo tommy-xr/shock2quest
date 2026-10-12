@@ -204,7 +204,7 @@ const AMP_POINTER: LaserStyle = LaserStyle {
 pub(crate) fn render_lasers(
     world: &World,
     physics: &crate::physics::PhysicsWorld,
-    vr: bool,
+    amp_pointer: bool,
 ) -> Vec<engine::scene::SceneObject> {
     let mut objects = Vec::new();
     let seconds = world
@@ -217,11 +217,10 @@ pub(crate) fn render_lasers(
     {
         if let Some(trace) = laser_trace(world, physics, weapon) {
             push_laser(&mut objects, weapon, &trace, &WEAPON_LASER, seconds);
-        } else if vr
+        } else if amp_pointer
             && crate::wielded_weapon::is_psi_amp(world, weapon)
             && let Some(trace) = amp_pointer_trace(world, physics, weapon)
         {
-            // Flat aims the amp with the crosshair; only a hand needs a beam.
             push_laser(&mut objects, weapon, &trace, &AMP_POINTER, seconds);
         }
     }

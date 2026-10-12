@@ -47,6 +47,9 @@ Enable **Developer options → Weapons → Free-hand psi pull** to aim your empt
 hand at a loose item and pull its trigger while holding an amp in the other hand.
 This requires trained Kinetic Redirection and spends its normal psi cost, without
 changing the amp's selected power. Grip the arriving item to catch it.
+Brackets mark the item Kinetic Redirection would pull; a near miss still finds
+the closest item in plain sight. A held amp shows a faint blue aim beam, which
+**Options → Controls → Psi pointer** turns off.
 
 The pouch also offers carried prisms and worm beakers for compatible guns.
 With a laser pistol or EMP rifle held, it offers one portable battery at a time

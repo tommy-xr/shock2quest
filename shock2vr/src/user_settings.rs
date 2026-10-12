@@ -91,6 +91,8 @@ pub struct VrSettings {
     pub grid_opacity: f32,
     pub grid_spacing: f32,
     pub grid_size: f32,
+    /// The psi amp's aim beam: its muzzle axis is not where a hand seems to point.
+    pub psi_pointer: bool,
 }
 
 impl Default for VrSettings {
@@ -106,6 +108,7 @@ impl Default for VrSettings {
             grid_opacity: 0.3,
             grid_spacing: 1.0,
             grid_size: 10.0,
+            psi_pointer: true,
         }
     }
 }
