@@ -85,6 +85,7 @@ struct InstallerApp {
     success: Option<bool>,
     log: String,
     log_open: bool,
+    log_feedback: Option<String>,
     worker: Option<Receiver<Message>>,
     screenshot: Option<PathBuf>,
     capture_install: bool,
@@ -118,6 +119,7 @@ impl InstallerApp {
             success: None,
             log: String::new(),
             log_open: false,
+            log_feedback: None,
             worker: None,
             screenshot: options.screenshot,
             capture_install: options.install_now,
@@ -220,6 +222,7 @@ impl InstallerApp {
         self.worker = Some(recv);
         self.log.clear();
         self.log_open = true;
+        self.log_feedback = None;
         self.success = None;
         self.progress = 0.0;
         self.status = "Checking installation".into();
@@ -273,6 +276,10 @@ impl InstallerApp {
                 cut += 1;
             }
             self.log.drain(..cut);
+            self.log.insert_str(
+                0,
+                "[Earlier output omitted; showing the most recent log.]\n",
+            );
         }
     }
 
@@ -502,15 +509,46 @@ impl eframe::App for InstallerApp {
                         .small()
                         .color(MUTED),
                     );
-                    if ui
-                        .small_button(if self.log_open {
-                            "Hide installation log"
-                        } else {
-                            "Show installation log"
-                        })
-                        .clicked()
-                    {
-                        self.log_open = !self.log_open;
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button(if self.log_open {
+                                "Hide installation log"
+                            } else {
+                                "Show installation log"
+                            })
+                            .clicked()
+                        {
+                            self.log_open = !self.log_open;
+                        }
+                        if ui
+                            .add_enabled(
+                                !self.log.is_empty(),
+                                egui::Button::new("Copy log").small(),
+                            )
+                            .clicked()
+                        {
+                            ctx.copy_text(self.log.clone());
+                            self.log_feedback = Some("Log copied.".into());
+                        }
+                        if ui
+                            .add_enabled(
+                                !self.log.is_empty(),
+                                egui::Button::new("Save log…").small(),
+                            )
+                            .clicked()
+                            && let Some(path) = rfd::FileDialog::new()
+                                .set_file_name("shock2quest-install.log")
+                                .add_filter("Log file", &["log", "txt"])
+                                .save_file()
+                        {
+                            self.log_feedback = Some(match std::fs::write(&path, &self.log) {
+                                Ok(()) => format!("Log saved to {}", path.display()),
+                                Err(error) => format!("Could not save log: {error}"),
+                            });
+                        }
+                    });
+                    if let Some(message) = &self.log_feedback {
+                        ui.label(egui::RichText::new(message).small());
                     }
                     if self.log_open {
                         egui::ScrollArea::vertical()
@@ -572,6 +610,17 @@ fn card() -> egui::Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exported_recent_log_marks_omitted_output_and_keeps_unicode_intact() {
+        let mut app = InstallerApp::new(Options::default(), None);
+        app.append_log(&"界".repeat(24_000));
+        assert!(app.log.starts_with("[Earlier output omitted;"));
+        assert!(app.log.ends_with('界'));
+        assert!(app.log.len() < 64 * 1024);
+        app.append_log("\nInstallation failed\n");
+        assert!(app.log.ends_with("\nInstallation failed\n"));
+    }
 
     #[test]
     fn an_explicit_headset_never_silently_switches_after_disconnect() {

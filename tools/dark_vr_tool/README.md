@@ -133,7 +133,9 @@ The connection panel shows the detected model and authorization state. If severa
 headsets are connected, a device picker appears; USB/Wi-Fi connections to the
 same headset are selected automatically. Devices other than Quest 3 show a
 compatibility warning but can still install. The installation log expands while
-installing or on failure and remains available after success.
+installing or on failure and remains available after success. **Copy log** copies
+the displayed output; **Save log…** writes it to a chosen file. Long logs retain
+the most recent output and mark any omitted earlier entries.
 
 Packaged installers include ADB and the release APK. Development builds use ADB
 from PATH and require an APK selection. `--source`, `--apk`, and `--adb` can
@@ -182,3 +184,4 @@ machine that cannot detect the headset may also need the Quest ADB driver.
 The **Quest installer** workflow tests macOS/Windows builds on PRs. A manual run
 downloads the chosen APK and platform-tools and produces unsigned installer
 artifacts. It does not publish them or change the APK release workflow.
+
