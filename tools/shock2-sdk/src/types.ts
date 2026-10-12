@@ -119,6 +119,8 @@ export interface StepSpec {
 
 export interface StepResult {
   frames_advanced: number;
+  /** Frames submitted to the GPU; hidden batches normally draw only their final frame. */
+  frames_rendered: number;
   time_advanced: number;
   new_frame_index: number;
   new_total_time: number;

@@ -754,6 +754,7 @@ fn run_game_blocking(
     let mut replay: std::collections::VecDeque<shock2vr::input::recording::RecordedFrame> =
         std::collections::VecDeque::new();
     let mut frames_advanced_this_step = 0u32;
+    let mut frames_rendered_this_step = 0u32;
     let mut time_advanced_this_step = 0.0f32;
     let mut pending_screenshots: Vec<(
         ScreenshotSpec,
@@ -833,6 +834,7 @@ fn run_game_blocking(
                                     // caller isn't left hanging.
                                     let _ = reply.send(Ok(StepResult {
                                         frames_advanced: 0,
+                                        frames_rendered: 0,
                                         time_advanced: 0.0,
                                         new_frame_index: frame_counter,
                                         new_total_time: accumulated_time,
@@ -845,6 +847,7 @@ fn run_game_blocking(
                     step_requested = true;
                     is_paused = false;
                     frames_advanced_this_step = 0;
+                    frames_rendered_this_step = 0;
                     time_advanced_this_step = 0.0;
                     // Reply is sent once stepping actually completes (below).
                     pending_step_reply = Some(reply);
@@ -1099,17 +1102,6 @@ fn run_game_blocking(
                     is_paused = true;
                     target_step_time = None;
                     frames_to_step = 0;
-                    // Stepping finished: now answer the /v1/step caller. (The final
-                    // frame is rendered later this same loop iteration, so by the
-                    // time the HTTP response is observed the frame is up to date.)
-                    if let Some(reply) = pending_step_reply.take() {
-                        let _ = reply.send(Ok(StepResult {
-                            frames_advanced: frames_advanced_this_step,
-                            time_advanced: time_advanced_this_step,
-                            new_frame_index: frame_counter,
-                            new_total_time: accumulated_time,
-                        }));
-                    }
                 }
             }
             accumulated_time
@@ -1180,6 +1172,19 @@ fn run_game_blocking(
             game.render_per_eye(view, projection_matrix, screen_size)
         );
 
+        // Hidden batches only need their final image. Keep render preparation and
+        // visibility updates every tick: these callbacks still maintain cached state.
+        if step_requested
+            && !args.visible
+            && pending_screenshots.is_empty()
+            && benchmark_run.is_none()
+        {
+            profile!("game.finish_render", {
+                game.finish_render(view, projection_matrix, screen_size)
+            });
+            continue;
+        }
+
         // Clear the screen to a visible color first
         unsafe {
             gl::ClearColor(0.1, 0.2, 0.3, 1.0); // Dark blue background
@@ -1242,6 +1247,9 @@ fn run_game_blocking(
             "engine.render",
             engine.render(&render_context, &scene_for_render)
         );
+        if pending_step_reply.is_some() {
+            frames_rendered_this_step += 1;
+        }
 
         profile!("game.finish_render", {
             game.finish_render(view, projection_matrix, screen_size)
@@ -1260,6 +1268,19 @@ fn run_game_blocking(
 
         // Swap buffers
         window.swap_buffers();
+
+        // Finish the step only after its final image and render diagnostics exist.
+        if !step_requested {
+            if let Some(reply) = pending_step_reply.take() {
+                let _ = reply.send(Ok(StepResult {
+                    frames_advanced: frames_advanced_this_step,
+                    frames_rendered: frames_rendered_this_step,
+                    time_advanced: time_advanced_this_step,
+                    new_frame_index: frame_counter,
+                    new_total_time: accumulated_time,
+                }));
+            }
+        }
     }
 
     if shutdown_requested {

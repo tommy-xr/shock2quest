@@ -300,6 +300,7 @@ pub enum StepError {
 #[derive(Debug, Serialize)]
 pub struct StepResult {
     pub frames_advanced: u32,
+    pub frames_rendered: u32,
     pub time_advanced: f32,
     pub new_frame_index: u64,
     pub new_total_time: f32,
