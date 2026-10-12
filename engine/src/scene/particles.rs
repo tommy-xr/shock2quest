@@ -1,6 +1,6 @@
 use std::{rc::Rc, sync::Arc, time::Duration};
 
-use cgmath::{Matrix4, SquareMatrix, Vector3, vec3};
+use cgmath::{InnerSpace, Matrix4, SquareMatrix, Vector3, vec3};
 use rand::Rng;
 
 use crate::{
@@ -54,6 +54,18 @@ fn create_particle_texture() -> Arc<Texture> {
     Arc::new(texture)
 }
 
+/// Where a particle spawns, in the group's local (y-up) space.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LaunchShape {
+    /// Uniformly inside the launch bounding box.
+    Box,
+    /// A random direction at a distance in `radius` (min, max).
+    Sphere { radius: (f32, f32) },
+    /// A random horizontal (x/z) direction at a distance in `radius`; the
+    /// height (y) comes from the launch bounding box.
+    Cylinder { radius: (f32, f32) },
+}
+
 #[derive(Clone)]
 pub struct ParticleSystem {
     particles: Vec<Particle>,
@@ -65,7 +77,7 @@ pub struct ParticleSystem {
     launch_time_remaining: f32,
     launch_bounding_box: (Vector3<f32>, Vector3<f32>),
     launch_velocity: (Vector3<f32>, Vector3<f32>),
-    //launch_radius: Vector2<f32>,
+    launch_shape: LaunchShape,
     launch_lifetime: (f32, f32),
     root_transform: Matrix4<f32>,
     particle_size: (f32, f32),
@@ -103,9 +115,34 @@ fn randv3(a: Vector3<f32>, b: Vector3<f32>) -> Vector3<f32> {
     vec3(randf(a.x, b.x), randf(a.y, b.y), randf(a.z, b.z))
 }
 
+/// A random unit vector over the axes `mask` keeps, e.g. `vec3(1, 0, 1)` for
+/// the horizontal plane. Not uniform over the sphere, like the original's.
+fn random_direction(mask: Vector3<f32>) -> Vector3<f32> {
+    let v = randv3(-mask, mask);
+    if v.magnitude2() > 0.0 {
+        v.normalize()
+    } else {
+        v
+    }
+}
+
+fn launch_position(system: &ParticleSystem) -> Vector3<f32> {
+    let (min, max) = system.launch_bounding_box;
+    match system.launch_shape {
+        LaunchShape::Box => randv3(min, max),
+        LaunchShape::Sphere { radius } => {
+            random_direction(vec3(1.0, 1.0, 1.0)) * randf(radius.0, radius.1)
+        }
+        LaunchShape::Cylinder { radius } => {
+            let flat = random_direction(vec3(1.0, 0.0, 1.0)) * randf(radius.0, radius.1);
+            vec3(flat.x, randf(min.y, max.y), flat.z)
+        }
+    }
+}
+
 fn create_random_particle(system: &ParticleSystem, transform: Matrix4<f32>) -> Particle {
     let lifetime = randf(system.launch_lifetime.0, system.launch_lifetime.1);
-    let mut position = randv3(system.launch_bounding_box.0, system.launch_bounding_box.1);
+    let mut position = launch_position(system);
     let mut velocity = randv3(system.launch_velocity.0, system.launch_velocity.1);
     if system.world_space {
         position = (transform * position.extend(1.0)).truncate();
@@ -138,6 +175,7 @@ impl ParticleSystem {
             acceleration: vec3(0.0, 0.0, 0.0),
             launch_bounding_box: (vec3(-0.2, -0.1, -0.2), vec3(0.2, 0.1, 0.2)),
             launch_velocity: (vec3(0.0, 3.0, 0.0), vec3(0.0, 4.0, 0.0)),
+            launch_shape: LaunchShape::Box,
             launch_lifetime: (1.0, 10.0),
             particles: vec![],
             particle_size: (0.08, 0.08),
@@ -258,6 +296,13 @@ impl ParticleSystem {
     pub fn with_launch_bounding_box(self, min: Vector3<f32>, max: Vector3<f32>) -> ParticleSystem {
         ParticleSystem {
             launch_bounding_box: (min, max),
+            ..self
+        }
+    }
+
+    pub fn with_launch_shape(self, launch_shape: LaunchShape) -> ParticleSystem {
+        ParticleSystem {
+            launch_shape,
             ..self
         }
     }
@@ -425,6 +470,24 @@ mod tests {
         assert!((p.position - vec3(4.0, 4.5, 6.0)).magnitude2() < 1e-5);
         assert!((p.velocity - vec3(0.0, -2.0, 0.0)).magnitude2() < 1e-5);
         assert_eq!(system.root_transform, Matrix4::identity());
+    }
+
+    #[test]
+    fn launch_shapes_place_particles_on_their_radius() {
+        let launch = |shape| {
+            let system = ParticleSystem::new()
+                .with_launch_bounding_box(vec3(-5.0, 0.5, -5.0), vec3(5.0, 1.5, 5.0))
+                .with_launch_shape(shape);
+            (0..200).map(move |_| launch_position(&system))
+        };
+        for p in launch(LaunchShape::Sphere { radius: (2.0, 2.0) }) {
+            assert!((p.magnitude() - 2.0).abs() < 1e-4, "{p:?}");
+        }
+        for p in launch(LaunchShape::Cylinder { radius: (2.0, 3.0) }) {
+            let flat = vec3(p.x, 0.0, p.z).magnitude();
+            assert!((2.0 - 1e-4..=3.0 + 1e-4).contains(&flat), "{p:?}");
+            assert!((0.5..=1.5).contains(&p.y), "{p:?}");
+        }
     }
 
     #[test]
