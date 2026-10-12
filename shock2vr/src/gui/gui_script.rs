@@ -15,6 +15,7 @@ use super::{GUI_PIXEL_TO_WORLD_SIZE, GuiCursor};
 /// this panel. Taking it even for hidden panels prevents stale hover on reopen.
 #[derive(Clone, Debug)]
 pub struct GuiFrameInput {
+    time: Time,
     cursor: Point2<f32>,
     last_cursor: Option<GuiCursor>,
     hover_by_hand: [Option<Point2<f32>>; 2],
@@ -66,12 +67,13 @@ where
         entity_id: EntityId,
         _world: &World,
         _physics: &PhysicsWorld,
-        _time: &Time,
+        time: &Time,
     ) -> Effect {
         Effect::BuildUI {
             parent_entity: entity_id,
             handle: self.handle.unwrap(),
             input: GuiFrameInput {
+                time: time.clone(),
                 cursor: self.cursor,
                 last_cursor: self.last_cursor.take(),
                 hover_by_hand: std::mem::take(&mut self.hover_by_hand),
@@ -89,6 +91,9 @@ where
         if self.handle != Some(handle) {
             return None;
         }
+        let frame_effect = self
+            .gui
+            .on_frame(entity_id, world, &mut self.state, &input.time);
         let config = self.gui.get_config_for(entity_id, world, &self.state);
         let components = {
             let cursor = &input.last_cursor;
@@ -98,7 +103,7 @@ where
         // An unavailable GUI must not create a second cursor-only world
         // panel over another script's active interface on the same entity.
         if components.is_empty() {
-            return Some(Effect::NoEffect);
+            return Some(frame_effect);
         }
         let mut canvas = UiCanvas::from_elements(config.screen_size_in_pixels, components);
         let size = vec2(16.0, 16.0);
@@ -124,13 +129,18 @@ where
             })
             .collect();
 
-        Some(Effect::SetUI {
+        let ui = Effect::SetUI {
             parent_entity: entity_id,
             handle,
             world_offset: config.world_offset,
             world_size: config.screen_size_in_pixels * GUI_PIXEL_TO_WORLD_SIZE,
             components: render_components,
             sidecar: self.gui.sidecar(entity_id, world, &self.state),
+        };
+        Some(if matches!(frame_effect, Effect::NoEffect) {
+            ui
+        } else {
+            Effect::combine(vec![frame_effect, ui])
         })
     }
 

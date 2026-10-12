@@ -65,6 +65,18 @@ where
 
     fn get_config(&self) -> GuiConfig;
 
+    /// Advance transient animation only while a presentation requests this
+    /// panel. The scene clock stops during pause and loading.
+    fn on_frame(
+        &self,
+        _entity: EntityId,
+        _world: &World,
+        _state: &mut TState,
+        _time: &crate::time::Time,
+    ) -> crate::Effect {
+        crate::Effect::NoEffect
+    }
+
     fn handheld_input(
         &self,
         _entity: EntityId,

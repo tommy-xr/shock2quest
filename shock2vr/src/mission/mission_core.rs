@@ -13632,7 +13632,9 @@ impl MissionCore {
                             self.script_world
                                 .build_gui(parent_entity, &self.world, handle, &input)
                         {
-                            effects.push_front(ui);
+                            for effect in Effect::flatten(vec![ui]).into_iter().rev() {
+                                effects.push_front(effect);
+                            }
                         }
                     }
                 }

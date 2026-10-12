@@ -39,7 +39,7 @@ for (const vr of [false, true]) {
       ui = await game.ui.state();
       assert.ok(ui.active_panel!.elements.filter(e => e.label?.startsWith("ttt-cell-")).length >= 8);
       await game.entities.sendMessage(handheld.entity_id, { type: "Frob" });
-      await game.step({ frames: 2 });
+      await game.step({ frames: 80 });
       assert.ok((await game.ui.state()).active_panel!.elements.some(e => e.label === "game-8"), "reopening returns to the index");
     });
 }
