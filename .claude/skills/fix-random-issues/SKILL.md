@@ -45,8 +45,9 @@ issue after the sample is frozen, skip it without drawing a replacement.
 
 1. Read `AGENTS.md`, `README.md`, and `DEVELOPMENT.md`.
 2. Confirm `gh` authentication, repository access, and push/PR access before
-   starting a worker. Never merge a PR. Comment on and close issues only under
-   the verified-fix protocol below.
+   starting a worker. Never merge a PR. Issue comments and creation follow the
+   blocker-tracking or verified-fix protocols below; closure follows only the
+   verified-fix protocol unless the user explicitly directs otherwise.
 3. Record the checkout's initial status. Preserve all existing user changes.
    Use an isolated branch/worktree for every issue; never stack unrelated issue
    fixes.
@@ -140,12 +141,38 @@ For each selected issue, in emitted order:
    - `not reproduced`: reasonable evidence failed to confirm the report.
    - `blocked`: a concrete product decision, unavailable dependency/hardware,
      unsafe scope, or persistent verification/CI failure prevents completion.
+     Complete blocker tracking below before accepting this result.
 6. Resolve any open, already-fixed issue under the verified-fix protocol below.
 7. Remove a temporary worktree only when it is clean and every change is safely
    committed and pushed. Otherwise preserve it and report its path.
 
 One issue is complete before the next begins. Sequential processing is a
 correctness boundary, not merely a preference.
+
+### Blocker tracking
+
+Every `blocked` result must link each concrete blocker to a GitHub issue.
+The worker searches existing issues and reads their scope and current state
+before proposing new tracking. Reuse an issue that covers the unresolved work;
+the sampled issue itself is sufficient when the blocker is already part of its
+scope or acceptance criteria, including required device verification.
+
+If no issue covers a blocker, the manager creates a focused prerequisite issue
+with the evidence, affected issue links, and concrete acceptance criteria for
+unblocking the work. Check for duplicates again before creating it. Creating
+these blocker issues and adding dependency comments is part of this workflow;
+it does not authorize implementing them or adding them to the frozen sample.
+
+The manager adds a concise dependency comment to the sampled issue, linking
+the existing or newly created tracking and stating what must happen to resume.
+Avoid repeating an equivalent existing comment. A closed issue is not tracking
+for an unresolved blocker unless an open successor covers the remaining work.
+If GitHub access prevents tracking, report that failure and the proposed issue
+text explicitly; do not claim the tracking step succeeded.
+
+Record blocker issue URLs, whether reused or created, and the dependency-comment
+URL in the ledger and final report. The manager must reject a blocked handoff
+that merely names a missing prerequisite without checking its tracking.
 
 ### Mandatory pr-visuals gate
 
@@ -270,6 +297,12 @@ Never merge the PR or close the issue yourself. If current main already fixes
 the issue, return the evidence and a `conclusive`, `appears fixed`, or `not
 fixed` closure recommendation to the manager.
 
+BLOCKED: For each concrete blocker, search existing issues and return the
+tracking URL and why it covers the unresolved work. The current issue can cover
+an in-scope blocker; do not propose duplicates. If tracking is missing, return
+an issue title/body with evidence, affected issues and unblocking acceptance
+criteria for the manager to create under the blocker-tracking protocol.
+
 Return: status; pre-fix reproduction; root cause; files changed; tests and exact
 results; pr-visuals result with gist/raw URLs and local media paths, or the
 specific non-renderable rationale; commit SHA; PR URL; CI status; remaining
@@ -291,6 +324,7 @@ provide a table in sampled order with:
 |---|---|---|---|---|---|
 
 State `fixed K of S sampled issues (X requested)`. List preserved worktree paths
-and blockers. Report verification-comment and closure URLs, plus a count of
+and blockers with their tracking issue URLs (reused or created) and dependency
+comment URLs. Report verification-comment and closure URLs, plus a count of
 stale fixed issues closed. Do not claim skipped, closed-as-stale, or merely
 patched issues as fixed.
