@@ -159,3 +159,53 @@ test("saved loose pickups do not gain the initial placement lift on every load",
       `load ${i + 1} moved the item: ${original} -> ${restored.position}`);
   }
 });
+
+test("a wrench dropped beside the elevator button falls to the cabin floor", {
+  skip: process.env.SHOCK2_E2E !== "1", timeout: 120_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "medsci1.mis" });
+  await game.step({ frames: 2 });
+  const start = await game.player.position();
+  const [marker] = await game.entities.byTemplate(169);
+  assert.ok(marker);
+  await teleportVerified(game, { x: marker.position[0], y: marker.position[1], z: marker.position[2] });
+  const wrench = await dropItem(game, "Wrench");
+  await teleportVerified(game, start);
+  await game.step({ frames: 120 });
+  const settled = await game.entities.detail(wrench.entity_id);
+  assert.ok(settled.position[1] - marker.position[1] < -1.2,
+    `wrench must reach the floor beside the button: ${settled.position}`);
+});
+
+test("an obstructed flat throw keeps the item carried without a physics body", {
+  skip: process.env.SHOCK2_E2E !== "1", timeout: 120_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "medsci1.mis" });
+  await game.step({ frames: 2 });
+  const [landing] = await game.entities.byTemplate(106);
+  assert.ok(landing);
+  const [x, , z] = landing.position;
+  // Aim upward while jumping near the low cabin ceiling. Every candidate
+  // remains above that ceiling and must be refused rather than spawned through it.
+  await game.player.teleport({ x, y: 1.0, z });
+  await game.input.set("head.look", [0, -90]);
+  const item = await game.player.spawnItem("Wrench");
+  await game.input.trigger("ToggleUseMode");
+  await game.step({ frames: 2 });
+  const button = (await game.ui.state()).strip?.elements.find(e => e.label === "Wrench");
+  assert.ok(button);
+  await clickUiElement(game, button);
+  await game.input.setJump(true);
+  await game.step({ frames: 12 });
+  await game.input.setJump(false);
+  await game.input.set("pointer.position", [0.5, 0.6]);
+  await game.step({ frames: 2 });
+  await game.input.set("pointer.pressed", 1);
+  await game.step({ frames: 2 });
+  await game.input.set("pointer.pressed", 0);
+  await game.step({ frames: 2 });
+  assert.ok((await game.player.inventory()).items.some(e => e.entity_id === item.entity_id),
+    JSON.stringify({ player: await game.player.position(), item: await game.entities.detail(item.entity_id) }));
+  assert.equal((await game.physics.bodies({ entityId: item.entity_id })).bodies.length, 0);
+  assert.ok((await game.ui.state()).strip?.elements.some(e => e.label === "Wrench"));
+});

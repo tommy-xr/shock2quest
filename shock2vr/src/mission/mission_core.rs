@@ -9932,18 +9932,21 @@ impl MissionCore {
             return;
         }
 
-        self.detach_from_containers(entity_id);
         let throw_pos = vec3(
             origin.x + forward.x * THROW_SPAWN_DISTANCE,
             origin.y + forward.y * THROW_SPAWN_DISTANCE,
             origin.z + forward.z * THROW_SPAWN_DISTANCE,
         );
-        self.set_entity_position_rotation(
-            entity_id,
-            throw_pos,
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            vec3(1.0, 1.0, 1.0),
-        );
+        let rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let Some(throw_pos) = self
+            .physics
+            .clear_item_release_position(entity_id, origin, throw_pos, rotation)
+        else {
+            self.make_un_physical(entity_id);
+            return;
+        };
+        self.detach_from_containers(entity_id);
+        self.set_entity_position_rotation(entity_id, throw_pos, rotation, vec3(1.0, 1.0, 1.0));
         self.physics.set_velocity(entity_id, forward * THROW_SPEED);
         self.thrown_items
             .track_existing_motion(&self.world, &self.physics, entity_id);
