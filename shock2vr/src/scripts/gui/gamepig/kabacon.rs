@@ -2,15 +2,14 @@
 use super::{GamePigGuiMsg, sprite};
 use crate::{
     gui::{self, GuiComponent, GuiCursor},
-    mini_game_scores::{MiniGameScore, MiniGameScores},
-    quest_info::QuestInfo,
+    mini_game_scores::MiniGameScore,
     scripts::{Effect, gui::PanelText},
     time::Time,
     ui::Rect,
 };
 use cgmath::vec2;
 use rand::Rng;
-use shipyard::{UniqueView, World};
+use shipyard::World;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -101,16 +100,7 @@ impl KaBacon {
         let previous = self.mode;
         self.tick(time.elapsed, speed, &mut rand::thread_rng());
         if previous != Mode::Scores && self.mode == Mode::Scores {
-            self.rank = world
-                .borrow::<UniqueView<QuestInfo>>()
-                .ok()
-                .and_then(|quest| {
-                    quest
-                        .mini_game_scores
-                        .get(&5)
-                        .map(|scores| scores.rank(self.caught))
-                })
-                .unwrap_or_else(|| MiniGameScores::default().rank(self.caught));
+            self.rank = super::score_rank(world, 5, self.caught);
             let format = PanelText::string(world, "minigame", "kb_score_form", "%d Bacon Caught");
             return Effect::RecordMiniGameScore {
                 game: 5,
@@ -258,42 +248,12 @@ impl KaBacon {
             Rect::new(14.0, 12.0, 138.0, 15.0),
         ));
         if self.mode == Mode::Scores {
-            let quest = world.borrow::<UniqueView<QuestInfo>>().unwrap();
-            let scores = quest.mini_game_scores.get(&5);
-            let rows: Vec<_> = (0..10)
-                .map(|index| {
-                    let text = scores
-                        .and_then(|scores| scores.entries().get(index))
-                        .map_or("", |entry| entry.text.as_str());
-                    PanelText::wrap(world, text, 104.0)
-                })
-                .collect();
-            let lines = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
-            for (index, row) in rows.iter().take((18 / lines).min(10)).enumerate() {
-                let y = 77.0 + index as f32 * lines as f32 * 11.0;
-                components.push(PanelText::text(
-                    &format!("{}:", index + 1),
-                    Rect::new(30.0, y, 18.0, 11.0),
-                ));
-                for (line, text) in row
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, text)| !text.trim().is_empty())
-                {
-                    components.push(PanelText::text(
-                        text,
-                        Rect::new(48.0, y + line as f32 * 11.0, 104.0, 11.0),
-                    ));
-                }
-            }
-            let (key, fallback) = match self.rank {
-                Some(0) => ("minig_topscore", "A New High Score!"),
-                Some(_) => ("minig_newscore", "Score Number %d"),
-                None => ("minig_youlose", "Score not in top 10."),
-            };
-            let text = PanelText::string(world, "minigame", key, fallback);
-            let text = PanelText::format(&text, &[self.rank.unwrap_or(0) as i32 + 1]);
-            components.push(PanelText::text(&text, Rect::new(34.0, 265.0, 118.0, 15.0)));
+            components.extend(super::score_table(
+                world,
+                5,
+                self.rank,
+                Rect::new(30.0, 77.0, 122.0, 198.0),
+            ));
             if self.score_time > Duration::from_secs(3) {
                 let phase =
                     ((self.score_time - Duration::from_secs(3)).as_millis() / 8 % 440) as f32;
@@ -319,6 +279,7 @@ impl KaBacon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quest_info::QuestInfo;
     use rand::{SeedableRng, rngs::StdRng};
 
     #[test]
@@ -525,6 +486,7 @@ mod tests {
 #[cfg(test)]
 mod score_tests {
     use super::*;
+    use crate::quest_info::QuestInfo;
 
     #[test]
     fn unfilled_score_slots_do_not_emit_empty_text_meshes() {
