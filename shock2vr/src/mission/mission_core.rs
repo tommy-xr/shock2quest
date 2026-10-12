@@ -58,7 +58,10 @@ use engine::{
     assets::asset_cache::AssetCache,
     audio::{AudioChannel, AudioContext, AudioHandle, AudioPlaybackSettings},
     game_log, profile,
-    scene::{BillboardMaterial, ParticleSystem, RenderLayer, SceneObject, VertexPosition, quad},
+    scene::{
+        BillboardMaterial, LaunchShape, ParticleSystem, RenderLayer, SceneObject, VertexPosition,
+        quad,
+    },
     texture::TextureTrait,
 };
 use physics::PhysicsWorld;
@@ -7968,6 +7971,18 @@ impl MissionCore {
                                     launch_info.loc_min / SCALE_FACTOR,
                                     launch_info.loc_max / SCALE_FACTOR,
                                 )
+                                .with_launch_shape({
+                                    // Launch type 0 box, 1 sphere, 2 cylinder.
+                                    let radius = (
+                                        launch_info.min_radius / SCALE_FACTOR,
+                                        launch_info.max_radius / SCALE_FACTOR,
+                                    );
+                                    match launch_info.launch_type {
+                                        1 => LaunchShape::Sphere { radius },
+                                        2 => LaunchShape::Cylinder { radius },
+                                        _ => LaunchShape::Box,
+                                    }
+                                })
                                 .with_particle_size(
                                     2.0 * pg.size / SCALE_FACTOR,
                                     2.0 * pg.size / SCALE_FACTOR,
