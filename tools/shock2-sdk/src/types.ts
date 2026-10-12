@@ -1091,7 +1091,7 @@ export interface PlayerStatsRequest {
  */
 export interface UiElement {
   /** "button" (clickable), "image", or "text". */
-  kind: "button" | "image" | "text";
+  kind: "button" | "image" | "text" | "fill";
   texture: string | null;
   text: string | null;
   label: string | null;

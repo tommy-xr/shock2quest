@@ -305,6 +305,10 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.get_hand_lights(options)
     }
 
+    fn active_world_panel(&self) -> Option<EntityId> {
+        self.mission_core.gui.active_panel()
+    }
+
     fn wants_pointer(&self) -> bool {
         self.mission_core.wants_pointer()
     }

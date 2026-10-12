@@ -17,6 +17,7 @@ use crate::{
     util::{get_position_from_transform, get_rotation_from_transform, log_entity},
 };
 
+use super::handheld_screen::HandheldScreen;
 use crate::gui::*;
 use crate::ui::{Rect, UiCanvas};
 
@@ -255,8 +256,25 @@ impl GuiManager {
         // and its clickable proxy, using the same host exclusion as hand rays.
         let is_not_host =
             |entity| crate::util::resolve_proxy_entity(world, entity) != parent_entity;
-        let position =
-            physics.clear_world_panel_position(authored.to_vec(), facing, world_size, &is_not_host);
+        let mount = HandheldScreen::for_entity(world, parent_entity);
+        let (position, facing, world_size) = mount
+            .and_then(|screen| {
+                screen
+                    .transform(world, parent_entity)
+                    .map(|transform| screen.proxy_pose(transform))
+            })
+            .unwrap_or_else(|| {
+                (
+                    physics.clear_world_panel_position(
+                        authored.to_vec(),
+                        facing,
+                        world_size,
+                        &is_not_host,
+                    ),
+                    facing,
+                    world_size,
+                )
+            });
         if let std::collections::hash_map::Entry::Vacant(e) = self.handle_to_instance.entry(handle)
         {
             // Add proxy entity to world
@@ -309,12 +327,50 @@ impl GuiManager {
         }
     }
 
-    pub fn update(&mut self) {}
+    /// Keep the collider and its transform on the final held mesh pose. Mounted
+    /// screens deliberately bypass free-panel clearance against their casing.
+    pub fn sync_mounted_screens(&self, world: &mut World, physics: &mut PhysicsWorld) {
+        for info in self.handle_to_instance.values() {
+            if let Some(screen) = HandheldScreen::for_entity(world, info.parent_entity)
+                && let Some(transform) = screen.transform(world, info.parent_entity)
+            {
+                let (position, rotation, _) = screen.proxy_pose(transform);
+                physics.set_position_rotation(info.physics_handle, position, rotation);
+                // Proxy coordinates already use a world-sized collider; remove
+                // the parent's scale, which the visible screen retains.
+                world.add_component(
+                    info.proxy_entity,
+                    RuntimePropTransform(
+                        Matrix4::from_translation(position) * Matrix4::from(rotation),
+                    ),
+                );
+            }
+        }
+    }
 
     /// Read-only snapshot of the active VR panel using the exact normalized
     /// component data its world-space renderer consumes. This extends the
     /// existing `/v1/ui` contract across presentations without introducing a
     /// debug-only UI path or re-laying out any element.
+    pub fn debug_mounted_pose(&self, world: &World) -> Option<crate::game_scene::DebugUiPanelPose> {
+        let entity = self.active_panel?;
+        let screen = HandheldScreen::for_entity(world, entity)?;
+        let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+        // panel_pose is pawn-local, shared with the cyber-interface contract.
+        let transform = Matrix4::from(player.rotation.conjugate())
+            * Matrix4::from_translation(-player.pos)
+            * screen.transform(world, entity)?
+            * Matrix4::from_angle_y(Deg(180.0));
+        let (center, rotation, size) = screen.proxy_pose(transform);
+        let surface = screen.surface();
+        Some(crate::game_scene::DebugUiPanelPose {
+            center: [center.x, center.y, center.z],
+            rotation: [rotation.v.x, rotation.v.y, rotation.v.z, rotation.s],
+            size: [size.x, size.y],
+            canvas: [surface.w, surface.h],
+        })
+    }
+
     pub fn debug_active_elements(&self, world: &World) -> Vec<crate::game_scene::DebugUiElement> {
         let Some(active) = self.active_panel else {
             return Vec::new();
@@ -338,11 +394,17 @@ impl GuiManager {
             })
             .map(|component| {
                 let rect = component.canvas_rect(panel);
+                let (mapped, extent) =
+                    if let Some(screen) = HandheldScreen::for_entity(world, info.parent_entity) {
+                        (screen.viewport().to_dst(rect), screen.surface())
+                    } else {
+                        (rect, panel)
+                    };
                 let normalized = [
-                    rect.x / panel.w,
-                    rect.y / panel.h,
-                    rect.w / panel.w,
-                    rect.h / panel.h,
+                    mapped.x / extent.w,
+                    mapped.y / extent.h,
+                    mapped.w / extent.w,
+                    mapped.h / extent.h,
                 ];
                 let (kind, texture, text, label, entity_id) = match component {
                     GuiComponentRenderInfo::Image {
@@ -407,7 +469,11 @@ impl GuiManager {
                 continue;
             }
 
-            let parent_entity_transform = maybe_transform.unwrap().0;
+            let mount = HandheldScreen::for_entity(world, info.parent_entity);
+            let parent_entity_transform = mount
+                .and_then(|screen| screen.transform(world, info.parent_entity))
+                .unwrap_or(maybe_transform.unwrap().0);
+            let presentation_size = mount.map(|screen| screen.size).unwrap_or(info.world_size);
             let _root_transform = parent_entity_transform;
             // * Matrix4::from_translation(info.offset)
             // * Matrix4::from_nonuniform_scale(0.5, 0.6, 1.0);
@@ -417,7 +483,7 @@ impl GuiManager {
             // authored facing meets the shared canvas path.
             let root_transform = parent_entity_transform
                 * Matrix4::from_angle_y(Deg(180.0))
-                * Matrix4::from_nonuniform_scale(info.world_size.x, info.world_size.y, 1.0);
+                * Matrix4::from_nonuniform_scale(presentation_size.x, presentation_size.y, 1.0);
             gui_obj.set_transform(root_transform);
 
             // Present the panel through the shared UI canvas, so the world
@@ -430,9 +496,23 @@ impl GuiManager {
                 .iter()
                 .map(|component| component.to_ui_element(panel))
                 .collect();
-            let canvas = UiCanvas::from_elements(size_px, elements);
-            let z_step =
-                COMPONENT_Z_STEP.min(PANEL_DEPTH_BUDGET / canvas.element_count().max(1) as f32);
+            let mut canvas = UiCanvas::from_elements(size_px, elements);
+            let element_count = canvas.element_count();
+            if let Some(screen) = mount {
+                let surface = screen.surface();
+                let mut mounted = UiCanvas::with_events(Vector2::new(surface.w, surface.h));
+                mounted.fill(surface, [0, 0, 0]);
+                mounted.project(canvas, vec![screen.viewport()]);
+                canvas = mounted;
+            }
+            // The renderer separates overlapping layers, not every tile. A
+            // mounted screen needs a stable depth increment: dividing its tiny
+            // depth budget by all board cells collapses below depth precision.
+            let z_step = if mount.is_some() {
+                0.0005
+            } else {
+                COMPONENT_Z_STEP.min(PANEL_DEPTH_BUDGET / element_count.max(1) as f32)
+            };
             let mut panel_objects =
                 canvas.render_world_space(asset_cache, root_transform, None, None, z_step);
             // Draw over everything the panel's own host mesh might otherwise
@@ -444,7 +524,11 @@ impl GuiManager {
             // `SystemOverlay`, so the pause menu and cyber interface still
             // draw over an open panel.
             for object in &mut panel_objects {
-                object.set_render_layer(RenderLayer::SceneUi);
+                object.set_render_layer(if mount.is_some() {
+                    RenderLayer::World
+                } else {
+                    RenderLayer::SceneUi
+                });
             }
             ret.extend(panel_objects);
 

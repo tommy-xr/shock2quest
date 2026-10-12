@@ -17,6 +17,8 @@ pub struct GamePigGui;
 #[derive(Clone, Debug, Default)]
 pub struct GamePigGuiState {
     game: Option<Game>,
+    selection: usize,
+    controller_active: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -59,11 +61,33 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 Game::TicTacTriop(game) => game.components(world),
                 Game::Swinekeeper(game) => game.components(world),
             });
+            if state.controller_active {
+                let (x, y, size, width) = match game {
+                    Game::TicTacTriop(_) => (22.0, 91.0, 40.0, 3),
+                    Game::Swinekeeper(_) => (14.0, 52.0, 23.0, 6),
+                };
+                highlight(
+                    &mut components,
+                    Rect::new(
+                        x + (state.selection % width) as f32 * size,
+                        y + (state.selection / width) as f32 * size,
+                        size,
+                        size,
+                    ),
+                );
+            }
             return components;
         }
+        let installed = installed_games(world);
         for index in 1..=12 {
             if games & (1 << index) == 0 {
                 continue;
+            }
+            if state.controller_active && installed.get(state.selection) == Some(&index) {
+                highlight(
+                    &mut components,
+                    Rect::new(14.0, 14.0 + (index - 1) as f32 * 15.0, 137.0, 15.0),
+                );
             }
             let name =
                 PanelText::string(world, "minigame", &format!("GameName{index}"), "Test Game");
@@ -76,17 +100,74 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 components.push(
                     gui::button(selection)
                         .with_position(vec2(16.0, 14.0 + (index - 1) as f32 * 15.0))
-                        .with_size(vec2(156.0, 15.0))
+                        .with_size(vec2(135.0, 15.0))
                         .with_label(&format!("game-{index}"))
                         .with_alpha(0.0),
                 );
             }
             components.push(PanelText::text(
                 &name,
-                Rect::new(16.0, 14.0 + (index - 1) as f32 * 15.0, 156.0, 15.0),
+                Rect::new(16.0, 14.0 + (index - 1) as f32 * 15.0, 135.0, 15.0),
             ));
         }
         components
+    }
+
+    fn handheld_input(
+        &self,
+        entity: EntityId,
+        world: &World,
+        state: &mut GamePigGuiState,
+        control: crate::handheld_input::HandheldControl,
+    ) -> Effect {
+        use crate::handheld_input::HandheldControl;
+        state.controller_active = true;
+        let message = match control {
+            HandheldControl::Focus => return Effect::NoEffect,
+            HandheldControl::Back => {
+                state.game = None;
+                state.selection = 0;
+                return Effect::NoEffect;
+            }
+            HandheldControl::Navigate { x, y } => {
+                let (width, height) = match &state.game {
+                    Some(Game::TicTacTriop(_)) => (3, 3),
+                    Some(Game::Swinekeeper(_)) => (6, 10),
+                    None => (1, installed_games(world).len().max(1)),
+                };
+                let column = (state.selection % width) as i32;
+                let row = (state.selection / width) as i32;
+                state.selection = (row + y).rem_euclid(height as i32) as usize * width
+                    + (column + x).rem_euclid(width as i32) as usize;
+                return Effect::NoEffect;
+            }
+            HandheldControl::Primary => match &state.game {
+                Some(Game::TicTacTriop(game)) => Some(if game.finished() {
+                    GamePigGuiMsg::Restart
+                } else {
+                    GamePigGuiMsg::PlayCell(state.selection)
+                }),
+                Some(Game::Swinekeeper(game)) => Some(if game.finished() {
+                    GamePigGuiMsg::Restart
+                } else {
+                    GamePigGuiMsg::SwineCell(state.selection)
+                }),
+                None => match installed_games(world).get(state.selection) {
+                    Some(3) => Some(GamePigGuiMsg::SelectSwinekeeper),
+                    Some(8) => Some(GamePigGuiMsg::SelectTicTacTriop),
+                    _ => None,
+                },
+            },
+            HandheldControl::Secondary => matches!(state.game, Some(Game::Swinekeeper(_)))
+                .then_some(GamePigGuiMsg::SwineToggleFlag),
+        };
+        if let Some(message) = message {
+            let (next, effect) = self.handle_msg(entity, world, state, &message);
+            *state = next;
+            effect
+        } else {
+            Effect::NoEffect
+        }
     }
 
     fn resets_state_on_frob(&self) -> bool {
@@ -114,6 +195,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     .borrow::<UniqueView<QuestInfo>>()
                     .is_ok_and(|quest| quest.mini_games & (1 << 8) != 0)
                 {
+                    state.selection = 0;
                     state.game = Some(Game::TicTacTriop(tictactriop::TicTacTriop::random()));
                 }
             }
@@ -122,6 +204,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     .borrow::<UniqueView<QuestInfo>>()
                     .is_ok_and(|quest| quest.mini_games & (1 << 3) != 0)
                 {
+                    state.selection = 0;
                     state.game = Some(Game::Swinekeeper(swinekeeper::Swinekeeper::random()));
                 }
             }
@@ -148,6 +231,30 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
         }
         (state, Effect::NoEffect)
+    }
+}
+
+fn installed_games(world: &World) -> Vec<usize> {
+    let bits = world
+        .borrow::<UniqueView<QuestInfo>>()
+        .map(|q| q.mini_games)
+        .unwrap_or(0);
+    (1..=12).filter(|index| bits & (1 << index) != 0).collect()
+}
+
+fn highlight(components: &mut Vec<GuiComponent<GamePigGuiMsg>>, rect: Rect) {
+    for (x, y, w, h) in [
+        (rect.x, rect.y, rect.w, 1.0),
+        (rect.x, rect.y + rect.h - 1.0, rect.w, 1.0),
+        (rect.x, rect.y, 1.0, rect.h),
+        (rect.x + rect.w - 1.0, rect.y, 1.0, rect.h),
+    ] {
+        components.push(GuiComponent::Fill {
+            position: vec2(x, y),
+            size: vec2(w, h),
+            color: [0, 255, 192],
+            alpha: 1.0,
+        });
     }
 }
 

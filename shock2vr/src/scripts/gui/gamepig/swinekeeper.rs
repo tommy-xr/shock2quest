@@ -70,7 +70,7 @@ impl Swinekeeper {
         Self::neighbors(index).filter(|&i| self.corn[i]).count()
     }
 
-    fn finished(&self) -> bool {
+    pub(super) fn finished(&self) -> bool {
         matches!(self.mode, Mode::Won | Mode::Lost)
     }
 
