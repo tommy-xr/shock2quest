@@ -1,0 +1,1608 @@
+{
+  "mission": "rick1.mis",
+  "presentation": "Vr",
+  "revision": "93f3fe412bd91080c2f3e193cf3deb3d0c50d62d",
+  "runtimeSha256": "7573988796c8260af72ecb73c3e9548e9e3efbf25ae431de393dc4e17bd74049",
+  "assetRoot": "/Users/bryphe/ss2-25th",
+  "devParams": {
+    "cheat": 1,
+    "fov_override_deg": 85,
+    "ambient_light_intensity": 1.6,
+    "level_light_intensity": 2,
+    "held_light_floor": 1
+  },
+  "stats": {
+    "skills": {
+      "standard_weapons": 3
+    }
+  },
+  "settings": {
+    "vr": {
+      "turning": "Smooth",
+      "vignette": "Off"
+    }
+  },
+  "assassin": {
+    "object": 1307,
+    "preWound": 45,
+    "hp": [
+      15,
+      0
+    ]
+  },
+  "pistol": {
+    "holsterSlot": 0,
+    "pulls": 4,
+    "rounds": [
+      12,
+      8
+    ]
+  },
+  "ladder": {
+    "segments": [
+      "ricklad6",
+      "ricklad6",
+      "ricklad6",
+      "ricklad6"
+    ],
+    "strokes": 3,
+    "startEye": 0.8743272000000002,
+    "endEye": 3.2743464
+  },
+  "video": {
+    "file": "rick1.mp4",
+    "fps": 15,
+    "frames": 119
+  },
+  "inputs": "rick1.inputs.json",
+  "gif": "rick1.gif",
+  "samples": [
+    {
+      "frame": 0,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 4,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 8,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 12,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 16,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 20,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 24,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 28,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 32,
+      "phase": "climb",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 36,
+      "phase": "climb",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 40,
+      "phase": "climb",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 44,
+      "phase": "climb",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 48,
+      "phase": "climb",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 52,
+      "phase": "climb",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 56,
+      "phase": "climb",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 60,
+      "phase": "climb",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 64,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 68,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 72,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 76,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 80,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 84,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 88,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 92,
+      "phase": "climb",
+      "grips": [
+        "right"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 96,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 100,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 104,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 108,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 112,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 116,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 120,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 124,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 128,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 132,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 136,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 140,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 144,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 148,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 152,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 156,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 160,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 164,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 168,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 172,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 176,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 180,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 184,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 188,
+      "phase": "hang",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 192,
+      "phase": "draw",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 196,
+      "phase": "draw",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 200,
+      "phase": "draw",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 204,
+      "phase": "draw",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 208,
+      "phase": "draw",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 212,
+      "phase": "draw",
+      "grips": [
+        "left"
+      ],
+      "holding": null,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 216,
+      "phase": "draw",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 220,
+      "phase": "draw",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 224,
+      "phase": "aim",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 228,
+      "phase": "aim",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 232,
+      "phase": "aim",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 236,
+      "phase": "aim",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 240,
+      "phase": "aim",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 244,
+      "phase": "aim",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 248,
+      "phase": "aim",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 15
+      }
+    },
+    {
+      "frame": 252,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243456,
+        "hp": 11
+      }
+    },
+    {
+      "frame": 256,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024346,
+        "hp": 11
+      }
+    },
+    {
+      "frame": 260,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024346,
+        "hp": 11
+      }
+    },
+    {
+      "frame": 264,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243464,
+        "hp": 11
+      }
+    },
+    {
+      "frame": 268,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243464,
+        "hp": 11
+      }
+    },
+    {
+      "frame": 272,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243437,
+        "hp": 11
+      }
+    },
+    {
+      "frame": 276,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024345,
+        "hp": 11
+      }
+    },
+    {
+      "frame": 280,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024345,
+        "hp": 11
+      }
+    },
+    {
+      "frame": 284,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024345,
+        "hp": 11
+      }
+    },
+    {
+      "frame": 288,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024345,
+        "hp": 8
+      }
+    },
+    {
+      "frame": 292,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024345,
+        "hp": 8
+      }
+    },
+    {
+      "frame": 296,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024345,
+        "hp": 8
+      }
+    },
+    {
+      "frame": 300,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024345,
+        "hp": 8
+      }
+    },
+    {
+      "frame": 304,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024345,
+        "hp": 8
+      }
+    },
+    {
+      "frame": 308,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024345,
+        "hp": 8
+      }
+    },
+    {
+      "frame": 312,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024345,
+        "hp": 8
+      }
+    },
+    {
+      "frame": 316,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.024345,
+        "hp": 8
+      }
+    },
+    {
+      "frame": 320,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 8
+      }
+    },
+    {
+      "frame": 324,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 3
+      }
+    },
+    {
+      "frame": 328,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 3
+      }
+    },
+    {
+      "frame": 332,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 3
+      }
+    },
+    {
+      "frame": 336,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 3
+      }
+    },
+    {
+      "frame": 340,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 3
+      }
+    },
+    {
+      "frame": 344,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 3
+      }
+    },
+    {
+      "frame": 348,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 3
+      }
+    },
+    {
+      "frame": 352,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 3
+      }
+    },
+    {
+      "frame": 356,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 3
+      }
+    },
+    {
+      "frame": 360,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 364,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 368,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 372,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 376,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 380,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 384,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 388,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 392,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 396,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 400,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 404,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 408,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 412,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 416,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 420,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 424,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 428,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 432,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 436,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 440,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 444,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 448,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 452,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 456,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 460,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 464,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 468,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    },
+    {
+      "frame": 472,
+      "phase": "fire",
+      "grips": [
+        "left"
+      ],
+      "holding": 918,
+      "health": 35,
+      "assassin": {
+        "y": 2.0243452,
+        "hp": 0
+      }
+    }
+  ]
+}
