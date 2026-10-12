@@ -400,6 +400,7 @@ fn get_link_types(entity_id: i32, entity_info: &SystemShock2EntityInfo) -> Vec<S
                 Link::AIPatrol => "AIPatrol".to_string(),
                 Link::AICurrentPatrol => "AICurrentPatrol".to_string(),
                 Link::Teleport => "Teleport".to_string(),
+                Link::TelePath => "TelePath".to_string(),
                 Link::StimSource(_) => "StimSource".to_string(),
                 Link::Receptron(_) => "Receptron".to_string(),
             })

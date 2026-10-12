@@ -820,6 +820,8 @@ pub enum Link {
     /// Names a destination object for scripted teleports (CS9 eggs/rumblers,
     /// TrapTeleport family, TrapDestroyTeleport's destroy target).
     Teleport,
+    /// Object/current marker -> next teleport-path marker (no link data).
+    TelePath,
     /// Act/react stim source ("arSrcDesc"): the linked-to template is the stim
     /// archetype this object emits (e.g. HE Explosion -> Standard Impact at
     /// intensity 10 over a radius of 10).
@@ -1620,6 +1622,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_link("L$HackingLi", |_| Link::Hacking),
         define_link("L$SwitchLin", |_| Link::SwitchLink),
         define_link("L$Teleport", |_| Link::Teleport),
+        define_link("L$TelePath", |_| Link::TelePath),
         define_link("L$TPathInit", |_| Link::TPathInit),
         define_link("L$TPathNext", |_| Link::TPathNext),
         define_link("L$ScriptPar", |_| Link::ScriptParams),
