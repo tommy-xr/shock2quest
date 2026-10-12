@@ -46,7 +46,9 @@ impl Script for Apparition {
                         handle: self.audio_handle.clone(),
                         source: Some(entity_id),
                         name: sound.name.clone(),
-                        spatial: false,
+                        // The remaster's global ND-apparitions.dml/ND_Apparition
+                        // localizes ObjSoundName at the ghost, rather than the ears.
+                        spatial: true,
                     },
                     Err(_) => Effect::NoEffect,
                 };
@@ -69,5 +71,39 @@ impl Script for Apparition {
             }
             _ => Effect::NoEffect,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apparition_speech_is_spatial_at_its_owner_without_changing_visibility() {
+        let mut world = World::new();
+        let ghost = world.add_entity((PropObjectSound {
+            name: "cs2201".into(),
+        },));
+        let mut script = Apparition::new();
+        let physics = PhysicsWorld::new();
+        let begin = script.handle_message(
+            ghost,
+            &world,
+            &physics,
+            &MessagePayload::Signal {
+                name: "ApparBegin".into(),
+            },
+        );
+        let effects = Effect::flatten(vec![begin]);
+        assert_eq!(effects.len(), 2);
+        assert!(
+            matches!(&effects[0], Effect::SetVisibility { entity_id, visible: true } if *entity_id == ghost)
+        );
+        assert!(
+            matches!(&effects[1], Effect::PlaySound { source: Some(source), name, spatial: true, .. } if *source == ghost && name == "cs2201")
+        );
+        assert!(
+            matches!(script.handle_message(ghost, &world, &physics, &MessagePayload::Signal { name: "ApparEnd".into() }), Effect::SetVisibility { entity_id, visible: false } if entity_id == ghost)
+        );
     }
 }
