@@ -1,7 +1,7 @@
 # dark_vr_tool
 
 `cargo dvr` opens a live Quest dashboard in a terminal. With redirected input or
-output it runs `status` instead. Requires `adb` on PATH; Android builds also need
+output it runs `status` instead. Device commands require `adb` on PATH; Android builds need
 the existing Oculus SDK/signing setup described in `DEVELOPMENT.md`.
 
 ```sh
@@ -11,10 +11,14 @@ cargo dvr mission get
 cargo dvr mission set medsci1.mis
 cargo dvr mission set debug_gloves
 cargo dvr mission unset             # same as: mission set ""
+cargo dvr build                     # release APK; no ADB or headset needed
 cargo dvr run                       # release build, install, launch, follow logs
 cargo dvr run --no-logcat           # return after launch
 cargo dvr deploy                    # release build + install; does not launch
 cargo dvr deploy --apk /path/to/shock2quest.apk
+cargo dvr assets copy /path/to/remaster
+cargo dvr assets recopy /path/to/remaster  # delete old assets, then copy
+cargo dvr assets delete             # removes retail assets, including custom mods
 cargo dvr wifi                      # USB -> ADB over Wi-Fi until reboot, then unplug
 cargo dvr launch                    # restart installed app, no build
 cargo dvr stop
@@ -35,8 +39,18 @@ cargo dvr debug-port unset
 
 `wifi` needs the headset on USB once: it reads its `wlan0` address, runs
 `adb tcpip` (`--port`, default 5555) and connects. The headset stays reachable through sleep, but
-a reboot returns it to USB-only. While USB and Wi-Fi are both attached ADB lists
-the headset twice, so unplug or pass `--serial IP:PORT`.
+a reboot returns it to USB-only. While USB and Wi-Fi are both attached, the tool
+matches transports by hardware serial and prefers USB. Pass `--serial IP:PORT`
+to force Wi-Fi. Different headsets still require an explicit selection.
+
+`assets copy` transfers `sshock2.kpf`, `mods/`, and `cutscenes/` into
+`/sdcard/shock2quest`, merging existing directories. `assets recopy` deletes those
+three paths first, including any custom mods. Both accept `DARK_ASSET_PATH` when
+the source argument is omitted and require all three source entries before doing
+any device work. These commands stop the app; launch it again after copying.
+An interrupted recopy can leave incomplete assets; rerun it to finish.
+Saves, recordings, settings, legacy data and other files are preserved.
+Repository `assets/` resources are bundled into the APK and updated by deployment.
 
 The dashboard refreshes every five seconds: **m** edits the mission, **l** launches,
 **s** stops, **f** lists game files, **r** returns to status, and **q** quits.
@@ -75,10 +89,12 @@ changing it, then use `adb -s SERIAL forward tcp:8171 tcp:8171` to reach its
 loopback debug server. Unsetting the file disables the server on next launch.
 Other gameplay settings remain in the in-game Developer options panel.
 
-`run` and `deploy` source `runtimes/oculus_runtime/set_up_android_sdk.sh` from that
-directory and invoke `cargo apk` with `--release --device SERIAL`. `deploy` resolves
-the APK beneath Cargo's configured target directory. `run` follows cargo-apk's
-logcat output; Ctrl-C exits the command. Launching an activity does not establish
+`build`, `run` and `deploy` (except `deploy --apk`) source `runtimes/oculus_runtime/set_up_android_sdk.sh`
+from that directory and invoke `cargo apk build --release`. They print the APK
+path beneath Cargo's configured target directory. `run` and `deploy` only select
+a device after the build succeeds, so you can connect the headset during a build.
+`run` installs, restarts the app, and follows the same filtered logcat as `logs`;
+Ctrl-C exits the command. Launching an activity does not establish
 that the headset is focused or rendering: this tool does not force proximity or
 Guardian state. Shell commands deliberately support arbitrary remote shell code;
 `ls` paths and configuration values are treated as literal data.
@@ -91,8 +107,10 @@ alias ss2vr='cargo dvr'
 ```
 
 Run the alias from this checkout. Plain status requires exactly one authorized
-device unless `--serial` or `ANDROID_SERIAL` selects one; it never guesses among
-multiple devices. `devices` also shows offline and unauthorized transports.
+headset unless `--serial` or `ANDROID_SERIAL` selects one. USB and Wi-Fi transports
+with the same hardware serial count as one headset; missing or conflicting
+identities require explicit selection. `devices` also shows offline and
+unauthorized transports.
 
 Validation: `cargo test -p dark_vr_tool` covers parsing, device selection, terminal
 layout, and command behavior with an isolated fake ADB (Python 3 required for
