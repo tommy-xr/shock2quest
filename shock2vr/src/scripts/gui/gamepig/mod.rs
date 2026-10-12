@@ -7,6 +7,7 @@ mod overworld;
 mod pig_stacker;
 mod ping;
 mod street_hog;
+mod swine_hunter;
 mod swinekeeper;
 mod tictactriop;
 
@@ -38,6 +39,7 @@ enum Game {
     HogWallow(hog_wallow::HogWallow),
     StreetHog(street_hog::StreetHog),
     OverWorld(overworld::Adventure),
+    SwineHunter(swine_hunter::SwineHunter),
     Ping(ping::Ping),
     PigStacker(pig_stacker::PigStacker),
     KaBacon(kabacon::KaBacon),
@@ -61,6 +63,8 @@ pub enum GamePigGuiMsg {
     HogRestart,
     SelectOverWorld,
     OverWorld(overworld::Message),
+    SelectSwineHunter,
+    HunterPrimary,
     SelectPing,
     SelectPigStacker,
     StackerPrimary,
@@ -116,6 +120,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 Game::StreetHog(game) => game.components(world),
                 Game::OverWorld(game) => game.components(world, entity_id),
                 Game::Ping(game) => game.components(world),
+                Game::SwineHunter(game) => game.components(world),
                 Game::PigStacker(game) => game.components(world),
                 Game::KaBacon(game) => game.components(world),
                 Game::TicTacTriop(game) => game.components(world),
@@ -129,7 +134,8 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 | Game::OverWorld(_)
                 | Game::Ping(_)
                 | Game::KaBacon(_)
-                | Game::PigStacker(_) => None,
+                | Game::PigStacker(_)
+                | Game::SwineHunter(_) => None,
                 Game::TicTacTriop(_) => Some((22.0, 91.0, 40.0, 3)),
                 Game::Swinekeeper(_) => Some((14.0, 52.0, 23.0, 6)),
             };
@@ -167,6 +173,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 6 => Some(GamePigGuiMsg::SelectHogWallow),
                 7 => Some(GamePigGuiMsg::SelectStreetHog),
                 8 => Some(GamePigGuiMsg::SelectTicTacTriop),
+                9 => Some(GamePigGuiMsg::SelectSwineHunter),
                 10 => Some(GamePigGuiMsg::SelectPigStacker),
                 11 => Some(GamePigGuiMsg::SelectBurroHog),
                 12 => Some(GamePigGuiMsg::SelectGolf),
@@ -217,6 +224,11 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         }
         if let Some(Game::OverWorld(game)) = &state.game {
             return game.inspect(entity, world, position);
+        }
+        if let Some(Game::SwineHunter(game)) = &mut state.game {
+            game.secondary(
+                super::keypad::object_state(world, entity) == dark::properties::ObjectState::Hacked,
+            );
         }
         if let Some(Game::PigStacker(game)) = &mut state.game {
             game.hard_drop();
@@ -286,7 +298,10 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         }
         let message = match control {
             HandheldControl::Focus => return Effect::NoEffect,
-            HandheldControl::Stick { x, .. } => {
+            HandheldControl::Stick { x, y } => {
+                if let Some(Game::SwineHunter(game)) = &mut state.game {
+                    game.stick = Some([x, y]);
+                }
                 if let Some(Game::Ping(game)) = &mut state.game {
                     game.stick = Some(x);
                 }
@@ -317,7 +332,8 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                         | Game::OverWorld(_)
                         | Game::Ping(_)
                         | Game::KaBacon(_)
-                        | Game::PigStacker(_),
+                        | Game::PigStacker(_)
+                        | Game::SwineHunter(_),
                     ) => {
                         return Effect::NoEffect;
                     }
@@ -335,6 +351,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 Some(Game::Golf(_) | Game::HogWallow(_) | Game::BurroHog(_)) => None,
                 Some(Game::StreetHog(_)) => Some(GamePigGuiMsg::HogRestart),
                 Some(Game::OverWorld(_) | Game::Ping(_)) => None,
+                Some(Game::SwineHunter(_)) => Some(GamePigGuiMsg::HunterPrimary),
                 Some(Game::PigStacker(_)) => Some(GamePigGuiMsg::StackerPrimary),
                 Some(Game::KaBacon(_)) => Some(GamePigGuiMsg::BaconActivate),
                 Some(Game::TicTacTriop(game)) => Some(if game.finished() {
@@ -355,6 +372,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     Some(6) => Some(GamePigGuiMsg::SelectHogWallow),
                     Some(7) => Some(GamePigGuiMsg::SelectStreetHog),
                     Some(8) => Some(GamePigGuiMsg::SelectTicTacTriop),
+                    Some(9) => Some(GamePigGuiMsg::SelectSwineHunter),
                     Some(10) => Some(GamePigGuiMsg::SelectPigStacker),
                     Some(11) => Some(GamePigGuiMsg::SelectBurroHog),
                     Some(12) => Some(GamePigGuiMsg::SelectGolf),
@@ -362,6 +380,12 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 },
             },
             HandheldControl::Secondary => {
+                if let Some(Game::SwineHunter(game)) = &mut state.game {
+                    game.secondary(
+                        super::keypad::object_state(world, entity)
+                            == dark::properties::ObjectState::Hacked,
+                    );
+                }
                 if let Some(Game::PigStacker(game)) = &mut state.game {
                     game.hard_drop();
                 }
@@ -426,6 +450,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     state.game = None;
                     state.selection = 0;
                 }
+            }
+            if let Some(Game::SwineHunter(game)) = &mut state.game {
+                return game.advance(time, cursor, state.controller_active, world);
             }
             if let Some(Game::KaBacon(game)) = &mut state.game {
                 return game.advance(time, cursor, state.controller_active, world);
@@ -553,6 +580,19 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     return (state, effect);
                 }
             }
+            GamePigGuiMsg::SelectSwineHunter => {
+                if world
+                    .borrow::<UniqueView<QuestInfo>>()
+                    .is_ok_and(|quest| quest.mini_games & (1 << 9) != 0)
+                {
+                    state.game = Some(Game::SwineHunter(swine_hunter::SwineHunter::default()));
+                }
+            }
+            GamePigGuiMsg::HunterPrimary => {
+                if let Some(Game::SwineHunter(game)) = &mut state.game {
+                    game.primary();
+                }
+            }
             GamePigGuiMsg::SelectPigStacker => {
                 if world
                     .borrow::<UniqueView<QuestInfo>>()
@@ -630,6 +670,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     Game::OverWorld(game) => Game::OverWorld(game),
                     Game::Ping(game) => Game::Ping(game),
                     Game::PigStacker(game) => Game::PigStacker(game),
+                    Game::SwineHunter(game) => Game::SwineHunter(game),
                     Game::KaBacon(game) => Game::KaBacon(game),
                     Game::BurroHog(game) => Game::BurroHog(game),
                     Game::Golf(game) => Game::Golf(game),
