@@ -1,11 +1,29 @@
 # Install Shock2Quest on Meta Quest
 
 Shock2Quest is an early development build. You need a Meta Quest headset with
-Developer Mode enabled, a computer with [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools)
-(`adb`), and your own **System Shock 2: 25th Anniversary Remaster** installation.
+Developer Mode enabled, a computer, and your own **System Shock 2: 25th Anniversary Remaster** installation.
 The APK does not include retail game data.
 
-## Download and install
+## Desktop installer (Windows / macOS)
+
+1. From the [release assets](https://github.com/tommy-xr/shock2quest/releases/latest),
+   download the installer matching your operating system and architecture.
+   On Windows, run the `.exe`. On macOS, open the `.dmg`, drag **Shock2Quest
+   Installer** into **Applications**, then open it.
+2. Connect your headset by USB and accept USB debugging inside the headset.
+   The installer shows the detected model and connection status.
+3. Choose your Remaster folder and click **Install on Quest**. The matching APK
+   and ADB are included; game files come from your purchased copy.
+
+Desktop installers are currently unsigned, so your operating system may block
+or warn when opening them. Use manual installation below if needed, or if no
+installer matches your computer. **Copy log** and **Save log…** export the
+installer’s recent output for troubleshooting.
+
+## Manual download and install
+
+Install [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools)
+(`adb`) first.
 
 1. Download [shock2quest.apk](https://github.com/tommy-xr/shock2quest/releases/latest/download/shock2quest.apk)
    from the latest release.

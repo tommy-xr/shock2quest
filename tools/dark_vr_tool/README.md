@@ -185,3 +185,10 @@ The **Quest installer** workflow tests macOS/Windows builds on PRs. A manual run
 downloads the chosen APK and platform-tools and produces unsigned installer
 artifacts. It does not publish them or change the APK release workflow.
 
+
+The **Release** workflow also calls the installer build after verifying its
+signed APK. Both desktop packages embed that exact APK, and publication waits
+for Windows/macOS packaging to finish. The release includes the installers,
+APK, install guide, and checksums for all downloads. Run Release on `main` with
+**publish** unchecked first to inspect the build artifacts; check it to publish
+the next version. Desktop packages remain unsigned until signing is configured.

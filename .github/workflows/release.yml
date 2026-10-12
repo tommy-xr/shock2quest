@@ -109,8 +109,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  installers:
+    needs: apk
+    uses: ./.github/workflows/installer.yml
+    with:
+      apk_artifact: release-apk
+      version: ${{ needs.apk.outputs.version }}
+
   publish:
-    needs: [apk, notes]
+    needs: [apk, notes, installers]
     if: inputs.publish
     runs-on: ubuntu-24.04
     permissions:
@@ -146,6 +153,24 @@ jobs:
           sha256sum --check SHA256SUMS
       - uses: actions/download-artifact@v4
         with:
+          pattern: quest-installer-*
+          merge-multiple: true
+          path: dist
+      - name: Verify installers and add checksums
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          windows=(Shock2Quest-Installer-windows-*.exe)
+          macos=(Shock2Quest-Installer-macos-*.dmg)
+          test "${#windows[@]}" -eq 1
+          test "${#macos[@]}" -eq 1
+          test -s "${windows[0]}"
+          test -s "${macos[0]}"
+          test "$(find . -type f | wc -l)" -eq 5
+          sha256sum "${windows[0]}" "${macos[0]}" >> SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - uses: actions/download-artifact@v4
+        with:
           name: release-notes
           path: target/release-notes
       - name: Publish release
@@ -153,7 +178,11 @@ jobs:
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF
           Signed Quest APK for Shock2Quest $RELEASE_VERSION (early development build).
 
-          Download **shock2quest.apk** and follow **INSTALL.md** below.
+          Download the **Windows installer (.exe)** or **macOS installer (.dmg)**
+          for your computer. Both include ADB and this release's signed APK;
+          the desktop installers themselves are unsigned.
+          For manual installation, download **shock2quest.apk**.
+          Follow **INSTALL.md** below.
           Requires your own System Shock 2: 25th Anniversary Remaster game files.
           SHA256SUMS contains download checksums.
 
@@ -164,5 +193,6 @@ jobs:
           gh release create "$RELEASE_TAG" \
             --target "$GITHUB_SHA" --title "Shock2Quest $RELEASE_VERSION" --draft \
             --notes-file "$RUNNER_TEMP/release-notes.md" \
-            "dist/shock2quest.apk" dist/INSTALL.md dist/SHA256SUMS
+            "dist/shock2quest.apk" dist/INSTALL.md dist/SHA256SUMS \
+            dist/Shock2Quest-Installer-windows-*.exe dist/Shock2Quest-Installer-macos-*.dmg
           gh release edit "$RELEASE_TAG" --draft=false --latest

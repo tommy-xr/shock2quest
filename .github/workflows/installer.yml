@@ -6,6 +6,16 @@ on:
       - 'tools/dark_vr_tool/**'
       - 'Cargo.lock'
       - '.github/workflows/installer.yml'
+      - '.github/workflows/release.yml'
+  workflow_call:
+    inputs:
+      apk_artifact:
+        description: 'Verified APK artifact from the calling release workflow'
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       apk_url:
@@ -43,8 +53,13 @@ jobs:
         run: cargo clippy --locked -p dark_vr_tool --features installer --all-targets -- -D warnings
       - name: Test packaging
         run: python -m unittest discover -s tools/dark_vr_tool/scripts -p 'test_*.py'
+      - uses: actions/download-artifact@v4
+        if: inputs.apk_artifact != ''
+        with:
+          name: ${{ inputs.apk_artifact }}
+          path: target/installer-inputs
       - name: Download packaging inputs
-        if: github.event_name == 'workflow_dispatch'
+        if: inputs.apk_artifact != '' || github.event_name == 'workflow_dispatch'
         env:
           APK_URL: ${{ inputs.apk_url }}
         shell: python
@@ -57,9 +72,10 @@ jobs:
           urllib.request.urlretrieve(f'https://dl.google.com/android/repository/platform-tools-latest-{platform}.zip', root / 'platform-tools.zip')
           with zipfile.ZipFile(root / 'platform-tools.zip') as archive:
               archive.extractall(root)
-          urllib.request.urlretrieve(os.environ['APK_URL'], root / 'shock2quest.apk')
+          if os.environ.get('APK_URL'):
+              urllib.request.urlretrieve(os.environ['APK_URL'], root / 'shock2quest.apk')
       - name: Package installer
-        if: github.event_name == 'workflow_dispatch'
+        if: inputs.apk_artifact != '' || github.event_name == 'workflow_dispatch'
         env:
           INSTALLER_VERSION: ${{ inputs.version }}
         shell: bash
@@ -70,7 +86,7 @@ jobs:
           --out dist/installer
           --version "$INSTALLER_VERSION"
       - uses: actions/upload-artifact@v4
-        if: github.event_name == 'workflow_dispatch'
+        if: inputs.apk_artifact != '' || github.event_name == 'workflow_dispatch'
         with:
           name: quest-installer-${{ matrix.os }}
           path: |
