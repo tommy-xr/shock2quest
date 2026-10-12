@@ -315,6 +315,12 @@ impl ParticleEffect {
         }
     }
 
+    /// Any layer leaves particles where they were emitted, so they can sit
+    /// outside the emitter's cell.
+    pub fn is_world_space(&self) -> bool {
+        self.layers.iter().any(ParticleSystem::is_world_space)
+    }
+
     pub fn is_done(&self) -> bool {
         self.layers.iter().all(ParticleSystem::is_done)
     }

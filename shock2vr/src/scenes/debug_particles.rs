@@ -105,6 +105,7 @@ fn make_particle_group(color_index: u8) -> PropParticleGroup {
         spin: Vector3::new(0.0, 0.0, 0.0),
         is_active: true,
         is_worldspace: false,
+        pre_launch: false,
         size: 0.6,
         scale_vel: 0.0,
         prev_loc: Vector3::new(0.0, 0.0, 0.0),

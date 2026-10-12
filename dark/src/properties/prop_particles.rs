@@ -69,6 +69,9 @@ pub struct PropParticleGroup {
     pub spin: Vector3<f32>,
     pub is_active: bool,
     pub is_worldspace: bool,
+    /// Authored to start with every particle already launched (not simulated
+    /// here); such a group keeps its authored launch period.
+    pub pre_launch: bool,
     pub size: f32,
     pub scale_vel: f32,
     pub prev_loc: Vector3<f32>,
@@ -138,7 +141,7 @@ impl PropParticleGroup {
         let _pulse_percentage = read_single(reader); // 144
         let _fixed_scale = read_single(reader); // 148
 
-        let _pre_launch = read_bool_u8(reader); // 152
+        let pre_launch = read_bool_u8(reader); // 152
         let _spin_group = read_bool_u8(reader);
         let _tiny_alpha = read_bool_u8(reader);
         let _tiny_dropout = read_bool_u8(reader);
@@ -190,6 +193,7 @@ impl PropParticleGroup {
             spin,
             is_active,
             is_worldspace,
+            pre_launch,
             size,
             scale_vel,
             prev_loc,
