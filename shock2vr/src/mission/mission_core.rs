@@ -4009,16 +4009,23 @@ impl MissionCore {
             &template_to_entity_id,
         );
 
-        // Dark clones the PlayerFactory marker onto its new player. Keep its
-        // training skills on the nonserialized runtime player, not the career
-        // sheet; reconstruct them even when a save overrides the spawn pose.
-        // MapDefault uses the last instantiated factory for its spawn, too.
+        // Dark clones the PlayerFactory marker onto its new player, which only
+        // exists on a new game or a direct launch; a transition carries the
+        // existing player across, so the destination's marker never applies.
+        // Keep its training skills on the nonserialized runtime player, not
+        // the career sheet: a floor for the mission that created the player
+        // (Earth's tutorial allowance), rebuilt when a save of it loads.
+        // Claim before looking for a marker so a markerless first mission
+        // still claims the run. MapDefault uses the last instantiated factory
+        // for its spawn, too.
+        let seeds_player = quest_info.claim_player_factory(&mission);
         let factory = abstract_mission
             .entity_info
             .link_playerfactories
             .iter()
             .rev()
-            .find_map(|link| template_to_entity_id.get(&link.src));
+            .find_map(|link| template_to_entity_id.get(&link.src))
+            .filter(|_| seeds_player);
         if let Some(factory) = factory {
             let weapons = world
                 .borrow::<View<dark::properties::PropBaseWeaponDesc>>()

@@ -61,6 +61,13 @@ pub struct QuestInfo {
     research: ResearchState,
     #[serde(default)]
     pub(crate) horde_battle: crate::horde_stats::HordeBattleStats,
+    /// The mission (lowercase) whose PlayerFactory start marker created the
+    /// player. Dark clones that marker onto the player only when there is no
+    /// player yet - a new game or a direct mission launch; a level transition
+    /// carries the existing player across, so the destination's marker never
+    /// applies.
+    #[serde(default)]
+    player_factory_mission: Option<String>,
 }
 
 impl QuestInfo {
@@ -81,7 +88,21 @@ impl QuestInfo {
             explored_maps: HashMap::new(),
             research: ResearchState::default(),
             horde_battle: Default::default(),
+            player_factory_mission: None,
         }
+    }
+
+    /// Whether `mission`'s PlayerFactory marker seeds the player on this load.
+    /// The first mission loaded into a run claims it (a new game or a direct
+    /// launch), and reloading that mission - a save or a reset - keeps it. Any
+    /// other mission was reached by a transition, so the player arrives with
+    /// their own skills and its marker is ignored.
+    pub fn claim_player_factory(&mut self, mission: &str) -> bool {
+        let mission = crate::save_load::canonical_mission_key(mission);
+        *self
+            .player_factory_mission
+            .get_or_insert_with(|| mission.clone())
+            == mission
     }
 
     /// Scene constructors seed their own test stats; retain those while selecting
@@ -445,5 +466,21 @@ mod security_hack_tests {
         quests.activate_security_hack(30.0);
         quests.activate_security_hack(0.0);
         assert!(!quests.security_hack_active());
+    }
+
+    /// A new game claims earth's marker; earth saves keep it, and the decks a
+    /// transition reaches never apply theirs (hydro1's marker authors all 6s).
+    #[test]
+    fn only_the_mission_that_created_the_player_applies_its_marker() {
+        let mut quests = QuestInfo::new();
+        assert!(quests.claim_player_factory("earth.mis"));
+        assert!(quests.claim_player_factory("EARTH.MIS"));
+        assert!(!quests.claim_player_factory("hydro1.mis"));
+
+        let reloaded: QuestInfo =
+            serde_json::from_value(serde_json::to_value(&quests).unwrap()).unwrap();
+        let mut reloaded = reloaded;
+        assert!(reloaded.claim_player_factory("earth.mis"));
+        assert!(!reloaded.claim_player_factory("station.mis"));
     }
 }

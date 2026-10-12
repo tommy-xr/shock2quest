@@ -140,3 +140,41 @@ for (const hand of ["left", "right"] as const) {
     assert.equal(await notice(), undefined);
   });
 }
+
+// hydro1's start marker (PlayerFactory) authors 6 in every weapon and tech
+// skill - a DromEd test loadout. Dark clones the marker onto the player only
+// when it creates one (a new game or a direct launch); a deck transition
+// carries the player across with their own skills.
+async function rifleFires(game: GameServer): Promise<boolean> {
+  const rifle = await game.player.spawnItem("Assault Rifle");
+  await game.input.trigger("EquipAssaultRifle");
+  await game.step({ frames: 5 });
+  const ammo = async () => ammoOf(await game.entities.detail(rifle.entity_id));
+  const before = await ammo();
+  assert.ok(before > 0, "the rifle must have ammunition to test the skill gate");
+  await pullTrigger(game);
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({ frames: 2 });
+  return (await ammo()) < before;
+}
+
+test("a deck transition keeps the player's skills instead of the destination's start marker", {
+  skip: process.env.SHOCK2_E2E !== "1", timeout: 240_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "medsci1.mis" });
+  await game.step({ frames: 5 });
+  await game.transitionLevel("hydro1.mis");
+  await game.step({ frames: 5 });
+  assert.equal(await rifleFires(game), false, "hydro1's marker must not grant Standard 6");
+  assert.ok((await game.ui.state()).messages.includes(
+    "Requires Standard Weapons 6 - You have 0",
+  ));
+});
+
+test("a direct launch is a new player, so its start marker's loadout applies", {
+  skip: process.env.SHOCK2_E2E !== "1", timeout: 240_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "hydro1.mis" });
+  await game.step({ frames: 5 });
+  assert.equal(await rifleFires(game), true, "hydro1's marker grants Standard 6");
+});
