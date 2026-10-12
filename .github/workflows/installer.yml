@@ -1,0 +1,79 @@
+name: Quest installer
+
+on:
+  pull_request:
+    paths:
+      - 'tools/dark_vr_tool/**'
+      - 'Cargo.lock'
+      - '.github/workflows/installer.yml'
+  workflow_dispatch:
+    inputs:
+      apk_url:
+        description: 'Release APK to bundle'
+        default: 'https://github.com/tommy-xr/shock2quest/releases/latest/download/shock2quest.apk'
+        required: true
+        type: string
+      version:
+        description: 'Installer version (e.g. 0.1.0)'
+        default: '0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: installer
+      - name: Test installer
+        run: cargo test --locked -p dark_vr_tool --features installer
+      - name: Check installer
+        run: cargo clippy --locked -p dark_vr_tool --features installer --all-targets -- -D warnings
+      - name: Test packaging
+        run: python -m unittest discover -s tools/dark_vr_tool/scripts -p 'test_*.py'
+      - name: Download packaging inputs
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          APK_URL: ${{ inputs.apk_url }}
+        shell: python
+        run: |
+          import os, sys, urllib.request, zipfile
+          from pathlib import Path
+          root = Path('target/installer-inputs')
+          root.mkdir(parents=True, exist_ok=True)
+          platform = 'windows' if sys.platform == 'win32' else 'darwin'
+          urllib.request.urlretrieve(f'https://dl.google.com/android/repository/platform-tools-latest-{platform}.zip', root / 'platform-tools.zip')
+          with zipfile.ZipFile(root / 'platform-tools.zip') as archive:
+              archive.extractall(root)
+          urllib.request.urlretrieve(os.environ['APK_URL'], root / 'shock2quest.apk')
+      - name: Package installer
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INSTALLER_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: >-
+          python tools/dark_vr_tool/scripts/package-installer.py
+          --apk target/installer-inputs/shock2quest.apk
+          --platform-tools target/installer-inputs/platform-tools
+          --out dist/installer
+          --version "$INSTALLER_VERSION"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: quest-installer-${{ matrix.os }}
+          path: |
+            dist/installer/*.exe
+            dist/installer/*.dmg
+          if-no-files-found: error

@@ -115,3 +115,66 @@ unauthorized transports.
 Validation: `cargo test -p dark_vr_tool` covers parsing, device selection, terminal
 layout, and command behavior with an isolated fake ADB (Python 3 required for
 those Unix integration tests). No physical headset is required for this suite.
+
+## Desktop installer
+
+Build the optional installer UI on macOS or Windows:
+
+```sh
+cargo run -p dark_vr_tool --features installer -- ui
+```
+
+Choose your local Remaster folder and an APK, connect/authorize the Quest, then
+click **Install on Quest**. The window shows installation stages, ADB output,
+and success or failure. The APK is installed with `-r`; game assets are merged
+into `/sdcard/shock2quest`. Saves/settings and extra files are preserved. The
+app is stopped during installation and is not launched automatically.
+If several headsets are connected, choose one by serial under **Advanced**.
+
+Packaged installers include ADB and the release APK. Development builds use ADB
+from PATH and require an APK selection. `--source`, `--apk`, and `--adb` can
+pre-fill/override those inputs. Builds with the `installer` feature open the UI
+when run without arguments; builds without it retain the terminal dashboard.
+
+The shared install operation can also run without a window:
+
+```sh
+cargo run -p dark_vr_tool --features installer -- install --source /path/to/remaster --apk /path/to/shock2quest.apk
+cargo test -p dark_vr_tool --features installer
+python3 -m unittest discover -s tools/dark_vr_tool/scripts -p 'test_*.py'
+```
+
+For render verification, `ui --screenshot /absolute/path.png` saves the ready
+screen and exits. Add `--install-now` to perform a real installation and capture
+its result; use a fake `--adb` executable for automated UI tests.
+
+## Packaging
+
+Supply a release APK and the extracted Android platform-tools for the build OS:
+
+```sh
+python3 tools/dark_vr_tool/scripts/package-installer.py \
+  --apk /path/to/shock2quest.apk --platform-tools /path/to/platform-tools \
+  --out /path/to/dist --version 0.1.0
+```
+
+On Windows, this embeds `adb.exe`, its two helper DLLs, notices, and the APK into
+one portable EXE. On first use it extracts them to a content-addressed directory
+under `%LOCALAPPDATA%/Shock2Quest/installer`. No global ADB installation or PATH
+change is required. Payload versions remain separate so a running ADB server
+doesn't prevent a newer installer from starting.
+
+On macOS, it creates an `.app` with ADB under `Contents/Helpers` and the APK and
+notices under `Contents/Resources`, then packages it in a DMG. The package targets
+the build machine's architecture. `--binary` can use an existing installer-feature
+binary for local previews; `--debug` builds with the development profile.
+
+Local packages are unsigned by default. For public macOS distribution, pass
+`--sign-identity "Developer ID Application: …"` and `--notary-profile PROFILE`.
+Windows release signing must be applied to the generated EXE before publishing.
+Users still need Quest Developer Mode and USB-debugging authorization; a Windows
+machine that cannot detect the headset may also need the Quest ADB driver.
+
+The **Quest installer** workflow tests macOS/Windows builds on PRs. A manual run
+downloads the chosen APK and platform-tools and produces unsigned installer
+artifacts. It does not publish them or change the APK release workflow.
