@@ -297,39 +297,141 @@ fn pattern_matches_simple_glob(text: &str, pattern: &str) -> bool {
 fn get_property_names(properties: &[Arc<Box<dyn Property>>]) -> Vec<String> {
     properties
         .iter()
-        .map(|prop| {
-            // Try to extract the property type name from the debug representation
-            let debug_str = format!("{:?}", prop.as_ref());
-
-            // Handle WrappedProperty format
-            let prop_str = if debug_str.starts_with("WrappedProperty { inner_property: ") {
-                if let Some(start) = debug_str.find("inner_property: ") {
-                    let remaining = &debug_str[start + 16..];
-                    if let Some(end) = remaining.find(", accumulator:") {
-                        remaining[..end].to_string()
-                    } else {
-                        remaining.to_string()
-                    }
-                } else {
-                    debug_str.clone()
-                }
-            } else {
-                debug_str.clone()
-            };
-
-            // Extract just the property type name (before the opening parenthesis or space/brace)
-            if prop_str.starts_with("Prop") {
-                // Split on multiple possible delimiters: '(', ' ', '{'
-                prop_str
-                    .split(['(', ' ', '{'])
-                    .next()
-                    .unwrap_or(&prop_str)
-                    .to_string()
-            } else {
-                prop_str
-            }
-        })
+        .map(|prop| describe_property(prop).0)
         .collect()
+}
+
+/// A property's type name and its Debug text, unwrapping `WrappedProperty`,
+/// e.g. ("PropParticleLaunchInfo", "PropParticleLaunchInfo { launch_type: 2, .. }").
+pub fn describe_property(prop: &Arc<Box<dyn Property>>) -> (String, String) {
+    let debug_str = format!("{:?}", prop.as_ref());
+
+    // Handle WrappedProperty format
+    let prop_str = if debug_str.starts_with("WrappedProperty { inner_property: ") {
+        if let Some(start) = debug_str.find("inner_property: ") {
+            let remaining = &debug_str[start + 16..];
+            if let Some(end) = remaining.find(", accumulator:") {
+                remaining[..end].to_string()
+            } else {
+                remaining.to_string()
+            }
+        } else {
+            debug_str.clone()
+        }
+    } else {
+        debug_str.clone()
+    };
+
+    // Extract just the property type name (before the opening parenthesis or space/brace)
+    let name = if prop_str.starts_with("Prop") {
+        // Split on multiple possible delimiters: '(', ' ', '{'
+        prop_str
+            .split(['(', ' ', '{'])
+            .next()
+            .unwrap_or(&prop_str)
+            .to_string()
+    } else {
+        prop_str.clone()
+    };
+    (name, prop_str)
+}
+
+/// A property field value filter, `<Prop>.<field>=<glob>` with the type name
+/// `dq` prints (`Prop` / `P$` prefix optional), e.g. `ParticleLaunchInfo.launch_type=2`.
+/// The value is the nearest declaration, not an accumulated one (use `S$` for
+/// scripts, which merge across ancestors).
+struct FieldFilter {
+    prop: String,
+    field: String,
+    value: Pattern,
+}
+
+impl FieldFilter {
+    fn parse(pattern: &str) -> Option<FieldFilter> {
+        let (lhs, value) = pattern.split_once('=')?;
+        let (prop, field) = lhs.split_once('.')?;
+        let prop = prop.strip_prefix("P$").unwrap_or(prop);
+        let is_ident =
+            |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !is_ident(prop) || !is_ident(field) {
+            return None;
+        }
+        Some(FieldFilter {
+            prop: normalize_prop_name(prop),
+            field: field.to_string(),
+            // An invalid glob (e.g. an unclosed `[`) matches literally rather
+            // than falling through to an unrelated filter.
+            value: Pattern::new(&value.to_lowercase())
+                .unwrap_or_else(|_| Pattern::new(&Pattern::escape(&value.to_lowercase())).unwrap()),
+        })
+    }
+
+    /// The matched item (e.g. `PropParticleLaunchInfo.launch_type=2`) when
+    /// the entity's effective value matches: its own property, else the
+    /// nearest ancestor's.
+    fn matches(
+        &self,
+        entity_id: i32,
+        entity_info: &SystemShock2EntityInfo,
+        hierarchy: &HashMap<i32, Vec<i32>>,
+    ) -> Option<String> {
+        let ancestors = ss2_entity_info::get_ancestors(hierarchy, &entity_id);
+        let (name, debug) = std::iter::once(entity_id)
+            .chain(ancestors.into_iter().rev())
+            .filter_map(|id| entity_info.entity_to_properties.get(&id))
+            .flat_map(|properties| properties.iter().map(describe_property))
+            .find(|(name, _)| normalize_prop_name(name) == self.prop)?;
+        let value = debug_field(&debug, &self.field)?;
+        self.value
+            .matches(&value.to_lowercase())
+            .then(|| format!("{name}.{}={value}", self.field))
+    }
+}
+
+fn normalize_prop_name(name: &str) -> String {
+    let lower = name.to_lowercase();
+    lower.strip_prefix("prop").unwrap_or(&lower).to_string()
+}
+
+/// A top-level field's value in a struct's Debug text, e.g. `b` in
+/// `Foo { a: 1, b: Bar { c: 2 } }` is `Bar { c: 2 }`.
+fn debug_field<'a>(debug: &'a str, field: &str) -> Option<&'a str> {
+    let body_start = debug.find('{')? + 1;
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut entry_start = body_start;
+    for (i, c) in debug.char_indices().skip_while(|(i, _)| *i < body_start) {
+        if in_string {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '{' | '[' | '(' => depth += 1,
+            '}' | ']' | ')' if depth > 0 => depth -= 1,
+            ',' | '}' if depth == 0 => {
+                let entry = debug[entry_start..i].trim();
+                if let Some(value) = entry
+                    .strip_prefix(field)
+                    .and_then(|rest| rest.strip_prefix(": "))
+                {
+                    return Some(value.trim());
+                }
+                if c == '}' {
+                    return None;
+                }
+                entry_start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Get property type names with inheritance support - walks up the hierarchy to collect all properties
@@ -561,6 +663,7 @@ pub fn analyze_entities(entity_info: &SystemShock2EntityInfo) -> Vec<EntitySumma
 pub fn filter_entities(
     summaries: &[EntitySummary],
     criteria: &FilterCriteria,
+    entity_info: &SystemShock2EntityInfo,
 ) -> Vec<EntitySummary> {
     let mut filtered = summaries.to_vec();
 
@@ -574,6 +677,21 @@ pub fn filter_entities(
 
     // Apply property filter
     if let Some(filter_pattern) = &criteria.property_filter {
+        // Property field value (e.g., "ParticleLaunchInfo.launch_type=2")
+        if let Some(field_filter) = FieldFilter::parse(filter_pattern) {
+            let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
+            filtered.retain_mut(|summary| {
+                match field_filter.matches(summary.id, entity_info, hierarchy) {
+                    Some(item) => {
+                        summary.matched_items = vec![item];
+                        true
+                    }
+                    None => false,
+                }
+            });
+            return filtered;
+        }
+
         // Auto-convert P$ patterns without colons to P$:* patterns to use value matching logic
         let effective_pattern = if filter_pattern.starts_with("P$") && !filter_pattern.contains(':')
         {
@@ -832,4 +950,48 @@ pub fn filter_entities(
     }
 
     filtered
+}
+
+#[cfg(test)]
+mod field_filter_tests {
+    use super::{FieldFilter, debug_field};
+
+    const DEBUG: &str = r#"PropParticleGroup { launch_time: 0.1, launch: Vector3 [1.0, 2.0], name: "a, b }", inner: Foo { x: 1, y: 2 }, last: 7 }"#;
+
+    #[test]
+    fn debug_field_reads_top_level_values() {
+        assert_eq!(debug_field(DEBUG, "launch_time"), Some("0.1"));
+        assert_eq!(debug_field(DEBUG, "launch"), Some("Vector3 [1.0, 2.0]"));
+        assert_eq!(debug_field(DEBUG, "name"), Some(r#""a, b }""#));
+        assert_eq!(debug_field(DEBUG, "inner"), Some("Foo { x: 1, y: 2 }"));
+        assert_eq!(debug_field(DEBUG, "last"), Some("7"));
+        assert_eq!(
+            debug_field(DEBUG, "x"),
+            None,
+            "nested fields are not top-level"
+        );
+        assert_eq!(debug_field("PropSymName(\"x\")", "0"), None);
+    }
+
+    #[test]
+    fn parse_accepts_type_names_with_or_without_prop_prefix() {
+        let a = FieldFilter::parse("ParticleLaunchInfo.launch_type=2").unwrap();
+        let b = FieldFilter::parse("PropParticleLaunchInfo.launch_type=2").unwrap();
+        assert_eq!(
+            (a.prop.as_str(), a.field.as_str()),
+            ("particlelaunchinfo", "launch_type")
+        );
+        assert_eq!(a.prop, b.prop);
+        let c = FieldFilter::parse("P$ParticleLaunchInfo.launch_type=2").unwrap();
+        assert_eq!(a.prop, c.prop);
+        let literal = FieldFilter::parse("ParticleLaunchInfo.vel_min=Vector3 [7.0").unwrap();
+        assert!(literal.value.matches("vector3 [7.0"));
+        assert!(FieldFilter::parse("P$SymName:*Robot*").is_none());
+        assert!(FieldFilter::parse("*Door*").is_none());
+        assert!(FieldFilter::parse("a.b.c=1").is_none());
+        // Values are globs: `?` (or `[[]`) matches a vector's literal bracket.
+        let v = FieldFilter::parse("ParticleLaunchInfo.vel_min=Vector3 ?7.0*").unwrap();
+        assert!(v.value.matches("vector3 [7.0, 0.0, 0.0]"));
+        assert!(!v.value.matches("vector3 [-7.0, 0.0, 0.0]"));
+    }
 }
