@@ -392,12 +392,6 @@ impl eframe::App for InstallerApp {
                         ui.label(egui::RichText::new("SHOCK2").size(28.0).strong());
                         ui.label(egui::RichText::new("QUEST").size(28.0).strong().color(CYAN));
                     });
-                    ui.label(
-                        egui::RichText::new("SYSTEM SHOCK 2. IN YOUR HANDS.")
-                            .monospace()
-                            .small()
-                            .color(MUTED),
-                    );
                     ui.add_space(10.0);
                     self.connection_card(ui, busy);
                     ui.add_space(4.0);
