@@ -784,6 +784,9 @@ export interface PlayerSnapshot {
   stats: PlayerStats | null;
   /** Current stats including powered equipped implants; training is unchanged. */
   effective_stats: PlayerStats | null;
+  /** Each skill at the level the game checks (weapon requirements,
+   * maintenance, research): the sheet with a new player's start-marker floor. */
+  checked_skills: SkillLevels | null;
   /** The audio logs the player has collected (frobbed), in pickup order.
    * Persisted in QuestInfo; survives level transitions and save/load. */
   collected_logs: CollectedLog[];

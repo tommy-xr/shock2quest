@@ -2709,6 +2709,7 @@ fn capture_frame_snapshot(
                     .unwrap_or_default(),
                 stats: state.as_ref().and_then(|s| s.stats.clone()),
                 effective_stats: state.as_ref().and_then(|s| s.effective_stats.clone()),
+                checked_skills: state.as_ref().and_then(|s| s.checked_skills),
                 collected_logs: state
                     .as_ref()
                     .map(|s| s.collected_logs.clone())

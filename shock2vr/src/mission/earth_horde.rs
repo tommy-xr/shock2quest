@@ -628,7 +628,10 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
         stats.strength = 2;
         stats.endurance = 2;
         stats.psionic_ability = 2;
+        // Every other skill starts at 0 and is bought at the subway trainers;
+        // Standard and Energy 1 let the pistol and the laser pistol fire.
         stats.skills.standard_weapons = 1;
+        stats.skills.energy_weapons = 1;
         stats.psi_tier = 1;
         stats.cyber_modules = 16;
         stats.nanites = 80;

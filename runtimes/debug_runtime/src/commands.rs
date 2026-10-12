@@ -898,6 +898,9 @@ pub struct PlayerInfo {
     /// `shock2vr::player_stats::PlayerStats`.
     pub stats: Option<shock2vr::player_stats::PlayerStats>,
     pub effective_stats: Option<shock2vr::player_stats::PlayerStats>,
+    /// Each skill at the level the game checks: the sheet with a new player's
+    /// start-marker floor. `null` without a player.
+    pub checked_skills: Option<shock2vr::player_stats::SkillLevels>,
     /// The audio logs the player has collected (frobbed), in pickup order.
     /// Persisted in `QuestInfo`; survives level transitions and save/load. See
     /// `shock2vr::quest_info::CollectedLog`.
