@@ -193,7 +193,8 @@ const SHOTS = [
       shots: [0.15, 0.7], // Pulls, in seconds, before it runs dry and after the reload.
       glance: 0.75, // How far the eyes drop from the subject toward the pouch...
       gunGlance: 0.7, // ...and then onto the magazine well.
-      tilt: 3, // Metres the pistol's aim lifts above the subject while the eyes are down.
+      tilt: 3, // Metres the pistol's aim lifts above the subject while the eyes are down...
+      roll: -45, // ...and degrees the wrist rolls about the barrel (negative: clockwise).
       low: [0.12, -0.38, -0.4], // The pistol at low ready while the hand draws.
       seat: [-0.02, -0.32, -0.48], // Pistol held out in front to take the clip.
     },
@@ -654,14 +655,17 @@ async function recordReload(game, shot, subjectId, held) {
   // swing the gun around - and the look that follows the gun with it.
   let leftWorld;
   let facing;
-  const pose = async (look, offsets, aims) => {
+  // `tilt` (0..1) eases in the pistol's off-subject pose: muzzle lifted by
+  // `reload.tilt` and the wrist rolled by `reload.roll` about the barrel.
+  const pose = async (look, offsets, aims, tilt = 0) => {
     const { player } = await game.info();
     await game.input.lookAtWorldPoint(look);
     if (offsets.left) leftWorld = fromOffset(eyeOf(player), facing, offsets.left);
     for (const [hand, offset] of Object.entries(offsets)) {
       const p = handPoseAimedAt(player.position, player.rotation, player.camera_offset[1], facing, offset, aims[hand]);
+      const roll = hand === "right" ? (reload.roll * tilt * Math.PI) / 360 : 0;
       await game.input.set(`${hand}_hand.position`, p.position);
-      await game.input.set(`${hand}_hand.rotation`, p.rotation);
+      await game.input.set(`${hand}_hand.rotation`, quatMultiply(p.rotation, [0, 0, Math.sin(roll), Math.cos(roll)]));
     }
     await sink.step();
     t += 1 / 60;
@@ -711,14 +715,14 @@ async function recordReload(game, shot, subjectId, held) {
       leftOffset = lerp(shot.hands.left, want, s);
       await pose(look, { left: leftOffset, right: lerp(shot.hands.right, reload.low, s) }, {
         left: lerp(eye, pouch, 2), right: tilted(s),
-      });
+      }, s);
     }
     await game.input.set("left_hand.squeeze", 1);
     for (let f = 0; f < 12; f++) {
       const { player } = await game.info();
       pouch = pouchOf(player);
       const look = glance(eyeOf(player), head, pouch, reload.glance);
-      await pose(look, { left: leftOffset, right: reload.low }, { left: lerp(eyeOf(player), pouch, 2), right: tilted(1) });
+      await pose(look, { left: leftOffset, right: reload.low }, { left: lerp(eyeOf(player), pouch, 2), right: tilted(1) }, 1);
     }
     const clip = (await game.info()).player.wielded_entity_id;
     assert.ok(clip != null, `${shot.name}: the pouch must put a clip in the left hand`);
@@ -749,7 +753,7 @@ async function recordReload(game, shot, subjectId, held) {
         // Up and forward in the view's frame, so the clip's yaw stays put
         // whatever the loop is correcting.
         left: fromOffset(eye, facing, leftOffset.map((v, i) => v + [0, 1, -0.6][i])), right: tilted(1),
-      });
+      }, 1);
     };
     let f = 1;
     for (; f <= approach + push && (await rounds()) === 0; f++) await seat(f);
@@ -770,7 +774,7 @@ async function recordReload(game, shot, subjectId, held) {
       const back = glance(eye, look, point("head"), s);
       await pose(back, { left: lerp(lastLeft, shot.hands.left, s), right: lerp(reload.seat, shot.hands.right, s) }, {
         left: point("torso"), right: tilted(1 - s),
-      });
+      }, 1 - s);
     }
 
     // 5. Back in the fight.
