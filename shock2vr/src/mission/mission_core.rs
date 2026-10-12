@@ -4041,6 +4041,16 @@ impl MissionCore {
             if let Some(skills) = tech {
                 world.add_component(player_entity, skills);
             }
+            // Horde provisions its own starting stats; Earth's tutorial PSI 5
+            // must not floor them.
+            let stats = world
+                .borrow::<View<dark::properties::PropBaseStats>>()
+                .ok()
+                .and_then(|stats| stats.get(factory.0).ok().copied())
+                .filter(|_| !super::earth_horde::is_horde(&mission));
+            if let Some(stats) = stats {
+                world.add_component(player_entity, stats);
+            }
         }
 
         if world
@@ -15068,11 +15078,20 @@ impl MissionCore {
                         continue;
                     }
                     let costs = crate::difficulty::trainer_costs(&self.world);
+                    let trained = crate::implants::trained_stats(&self.world);
                     if let Some(costs) = costs {
                         let purchased = {
                             let mut quests =
                                 self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                             let stats = quests.player_stats_mut();
+                            // Retail trainers raise the player's BaseStats,
+                            // which a new player took from the start marker:
+                            // buy from the floored level, not the sheet under it.
+                            if let (crate::scripts::gui::TrainerTarget::Stat(stat), Some(floored)) =
+                                (target, &trained)
+                            {
+                                stats.lift_stat_to(stat, floored.stat_level(stat));
+                            }
                             match upgrade_quote(&costs, stats, target) {
                                 Some(cost) if stats.spend_cyber_modules(cost) => {
                                     apply_purchase(stats, target);

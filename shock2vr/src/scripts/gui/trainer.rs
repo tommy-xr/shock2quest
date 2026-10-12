@@ -263,7 +263,10 @@ impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
         let Ok(quests) = world.borrow::<UniqueView<QuestInfo>>() else {
             return components;
         };
-        let stats = quests.player_stats().clone();
+        // Stats show (and price) from the start marker's floor, as purchases
+        // apply them; see `Effect::TrainerPurchase`.
+        let stats =
+            crate::implants::trained_stats(world).unwrap_or_else(|| quests.player_stats().clone());
         let costs = crate::difficulty::trainer_costs(world);
         drop(quests);
 
@@ -390,7 +393,8 @@ impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
         // Pre-validate here for immediate panel feedback; the effect handler
         // re-validates and applies atomically (handle_msg must not mutate).
         let quests = world.borrow::<UniqueView<QuestInfo>>().unwrap();
-        let stats = quests.player_stats();
+        let trained = crate::implants::trained_stats(world);
+        let stats = trained.as_ref().unwrap_or_else(|| quests.player_stats());
         let costs = crate::difficulty::trainer_costs(world);
         let Some(costs) = costs else {
             return (
