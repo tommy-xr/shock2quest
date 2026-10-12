@@ -295,6 +295,7 @@ cargo dq templates 22                          # template -22 detail (avoids awk
 cargo dq entities earth.mis --filter "*Door*"  # wildcard search across names, properties, links, scripts
 cargo dq entities earth.mis --filter "P$SymName:*Robot*"  # property-value filter
 cargo dq entities earth.mis --filter "S$stddoor"          # script filter (inheritance-aware)
+cargo dq templates --filter "ParticleLaunchInfo.launch_type=2"  # property field value (type name as dq prints it; value is a glob)
 cargo dq entities --only-unparsed              # find entities with unparsed data
 cargo dq unparsed-audit                        # tally unparsed chunks, stub/no-op/unregistered scripts and unhandled reactions across gamesys + all missions
 

@@ -53,7 +53,8 @@ enum Commands {
         /// Specific entity or template ID to show details for (positive for entities, negative for templates)
         id: Option<i32>,
 
-        /// Filter by property or link name (supports wildcards)
+        /// Filter by property or link name (supports wildcards), or by a
+        /// property field value: `ParticleLaunchInfo.launch_type=2`
         #[arg(long)]
         filter: Option<String>,
 
@@ -73,7 +74,8 @@ enum Commands {
         /// Mission file to load (loads shock2.gam by default, or shock2.gam + mission if specified)
         mission: Option<String>,
 
-        /// Filter by property or link name (supports wildcards)
+        /// Filter by property or link name (supports wildcards), or by a
+        /// property field value: `ParticleLaunchInfo.launch_type=2`
         #[arg(long)]
         filter: Option<String>,
 
@@ -238,7 +240,7 @@ fn handle_list_command(
         only_unparsed,
         property_filter: filter.map(|s| s.to_string()),
     };
-    let filtered_summaries = filter_entities(&summaries, &criteria);
+    let filtered_summaries = filter_entities(&summaries, &criteria, &entity_info);
 
     // No entity type filtering needed - show both templates and entities
 
@@ -265,7 +267,7 @@ fn handle_template_list_command(
         only_unparsed,
         property_filter: filter.map(|s| s.to_string()),
     };
-    let filtered_summaries = filter_entities(&summaries, &criteria);
+    let filtered_summaries = filter_entities(&summaries, &criteria, &entity_info);
 
     // Filter to show only templates (negative IDs)
     let template_summaries: Vec<_> = filtered_summaries
@@ -494,24 +496,7 @@ fn show_properties_for_entity(
     println!("{}Properties ({}):", indent, properties.len());
 
     for (i, prop) in properties.iter().enumerate() {
-        let prop_debug = format!("{:?}", prop);
-
-        // Extract a more comprehensive property representation
-        let prop_display = if prop_debug.starts_with("WrappedProperty { inner_property: ") {
-            if let Some(start) = prop_debug.find("inner_property: ") {
-                let remaining = &prop_debug[start + 16..];
-                if let Some(end) = remaining.find(", accumulator:") {
-                    remaining[..end].to_string()
-                } else {
-                    // Fallback to the full remaining string
-                    remaining.to_string()
-                }
-            } else {
-                prop_debug
-            }
-        } else {
-            prop_debug
-        };
+        let (_, prop_display) = entity_analyzer::describe_property(prop);
 
         // Show full property display without truncation
         println!("{}  {}. {}", indent, i + 1, prop_display);
