@@ -38,10 +38,10 @@ Install [Android Platform Tools](https://developer.android.com/tools/releases/pl
    `-r` updates an existing installation
    while retaining app data, provided it uses the same signing key.
 
-Optionally download `SHA256SUMS` and `INSTALL.md` into the same directory and
-verify with `sha256sum --check SHA256SUMS` (Linux) or
-`shasum -a 256 --check SHA256SUMS` (macOS). On Windows, compare
-`Get-FileHash "shock2quest.apk" -Algorithm SHA256` with the APK entry.
+To verify a download, compare its entry in `SHA256SUMS` with the output of
+`sha256sum "filename"` (Linux), `shasum -a 256 "filename"` (macOS), or
+`Get-FileHash "filename" -Algorithm SHA256` (Windows). Replace `filename` with
+the APK or installer you downloaded; you do not need to download every asset.
 
 ## Copy your game files
 
