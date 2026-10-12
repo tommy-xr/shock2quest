@@ -4128,6 +4128,7 @@ impl MissionCore {
                 "modify1.str",
                 "modify2.str",
                 "hacktext.str",
+                "minigame.str",
             ],
         ));
         world.add_unique(crate::scripts::ElevatorContext::load(asset_cache, &mission));
@@ -12770,6 +12771,23 @@ impl MissionCore {
                     }
                     if !matches!(sound, Effect::NoEffect) {
                         effects.push_front(sound);
+                    }
+                }
+
+                Effect::InstallMiniGames { entity_id } => {
+                    // Read at application time: duplicate queued frobs cannot use
+                    // a cartridge after the first application destroys it.
+                    let games = self
+                        .world
+                        .borrow::<View<dark::properties::PropMiniGames>>()
+                        .ok()
+                        .and_then(|view| view.get(entity_id).ok().map(|prop| prop.0));
+                    if let Some(games) = games {
+                        self.world
+                            .borrow::<UniqueViewMut<QuestInfo>>()
+                            .unwrap()
+                            .mini_games |= games;
+                        self.destroy_entity(entity_id);
                     }
                 }
 

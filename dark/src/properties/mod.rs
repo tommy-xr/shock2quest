@@ -286,6 +286,10 @@ pub struct PropStackCount(pub i32);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropCombineType(pub String);
 
+/// `P$MiniGames`: authored GamePig/cartridge unlocks (bits 0..12).
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropMiniGames(pub u32);
+
 /// The version of a piece of software (`P$SoftLevel`, 1..=3). Authored on the
 /// `Softs` base archetype as 1 and overridden by the V2/V3 archetypes, so a
 /// V1 soft inherits the base value. Read by the `AutoInstallSoft` script.
@@ -1962,6 +1966,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$MiniGames",
+            |reader, _len| read_u32(reader),
+            PropMiniGames,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$SoftType",
             |reader, _len| read_i32(reader),
             PropSoftType,
@@ -3513,6 +3523,30 @@ mod tests {
             };
             assert_eq!(tags.get(entity).unwrap().0.tag_values, expected);
         }
+    }
+
+    #[test]
+    fn mini_games_is_registered_as_a_four_byte_bitfield() {
+        let (definitions, _, _) = get::<Cursor<Vec<u8>>>();
+        let definition = definitions
+            .into_iter()
+            .find(|property| property.name() == "P$MiniGames")
+            .expect("GamePig and cartridges must parse their authored unlock bitfield");
+        let mut cursor = Cursor::new(0x1398_u32.to_le_bytes().to_vec());
+        let property = definition.read(&mut cursor, 4);
+        assert_eq!(cursor.position(), 4);
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        property.initialize(&mut world, entity);
+        assert_eq!(
+            world
+                .borrow::<View<PropMiniGames>>()
+                .unwrap()
+                .get(entity)
+                .unwrap()
+                .0,
+            0x1398
+        );
     }
 
     #[test]
