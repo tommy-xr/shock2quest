@@ -15,9 +15,13 @@ for (const setting of [0, 1]) {
       try {
         await game.step({ frames: 10 });
         await game.player.setStats({ skills: { exotic_weapons: 6 } });
-        await cycleToWeapon(game, (e) => e.template_id === -27, {
+        const launcher = await cycleToWeapon(game, (e) => e.template_id === -27, {
           settleFrames: 10,
         });
+        // Homing starts with a usable, researched biological weapon.
+        await game.entities.sendMessage(launcher.id, { type: "SetObjectState", state: "Normal" });
+        await game.step({ frames: 2 });
+        assert.equal((await game.entities.detail(launcher.id)).properties.find(p => p.name === "ObjectState")?.value, "Normal");
         await game.player.spawnItem(-1264);
         await game.input.trigger("Reload");
         await game.step({ frames: 180 });
@@ -93,7 +97,11 @@ test(
     await using game = await GameServer.launch({ mission: "earth.mis" });
     await game.step({ frames: 30 });
     await game.player.setStats({ skills: { exotic_weapons: 6 } });
-    await game.player.spawnItem("Worm Launcher");
+    const launcher = await game.player.spawnItem("Worm Launcher");
+    // Research progression is covered separately; this fixture tests in-flight save/load.
+    await game.entities.sendMessage(launcher.entity_id, { type: "SetObjectState", state: "Normal" });
+    await game.step({ frames: 2 });
+    assert.equal((await game.entities.detail(launcher.entity_id)).properties.find(p => p.name === "ObjectState")?.value, "Normal");
     await game.input.trigger("EquipWormLauncher");
     await game.step({ frames: 5 });
     await game.player.spawnItem(-1264);

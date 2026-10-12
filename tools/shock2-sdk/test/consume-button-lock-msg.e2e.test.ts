@@ -16,7 +16,8 @@ import { GameServer } from "../src/index.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const AUX_POWER = 1128;
-const EXPECTED = "Insert charged power cell.";
+// The required remaster SCP archive overrides the base KPF's legacy wording.
+const EXPECTED = "Charged power cell required.";
 
 test(
   "medsci1: frobbing the aux power slot without a power cell shows its LockMsg",

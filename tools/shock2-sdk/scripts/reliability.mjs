@@ -10,7 +10,8 @@
 //   npm run test:e2e:reliability                  # all e2e tests, 10x
 //   node scripts/reliability.mjs 20 "muzzle flash" # one test, 20x
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRuntime } from "./build-runtime.mjs";
@@ -43,6 +44,12 @@ if (!process.env.SHOCK2_RUNTIME_BINARY) {
   }
 }
 
+// Count real passing test events: Node can report an empty file as a pass
+// when a filter matches nothing.
+const summaryDir = mkdtempSync(join(tmpdir(), "shock2-reliability-summary-"));
+process.on("exit", () => rmSync(summaryDir, { recursive: true, force: true }));
+const summaryPath = join(summaryDir, "summary.jsonl");
+const summaryReporter = fileURLToPath(new URL("./reliability-summary.mjs", import.meta.url));
 let passed = 0;
 for (let i = 1; i <= count; i++) {
   // Serialize files (--test-concurrency=1): each e2e test spawns its own heavy
@@ -52,6 +59,10 @@ for (let i = 1; i <= count; i++) {
     "--test",
     "--test-concurrency=1",
     "--test-force-exit",
+    "--test-reporter=tap",
+    "--test-reporter-destination=stdout",
+    `--test-reporter=${summaryReporter}`,
+    `--test-reporter-destination=${summaryPath}`,
     `--test-timeout=${process.env.SHOCK2_TEST_TIMEOUT_MS || 600_000}`,
   ];
   if (pattern) args.push(`--test-name-pattern=${pattern}`);
@@ -64,6 +75,13 @@ for (let i = 1; i <= count; i++) {
   });
 
   if (res.status === 0) {
+    const executed = readFileSync(summaryPath, "utf8").split("\n").filter(Boolean)
+      .map(line => JSON.parse(line))
+      .reduce((total, summary) => total + summary.counts.passed, 0);
+    if (executed === 0) {
+      console.error(`reliability: run ${i}/${count} FAILED (no passing tests executed; check filter and fixture gates)`);
+      process.exit(1);
+    }
     passed++;
   } else {
     console.error(`\nreliability: run ${i}/${count} FAILED (${passed} passed before this)`);

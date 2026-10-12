@@ -68,6 +68,14 @@ test(
     });
     await game.step({ frames: 5 });
 
+    // Assassin 2314 can independently open the unlocked shuttle leaf while
+    // pursuing the observer. Isolate the reader/tripwire circuit from that AI.
+    const assassin = await only(game, 2314);
+    await game.entities.sendMessage(assassin.id, { type: "Damage", amount: 10000 });
+    await game.step({ frames: 2 });
+    assert.ok(Number((await game.entities.detail(assassin.id)).properties.find(p => p.name === "HitPoints")?.value) <= 0,
+      "the independent AI door opener must be inactive");
+
     assert.equal(await game.quests.get("ShuttleABoom"), "unknown");
     assert.equal(await game.quests.get("ShuttleBBoom"), "unknown");
     assert.equal(await game.quests.get("opscom"), "unknown");
@@ -92,6 +100,16 @@ test(
     // SensorBeginIntersect message.
     await enterTripwire(game, UMBILICAL_TRIPWIRE);
     await enterTripwire(game, SHUTTLE_TRIPWIRE);
+
+    const messages = (await game.messages.recent()).messages;
+    for (const [tripwire, reader] of [[UMBILICAL_TRIPWIRE, 621], [SHUTTLE_TRIPWIRE, 69]]) {
+      assert.ok(messages.some(message => message.payload === "TurnOn" &&
+        message.from?.template_id === tripwire && message.to.template_id === reader),
+        `tripwire ${tripwire} must actually activate locked reader ${reader}`);
+      assert.ok(!messages.some(message => message.payload === "TurnOn" &&
+        message.from?.template_id === reader && [UMBILICAL_DOOR, ...SHUTTLE_DOORS].includes(message.to.template_id ?? 0)),
+        `locked reader ${reader} must not relay to a door`);
+    }
 
     const umbilicalAfter = await doorState(game, UMBILICAL_DOOR);
     const shuttleAfter = await Promise.all(

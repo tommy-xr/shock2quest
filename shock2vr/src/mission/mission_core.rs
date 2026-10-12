@@ -3295,6 +3295,8 @@ pub struct MissionCore {
     klaxon: crate::security_alarm::Klaxon,
     room_gravity: super::room_gravity::RoomGravity,
     listener_sounds: crate::listener_sounds::ListenerSounds,
+    /// Effect-owned loops must not outlive the mission that started them.
+    looping_sounds: HashMap<u64, engine::audio::AudioHandle>,
     speech_playback: crate::speech_playback::SpeechPlayback,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
@@ -4351,6 +4353,7 @@ impl MissionCore {
             room_gravity: Default::default(),
             speech_playback: Default::default(),
             listener_sounds: Default::default(),
+            looping_sounds: Default::default(),
             debug_pose_index: 0,
             debug_weapon_index: 0,
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
@@ -10943,6 +10946,16 @@ impl MissionCore {
         let mut effects = VecDeque::from(effects);
         while let Some(effect) = effects.pop_front() {
             let toxin_patch = matches!(&effect, Effect::UseToxinPatch { .. });
+            match &effect {
+                Effect::PlayLoopingSound { handle, .. }
+                | Effect::PlaySpatialLoopingSound { handle, .. } => {
+                    self.looping_sounds.insert(handle.id(), handle.clone());
+                }
+                Effect::StopSound { handle } => {
+                    self.looping_sounds.remove(&handle.id());
+                }
+                _ => {}
+            }
             match effect {
                 Effect::MaxPlayerAlcohol => {
                     self.world
@@ -24098,6 +24111,9 @@ impl crate::game_scene::GameScene for MissionCore {
     }
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        for (_, handle) in self.looping_sounds.drain() {
+            stop_sound(audio_context, handle);
+        }
         for handle in self.rapier_feedback.take_handles() {
             stop_sound(audio_context, handle);
         }

@@ -122,6 +122,23 @@ async function researchPanel(game: GameServer): Promise<UiState> {
   return ui;
 }
 
+test("Toxin-A refuses research without the required skill", {
+  skip: !e2eEnabled, timeout: 180_000,
+}, async () => {
+  // Hydro's PlayerFactory grants Research 1; Med/Sci's grants no Research.
+  await using game = await GameServer.launch({ mission: "medsci1.mis" });
+  await game.step({ frames: 5 });
+  assert.equal((await game.info()).player.stats?.skills.research, 0);
+  const toxin = await game.player.spawnItem(-1341);
+  await useInventoryItem(game, toxin.entity_id);
+  const panel = await researchPanel(game);
+  assert.match(panelTexts(panel).join(" "), /Research skill of 1/,
+    "an untrained character is told the exact research prerequisite");
+  await game.step({ frames: 120 });
+  assert.ok(panelTexts(await researchPanel(game)).includes("0.0 %"),
+    "research must not advance while the prerequisite is missing");
+});
+
 test(
   "Hydro Toxin-A: train, research with chemicals, persist, and use both ACRs",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -162,13 +179,14 @@ test(
     let toxin = await carriedNamed(game, "Anti-Annelid Toxin");
     assert.ok(toxin, "Toxin-A should remain carried after ACR2 rejects it");
 
-    // Double-click through the production inventory. With no Research skill,
-    // the MFD opens but explicitly refuses to begin.
+    // Hydro's factory grants a mission-local Research 1 allowance, separate
+    // from the career sheet. A direct map start can therefore begin research;
+    // the genuinely untrained gate is exercised on Med/Sci above.
     await useInventoryItem(game, toxin.entity_id);
     let panel = await researchPanel(game);
     assert.ok(
-      panelTexts(panel).some((text) => text.includes("Research skill of 1")),
-      `untrained panel should explain the requirement; got ${JSON.stringify(panelTexts(panel))}`,
+      panel.active_panel?.elements.some(element => element.label === "Suspend research"),
+      "Hydro's authored research allowance starts the project",
     );
 
     // Fund and use Hydro 2's authored Tech Trainer, purchasing Research 0->1
