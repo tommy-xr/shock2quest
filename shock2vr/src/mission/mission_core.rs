@@ -17577,12 +17577,17 @@ impl MissionCore {
 
             rendered_model_count += 1;
 
+            let stasis = self.script_world.stasis(*entity_id, &self.world);
+            let frame_model = crate::model_frame_animation::model(
+                &self.world,
+                asset_cache,
+                *entity_id,
+                stasis.map(|state| state.visual_time()),
+            );
             let mut scene_objs = {
-                if let Some(pose) = self
-                    .script_world
-                    .stasis(*entity_id, &self.world)
-                    .and_then(|s| s.pose())
-                {
+                if let Some((_, model)) = &frame_model {
+                    model.to_scene_objects().clone()
+                } else if let Some(pose) = stasis.and_then(|s| s.pose()) {
                     objs.to_posed_scene_objects(pose)
                 } else if let Some(player) = self.id_to_animation_player.get(entity_id) {
                     objs.to_animated_scene_objects(player)
@@ -17608,7 +17613,9 @@ impl MissionCore {
             }
             self.script_world
                 .apply_morph_weights(*entity_id, &mut scene_objs);
-            let is_animated_model = objs.is_animated();
+            let is_animated_model = frame_model
+                .as_ref()
+                .map_or_else(|| objs.is_animated(), |(_, model)| model.is_animated());
 
             // Authored/scripted per-entity alpha (Renderer\Transparency (alpha):
             // 1.0 = opaque, 0.0 = invisible), e.g. the CS9 holo exhibits.
@@ -17634,7 +17641,10 @@ impl MissionCore {
             let debug_tag = Rc::new(engine::scene::SceneObjectDebugTag {
                 entity_id: Some(entity_id.inner()),
                 name: v_sym_name.get(*entity_id).ok().map(|n| n.0.clone()),
-                model: v_model_name.get(*entity_id).ok().map(|m| m.0.clone()),
+                model: frame_model
+                    .as_ref()
+                    .map(|(name, _)| name.clone())
+                    .or_else(|| v_model_name.get(*entity_id).ok().map(|m| m.0.clone())),
                 source: Some("entity".to_owned()),
             });
 
