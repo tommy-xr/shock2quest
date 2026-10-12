@@ -1422,7 +1422,7 @@ fn query_with_material_fallback(
 /// changes hands around death), so a missing transform is a silent no-sound
 /// rather than a panic - there is nowhere to place the sound. Footsteps come
 /// from foot-plant frames of the death collapse too, so this is a live path.
-fn emit_environmental_sound(
+pub(crate) fn emit_environmental_sound(
     world: &World,
     entity_id: EntityId,
     query: EnvSoundQuery,

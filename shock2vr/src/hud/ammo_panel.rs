@@ -688,6 +688,7 @@ mod tests {
             projectiles: vec![],
             overloadable: false,
             duration: None,
+            sound_tags: Vec::new(),
         }]));
         world.add_unique(PsiPowerSelection { index: 0 });
         let gun_readout = AmmoReadout::for_weapon(&world, Some(gun), false);

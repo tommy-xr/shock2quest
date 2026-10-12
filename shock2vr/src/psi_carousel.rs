@@ -428,6 +428,7 @@ mod tests {
                 projectiles: vec![],
                 overloadable: false,
                 duration: None,
+                sound_tags: Vec::new(),
             })
             .collect()
     }

@@ -121,6 +121,7 @@ mod tests {
             projectiles: vec![],
             overloadable: false,
             duration: None,
+            sound_tags: Vec::new(),
         }
     }
     fn authored() -> Vec<(i32, ReceptronOptions)> {

@@ -195,6 +195,10 @@ pub struct PropClassTag {
     pub tag_values: Vec<(String, String)>,
 }
 
+/// Schema tags on a psi power archetype (`P$Psi Tags`).
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropPsiTags(pub PropClassTag);
+
 impl PropClassTag {
     pub fn from_string(str: &str) -> PropClassTag {
         let raw = str.to_ascii_lowercase();
@@ -2346,6 +2350,14 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$Psi Tags",
+            // Like Class Tag, the string follows an ignored four-byte word.
+            // Retail stores 256 bytes total; the word is not a string length.
+            read_variable_length_string,
+            |tags| PropPsiTags(PropClassTag::from_string(&tags)),
+            accumulator::latest,
+        ),
+        define_prop(
             "P$PsiPowerD",
             PropPsiPowerLearned::read,
             identity,
@@ -3452,6 +3464,35 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn psi_tags_are_fixed_size_schema_tags() {
+        let (definitions, _, _) = get::<Cursor<Vec<u8>>>();
+        let definition = definitions
+            .into_iter()
+            .find(|property| property.name() == "P$Psi Tags")
+            .unwrap();
+        for raw in ["L1PsiType Kinesis", "L3PsiType Hypnosis", ""] {
+            let mut bytes = vec![0; 256];
+            // A real authored prefix: treating this as UTF-8 must fail.
+            bytes[..4].copy_from_slice(&[0x60, 0xfe, 0x38, 0x09]);
+            bytes[4..4 + raw.len()].copy_from_slice(raw.as_bytes());
+            let mut cursor = Cursor::new(bytes);
+            let property = definition.read(&mut cursor, 256);
+            let mut world = World::new();
+            let entity = world.add_entity(());
+            property.initialize(&mut world, entity);
+            assert_eq!(cursor.position(), 256);
+            let tags = world.borrow::<View<PropPsiTags>>().unwrap();
+            let expected = if raw.is_empty() {
+                vec![]
+            } else {
+                let (tag, value) = raw.split_once(' ').unwrap();
+                vec![(tag.to_ascii_lowercase(), value.to_ascii_lowercase())]
+            };
+            assert_eq!(tags.get(entity).unwrap().0.tag_values, expected);
+        }
+    }
 
     #[test]
     fn hud_use_is_registered_as_a_variable_length_string() {

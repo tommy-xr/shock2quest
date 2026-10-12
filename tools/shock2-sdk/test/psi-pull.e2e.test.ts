@@ -41,6 +41,8 @@ for (const vr of [false, true]) {
     await pullTrigger(game);
     await game.step({ frames: 3 });
     assert.equal((await game.info()).player.psi_points, blockedPsi, "distant item stays out of reach");
+    assert.equal((await game.audio.recent({ sample: "psikinac" })).sounds.length, 0,
+      "refused pulls must not play an activation sound");
     await aim(hypo.id);
     const before = (await game.info()).player;
     const start = (await game.entities.detail(hypo.id)).position;
@@ -49,6 +51,8 @@ for (const vr of [false, true]) {
     assert.ok(gravity > 0);
     await pullTrigger(game);
     await game.step({ frames: 10 });
+    assert.equal((await game.audio.recent({ sample: "psikinac" })).sounds.length, 1,
+      "a successful pull uses Kinesis's activation schema in both presentations");
     const midFlight = (await game.entities.detail(hypo.id)).position;
     assert.ok(Math.hypot(...midFlight.map((v, i) => v - start[i]!)) > 0.1, "the actual item moves through space");
     assert.ok(!(await game.player.inventory()).items.some(i => i.entity_id === hypo.id));
@@ -62,6 +66,8 @@ for (const vr of [false, true]) {
     }
     assert.ok(nearest < 0.4, `item reaches the visible amp muzzle: ${nearest}`);
     assert.equal((await game.physics.body(body.body_id)).gravity_scale, gravity);
+    assert.equal((await game.audio.recent({ sample: "psikinde" })).sounds.length, 1,
+      "Kinesis plays its ending schema when the pull finishes");
     const arrival = (await game.entities.detail(hypo.id)).position;
     await game.step({ frames: 45 });
     const dropped = (await game.entities.detail(hypo.id)).position;
