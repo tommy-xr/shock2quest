@@ -184,15 +184,18 @@ const SHOTS = [
     hands: { right: AIM_RIGHT, left: REST_LEFT },
     // An untrained pistol will not fire.
     stats: { skills: { standard_weapons: 3 } },
+    // On show on the chest while the eyes are down (chest slots take only
+    // hypos and batteries): a med hypo and a psi hypo.
+    chest: [-52, -57],
     reload: {
       spare: -31, // A standard clip, offered by the pouch.
       emptyAt: [22.6, -7.8, 131.6], // The mission start, out of the droid's earshot.
       shots: [0.15, 0.7], // Pulls, in seconds, before it runs dry and after the reload.
       glance: 0.75, // How far the eyes drop from the subject toward the pouch...
-      gunGlance: 0.85, // ...and then onto the magazine well.
+      gunGlance: 0.7, // ...and then onto the magazine well.
       tilt: 3, // Metres the pistol's aim lifts above the subject while the eyes are down.
       low: [0.12, -0.38, -0.4], // The pistol at low ready while the hand draws.
-      seat: [0.02, -0.4, -0.34], // Pistol brought down to the belly to take the clip.
+      seat: [-0.02, -0.32, -0.48], // Pistol held out in front to take the clip.
     },
   },
 ];
@@ -282,6 +285,7 @@ async function captureShot(shot) {
     await game.player.teleport({ x, y, z });
     await game.step({ frames: 5 });
     if (shot.spawnMonster) subject = await spawnMonster(game, shot.spawnMonster);
+    if (shot.chest) await stowInChest(game, shot.chest);
     // Aim where the subject is now; it may have moved while we squared up.
     const points = await aimPoints(game, subject.id);
     assert.ok(points, `${shot.name}: the subject vanished while squaring up`);
@@ -419,6 +423,31 @@ async function rackPump(game, primary, fraction) {
     [p.x + travel.x * delta, p.y + travel.y * delta, p.z + travel.z * delta],
     [q.v.x, q.v.y, q.v.z, q.s],
   );
+}
+
+/** Stow one item per template in the chest slots, in order, with the right hand. */
+async function stowInChest(game, templates) {
+  for (const [slot, template] of templates.entries()) {
+    // Clear of the chest first: a squeeze there would draw the last item back.
+    await game.input.set("right_hand.position", [0.3, 1, -0.6]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.step({ frames: 3 });
+    await game.input.set("right_hand.squeeze", 1);
+    const item = await game.player.spawnItem(template, { hand: "right" });
+    await game.step({ frames: 3 });
+    const { player } = await game.info();
+    const center = player.hand_feedback?.chest_slots?.centers?.[slot];
+    if (!center) throw new Error(`no chest slot ${slot}`);
+    const [x, y, z, w] = player.rotation;
+    const local = quatRotate([-x, -y, -z, w], center.map((v, i) => v - player.position[i]));
+    await game.input.set("right_hand.position", local);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.step({ frames: 5 });
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 8 });
+    const stowed = (await game.info()).player.hand_feedback?.chest_slots?.items?.[slot];
+    if (stowed !== item.entity_id) throw new Error(`template ${template} did not stow in chest slot ${slot}`);
+  }
 }
 
 /** Spawn `template` in front of the player (SpawnDebugMonster) and return it. */
@@ -620,13 +649,17 @@ async function recordReload(game, shot, subjectId, held) {
   };
   // One frame: eyes on `look`, each hand at its eye-frame offset, aimed at
   // `aims[hand]`. Tracks where the left hand was sent, in world space.
+  // Offsets are in the yaw frame facing `facing`, not the look: looking almost
+  // straight down, the look's yaw is unstable, and hands placed in it would
+  // swing the gun around - and the look that follows the gun with it.
   let leftWorld;
+  let facing;
   const pose = async (look, offsets, aims) => {
     const { player } = await game.info();
     await game.input.lookAtWorldPoint(look);
-    if (offsets.left) leftWorld = fromOffset(eyeOf(player), look, offsets.left);
+    if (offsets.left) leftWorld = fromOffset(eyeOf(player), facing, offsets.left);
     for (const [hand, offset] of Object.entries(offsets)) {
-      const p = handPoseAimedAt(player.position, player.rotation, player.camera_offset[1], look, offset, aims[hand]);
+      const p = handPoseAimedAt(player.position, player.rotation, player.camera_offset[1], facing, offset, aims[hand]);
       await game.input.set(`${hand}_hand.position`, p.position);
       await game.input.set(`${hand}_hand.rotation`, p.rotation);
     }
@@ -659,6 +692,7 @@ async function recordReload(game, shot, subjectId, held) {
       return center;
     };
     const head = point("head");
+    facing = head;
     // Muzzle up while the eyes are down, so the locked-back slide shows side-on.
     const tilted = (s) => point("torso").map((v, i) => v + (i === 1 ? reload.tilt * s : 0));
     let leftOffset = shot.hands.left;
@@ -673,7 +707,7 @@ async function recordReload(game, shot, subjectId, held) {
       // its palm lands there.
       const palm = player.hand_feedback?.glove_contacts?.centers[0];
       const palmFromHand = palm && leftWorld ? palm.map((v, i) => v - leftWorld[i]) : [0, 0, 0];
-      const want = toOffset(eye, look, pouch.map((v, i) => v - palmFromHand[i]));
+      const want = toOffset(eye, facing, pouch.map((v, i) => v - palmFromHand[i]));
       leftOffset = lerp(shot.hands.left, want, s);
       await pose(look, { left: leftOffset, right: lerp(shot.hands.right, reload.low, s) }, {
         left: lerp(eye, pouch, 2), right: tilted(s),
@@ -689,28 +723,38 @@ async function recordReload(game, shot, subjectId, held) {
     const clip = (await game.info()).player.wielded_entity_id;
     assert.ok(clip != null, `${shot.name}: the pouch must put a clip in the left hand`);
 
-    // 3. Carry the clip up under the pistol and seat it from below.
-    const carry = 72;
+    // 3. Carry the clip up under the pistol, then push it slowly up into the
+    // well. The well takes a clip within 0.25 of its anchor, so the eased
+    // approach stops outside that and only the slow push enters it.
+    const approach = 66;
+    const push = 36;
     const from = (await game.entities.detail(clip)).position;
     let look;
-    for (let f = 1; f <= carry && (await rounds()) === 0; f++) {
-      const s = ease(f / carry);
+    const seat = async (f) => {
+      const s = ease(Math.min(f / approach, 1));
       const [{ player }, gun, mag] = await Promise.all([
         game.info(), game.entities.detail(held.right), game.entities.detail(clip),
       ]);
       const eye = eyeOf(player);
       const anchor = gun.magazine_anchor;
-      const below = anchor.map((v, i) => v - (i === 1 ? 0.15 : 0));
-      const want = s < 0.75 ? lerp(from, below, s / 0.75) : lerp(below, anchor, (s - 0.75) / 0.25);
+      const below = anchor.map((v, i) => v - (i === 1 ? 0.4 : 0));
+      const want = f <= approach
+        ? lerp(from, below, s)
+        : lerp(below, anchor, Math.min((f - approach) / push, 1));
       look = glance(eye, glance(eye, head, pouch, reload.glance), anchor, s * reload.gunGlance);
-      // Move the hand by the clip's error from where it should be.
-      leftOffset = toOffset(eye, look, leftWorld.map((v, i) => v + want[i] - mag.position[i]));
+      // Move the hand by the clip's error from where it should be. A seated
+      // clip is gone, so the hand then holds where it is.
+      if (mag) leftOffset = toOffset(eye, facing, leftWorld.map((v, i) => v + want[i] - mag.position[i]));
       await pose(look, { left: leftOffset, right: lerp(reload.low, reload.seat, s) }, {
         // Up and forward in the view's frame, so the clip's yaw stays put
         // whatever the loop is correcting.
-        left: fromOffset(eye, look, leftOffset.map((v, i) => v + [0, 1, -0.6][i])), right: tilted(1),
+        left: fromOffset(eye, facing, leftOffset.map((v, i) => v + [0, 1, -0.6][i])), right: tilted(1),
       });
-    }
+    };
+    let f = 1;
+    for (; f <= approach + push && (await rounds()) === 0; f++) await seat(f);
+    // Hold the seated gun a beat before letting go.
+    for (const end = f + 12; f < end; f++) await seat(f);
     const loaded = await rounds();
     assert.ok(loaded > 0, `${shot.name}: the clip must seat`);
 
