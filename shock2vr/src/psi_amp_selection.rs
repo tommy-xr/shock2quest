@@ -94,6 +94,7 @@ mod tests {
             projectiles: vec![],
             overloadable: false,
             duration: None,
+            sound_tags: Vec::new(),
         });
         world.add_unique(GlobalPsiPowers(powers.to_vec()));
         world.add_unique(PlayerPsiKnownPowers(std::collections::HashSet::from([-2])));

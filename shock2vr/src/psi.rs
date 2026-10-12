@@ -247,6 +247,8 @@ pub struct PsiPowerInfo {
     /// `duration_base + duration_per_psi × max(PSI - baseline_psi, 0)` seconds). `None` for powers
     /// without timed data.
     pub duration: Option<PropPsiShield>,
+    /// Schema tags authored on the power, independent of the amp's class tags.
+    pub sound_tags: Vec<(String, String)>,
 }
 
 impl PsiPowerInfo {
@@ -277,6 +279,58 @@ impl PsiPowerInfo {
 /// All psi powers from the gamesys, ordered by tier (psi cost) then power id.
 #[derive(Unique, Clone)]
 pub struct GlobalPsiPowers(pub Vec<PsiPowerInfo>);
+
+fn sound_query(world: &World, template_id: i32, event: &str) -> Option<dark::EnvSoundQuery> {
+    let powers = world.borrow::<UniqueView<GlobalPsiPowers>>().ok()?;
+    let power = powers
+        .0
+        .iter()
+        .find(|power| power.template_id == template_id)?;
+    if power.sound_tags.is_empty() {
+        return None;
+    }
+    let mut tags = vec![("event", event)];
+    tags.extend(
+        power
+            .sound_tags
+            .iter()
+            .map(|(tag, value)| (tag.as_str(), value.as_str())),
+    );
+    Some(dark::EnvSoundQuery::from_tag_values(tags))
+}
+
+/// Resolve the power's activation schema, retaining the amp's shoot schema
+/// when the power has no authored activation sample (for example Teleport).
+pub(crate) fn activation_sound(
+    world: &World,
+    amp: shipyard::EntityId,
+    template_id: i32,
+) -> crate::scripts::Effect {
+    use crate::scripts::script_util::{emit_environmental_sound, get_environmental_sound_query};
+    let fallback = get_environmental_sound_query(world, amp, "shoot", vec![]);
+    let query = match (sound_query(world, template_id, "activate"), fallback) {
+        (Some(query), Some(fallback)) => query.with_fallback(fallback),
+        (Some(query), None) | (None, Some(query)) => query,
+        (None, None) => return crate::scripts::Effect::NoEffect,
+    };
+    emit_environmental_sound(world, amp, query, engine::audio::AudioHandle::new())
+}
+
+/// Sustained powers may end after the amp was stowed or destroyed. Play their
+/// ending schema at the player, with no generic activation-sound fallback.
+pub(crate) fn deactivation_sound(world: &World, template_id: i32) -> crate::scripts::Effect {
+    let Some(query) = sound_query(world, template_id, "deactivate") else {
+        return crate::scripts::Effect::NoEffect;
+    };
+    let player = world
+        .borrow::<UniqueView<crate::mission::PlayerInfo>>()
+        .unwrap();
+    crate::scripts::Effect::PlayEnvironmentalSound {
+        audio_handle: engine::audio::AudioHandle::new(),
+        query,
+        position: player.pos,
+    }
+}
 
 /// The player's currently selected psi power - an index into
 /// [`GlobalPsiPowers`].
@@ -506,6 +560,12 @@ pub fn build_psi_power_registry(
             projectiles,
             overloadable: OVERLOADABLE_TEMPLATE_IDS.contains(template_id),
             duration: hydrate_template_component::<PropPsiShield>(*template_id, entity_info),
+            sound_tags: hydrate_template_component::<dark::properties::PropPsiTags>(
+                *template_id,
+                entity_info,
+            )
+            .map(|tags| tags.0.tag_values)
+            .unwrap_or_default(),
         });
     }
 
@@ -562,6 +622,51 @@ pub fn apply_display_names(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_uses_only_power_tags_with_the_amp_query_as_fallback() {
+        use crate::{runtime_props::RuntimePropTransform, scripts::Effect};
+        use dark::properties::PropClassTag;
+        let mut world = World::new();
+        let amp = world.add_entity((
+            PropClassTag::from_string("WeaponType PsiAmp"),
+            RuntimePropTransform(cgmath::Matrix4::from_scale(1.0)),
+        ));
+        let mut powers = registry(&[(-1, 1)]);
+        powers[0].sound_tags = vec![("l1psitype".into(), "kinesis".into())];
+        world.add_unique(GlobalPsiPowers(powers));
+        let Effect::PlayEnvironmentalSound { query, .. } = activation_sound(&world, amp, -1) else {
+            panic!("tagged powers must emit a sound query");
+        };
+        assert_eq!(
+            query.tag_values(),
+            vec![
+                ("event".into(), "activate".into()),
+                ("l1psitype".into(), "kinesis".into()),
+            ]
+        );
+        assert_eq!(
+            query.fallback().unwrap().tag_values(),
+            vec![
+                ("event".into(), "shoot".into()),
+                ("weapontype".into(), "psiamp".into()),
+            ]
+        );
+        // A missing property must use only the old shoot query, never a broad
+        // Event Activate query that could select another object's schema.
+        world
+            .borrow::<shipyard::UniqueViewMut<GlobalPsiPowers>>()
+            .unwrap()
+            .0[0]
+            .sound_tags
+            .clear();
+        let Effect::PlayEnvironmentalSound { query, .. } = activation_sound(&world, amp, -1) else {
+            panic!("untagged powers retain the amp's sound");
+        };
+        assert_eq!(query.tag_values()[0], ("event".into(), "shoot".into()));
+        assert!(query.fallback().is_none());
+        assert!(matches!(deactivation_sound(&world, -1), Effect::NoEffect));
+    }
 
     /// A help entry's escaped breaks become real ones, so its first line is
     /// the discipline name rather than the whole paragraph.
@@ -631,6 +736,7 @@ mod tests {
                     projectiles: Vec::new(),
                     overloadable: false,
                     duration: None,
+                    sound_tags: Vec::new(),
                 }
             })
             .collect()

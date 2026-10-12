@@ -411,7 +411,7 @@ fn cast_selected_power(
     };
 
     let mut effects = vec![
-        play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
+        psi::activation_sound(world, amp_entity, power.template_id),
         Effect::SpendPsiPoints {
             amount: power.power.psi_cost,
         },
@@ -481,7 +481,7 @@ fn cast_sustained_power(
     let duration_secs = duration.duration_for_psi(effective_psi);
 
     let mut effects = vec![
-        play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
+        psi::activation_sound(world, amp_entity, power.template_id),
         Effect::SpendPsiPoints {
             amount: power.power.psi_cost,
         },
@@ -582,7 +582,7 @@ fn cast_instant_power(
                 Effect::SpendPsiPoints {
                     amount: power.power.psi_cost,
                 },
-                play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
+                psi::activation_sound(world, amp_entity, power.template_id),
             ];
             effects.extend(amp_cast_flashes(world, amp_entity));
             Effect::Multiple(effects)
@@ -636,7 +636,7 @@ fn cast_self_heal(
     }
 
     let mut effects = vec![
-        play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
+        psi::activation_sound(world, amp_entity, power.template_id),
         Effect::SpendPsiPoints {
             amount: power.power.psi_cost,
         },
@@ -700,7 +700,7 @@ fn cast_soma_drain(
     let heal = whole_hit_points(damage).min((max_hp - current_hp).max(0));
 
     let mut effects = vec![
-        play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
+        psi::activation_sound(world, amp_entity, power.template_id),
         Effect::SpendPsiPoints {
             amount: power.power.psi_cost,
         },
@@ -962,6 +962,7 @@ mod tests {
             projectiles: vec![],
             overloadable: true,
             duration: None,
+            sound_tags: Vec::new(),
         };
         assert!(!matches!(
             cast_instant_power(&world, &PhysicsWorld::new(), amp, &power, 6),
@@ -1001,6 +1002,7 @@ mod tests {
                 projectiles: vec![],
                 overloadable: true,
                 duration: None,
+                sound_tags: Vec::new(),
             }]));
             world.add_unique(PsiPowerSelection { index: 0 });
             let Effect::Multiple(effects) = burnout(&world, amp) else {

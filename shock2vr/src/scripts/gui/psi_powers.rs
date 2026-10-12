@@ -759,6 +759,7 @@ mod tests {
                     projectiles: Vec::new(),
                     overloadable: false,
                     duration: None,
+                    sound_tags: Vec::new(),
                 });
             }
         }

@@ -4506,6 +4506,14 @@ impl MissionCore {
         // Death ends every sustained psi power: a corpse must not keep burning
         // (Immolate) or stay invisible (Inviso) through the death sequence and
         // out the other side of a QBR reconstruction.
+        let mut ending_sounds: Vec<_> = self
+            .world
+            .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+            .unwrap()
+            .0
+            .iter()
+            .map(|power| crate::psi::deactivation_sound(&self.world, power.template_id))
+            .collect();
         self.world
             .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
             .unwrap()
@@ -4518,7 +4526,7 @@ impl MissionCore {
         self.refresh_implant_effects();
         self.death_camera = Some(self.begin_death_camera());
 
-        vec![Effect::PlaySound {
+        ending_sounds.push(Effect::PlaySound {
             handle: AudioHandle::new(),
             source: None,
             name: PLAYER_DEATH_SCHEMAS
@@ -4526,7 +4534,8 @@ impl MissionCore {
                 .expect("player death schemas are never empty")
                 .to_string(),
             spatial: false,
-        }]
+        });
+        ending_sounds
     }
 
     /// Choose where this death lands. The fall direction is seeded from the
@@ -5718,6 +5727,7 @@ impl MissionCore {
         }
 
         // Tick the player's sustained psi powers down and expire them.
+        let mut expired_powers = Vec::new();
         let expired_sources =
             self.world
                 .run(|mut active: UniqueViewMut<crate::psi::ActivePsiPowers>| {
@@ -5727,6 +5737,7 @@ impl MissionCore {
                         power.remaining_secs -= dt;
                         if power.remaining_secs <= 0.0 {
                             game_log!(INFO, "Psi power expired: {}", power.name);
+                            expired_powers.push(power.template_id);
                             if let Some((source, _)) = crate::psi::stat_modifier(power.template_id)
                             {
                                 expired_sources.push(source);
@@ -5738,6 +5749,9 @@ impl MissionCore {
                     });
                     expired_sources
                 });
+        for template_id in expired_powers {
+            effects.push(crate::psi::deactivation_sound(&self.world, template_id));
+        }
         if !expired_sources.is_empty() {
             // Powers use an f32 clock, modifiers use Duration. Remove the
             // source here too so rounding cannot leave a bonus after expiry.
@@ -9632,7 +9646,10 @@ impl MissionCore {
         let Some(position) = position.filter(|_| valid) else {
             self.physics.set_gravity(item, flight.gravity);
             self.physics.set_velocity(item, Vector3::zero());
-            return vec![];
+            return vec![crate::psi::deactivation_sound(
+                &self.world,
+                crate::psi_pull::POWER,
+            )];
         };
         let destination = destination.unwrap();
         let delta = destination - position;
@@ -9653,12 +9670,18 @@ impl MissionCore {
         if blocked {
             self.physics.set_gravity(item, flight.gravity);
             self.physics.set_velocity(item, Vector3::zero());
-            return vec![];
+            return vec![crate::psi::deactivation_sound(
+                &self.world,
+                crate::psi_pull::POWER,
+            )];
         }
         if distance <= crate::psi_pull::ARRIVAL_DISTANCE {
             self.physics.set_gravity(item, flight.gravity);
             self.physics.set_velocity(item, Vector3::zero());
-            return vec![];
+            return vec![crate::psi::deactivation_sound(
+                &self.world,
+                crate::psi_pull::POWER,
+            )];
         }
         self.physics.set_velocity(
             item,
@@ -11863,6 +11886,11 @@ impl MissionCore {
                         to: host,
                         payload: MessagePayload::PanelOpened,
                     });
+                    effects.push_front(crate::psi::activation_sound(
+                        &self.world,
+                        amp,
+                        crate::scripts::gui::psi_hack::POWER,
+                    ));
                     effects.push_front(Effect::SpendPsiPoints { amount: cost });
                 }
                 Effect::OpenPanel { entity } => {
@@ -12723,19 +12751,25 @@ impl MissionCore {
                             .add_component(amp, (crate::psi_sword::BoundBlade,));
                     } else {
                         self.world.remove::<(crate::psi_sword::BoundBlade,)>(amp);
-                        self.world
-                            .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
-                            .unwrap()
-                            .0
-                            .retain(|p| p.template_id != crate::psi_sword::POWER);
+                        effects.push_front(Effect::DeactivatePsiPower {
+                            template_id: crate::psi_sword::POWER,
+                        });
                     }
                 }
                 Effect::DeactivatePsiPower { template_id } => {
+                    let was_active = self
+                        .world
+                        .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+                        .unwrap()
+                        .is_active(template_id);
                     self.world
                         .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
                         .unwrap()
                         .0
                         .retain(|p| p.template_id != template_id);
+                    if was_active {
+                        effects.push_back(crate::psi::deactivation_sound(&self.world, template_id));
+                    }
                     if let Some((source, _)) = crate::psi::stat_modifier(template_id) {
                         self.world
                             .borrow::<UniqueViewMut<QuestInfo>>()
@@ -12907,12 +12941,10 @@ impl MissionCore {
                     effects.push_back(Effect::ShowMessage {
                         text: message.into(),
                     });
-                    effects.push_back(crate::scripts::script_util::play_environmental_sound(
+                    effects.push_back(crate::psi::activation_sound(
                         &self.world,
                         amp,
-                        "shoot",
-                        vec![],
-                        engine::audio::AudioHandle::new(),
+                        crate::psi_teleport::POWER,
                     ));
                 }
                 Effect::PsiBarrier {
@@ -12996,12 +13028,10 @@ impl MissionCore {
                         },
                     );
                     effects.extend(spend_player_psi_points(&self.world, cost));
-                    effects.push_back(crate::scripts::script_util::play_environmental_sound(
+                    effects.push_back(crate::psi::activation_sound(
                         &self.world,
                         amp,
-                        "shoot",
-                        vec![],
-                        engine::audio::AudioHandle::new(),
+                        crate::scripts::force_wall::POWER,
                     ));
                 }
                 Effect::PsiPull { amp, cost } => {
@@ -13027,12 +13057,10 @@ impl MissionCore {
                         age: 0.0,
                         trail_age: 0.1,
                     });
-                    effects.push_back(crate::scripts::script_util::play_environmental_sound(
+                    effects.push_back(crate::psi::activation_sound(
                         &self.world,
                         amp,
-                        "shoot",
-                        vec![],
-                        engine::audio::AudioHandle::new(),
+                        crate::psi_pull::POWER,
                     ));
                 }
 
