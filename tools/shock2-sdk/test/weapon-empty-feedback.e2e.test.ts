@@ -32,6 +32,14 @@ for (const vr of [false, true]) {
       } else {
         gun = await cycleToWeapon(game, e => e.template_id === template);
       }
+      if (template === -27 || template === -29) {
+        // Exercise the empty-ammo response after satisfying biological research;
+        // otherwise the earlier Unresearched gate correctly rejects the shot.
+        await game.entities.sendMessage(gun.id, { type: "SetObjectState", state: "Normal" });
+        await game.step({ frames: 2 });
+        assert.equal((await game.entities.detail(gun.id)).properties.find(p => p.name === "ObjectState")?.value,
+          "Normal", "biological weapon research prerequisite must be satisfied");
+      }
       let sequence = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
       await game.input.trigger("EjectClip");
       await game.step({ frames: 5 });

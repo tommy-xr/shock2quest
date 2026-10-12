@@ -21,6 +21,14 @@ for (const vr of [false, true]) for (const row of cases) {
     await game.step({ frames: 5 });
     await game.player.setStats({ skills: { standard_weapons: 6, energy_weapons: 6, heavy_weapons: 6, exotic_weapons: 6 } });
     const gun = await cycleToWeapon(game, e => e.template_id === row.weaponTemplate, { settleFrames: vr ? 90 : 5 });
+    if (row.weaponTemplate === -27 || row.weaponTemplate === -29) {
+      // This routing/cost audit provisions research just as it provisions skills
+      // and ammunition. Research gating has its own gameplay coverage.
+      await game.entities.sendMessage(gun.id, { type: "SetObjectState", state: "Normal" });
+      await game.step({ frames: 2 });
+      assert.equal((await game.entities.detail(gun.id)).properties.find(p => p.name === "ObjectState")?.value,
+        "Normal", "biological weapon research prerequisite must be satisfied");
+    }
     if (vr) {
       await aimVrHandAt(game, gun.position, 0.45, 1, 0, { hand: "right" });
       await game.step({ frames: 8 });
