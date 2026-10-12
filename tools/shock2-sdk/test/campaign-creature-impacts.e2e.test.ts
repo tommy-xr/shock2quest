@@ -59,7 +59,10 @@ for (const vr of [false, true]) for (const fixture of [
       assert.ok(!(await game.scene.objects({ limit: 10000 })).objects.some(o =>
         /^ND-(mtlhit|pcrhit)/i.test(o.model ?? "")), "actor hits must not receive world-surface bullet holes");
       await game.step({ frames: 120 });
-      assert.equal((await game.scene.objects({ entityId: spang.id })).objects.length, 0);
+      // Expiring the spang frees its numeric slot; a live turret can reuse it
+      // for a new slug. Check the impact particles, not that projectile's mesh.
+      assert.equal((await game.scene.objects({ entityId: spang.id })).objects
+        .filter(o => o.source === "particle").length, 0);
       assert.ok(!(await game.entities.list({ filter: "Spang", limit: 50 })).entities.some(e => e.id === spang.id));
     });
 }
