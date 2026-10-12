@@ -317,9 +317,9 @@ impl InstallerApp {
                     ui.label(egui::RichText::new("Warning: This APK has only been tested on Quest 3. You may run into performance or playability issues on other devices.").small().color(WARNING));
                 }
             }
-            if (self.headsets.devices.len() > 1 && self.headsets.automatic.is_none()) || !self.serial.is_empty() {
+            if self.headsets.needs_picker() || !self.serial.is_empty() {
                 ui.add_enabled_ui(!busy, |ui| {
-                    egui::ComboBox::from_id_salt("headset_picker").selected_text(if self.serial.is_empty() { "Select a headset" } else { &self.serial }).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("headset_picker").selected_text(if self.serial.is_empty() { if self.headsets.automatic.is_some() { "Automatic selection" } else { "Select a headset" } } else { &self.serial }).show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.serial, String::new(), "Automatic selection");
                         for device in &self.headsets.devices {
                             ui.selectable_value(&mut self.serial, device.serial.clone(), format!("{} — {} ({})", device.model, device.serial, device.state));
@@ -421,7 +421,16 @@ impl eframe::App for InstallerApp {
                     card().show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.label(egui::RichText::new("02  QUEST APP").monospace().color(CYAN));
-                        ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add_enabled(!busy, egui::Button::new("Change…"))
+                                .clicked()
+                                && let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("Android package", &["apk"])
+                                    .pick_file()
+                            {
+                                self.apk = path.to_string_lossy().into_owned();
+                            }
                             let label = if self.apk.is_empty() {
                                 "Choose an APK".into()
                             } else {
@@ -431,20 +440,11 @@ impl eframe::App for InstallerApp {
                                     .to_string_lossy()
                                     .into_owned()
                             };
-                            ui.add(egui::Label::new(label).truncate())
-                                .on_hover_text(&self.apk);
                             ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
+                                egui::Layout::left_to_right(egui::Align::Center),
                                 |ui| {
-                                    if ui
-                                        .add_enabled(!busy, egui::Button::new("Change…"))
-                                        .clicked()
-                                        && let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("Android package", &["apk"])
-                                            .pick_file()
-                                    {
-                                        self.apk = path.to_string_lossy().into_owned();
-                                    }
+                                    ui.add(egui::Label::new(label).truncate())
+                                        .on_hover_text(&self.apk);
                                 },
                             );
                         });

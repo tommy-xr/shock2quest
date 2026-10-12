@@ -25,6 +25,13 @@ pub struct Headsets {
     pub automatic: Option<String>,
 }
 
+impl Headsets {
+    pub fn needs_picker(&self) -> bool {
+        self.devices.len() > 1
+            && (self.automatic.is_none() || self.devices.iter().any(|d| d.state != "device"))
+    }
+}
+
 pub fn probe(adb: &Path) -> Result<Headsets> {
     let list = query(command(adb).args(["devices", "-l"]))?;
     let automatic = select_transport(&list, None, |serial| {
@@ -111,6 +118,25 @@ mod tests {
         for model in ["Quest_3S", "Quest_2", "Quest_Pro", "Pixel_8"] {
             assert!(!parse(&format!("serial device model:{model}"))[0].tested_model());
         }
+    }
+
+    #[test]
+    fn unverified_extra_devices_remain_selectable() {
+        let mut headsets = Headsets {
+            devices: parse("usb device model:Quest_3\nother unauthorized"),
+            automatic: Some("usb".into()),
+        };
+        assert!(headsets.needs_picker());
+        headsets.devices[1].state = "offline".into();
+        assert!(headsets.needs_picker());
+        // Automatic selection with all transports authorized means their
+        // hardware identity was verified; these do not need a selector.
+        headsets.devices[1].state = "device".into();
+        assert!(!headsets.needs_picker());
+        headsets.automatic = None;
+        assert!(headsets.needs_picker());
+        headsets.devices.pop();
+        assert!(!headsets.needs_picker());
     }
 
     #[cfg(unix)]
