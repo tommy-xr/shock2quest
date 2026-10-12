@@ -421,30 +421,35 @@ impl eframe::App for InstallerApp {
                     card().show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.label(egui::RichText::new("02  QUEST APP").monospace().color(CYAN));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add_enabled(!busy, egui::Button::new("Change…"))
-                                .clicked()
-                                && let Some(path) = rfd::FileDialog::new()
-                                    .add_filter("Android package", &["apk"])
-                                    .pick_file()
-                            {
-                                self.apk = path.to_string_lossy().into_owned();
-                            }
-                            let label = if self.apk.is_empty() {
-                                "Choose an APK".into()
-                            } else {
-                                PathBuf::from(&self.apk)
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .into_owned()
-                            };
+                        ui.horizontal(|ui| {
                             ui.with_layout(
-                                egui::Layout::left_to_right(egui::Align::Center),
+                                egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    ui.add(egui::Label::new(label).truncate())
-                                        .on_hover_text(&self.apk);
+                                    if ui
+                                        .add_enabled(!busy, egui::Button::new("Change…"))
+                                        .clicked()
+                                        && let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Android package", &["apk"])
+                                            .pick_file()
+                                    {
+                                        self.apk = path.to_string_lossy().into_owned();
+                                    }
+                                    let label = if self.apk.is_empty() {
+                                        "Choose an APK".into()
+                                    } else {
+                                        PathBuf::from(&self.apk)
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                            .into_owned()
+                                    };
+                                    ui.with_layout(
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            ui.add(egui::Label::new(label).truncate())
+                                                .on_hover_text(&self.apk);
+                                        },
+                                    );
                                 },
                             );
                         });
