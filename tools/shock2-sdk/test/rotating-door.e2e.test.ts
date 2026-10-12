@@ -14,7 +14,6 @@ import type { EntityDetailResult, EntitySummary, Quat, Vec3 } from "../src/types
 // unparsed P$RotDoor left StdDoor to initialize from the zero translation,
 // moving both the hatch and its body to world origin.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const exactCampaignSave = process.env.SHOCK2_ROTDOOR_EXACT_SAVE;
 const HATCH = 85;
 const SECOND_SHIPPED_HATCH = 462;
 const UPPER_CONTROL = 152;
@@ -138,51 +137,6 @@ test(
     const restoredClosed = await hatchDetail(game);
     assert.ok(distance(restoredClosed.position, closed.position) < 0.01);
     assert.ok(rotationDistance(restoredClosed.rotation, closed.rotation) < 0.001);
-    await assertBodyFollows(game, await byMissionId(game, HATCH, "Floor Hatch"));
-  },
-);
-
-test(
-  "exact campaign frontier: the supported upper approach opens Hatch 85",
-  { skip: !e2eEnabled || !exactCampaignSave, timeout: 600_000 },
-  async () => {
-    await using game = await GameServer.launch({
-      mission: "eng1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8185) + 1,
-    });
-    assert.equal((await game.load(exactCampaignSave!)).success, true);
-    await game.step({ frames: 30 });
-    assert.equal((await game.info()).mission, "eng1.mis");
-
-    const closed = await hatchDetail(game);
-    assert.ok(distance(closed.position, AUTHORED_CLOSED) < 0.01);
-    await assertBodyFollows(game, await byMissionId(game, HATCH, "Floor Hatch"));
-
-    // Walk from the saved supported frontier around the hatch lip to the same
-    // upper-side control approach. The bounded SDK primitive shape-casts the
-    // real player capsule; it cannot cross the sealed hatch or world geometry.
-    const approach = await game.player.moveTo({ x: -3, y: -12, z: -22.3 });
-    assert.ok(
-      approach.distance_moved > 2,
-      `saved player must walk toward the upper control: ${JSON.stringify(approach)}`,
-    );
-    const control = await byMissionId(game, UPPER_CONTROL, "upper hatch control");
-    const aim = await game.player.aimAt(control, {
-      hitbox: "center",
-      visibility: "required",
-    });
-    assert.equal(
-      aim.target_confirmed,
-      true,
-      `saved frontier must have a production interaction ray to control 152: ${JSON.stringify(aim)}`,
-    );
-    await game.input.set("right_hand.squeeze_value", 1);
-    await game.step({ frames: 2 });
-    await game.input.set("right_hand.squeeze_value", 0);
-    await game.step({ frames: 180 });
-
-    const open = await hatchDetail(game);
-    assert.ok(rotationDistance(open.rotation, closed.rotation) > 0.1);
     await assertBodyFollows(game, await byMissionId(game, HATCH, "Floor Hatch"));
   },
 );

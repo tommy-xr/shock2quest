@@ -29,7 +29,7 @@ The SDK lives in `tools/shock2-sdk`. Current scripts clean `dist`, preflight the
 
 ## Optional coverage
 
-Check each test's actual gate. The audit encountered private-save gates for SHODAN boss entry/interlocks/ending, Ops2 corpse blockage, Rec/Command arrival, Rick1 card corpse/Rumbler junction, Rick2 mixed-case loading, and an exact rotating-door approach. Report each unavailable scenario explicitly.
+Historical private campaign-save regressions have been retired: their serialized state drifts with the pre-v1 save schema. Do not restore those gates or seek old checkpoints for the suite. Keep save/load coverage self-contained by writing and loading saves in the same build; checkpoints retained during a failing run remain useful diagnostic evidence.
 
 `SHOCK2_ACCURACY_FIXTURE` points to a private asset tree with nonzero SKILLPARAM accuracy data. The existing test describes the exact byte change. A local fixture can be derived from the licensed configured installation without modifying or publishing shipped assets; verify its version and run both Strength cases. Keep its mutable saves separate.
 
