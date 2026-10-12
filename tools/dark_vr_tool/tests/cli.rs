@@ -15,7 +15,7 @@ impl Harness {
         let dir = tempfile::tempdir().unwrap();
         let adb = dir.path().join("adb");
         fs::write(&adb, r#"#!/usr/bin/env python3
-import os, sys, json, subprocess
+import os, sys, json, subprocess, shutil
 from pathlib import Path
 root = Path(os.environ['DVR_TEST_ROOT'])
 a = sys.argv[1:]
@@ -27,6 +27,8 @@ if a[0] == 'connect':
     print('connected to ' + a[1]); sys.exit(0)
 if a[0] == '-s' and a[2:] == ['get-state']:
     print(os.environ.get('DVR_TEST_WIFI_STATE', 'device')); sys.exit(0)
+if a[0] == '-s' and a[2:] == ['shell', 'getprop ro.serialno']:
+    print(json.loads(os.environ.get('DVR_TEST_IDENTITIES', '{}')).get(a[1], a[1])); sys.exit(0)
 assert a[:2] == ['-s', 'quest'], a
 a = a[2:]
 if os.environ.get('DVR_TEST_FAIL'):
@@ -40,6 +42,12 @@ if a[0] == 'shell' and len(a) == 2:
 if a[0] == 'pull':
     src = Path(a[1].replace('/sdcard/shock2quest', str(root / 'data')))
     Path(a[2]).write_bytes(src.read_bytes()); sys.exit(0)
+if a[0] == 'push':
+    src = Path(a[1])
+    dest = Path(a[2].replace('/sdcard/shock2quest', str(root / 'data'))) / src.name
+    if src.is_dir(): shutil.copytree(src, dest, dirs_exist_ok=True)
+    else: shutil.copy2(src, dest)
+    sys.exit(0)
 if a[0] == 'tcpip':
     print('restarting in TCP mode port: ' + a[1]); sys.exit(0)
 if a[0] == 'install':
@@ -48,12 +56,33 @@ if a[0] == 'install':
 raise RuntimeError(a)
 "#).unwrap();
         fs::set_permissions(adb, fs::Permissions::from_mode(0o755)).unwrap();
+        // Intercept the Android build shell: no SDK, signing key or headset needed.
+        for name in ["bash", "cargo"] {
+            let path = dir.path().join(name);
+            fs::write(&path, r#"#!/usr/bin/env python3
+import os, sys, json
+from pathlib import Path
+root = Path(os.environ['DVR_TEST_ROOT'])
+with (root / 'calls').open('a') as f: f.write(json.dumps([Path(sys.argv[0]).name] + sys.argv[1:]) + '\n')
+if Path(sys.argv[0]).name == 'bash':
+    assert sys.argv[1:] == ['-c', 'source ./set_up_android_sdk.sh && cargo apk build --release']
+    if os.environ.get('DVR_TEST_BUILD_FAIL'): sys.exit(1)
+    apk = root / 'release/apk/shock2quest.apk'
+    apk.parent.mkdir(parents=True, exist_ok=True)
+    apk.write_text('fake APK')
+else:
+    assert sys.argv[1:] == ['metadata', '--no-deps', '--format-version', '1']
+    print(json.dumps({'target_directory': str(root)}))
+"#).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         Self { dir }
     }
     fn command(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_dark_vr_tool"));
         cmd.args(args)
             .env_remove("ANDROID_SERIAL")
+            .env_remove("DARK_ASSET_PATH")
             .env("DVR_TEST_ROOT", self.dir.path())
             .env(
                 "PATH",
@@ -74,6 +103,140 @@ raise RuntimeError(a)
         );
         out
     }
+}
+#[test]
+fn build_never_calls_adb_and_run_deploy_build_before_device_selection() {
+    for args in [&["build"][..], &["run", "--no-logcat"], &["deploy"]] {
+        let h = Harness::new();
+        let out = h
+            .command(args)
+            .env("DVR_TEST_DEVICES", "")
+            .output()
+            .unwrap();
+        assert_eq!(out.status.success(), args[0] == "build");
+        assert!(h.dir.path().join("release/apk/shock2quest.apk").is_file());
+        let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+        assert!(calls.starts_with("[\"bash\""));
+        assert_eq!(calls.contains("devices"), args[0] != "build");
+    }
+}
+
+#[test]
+fn failed_build_never_queries_or_mutates_device() {
+    let h = Harness::new();
+    let out = h
+        .command(&["run"])
+        .env("DVR_TEST_BUILD_FAIL", "1")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+    assert_eq!(calls.lines().count(), 1);
+}
+
+#[test]
+fn run_builds_installs_then_launches() {
+    let h = Harness::new();
+    h.run(&["run", "--no-logcat"]);
+    let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+    assert!(calls.find("install").unwrap() < calls.find("am start").unwrap());
+    assert!(!calls.contains("logcat"));
+}
+
+#[test]
+fn duplicate_transports_prefer_usb_but_distinct_or_unknown_headsets_fail() {
+    let devices = "192.168.1.42:5555 device model:Quest_3\nquest device usb:1 model:Quest_3";
+    for identity in ["quest", "second", "", "unknown"] {
+        let h = Harness::new();
+        let out = h
+            .command(&["mission", "set", "earth.mis"])
+            .env("DVR_TEST_DEVICES", devices)
+            .env(
+                "DVR_TEST_IDENTITIES",
+                serde_json::json!({"192.168.1.42:5555": identity, "quest": "quest"}).to_string(),
+            )
+            .output()
+            .unwrap();
+        assert_eq!(out.status.success(), identity == "quest");
+        assert_eq!(
+            h.dir.path().join("data/vr-mission.txt").is_file(),
+            identity == "quest"
+        );
+        if identity == "quest" {
+            let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+            let write = calls
+                .lines()
+                .find(|line| line.contains("vr-mission.txt"))
+                .unwrap();
+            assert!(write.starts_with(r#"["-s", "quest", "shell", "#));
+        }
+    }
+    let h = Harness::new();
+    let out = h
+        .command(&["--serial", "quest", "mission", "set", "earth.mis"])
+        .env("DVR_TEST_DEVICES", devices)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(
+        !fs::read_to_string(h.dir.path().join("calls"))
+            .unwrap()
+            .contains("ro.serialno")
+    );
+}
+
+#[test]
+fn assets_copy_recopy_delete_preserve_saves_and_settings() {
+    let h = Harness::new();
+    let source = h.dir.path().join("retail ' game");
+    fs::create_dir_all(source.join("mods")).unwrap();
+    fs::create_dir_all(source.join("cutscenes/enhanced")).unwrap();
+    fs::write(source.join("sshock2.kpf"), "game").unwrap();
+    fs::write(source.join("mods/remaster.kpf"), "mod").unwrap();
+    fs::write(source.join("cutscenes/enhanced/intro.avi"), "movie").unwrap();
+    h.run(&["mission", "set", "earth.mis"]);
+    fs::create_dir(h.dir.path().join("data/saves")).unwrap();
+    fs::write(h.dir.path().join("data/saves/slot.sav"), "save").unwrap();
+    h.run(&["assets", "copy", source.to_str().unwrap()]);
+    assert!(
+        h.dir
+            .path()
+            .join("data/cutscenes/enhanced/intro.avi")
+            .is_file()
+    );
+    fs::write(h.dir.path().join("data/mods/stale.kpf"), "stale").unwrap();
+    h.run(&["assets", "copy", source.to_str().unwrap()]);
+    assert!(h.dir.path().join("data/mods/stale.kpf").exists());
+    let out = h
+        .command(&["assets", "recopy"])
+        .env("DARK_ASSET_PATH", &source)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!h.dir.path().join("data/mods/stale.kpf").exists());
+    assert!(h.dir.path().join("data/mods/remaster.kpf").is_file());
+    h.run(&["assets", "delete"]);
+    for name in ["sshock2.kpf", "mods", "cutscenes"] {
+        assert!(!h.dir.path().join("data").join(name).exists());
+    }
+    assert!(h.dir.path().join("data/saves/slot.sav").is_file());
+    assert!(h.dir.path().join("data/vr-mission.txt").is_file());
+}
+
+#[test]
+fn invalid_recopy_source_never_touches_device() {
+    let h = Harness::new();
+    fs::write(h.dir.path().join("sshock2.kpf"), "game").unwrap();
+    let out = h
+        .command(&["assets", "recopy", h.dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(!h.dir.path().join("calls").exists());
 }
 #[test]
 fn mission_roundtrip_and_both_delete_forms() {

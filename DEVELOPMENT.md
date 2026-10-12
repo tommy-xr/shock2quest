@@ -1334,8 +1334,11 @@ Or use the host-side Quest tool, which sources the setup script for you:
 cargo dvr                         # live device dashboard
 cargo dvr mission set medsci1.mis  # startup override on the headset
 cargo dvr mission unset           # return to main menu on next launch
+cargo dvr build                   # release APK, no headset required
 cargo dvr run                     # release build, install and launch
 cargo dvr deploy                  # release build and install only
+cargo dvr assets copy             # copy retail assets from DARK_ASSET_PATH
+cargo dvr assets recopy           # replace retail assets; preserves saves/settings
 ```
 
 See [dark_vr_tool](tools/dark_vr_tool/README.md) for device selection, filesystem
@@ -1383,8 +1386,9 @@ Then unplug. `adb devices` lists `192.168.1.42:5555` (your headset's IP) and
 `cargo apk run --release` installs + launches over the air; `adb logcat` streams
 logs wirelessly.
 
-- If both a USB and a wireless device are listed, target one with
-  `adb -s 192.168.1.42:5555 ...` or `export ANDROID_SERIAL=192.168.1.42:5555`.
+- `cargo dvr` recognizes USB and Wi-Fi transports for the same headset and prefers
+  USB. For raw ADB/cargo-apk, target one with `adb -s 192.168.1.42:5555 ...` or
+  `export ANDROID_SERIAL=192.168.1.42:5555`.
 - A reboot (and sometimes sleep / a Wi-Fi drop) resets tcpip mode — reconnect the
   cable and repeat. For a fully cable-free flow, use the headset's Wireless
   Debugging (Settings → System → Developer) with `adb pair` once and

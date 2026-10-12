@@ -38,6 +38,11 @@ enum Action {
     Devices,
     /// Show device, battery, storage, package and boot configuration
     Status,
+    /// Copy or remove retail game assets on the headset (preserves saves/settings)
+    Assets {
+        #[command(subcommand)]
+        action: Assets,
+    },
     /// Read or change the startup mission; changes take effect on next launch
     #[command(alias = "vr-override")]
     Mission {
@@ -55,6 +60,8 @@ enum Action {
         #[arg(long)]
         no_logcat: bool,
     },
+    /// Build the release APK without requiring ADB or a connected headset
+    Build,
     /// Build and install the release APK without launching, or install --apk
     Deploy {
         #[arg(long)]
@@ -102,6 +109,24 @@ enum Setting {
     Unset,
 }
 
+#[derive(Subcommand)]
+enum Assets {
+    /// Copy sshock2.kpf, mods/ and cutscenes/ from a Remaster installation
+    Copy {
+        #[arg(env = "DARK_ASSET_PATH")]
+        source: PathBuf,
+    },
+    /// Delete those assets, then copy a fresh set; validates the source first
+    Recopy {
+        #[arg(env = "DARK_ASSET_PATH")]
+        source: PathBuf,
+    },
+    /// Delete sshock2.kpf, mods/ and cutscenes/ (including custom mods)
+    Delete,
+}
+
+const GAME_ASSETS: [&str; 3] = ["sshock2.kpf", "mods", "cutscenes"];
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let action = cli.command.unwrap_or_else(|| {
@@ -122,24 +147,55 @@ fn main() -> Result<()> {
         );
         return dashboard::run(cli.serial);
     }
+    // Compile first so a disconnected headset never prevents a local build.
+    let apk = match &action {
+        Action::Build | Action::Run { .. } | Action::Deploy { apk: None } => {
+            build_apk()?;
+            Some(apk_path()?)
+        }
+        Action::Deploy { apk: Some(path) } => Some(path.clone()),
+        _ => None,
+    };
+    if let Some(path) = &apk {
+        ensure!(path.is_file(), "APK not found: {}", path.display());
+        println!("APK: {}", path.display());
+    }
+    if matches!(action, Action::Build) {
+        return Ok(());
+    }
+    if let Action::Assets {
+        action: Assets::Copy { source } | Assets::Recopy { source },
+    } = &action
+    {
+        ensure!(
+            source.join(GAME_ASSETS[0]).is_file(),
+            "missing sshock2.kpf in {}",
+            source.display()
+        );
+        for name in &GAME_ASSETS[1..] {
+            ensure!(
+                source.join(name).is_dir(),
+                "missing {name}/ in {}",
+                source.display()
+            );
+        }
+    }
     let device = Device::resolve(cli.serial.as_deref())?;
     match action {
+        Action::Assets { action } => device.assets(action)?,
         Action::Status => print!("{}", device.status()?),
         Action::Mission { action } => {
             device.setting(quest_config::MISSION_CONFIG_PATH, action, true)?
         }
         Action::DebugPort { action } => device.setting(DEBUG_PORT, action, false)?,
-        Action::Run { no_logcat } => device.build(true, no_logcat)?,
-        Action::Deploy { apk } => {
-            let apk = match apk {
-                Some(path) => path,
-                None => {
-                    device.build(false, false)?;
-                    apk_path()?
+        Action::Run { .. } | Action::Deploy { .. } => {
+            inherit(device.adb().args(["install", "-r"]).arg(apk.unwrap()))?;
+            if let Action::Run { no_logcat } = action {
+                device.launch()?;
+                if !no_logcat {
+                    device.logs()?;
                 }
-            };
-            ensure!(apk.is_file(), "APK not found: {}", apk.display());
-            inherit(device.adb().args(["install", "-r"]).arg(apk))?;
+            }
         }
         Action::Wifi { port } => device.wifi(port)?,
         Action::Launch => device.launch()?,
@@ -155,15 +211,7 @@ fn main() -> Result<()> {
         Action::Shell { args } => {
             inherit(device.adb().arg("shell").args(args))?;
         }
-        Action::Logs => {
-            inherit(device.adb().args([
-                "logcat",
-                "RustStdoutStderr:V",
-                "AndroidRuntime:E",
-                "DEBUG:E",
-                "*:S",
-            ]))?;
-        }
+        Action::Logs => device.logs()?,
         Action::Recordings => {
             for recording in device.recordings()? {
                 println!(
@@ -173,7 +221,7 @@ fn main() -> Result<()> {
             }
         }
         Action::PullRecording { name, out } => device.pull_recording(name.as_deref(), &out)?,
-        Action::Tui | Action::Devices => unreachable!(),
+        Action::Tui | Action::Devices | Action::Build => unreachable!(),
     }
     Ok(())
 }
@@ -201,15 +249,18 @@ fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
-fn select_serial(list: &str, requested: Option<&str>) -> Result<String> {
-    let devices: Vec<_> = list
-        .lines()
+fn authorized_serials(list: &str) -> Vec<&str> {
+    list.lines()
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
             let serial = fields.next()?;
             (fields.next()? == "device").then_some(serial)
         })
-        .collect();
+        .collect()
+}
+
+fn select_serial(list: &str, requested: Option<&str>) -> Result<String> {
+    let devices = authorized_serials(list);
     if let Some(serial) = requested {
         ensure!(
             devices.contains(&serial),
@@ -231,6 +282,40 @@ struct Device {
 impl Device {
     fn resolve(serial: Option<&str>) -> Result<Self> {
         let list = output(Command::new("adb").args(["devices", "-l"]))?;
+        let devices = authorized_serials(&list);
+        if serial.is_none() && devices.len() > 1 {
+            // USB and TCP transports expose the same hardware serial. Never
+            // collapse devices by model: two Quest 3s must remain ambiguous.
+            let mut identity = None;
+            for serial in &devices {
+                let hardware = Self {
+                    serial: (*serial).into(),
+                }
+                .shell("getprop ro.serialno")
+                .context("could not identify transports; pass --serial (cargo dvr devices)")?;
+                let hardware = hardware.trim();
+                ensure!(
+                    !hardware.is_empty()
+                        && hardware != "unknown"
+                        && identity.as_deref().is_none_or(|id| id == hardware),
+                    "multiple or unidentified headsets; pass --serial (cargo dvr devices)"
+                );
+                identity = Some(hardware.to_owned());
+            }
+            let preferred = devices
+                .iter()
+                .find(|serial| {
+                    Some(**serial) == identity.as_deref()
+                        || list.lines().any(|line| {
+                            let mut fields = line.split_whitespace();
+                            fields.next() == Some(**serial) && fields.any(|f| f.starts_with("usb:"))
+                        })
+                })
+                .unwrap_or(&devices[0]);
+            return Ok(Self {
+                serial: (*preferred).into(),
+            });
+        }
         Ok(Self {
             serial: select_serial(&list, serial)?,
         })
@@ -327,7 +412,7 @@ impl Device {
             let state = output(Command::new("adb").args(["-s", &target, "get-state"]));
             if state.is_ok_and(|state| state.trim() == "device") {
                 println!(
-                    "Connected: {target}\nUnplug USB, or pass --serial {target} while both are attached."
+                    "Connected: {target}\nUSB is preferred while attached; unplug to use Wi-Fi."
                 );
                 return Ok(());
             }
@@ -346,6 +431,35 @@ impl Device {
     }
     fn stop(&self) -> Result<()> {
         self.shell(&format!("am force-stop {PACKAGE}"))?;
+        Ok(())
+    }
+    fn assets(&self, action: Assets) -> Result<()> {
+        let source = match &action {
+            Assets::Copy { source } | Assets::Recopy { source } => {
+                Some(std::path::absolute(source)?)
+            }
+            Assets::Delete => None,
+        };
+        self.stop()?;
+        if matches!(action, Assets::Delete | Assets::Recopy { .. }) {
+            let paths = GAME_ASSETS.map(|name| quote(&format!("{ROOT}/{name}")));
+            self.shell(&format!("rm -rf -- {}", paths.join(" ")))?;
+            println!("Removed sshock2.kpf, mods/ and cutscenes/ from {ROOT}");
+        }
+        if let Some(source) = source {
+            self.shell(&format!("mkdir -p {}", quote(ROOT)))?;
+            // Absolute paths cannot be mistaken for adb flags, even if the
+            // supplied relative directory starts with '-'.
+            for name in GAME_ASSETS {
+                inherit(
+                    self.adb()
+                        .arg("push")
+                        .arg(source.join(name))
+                        .arg(format!("{ROOT}/")),
+                )?;
+            }
+            println!("Copied assets to {ROOT}; launch the app when ready.");
+        }
         Ok(())
     }
     fn status(&self) -> Result<String> {
@@ -381,25 +495,26 @@ impl Device {
             storage
         ))
     }
-    fn build(&self, run: bool, no_logcat: bool) -> Result<()> {
-        // Arguments are positional bash parameters, never interpolated shell code.
-        let mut command = Command::new("bash");
-        command
+    fn logs(&self) -> Result<()> {
+        inherit(self.adb().args([
+            "logcat",
+            "RustStdoutStderr:V",
+            "AndroidRuntime:E",
+            "DEBUG:E",
+            "*:S",
+        ]))
+    }
+}
+
+fn build_apk() -> Result<()> {
+    inherit(
+        Command::new("bash")
             .current_dir(repo_root().join("runtimes/oculus_runtime"))
             .args([
                 "-c",
-                "source ./set_up_android_sdk.sh && cargo apk \"$@\"",
-                "dark_vr_tool",
-                if run { "run" } else { "build" },
-                "--release",
-                "--device",
-                &self.serial,
-            ]);
-        if no_logcat {
-            command.arg("--no-logcat");
-        }
-        inherit(&mut command)
-    }
+                "source ./set_up_android_sdk.sh && cargo apk build --release",
+            ]),
+    )
 }
 
 struct Recording {
