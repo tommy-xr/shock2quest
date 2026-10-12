@@ -1,12 +1,11 @@
 {
   "mission": "rec3.mis",
   "presentation": "Vr",
-  "revision": "bf1b167b11a6715f9e7b28f5e9a0deaa92ee7808",
+  "revision": "13512633c7ac0ec424d206fa588abadfbce882a9",
   "revisionParents": [
-    "c002d2ed18d5f72c2b55f39fd0ad7aa28b2e2a4c",
-    "b216adc0cc425ab7f4bfdf315af4f0426e242709"
+    "93f3fe412bd91080c2f3e193cf3deb3d0c50d62d"
   ],
-  "runtimeSha256": "349fba7e846ff2f5fc59f242492352d6b026253cc498aa9e5eed31438a0ccf4b",
+  "runtimeSha256": "a759a8ec3b03e128ecb2afa79d991d98f5a1ddddeface1623fc8c7fcca617703",
   "assetRoot": "/Users/bryphe/ss2-25th",
   "assetFiles": [
     "sshock2.kpf",
@@ -55,8 +54,8 @@
     {
       "name": "Protocol Droid",
       "position": [
-        82.01861,
-        2.2691061,
+        82.01066,
+        2.267684,
         -154.58997
       ]
     },

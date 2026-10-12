@@ -17,6 +17,7 @@ The APK does not include retail game data. See the [installation guide](INSTALL.
 
 <img src="screenshots/hero/medsci1-melee.gif" alt="Med/Sci: pistol in one hand, a wrench swing with the other" width="400"/> <img src="screenshots/hero/ops2.gif" alt="Operations: casting cryokinesis from the psi amp, then firing the laser pistol" width="400"/>
 <img src="screenshots/hero/rec1.gif" alt="Recreation: raising a pistol and firing at a charging monkey" width="400"/> <img src="screenshots/hero/hydro1.gif" alt="Hydroponics: two-handed assault rifle bursting an egg pod" width="400"/>
+<img src="screenshots/hero/rick1.gif" alt="Rickenbacker: climbing a ladder hand over hand, hanging one-handed, drawing the pistol from the hip holster and shooting an assassin" width="400"/>
 
 ## Installation
 
