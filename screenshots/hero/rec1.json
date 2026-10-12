@@ -1,8 +1,10 @@
 {
-  "revision": "13512633c7ac0ec424d206fa588abadfbce882a9",
+  "revision": "5329e731f30046d042b575688adec4384d124167",
   "dirty": false,
-  "capturedAt": "2026-10-12T13:54:18.818Z",
+  "runtimeSha256": "da0d92355deceea176b8afcb2a6f2ec3f5deddcca4df5ac8b0778f0c08216afc",
+  "capturedAt": "2026-10-12T16:53:00.501Z",
   "mission": "rec1.mis",
+  "difficulty": "easy",
   "settings": {
     "vr": {
       "turning": "Smooth",
@@ -28,7 +30,8 @@
   ],
   "subject": "Red Monkey",
   "loadout": {
-    "right": "Pistol"
+    "right": "Pistol",
+    "left": "Pistol"
   },
   "fovDeg": 85,
   "still": {
@@ -43,7 +46,7 @@
       "rec1.gif",
       "rec1.mp4"
     ],
-    "frames": 30,
+    "frames": 16,
     "fps": 15
   }
 }

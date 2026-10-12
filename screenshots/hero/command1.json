@@ -1,0 +1,56 @@
+{
+  "revision": "5329e731f30046d042b575688adec4384d124167",
+  "dirty": false,
+  "runtimeSha256": "da0d92355deceea176b8afcb2a6f2ec3f5deddcca4df5ac8b0778f0c08216afc",
+  "capturedAt": "2026-10-12T16:53:21.049Z",
+  "mission": "command1.mis",
+  "settings": {
+    "vr": {
+      "turning": "Smooth",
+      "vignette": "Off"
+    }
+  },
+  "lighting": [
+    {
+      "key": "ambient_light_intensity",
+      "value": 0,
+      "default": 0
+    },
+    {
+      "key": "held_light_floor",
+      "value": 0.15000000596046448,
+      "default": 0.15000000596046448
+    }
+  ],
+  "player": [
+    -325.6,
+    -0.4,
+    81.1
+  ],
+  "subject": "*Midwife",
+  "loadout": {
+    "right": "Shotgun"
+  },
+  "stats": {
+    "strength": 5,
+    "skills": {
+      "standard_weapons": 6
+    }
+  },
+  "fovDeg": 85,
+  "still": {
+    "file": "command1.png",
+    "resolution": [
+      1280,
+      720
+    ]
+  },
+  "clip": {
+    "files": [
+      "command1.gif",
+      "command1.mp4"
+    ],
+    "frames": 35,
+    "fps": 15
+  }
+}
