@@ -1084,6 +1084,32 @@ mod tests {
     }
 
     #[test]
+    fn positional_speech_attenuates_and_pans_with_listener_pose() {
+        use cgmath::Vector3;
+        use rodio::buffer::SamplesBuffer;
+        // Exercise the actual rodio sample mixer used by SpatialSink, with the
+        // same world-to-audio conversion as one-shot speech and listener updates.
+        let emitter = vec3(32.99209, -0.10437393, -34.833527);
+        let mix = |listener: Vector3<f32>, ear_axis: Vector3<f32>| {
+            let mut source = rodio::source::Spatial::new(
+                SamplesBuffer::new(1, 8000, vec![1.0_f32; 8]),
+                super::to_audio_position(emitter),
+                super::to_audio_position(listener - ear_axis),
+                super::to_audio_position(listener + ear_axis),
+            );
+            [source.next().unwrap(), source.next().unwrap()]
+        };
+        let ears = vec3(0.125, 0.0, 0.0);
+        let near = mix(emitter + vec3(1.0, 0.0, 1.0), ears);
+        let far = mix(emitter + vec3(10.0, 0.0, 10.0), ears);
+        assert!(far[0] < near[0] && far[1] < near[1]);
+        assert!((near[0] - near[1]).abs() > 0.01);
+        let turned = mix(emitter + vec3(1.0, 0.0, 1.0), -ears);
+        assert!((near[0] - turned[1]).abs() < 1e-6);
+        assert!((near[1] - turned[0]).abs() < 1e-6);
+    }
+
+    #[test]
     #[ignore = "requires an audio output device"]
     fn spatial_loop_fades_tracks_pauses_and_stops_without_restarting() {
         use super::*;
