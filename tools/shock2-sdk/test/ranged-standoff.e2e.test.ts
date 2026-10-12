@@ -13,7 +13,11 @@ for (const [mission, template, name] of [
     const [hybrid] = await game.entities.byTemplate(template);
     assert.ok(hybrid?.name.includes(name));
     const [x, y, z] = hybrid.position;
-    await game.player.teleport({ x: x! - 1.1, y: y!, z: z! });
+    // On Engineering's narrow catwalk, approach slightly from the railing side.
+    // Starting on the authored centerline lets the firing clip's lateral motion
+    // angle a subsequent retreat into the railing instead of along the walkway.
+    const approachZ = mission === "eng1.mis" ? 0.3 : 0;
+    await game.player.teleport({ x: x! - 1.1, y: y!, z: z! + approachZ });
     // Controlled aggro isolates combat positioning from peripheral vision.
     await game.entities.sendMessage(hybrid.id, { type: "Damage", amount: 1 });
     let backoffs = 0;
@@ -26,6 +30,7 @@ for (const [mission, template, name] of [
         Math.hypot(actor.position[0]! - player.x, actor.position[2]! - player.z));
       if (actor.properties.find(p => p.name === "AIBehavior")?.value.includes("BackOff")) backoffs++;
     }
+    assert.equal((await game.info()).player.life_state, "alive", "the observer must survive");
     assert.ok(backoffs > 0, "must select an authored reverse locomotion clip");
     assert.ok(greatestDistance > 3, `must gain separation, reached ${greatestDistance}`);
   });
