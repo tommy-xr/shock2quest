@@ -137,6 +137,18 @@ pub fn to_scene_objects(
         .into_iter()
         .collect::<Vec<(u16, Vec<VertexPositionTextureSkinnedNormal>)>>();
 
+    let shape_names = mesh
+        .shapes
+        .as_ref()
+        .map(|shapes| {
+            shapes
+                .names
+                .iter()
+                .filter(|name| !name.eq_ignore_ascii_case("Basis"))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let skeleton = obj_skeleton(mesh);
     let is_skinned = skeleton.bone_count() > 1;
 
@@ -181,7 +193,7 @@ pub fn to_scene_objects(
             let deltas = slot_to_deltas.remove(&slot);
             let geometry: Rc<Box<dyn engine::scene::Geometry>> = if is_skinned {
                 if let Some(deltas) = deltas {
-                    Rc::new(Box::new(engine::scene::morph_mesh::MorphMesh::new(verts, deltas)))
+                    Rc::new(Box::new(engine::scene::morph_mesh::MorphMesh::named(verts, deltas, shape_names.clone())))
                 } else { Rc::new(Box::new(engine::scene::mesh::create(verts))) }
             } else {
                 // If not skinned, convert the vertices to non-skinned representation
@@ -195,7 +207,7 @@ pub fn to_scene_objects(
                             delta.normal = transform.transform_vector(delta.normal);
                         }
                     }
-                    Rc::new(Box::new(engine::scene::morph_mesh::MorphMesh::new(simpler_vertices, deltas)))
+                    Rc::new(Box::new(engine::scene::morph_mesh::MorphMesh::named(simpler_vertices, deltas, shape_names.clone())))
                 } else { Rc::new(Box::new(engine::scene::mesh::create(simpler_vertices))) }
             };
 
@@ -780,7 +792,7 @@ pub fn to_vertices(
     to_vertices_with_shapes(mesh).0
 }
 
-type ShapeVertices = HashMap<u16, Vec<[engine::scene::morph_mesh::Delta; 3]>>;
+type ShapeVertices = HashMap<u16, Vec<Vec<engine::scene::morph_mesh::Delta>>>;
 fn to_vertices_with_shapes(
     mesh: &SystemShock2ObjectMesh,
 ) -> (
@@ -789,16 +801,15 @@ fn to_vertices_with_shapes(
 ) {
     let mut shape_vertices: ShapeVertices = HashMap::new();
     let shapes = mesh.shapes.as_ref();
-    // These three GPU-buffer channels implement object_plants.nut only. The
-    // decoder retains arbitrary named targets; egg-pod and SHODAN drivers must
-    // supply their own name/channel mapping rather than reuse this plant map.
+    // Preserve authored names through material splitting. Drivers select their
+    // channels by name; Basis is the immutable rest mesh, not a blend target.
     let shape_indices = shapes.map(|shapes| {
-        ["motion_one", "motion_two", "motion_three"].map(|name| {
-            shapes
-                .names
-                .iter()
-                .position(|s| s == name || (name == "motion_three" && s == "contract"))
-        })
+        shapes
+            .names
+            .iter()
+            .enumerate()
+            .filter_map(|(i, name)| (!name.eq_ignore_ascii_case("Basis")).then_some(i))
+            .collect::<Vec<_>>()
     });
     let polygons = &mesh.polygons;
     let uvs = &mesh.uvs;
@@ -844,20 +855,23 @@ fn to_vertices_with_shapes(
         if len >= 3 && (solid_color || uv_len >= len) {
             for idx in 1..(len - 1) {
                 let bone_idx = get_bone_index_for_point(mesh, indices[idx]);
-                if let (Some(shapes), Some(shape_indices)) = (shapes, shape_indices) {
-                    if shape_indices.iter().any(Option::is_some) {
+                if let (Some(shapes), Some(shape_indices)) = (shapes, shape_indices.as_ref()) {
+                    if !shape_indices.is_empty() {
                         for corner in [idx, idx + 1, 0] {
                             let index = shapes.corner_indices[poly.shape_corner_start + corner];
-                            let deltas = shape_indices.map(|shape| {
-                                let mut delta = engine::scene::morph_mesh::Delta::default();
-                                if let (Some(shape), Some(index)) = (shape, index.checked_sub(1)) {
-                                    let source = &shapes.deltas[shape][index as usize];
-                                    delta.position = source.position;
-                                    delta.normal = source.normal;
-                                    delta.uv = source.uv;
-                                }
-                                delta
-                            });
+                            let deltas = shape_indices
+                                .iter()
+                                .map(|&shape| {
+                                    let mut delta = engine::scene::morph_mesh::Delta::default();
+                                    if let Some(index) = index.checked_sub(1) {
+                                        let source = &shapes.deltas[shape][index as usize];
+                                        delta.position = source.position;
+                                        delta.normal = source.normal;
+                                        delta.uv = source.uv;
+                                    }
+                                    delta
+                                })
+                                .collect();
                             shape_vertices.entry(slot).or_default().push(deltas);
                         }
                     }
@@ -1833,5 +1847,37 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1.0, 0.0, 2.0]
         );
+    }
+    #[test]
+    fn egg_named_shapes_survive_material_expansion() {
+        let mut mesh = mesh_with(vec![material_in_slot("shell", 1)], vec![polygon_in_slot(1)]);
+        let names = ["closed", "wide open", "twisting", "push out"];
+        mesh.shapes = Some(crate::object_shapes::ObjectShapes {
+            names: names.map(str::to_owned).to_vec(),
+            deltas: (1..=4)
+                .map(|i| {
+                    vec![crate::object_shapes::ShapeDelta {
+                        position: vec3(i as f32, 0.0, 0.0),
+                        normal: vec3(0.0, 0.0, 0.0),
+                        uv: Vector2::new(0.0, 0.0),
+                    }]
+                })
+                .collect(),
+            corner_indices: vec![1, 1, 0],
+        });
+        let (_, shapes) = to_vertices_with_shapes(&mesh);
+        assert!(
+            shapes.contains_key(&1),
+            "egg channels must reach the renderer"
+        );
+        assert_eq!(shapes[&1][0].len(), 4);
+        assert_eq!(
+            shapes[&1][0]
+                .iter()
+                .map(|d| d.position.x)
+                .collect::<Vec<_>>(),
+            [1.0, 2.0, 3.0, 4.0]
+        );
+        assert!(shapes[&1][1].iter().all(|d| d.position.x == 0.0));
     }
 }

@@ -20,6 +20,7 @@ const SCRIPT_STATE_KEY: &str = "shock2vr.base_egg";
 #[derive(Serialize, Deserialize)]
 struct BaseEggState {
     hatched: bool,
+    opening_seconds: Option<f64>,
 }
 
 /// What a pod puts into the world when it opens. Retail models this as three
@@ -70,6 +71,8 @@ impl EggPayload {
 pub struct BaseEgg {
     payload: EggPayload,
     hatched: bool,
+    opening_seconds: Option<f64>,
+    pose: [(&'static str, f32); 4],
 }
 
 impl BaseEgg {
@@ -77,11 +80,34 @@ impl BaseEgg {
         Self {
             payload,
             hatched: false,
+            opening_seconds: None,
+            pose: EGG_CHANNELS.map(|name| (name, 0.0)),
         }
     }
 }
 
 impl Script for BaseEgg {
+    fn visit_morph_weights(&self, visit: &mut dyn FnMut(&[(&'static str, f32)])) {
+        if self.opening_seconds.is_some() {
+            visit(&self.pose);
+        }
+    }
+
+    fn update(
+        &mut self,
+        _entity_id: EntityId,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        time: &crate::time::Time,
+    ) -> Effect {
+        if let Some(seconds) = self.opening_seconds.filter(|seconds| *seconds < 2.0) {
+            let seconds = (seconds + time.elapsed.as_secs_f64()).min(2.0);
+            self.opening_seconds = Some(seconds);
+            self.pose = egg_pose(seconds);
+        }
+        Effect::NoEffect
+    }
+
     fn handle_message(
         &mut self,
         entity_id: EntityId,
@@ -109,6 +135,11 @@ impl Script for BaseEgg {
             (position.position, position.rotation)
         };
         self.hatched = true;
+        // ND_Egg starts egg_open on TweqComplete, at the switch to eggop.
+        // This native hatch already completes the one-model tweq here. Keep
+        // payload release and sound at that event, independent of visual time.
+        self.opening_seconds = Some(0.0);
+        self.pose = egg_pose(0.0);
 
         // The wall shell is different art, not a pitched floor shell: wpod
         // opens along local -Z while eggcl opens along local +Y.
@@ -174,6 +205,7 @@ impl Script for BaseEgg {
             1,
             &BaseEggState {
                 hatched: self.hatched,
+                opening_seconds: self.opening_seconds,
             },
             SCRIPT_STATE_KEY,
         )
@@ -186,8 +218,51 @@ impl Script for BaseEgg {
     ) -> Result<(), ScriptStateError> {
         let restored: BaseEggState = state.decode(1, SCRIPT_STATE_KEY)?;
         self.hatched = restored.hatched;
+        self.opening_seconds = restored.opening_seconds;
+        self.pose = restored
+            .opening_seconds
+            .map(egg_pose)
+            .unwrap_or_else(|| EGG_CHANNELS.map(|name| (name, 0.0)));
         Ok(())
     }
+}
+
+const EGG_CHANNELS: [&str; 4] = ["closed", "wide open", "twisting", "push out"];
+
+/// object_egg.nut: 100 frames at 50 Hz. PointRigAnimation uses quadratic
+/// ease-out between keys, and the last of duplicated frame-21 keys wins.
+fn egg_pose(seconds: f64) -> [(&'static str, f32); 4] {
+    const CURVES: [&[(f64, f32)]; 4] = [
+        &[(0.0, 1.0), (6.0, 0.5), (35.0, 0.1), (100.0, 0.0)],
+        &[(0.0, 1.0), (4.0, 0.5), (100.0, 0.0)],
+        &[
+            (0.0, 0.0),
+            (3.0, 0.3),
+            (6.0, -0.3),
+            (9.0, 0.25),
+            (12.0, -0.2),
+            (15.0, 0.15),
+            (18.0, -0.1),
+            (21.0, 0.05),
+            (21.0, 0.0),
+        ],
+        &[(0.0, 0.0), (14.0, 1.0), (30.0, 0.4), (100.0, 0.0)],
+    ];
+    let frame = (seconds * 50.0).clamp(0.0, 100.0);
+    std::array::from_fn(|i| {
+        let mut current = CURVES[i][0];
+        for &next in CURVES[i].iter().skip(1) {
+            if next.0 > frame.floor() {
+                let t = ((frame - current.0) / (next.0 - current.0)) as f32;
+                return (
+                    EGG_CHANNELS[i],
+                    current.1 + (next.1 - current.1) * t * (2.0 - t),
+                );
+            }
+            current = next;
+        }
+        (EGG_CHANNELS[i], current.1)
+    })
 }
 
 /// How far above a goo pod's origin its emitter stands, in world units (one
@@ -385,5 +460,73 @@ mod tests {
                     .hatched
             );
         }
+    }
+    #[test]
+    fn authored_egg_keys_signed_twist_and_ease_out() {
+        assert_eq!(egg_pose(0.0).map(|(_, w)| w), [1.0, 1.0, 0.0, 0.0]);
+        assert_eq!(egg_pose(2.0).map(|(_, w)| w), [0.0; 4]);
+        assert_eq!(egg_pose(3.0).map(|(_, w)| w), [0.0; 4]);
+        assert!((egg_pose(0.06)[2].1 - 0.3).abs() < 1e-6);
+        assert!((egg_pose(0.12)[2].1 + 0.3).abs() < 1e-6);
+        assert_eq!(egg_pose(0.42)[2].1, 0.0, "last duplicate key wins");
+        assert_eq!(egg_pose(0.28)[3].1, 1.0);
+        assert!(
+            (egg_pose(0.06)[0].1 - 0.625).abs() < 1e-6,
+            "ease-out at half the first closed interval"
+        );
+    }
+
+    #[test]
+    fn opening_round_trips_without_releasing_or_restarting() {
+        let mut world = World::new();
+        let pod = world.add_entity((position(vec3(0.0, 0.0, 0.0)),));
+        let physics = PhysicsWorld::new();
+        let mut script = BaseEgg::new(EggPayload::Grub);
+        let msg = MessagePayload::TurnOn { from: pod };
+        assert!(matches!(
+            script.handle_message(pod, &world, &physics, &msg),
+            Effect::Multiple(_)
+        ));
+        let time = crate::time::Time {
+            elapsed: std::time::Duration::from_millis(120),
+            total: std::time::Duration::from_secs(9),
+        };
+        assert!(matches!(
+            script.update(pod, &world, &physics, &time),
+            Effect::NoEffect
+        ));
+        let mut restored = BaseEgg::new(EggPayload::Grub);
+        let map = std::collections::HashMap::new();
+        restored
+            .restore_state(
+                &script.save_state().unwrap(),
+                &ScriptRestoreContext::new(&map),
+            )
+            .unwrap();
+        assert_eq!(restored.pose, script.pose);
+        assert!(restored.pose[2].1 < 0.0);
+        assert!(matches!(
+            restored.handle_message(pod, &world, &physics, &msg),
+            Effect::NoEffect
+        ));
+        assert_eq!(
+            restored.pose, script.pose,
+            "retrigger does not restart visual time"
+        );
+        restored.update(pod, &world, &physics, &time);
+        script.update(pod, &world, &physics, &time);
+        assert_eq!(restored.pose, script.pose);
+    }
+    #[test]
+    fn composite_preserves_each_child_visual_pose() {
+        let mut egg = BaseEgg::new(EggPayload::Grub);
+        egg.opening_seconds = Some(0.12);
+        egg.pose = egg_pose(0.12);
+        let expected = egg.pose.to_vec();
+        let nested = super::super::CompositeScript::new(vec![Box::new(egg)]);
+        let composite = super::super::CompositeScript::new(vec![Box::new(nested)]);
+        let mut poses = Vec::new();
+        composite.visit_morph_weights(&mut |pose| poses.push(pose.to_vec()));
+        assert_eq!(poses, [expected]);
     }
 }

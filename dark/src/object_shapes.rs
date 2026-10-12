@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires locally extracted owned remaster model files"]
-    fn retail_plant_shape_corpus() {
+    fn retail_object_shape_corpus() {
         let root = std::env::var("SHOCK2_LGMD_TEST_DIR").expect("owned model directory");
         for (name, count) in [
             ("FLOWER", 4),
@@ -132,6 +132,8 @@ mod tests {
             ("NERVEST", 4),
             ("NERVEU", 4),
             ("ORIFICE", 2),
+            ("EGGOP", 5),
+            ("EGGOP_F", 5),
         ] {
             let bytes = std::fs::read(format!("{root}/{name}.bin")).unwrap();
             let word = |at| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;

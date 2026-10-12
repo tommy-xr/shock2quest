@@ -30,7 +30,9 @@ for (const vr of [false, true]) {
         const expected = [4000,600,1000].map((period) => Math.sin(value / period) / 2);
         for (const object of shapes) {
           object.morph_weights!.forEach((weight,i) => {
-            assert.ok(Math.abs(weight - expected[i]!) < 0.015,
+            const channel = {motion_one:0,motion_two:1,motion_three:2,contract:2}[object.morph_names![i]!];
+            assert.notEqual(channel, undefined, "authored plant channel is named");
+            assert.ok(Math.abs(weight - expected[channel!]!) < 0.015,
               `authored weight ${weight} versus ${expected[i]} at ${step.new_total_time}`);
           });
         }
@@ -66,7 +68,7 @@ for (const vr of [false,true]) {
       const shapes = objects.filter((o)=>o.model?.toLowerCase()==="orifice" && o.morph_weights);
       assert.ok(shapes.length>0,"LGMD contract target reaches the skinned draw path");
       for (const object of shapes) assert.deepEqual(object.morph_weights,shapes[0]!.morph_weights);
-      weights.push(shapes[0]!.morph_weights![2]);
+      weights.push(shapes[0]!.morph_weights![shapes[0]!.morph_names!.indexOf("contract")]);
     }
     assert.notEqual(weights[0],weights[1],"authored third-channel contract weight advances");
     const after = await game.physics.bodies({entityId:depositor.id});
