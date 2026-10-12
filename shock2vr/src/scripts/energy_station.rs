@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use dark::{
     EnvSoundQuery,
-    properties::{Link, Links, PropClassTag, PropPosition},
+    properties::{PropClassTag, PropPosition},
 };
 use engine::audio::AudioHandle;
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
+use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
 use crate::time::Time;
@@ -155,29 +155,15 @@ fn do_recharge_all(world: &World, entity_id: EntityId) -> Effect {
     Effect::combine(effects)
 }
 
-/// Toggle the particle groups attached to this station. The mission data
-/// authors one `RechargeFX` entity per station, linked BY the FX entity via a
-/// concrete `ParticleAttachement` link (FX -> station), so the FX is found by
-/// scanning incoming links. This assumes a mission-placed station: a
-/// runtime-created host gets its riders attached without `Links`, but every
-/// energy station ships placed in the level.
+/// Toggle the station's `RechargeFX` particle group (one per station in the
+/// mission data).
 fn set_attached_fx_active(world: &World, station_id: EntityId, active: bool) -> Effect {
-    let v_links = world.borrow::<View<Links>>().unwrap();
-    let effects: Vec<Effect> = v_links
-        .iter()
-        .with_id()
-        .filter(|(_, links)| {
-            links.to_links.iter().any(|l| {
-                matches!(l.link, Link::ParticleAttachement(_))
-                    && l.to_entity_id.map(|e| e.0) == Some(station_id)
-            })
-        })
-        .map(|(id, _)| Effect::SetParticleActive {
-            entity_id: id,
-            active,
-        })
-        .collect();
-    Effect::combine(effects)
+    Effect::combine(
+        super::script_util::attached_particles(world, station_id)
+            .into_iter()
+            .map(|entity_id| Effect::SetParticleActive { entity_id, active })
+            .collect(),
+    )
 }
 
 fn recharge_message(to: &EntityId) -> Effect {
