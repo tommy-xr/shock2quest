@@ -8037,9 +8037,13 @@ impl MissionCore {
                                 .with_fade_time(pg.fade_time)
                                 // pg.r is the primary color as an index into the
                                 // game master palette (not a literal red channel);
-                                // resolve it to RGB. cg/cb (pg.g/pg.b) drive the
-                                // lifetime fade and are handled separately.
+                                // resolve it to RGB. pg.g/pg.b are fade targets.
                                 .with_color(crate::palette::index_to_rgb(pg.r))
+                                .with_color_keys(crate::particle_group::color_fade_keys(
+                                    pg,
+                                    launch_info.min_time,
+                                ))
+                                .with_world_space(crate::particle_group::is_world_space(pg))
                                 // Animation type 0 = launch one shot: the burst
                                 // fires once and the group dies with its last
                                 // particle (impact spangs). Other types keep

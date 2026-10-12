@@ -84,6 +84,9 @@ pub struct ParticleSystem {
     /// Tint applied to the sprite (resolved from the group's palette color
     /// index upstream). Defaults to white = untinted full texture.
     color: Vector3<f32>,
+    /// Tint over a particle's remaining life as `(remaining_seconds, color)`,
+    /// longest first, held past either end. Empty = constant `color`.
+    color_keys: Vec<(f32, Vector3<f32>)>,
     /// One-shot burst (impact spangs): all particles launch on the first
     /// update and are never relaunched; `is_done()` reports when they have all
     /// expired. `false` = continuous emitter (steam vents etc.).
@@ -181,6 +184,7 @@ impl ParticleSystem {
             particle_size: (0.08, 0.08),
             root_transform: Matrix4::identity(),
             color: vec3(1.0, 1.0, 1.0),
+            color_keys: Vec::new(),
             one_shot: false,
             has_launched: false,
             sprite_texture: None,
@@ -315,6 +319,32 @@ impl ParticleSystem {
         }
     }
 
+    pub fn with_color_keys(self, color_keys: Vec<(f32, Vector3<f32>)>) -> ParticleSystem {
+        ParticleSystem { color_keys, ..self }
+    }
+
+    /// The tint for a particle with `remaining` seconds of life.
+    fn color_at(&self, remaining: f32) -> Vector3<f32> {
+        let Some(&(first_time, first_color)) = self.color_keys.first() else {
+            return self.color;
+        };
+        if remaining >= first_time {
+            return first_color;
+        }
+        for pair in self.color_keys.windows(2) {
+            let ((t_hi, c_hi), (t_lo, c_lo)) = (pair[0], pair[1]);
+            if remaining >= t_lo {
+                let f = if t_hi > t_lo {
+                    (remaining - t_lo) / (t_hi - t_lo)
+                } else {
+                    1.0
+                };
+                return c_lo + (c_hi - c_lo) * f;
+            }
+        }
+        self.color_keys.last().unwrap().1
+    }
+
     pub fn with_alpha(self, alpha: f32) -> ParticleSystem {
         ParticleSystem {
             particle_alpha: alpha,
@@ -396,14 +426,14 @@ impl ParticleSystem {
                     // clip the sprite's gradients to white.
                     Some(sprite) => BillboardMaterial::create(
                         sprite.clone(),
-                        self.color,
+                        self.color_at(p.remaining_life_in_seconds),
                         0.0,
                         1.0 - (self.particle_alpha * alpha),
                         p.scale,
                     ),
                     None => BillboardMaterial::create(
                         particle_texture.clone(),
-                        self.color,
+                        self.color_at(p.remaining_life_in_seconds),
                         1.0,
                         1.0 - (self.particle_alpha * alpha),
                         p.scale,
@@ -488,6 +518,29 @@ mod tests {
             assert!((2.0 - 1e-4..=3.0 + 1e-4).contains(&flat), "{p:?}");
             assert!((0.5..=1.5).contains(&p.y), "{p:?}");
         }
+    }
+
+    #[test]
+    fn color_keys_blend_over_remaining_life() {
+        let (red, green, blue) = (
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 1.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+        );
+        let system =
+            ParticleSystem::new().with_color_keys(vec![(2.0, red), (1.0, green), (0.0, blue)]);
+        let close = |a: Vector3<f32>, b: Vector3<f32>| (a - b).magnitude2() < 1e-6;
+        assert!(
+            close(system.color_at(5.0), red),
+            "held before the first key"
+        );
+        assert!(close(system.color_at(1.5), vec3(0.5, 0.5, 0.0)));
+        assert!(close(system.color_at(0.5), vec3(0.0, 0.5, 0.5)));
+        assert!(close(system.color_at(-1.0), blue), "held past the last key");
+        assert!(close(
+            ParticleSystem::new().with_color(red).color_at(1.0),
+            red
+        ));
     }
 
     #[test]
