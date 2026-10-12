@@ -12861,7 +12861,17 @@ impl MissionCore {
                         continue;
                     }
                     let message;
-                    if let Some((marker, position)) = crate::psi_teleport::marker(&self.world) {
+                    // Remaster ND_Teleport removes the target/link on Create in
+                    // these missions. Apply that restriction before creating a
+                    // marker (and its particles), retaining normal cast cost/audio.
+                    if matches!(
+                        self.level_name.to_ascii_lowercase().as_str(),
+                        "ops1" | "ops1.mis" | "shodan" | "shodan.mis"
+                    ) {
+                        message = "Teleport unavailable here";
+                    } else if let Some((marker, position)) =
+                        crate::psi_teleport::marker(&self.world)
+                    {
                         // A door or actor may have occupied the saved spot. Refuse
                         // without spending/consuming, using the movement capsule's
                         // existing clearance filter rather than inventing a range.
