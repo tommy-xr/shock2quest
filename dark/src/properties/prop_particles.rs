@@ -69,7 +69,8 @@ pub struct PropParticleGroup {
     pub spin: Vector3<f32>,
     pub is_active: bool,
     pub is_worldspace: bool,
-    /// Starts with every particle launched; keeps its authored launch period.
+    /// Authored to start with every particle already launched (not simulated
+    /// here); such a group keeps its authored launch period.
     pub pre_launch: bool,
     pub size: f32,
     pub scale_vel: f32,

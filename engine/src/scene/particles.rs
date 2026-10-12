@@ -80,6 +80,9 @@ pub struct ParticleSystem {
     launch_shape: LaunchShape,
     launch_lifetime: (f32, f32),
     root_transform: Matrix4<f32>,
+    /// The emitter transform from the previous update, to place world-space
+    /// particles launched between frames along the emitter's path.
+    prev_transform: Option<Matrix4<f32>>,
     particle_size: (f32, f32),
     /// Tint applied to the sprite (resolved from the group's palette color
     /// index upstream). Defaults to white = untinted full texture.
@@ -183,6 +186,7 @@ impl ParticleSystem {
             particles: vec![],
             particle_size: (0.08, 0.08),
             root_transform: Matrix4::identity(),
+            prev_transform: None,
             color: vec3(1.0, 1.0, 1.0),
             color_keys: Vec::new(),
             one_shot: false,
@@ -319,6 +323,25 @@ impl ParticleSystem {
         }
     }
 
+    /// Where the emitter was `overdue` seconds before this update's
+    /// `transform`: world-space launches interpolate the translation back
+    /// toward the previous update; object-space ones ride the emitter anyway.
+    fn emitter_transform_at(
+        &self,
+        transform: Matrix4<f32>,
+        overdue: f32,
+        delta_time: f32,
+    ) -> Matrix4<f32> {
+        match self.prev_transform {
+            Some(prev) if self.world_space && delta_time > 0.0 => {
+                let mut at = transform;
+                at.w = transform.w + (prev.w - transform.w) * (overdue / delta_time);
+                at
+            }
+            _ => transform,
+        }
+    }
+
     pub fn is_world_space(&self) -> bool {
         self.world_space
     }
@@ -365,13 +388,10 @@ impl ParticleSystem {
 
     pub fn update(&mut self, dt: Duration, transform: Matrix4<f32>) {
         let delta_time = dt.as_secs_f32();
-        self.particles.iter_mut().for_each(|p| {
-            p.age += delta_time;
-            p.remaining_life_in_seconds -= delta_time;
-            p.position += p.velocity * delta_time;
-            p.velocity += self.acceleration * delta_time;
-            p.scale = (p.scale + self.size_velocity * delta_time).max(0.0);
-        });
+        let (acceleration, size_velocity) = (self.acceleration, self.size_velocity);
+        self.particles
+            .iter_mut()
+            .for_each(|p| p.advance(delta_time, acceleration, size_velocity));
 
         self.particles.retain(|p| p.remaining_life_in_seconds > 0.0);
 
@@ -386,11 +406,30 @@ impl ParticleSystem {
                     self.particles.push(create_random_particle(self, transform));
                 }
             }
-        } else if self.particles.len() < self.max_particles && self.launch_time_remaining < 0.0 {
-            // Continuous emitter: create a new particle per launch interval.
-            self.launch_time_remaining = self.launch_time;
-            self.particles.push(create_random_particle(self, transform));
+        } else if self.launch_time <= 0.0 {
+            // No period: one launch per frame while there is room.
+            if self.particles.len() < self.max_particles {
+                self.particles.push(create_random_particle(self, transform));
+            }
+        } else {
+            // Launch every particle due this frame, keeping the remainder so a
+            // period that isn't a frame multiple keeps its rate. Each launch is
+            // backdated to its due time - aged, and in world space placed
+            // along the emitter's path - so a sub-frame period streaks rather
+            // than stacking at the frame's position.
+            while self.launch_time_remaining <= 0.0 && self.particles.len() < self.max_particles {
+                let overdue = (-self.launch_time_remaining).min(delta_time);
+                let emitter = self.emitter_transform_at(transform, overdue, delta_time);
+                let mut particle = create_random_particle(self, emitter);
+                particle.advance(overdue, acceleration, size_velocity);
+                self.particles.push(particle);
+                self.launch_time_remaining += self.launch_time;
+            }
+            // Full: don't bank time while waiting, or the next launches
+            // would be backdated as if overdue.
+            self.launch_time_remaining = self.launch_time_remaining.max(0.0);
         }
+        self.prev_transform = Some(transform);
 
         self.root_transform = if self.world_space {
             Matrix4::identity()
@@ -461,6 +500,16 @@ struct Particle {
     position: Vector3<f32>,
     velocity: Vector3<f32>,
     scale: f32,
+}
+
+impl Particle {
+    fn advance(&mut self, dt: f32, acceleration: Vector3<f32>, size_velocity: f32) {
+        self.age += dt;
+        self.remaining_life_in_seconds -= dt;
+        self.position += self.velocity * dt;
+        self.velocity += acceleration * dt;
+        self.scale = (self.scale + size_velocity * dt).max(0.0);
+    }
 }
 
 fn sprite_frame_index(age: f32, count: usize, frame_time: f32, looping: bool) -> Option<usize> {
@@ -545,6 +594,55 @@ mod tests {
             ParticleSystem::new().with_color(red).color_at(1.0),
             red
         ));
+    }
+
+    fn continuous(launch_time: f32, max: usize) -> ParticleSystem {
+        ParticleSystem::new()
+            .with_num_particles(max)
+            .with_lifetime(10.0, 10.0)
+            .with_launch_bounding_box(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0))
+            .with_velocity(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0))
+            .with_launch_time(Duration::from_secs_f32(launch_time))
+    }
+
+    #[test]
+    fn continuous_emitter_keeps_its_rate_between_frames() {
+        let frame = Duration::from_secs_f64(1.0 / 60.0);
+        // 20 ms is not a frame multiple; one exact frame must not slip to two.
+        for (period, expected) in [(0.02, 50), (1.0 / 60.0, 60), (0.005, 200)] {
+            let mut system = continuous(period, 1000);
+            for _ in 0..60 {
+                system.update(frame, Matrix4::identity());
+            }
+            let n = system.particles.len() as i32;
+            assert!((n - expected).abs() <= 1, "period {period}: {n} launches");
+        }
+    }
+
+    #[test]
+    fn world_space_launches_spread_along_the_emitter_path() {
+        let mut system = continuous(0.004, 1000).with_world_space(true);
+        let frame = Duration::from_secs_f64(1.0 / 60.0);
+        system.update(frame, Matrix4::from_translation(vec3(0.0, 0.0, 0.0)));
+        system.particles.clear();
+        system.update(frame, Matrix4::from_translation(vec3(4.0, 0.0, 0.0)));
+        let mut xs: Vec<f32> = system.particles.iter().map(|p| p.position.x).collect();
+        xs.sort_by(f32::total_cmp);
+        assert!(xs.len() >= 4, "{xs:?}");
+        assert!(
+            xs.windows(2).all(|w| w[1] - w[0] > 0.5),
+            "spread, not stacked: {xs:?}"
+        );
+        assert!(xs.iter().all(|x| (0.0..=4.0).contains(x)), "{xs:?}");
+    }
+
+    #[test]
+    fn zero_period_launches_once_per_frame() {
+        let mut system = continuous(0.0, 1000);
+        for _ in 0..10 {
+            system.update(Duration::from_millis(16), Matrix4::identity());
+        }
+        assert_eq!(system.particles.len(), 10);
     }
 
     #[test]
