@@ -15,7 +15,15 @@ use std::time::Duration;
 #[derive(Clone, Copy, Debug)]
 pub enum HandheldControl {
     Focus,
-    Navigate { x: i32, y: i32 },
+    Navigate {
+        x: i32,
+        y: i32,
+    },
+    /// Continuous axis sample; games consume it in the same simulation frame.
+    Stick {
+        x: f32,
+        y: f32,
+    },
     Primary,
     Secondary,
     Back,
@@ -126,6 +134,12 @@ impl HandheldInput {
                     capture.blocked_stick = true;
                 }
                 if !opening && !capture.blocked_stick {
+                    if stick.x.abs().max(stick.y.abs()) >= 0.15 {
+                        effects.push(send(HandheldControl::Stick {
+                            x: stick.x,
+                            y: stick.y,
+                        }));
+                    }
                     let (step, latch) = stick_nav(stick, capture.stick_latched);
                     capture.stick_latched = latch;
                     if let Some(step) = step {
@@ -226,7 +240,7 @@ mod tests {
         );
         assert_eq!(out.left_hand.thumbstick, vec2(0.0, 0.0));
         assert_eq!(out.right_hand.thumbstick, input.right_hand.thumbstick);
-        assert_eq!(effects.len(), 2);
+        assert_eq!(effects.len(), 3);
         assert_eq!(lower, [true, false]);
         assert!(!actions.just_triggered(InputAction::LeftHandLowerButton));
         assert!(actions.just_triggered(InputAction::RightHandLowerButton));
@@ -387,6 +401,72 @@ mod tests {
         );
         actions.release(InputAction::LeftHandUpperButton);
         input.pose_tracking = None;
+        assert!(
+            router
+                .update(
+                    &world,
+                    Some(entity),
+                    &mut actions,
+                    &input,
+                    Duration::ZERO,
+                    true
+                )
+                .1
+                .is_empty()
+        );
+    }
+    #[test]
+    fn continuous_stick_samples_repeat_without_repeating_navigation_and_stop_on_release() {
+        let (world, entity) = held_game();
+        let mut router = HandheldInput::default();
+        let mut actions = InputActionState::default();
+        let mut input = InputContext::default();
+        router.update(
+            &world,
+            Some(entity),
+            &mut actions,
+            &input,
+            Duration::ZERO,
+            true,
+        );
+        input.left_hand.thumbstick = vec2(-0.75, 0.0);
+        input.right_hand.thumbstick = vec2(1.0, 0.0);
+        for frame in 0..3 {
+            let (output, effects, _) = router.update(
+                &world,
+                Some(entity),
+                &mut actions,
+                &input,
+                Duration::from_millis(16),
+                true,
+            );
+            let mut samples = 0;
+            let mut navigation = 0;
+            for effect in effects {
+                if let Effect::Send {
+                    msg:
+                        Message {
+                            to,
+                            payload: MessagePayload::HandheldInput(control),
+                        },
+                } = effect
+                {
+                    assert_eq!(to, entity);
+                    match control {
+                        HandheldControl::Stick { x, y } => {
+                            assert_eq!((x, y), (-0.75, 0.0));
+                            samples += 1;
+                        }
+                        HandheldControl::Navigate { .. } => navigation += 1,
+                        _ => {}
+                    }
+                }
+            }
+            assert_eq!(samples, 1);
+            assert_eq!(navigation, usize::from(frame == 0));
+            assert_eq!(output.right_hand.thumbstick, input.right_hand.thumbstick);
+        }
+        input.left_hand.thumbstick = vec2(0.0, 0.0);
         assert!(
             router
                 .update(

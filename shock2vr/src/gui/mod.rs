@@ -73,6 +73,7 @@ where
         _world: &World,
         _state: &mut TState,
         _time: &crate::time::Time,
+        _cursor: Option<&GuiCursor>,
     ) -> crate::Effect {
         crate::Effect::NoEffect
     }
