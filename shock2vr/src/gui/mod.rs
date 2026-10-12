@@ -78,6 +78,17 @@ where
         crate::Effect::NoEffect
     }
 
+    /// A fresh secondary pointer gesture, resolved into shared canvas pixels.
+    fn pointer_secondary(
+        &self,
+        _entity: EntityId,
+        _world: &World,
+        _state: &mut TState,
+        _position: cgmath::Point2<f32>,
+    ) -> crate::Effect {
+        crate::Effect::NoEffect
+    }
+
     fn handheld_input(
         &self,
         _entity: EntityId,

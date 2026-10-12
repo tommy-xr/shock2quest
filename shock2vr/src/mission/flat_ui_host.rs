@@ -313,6 +313,7 @@ pub struct FlatUiHost {
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
     last_pointer_pressed: bool,
+    last_secondary_pressed: bool,
     vr_pointer_pressed: [bool; 2],
     /// The pointer of the latest [`update_canvas`](Self::update_canvas), for
     /// `GET /v1/ui` - so a test can see where the VR ray actually landed on the
@@ -404,6 +405,7 @@ impl FlatUiHost {
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
+            last_secondary_pressed: true,
             vr_pointer_pressed: [true; 2],
             last_pointer: None,
             last_pointer_grabbing: [false; 2],
@@ -736,6 +738,7 @@ impl FlatUiHost {
     /// entered under a held button starts "already pressed".
     pub fn guard_held_press(&mut self) {
         self.last_pointer_pressed = true;
+        self.last_secondary_pressed = true;
         self.vr_pointer_pressed = [true; 2];
     }
 
@@ -948,6 +951,7 @@ impl FlatUiHost {
         // frame - it would instantly close the panel as a bare-view click.
         // Require a release to be observed first.
         self.last_pointer_pressed = true;
+        self.last_secondary_pressed = true;
         self.vr_pointer_pressed = [true; 2];
     }
 
@@ -1101,6 +1105,11 @@ impl FlatUiHost {
         world: &World,
         pointer: Option<Pointer2D>,
     ) -> (Vec<Message>, Vec<FlatUiDragAction>) {
+        // Missing pointers and newly opened panels require a release before
+        // another secondary gesture can reach a widget.
+        let secondary = pointer.is_none_or(|pointer| pointer.secondary);
+        let secondary_edge = secondary && !self.last_secondary_pressed;
+        self.last_secondary_pressed = secondary;
         // Flat's only job is resolving the mouse onto the canvas; the gestures
         // themselves live in the shared core below.
         let pointer = pointer.map(|pointer| CanvasPointer {
@@ -1127,7 +1136,28 @@ impl FlatUiHost {
             hand: Handedness::Right,
             bare_view: BareViewPress::Exit,
         });
-        self.update_canvas(world, pointer)
+        let (mut messages, actions) = self.update_canvas(world, pointer);
+        // Reuse the host's resolved route so strip overlap, carried items,
+        // close gestures and panel lifetime obey the primary pointer rules.
+        if secondary_edge && !pointer.is_some_and(|pointer| pointer.pressed) {
+            if let Some(message) = messages.iter().find_map(|message| {
+                if Some(message.to) != self.active_panel {
+                    return None;
+                }
+                match message.payload {
+                    MessagePayload::GUIHover {
+                        screen_coordinates, ..
+                    } => Some(Message {
+                        to: message.to,
+                        payload: MessagePayload::GUISecondary { screen_coordinates },
+                    }),
+                    _ => None,
+                }
+            }) {
+                messages.push(message);
+            }
+        }
+        (messages, actions)
     }
 
     /// The presentation-free core of [`update`](Self::update): the same frame
@@ -2682,6 +2712,107 @@ mod tests {
     }
 
     #[test]
+    fn secondary_pointer_requires_release_and_uses_the_active_panel_route() {
+        let mut world = World::new();
+        let panel = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.open(panel);
+        host.on_set_ui(
+            &world,
+            panel,
+            vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
+            &[],
+        );
+        let rect = host.panel_rect().unwrap();
+        let position = vec2((rect.x + 47.0) / 640.0, (rect.y + 74.0) / 480.0);
+        let pointer = |secondary| {
+            Some(Pointer2D {
+                position,
+                pressed: false,
+                secondary,
+            })
+        };
+        let count = |messages: Vec<Message>| {
+            messages
+                .into_iter()
+                .filter(|m| matches!(m.payload, MessagePayload::GUISecondary { .. }))
+                .count()
+        };
+        assert_eq!(
+            count(host.update(&world, pointer(true)).0),
+            0,
+            "held on opening"
+        );
+        host.update(&world, pointer(false));
+        let messages = host.update(&world, pointer(true)).0;
+        assert!(messages.iter().any(|m| matches!(m.payload, MessagePayload::GUISecondary { screen_coordinates } if m.to == panel && screen_coordinates == point2(0.25, 0.25))));
+        assert_eq!(
+            count(host.update(&world, pointer(true)).0),
+            0,
+            "one event per press"
+        );
+        host.update(&world, pointer(false));
+        host.update(
+            &world,
+            Some(Pointer2D {
+                position: vec2(0.9, 0.9),
+                pressed: false,
+                secondary: true,
+            }),
+        );
+        assert_eq!(
+            count(host.update(&world, pointer(true)).0),
+            0,
+            "outside press cannot drag into panel"
+        );
+        host.update(&world, pointer(false));
+        host.update(&world, None);
+        assert_eq!(
+            count(host.update(&world, pointer(true)).0),
+            0,
+            "missing pointer requires release"
+        );
+        host.update(&world, pointer(false));
+        host.guard_held_press();
+        assert_eq!(
+            count(host.update(&world, pointer(true)).0),
+            0,
+            "resume/open guard"
+        );
+        host.update(&world, pointer(false));
+        assert_eq!(count(host.update(&world, pointer(true)).0), 1);
+        host.update(&world, pointer(false));
+        assert_eq!(
+            count(
+                host.update(
+                    &world,
+                    Some(Pointer2D {
+                        position,
+                        pressed: true,
+                        secondary: true,
+                    })
+                )
+                .0
+            ),
+            0,
+            "primary owns a simultaneous press"
+        );
+        assert_eq!(
+            count(host.update(&world, pointer(true)).0),
+            0,
+            "releasing primary does not replay secondary"
+        );
+        host.close();
+        host.update(&world, pointer(false));
+        assert_eq!(
+            count(host.update(&world, pointer(true)).0),
+            0,
+            "closed panel"
+        );
+    }
+
+    #[test]
     fn held_button_at_open_does_not_close_the_panel() {
         // The (shift+)LMB frob that opened the panel is typically still held
         // on the next frame - it must be swallowed, not treated as a fresh
@@ -2699,6 +2830,7 @@ mod tests {
         );
         let bare_view_pressed = Pointer2D {
             position: vec2(0.9, 0.9),
+            secondary: false,
             pressed: true,
         };
         host.update(&world, Some(bare_view_pressed));
@@ -2711,6 +2843,7 @@ mod tests {
             &world,
             Some(Pointer2D {
                 position: vec2(0.9, 0.9),
+                secondary: false,
                 pressed: false,
             }),
         );
@@ -2918,6 +3051,7 @@ mod tests {
             &world,
             Some(Pointer2D {
                 position: norm(over_slot.0, over_slot.1),
+                secondary: false,
                 pressed: false,
             }),
         );
@@ -2930,6 +3064,7 @@ mod tests {
             &world,
             Some(Pointer2D {
                 position: norm(320.0, 400.0),
+                secondary: false,
                 pressed: false,
             }),
         );
@@ -2965,6 +3100,7 @@ mod tests {
         // (0.5, 0.125) at the default 640x480 screen size.
         let over_strip = Pointer2D {
             position: vec2(0.5, 0.125),
+            secondary: false,
             pressed: false,
         };
         let (msgs, _) = host.update(&world, Some(over_strip));
@@ -2974,6 +3110,7 @@ mod tests {
         // Canvas (96, 272) - the middle of the left MFD - is (0.15, ~0.567).
         let over_panel = Pointer2D {
             position: vec2(96.0 / 640.0, 272.0 / 480.0),
+            secondary: false,
             pressed: false,
         };
         let (msgs, _) = host.update(&world, Some(over_panel));
@@ -3012,6 +3149,7 @@ mod tests {
             &world,
             Some(Pointer2D {
                 position: bare,
+                secondary: false,
                 pressed: false,
             }),
         );
@@ -3019,6 +3157,7 @@ mod tests {
             &world,
             Some(Pointer2D {
                 position: bare,
+                secondary: false,
                 pressed: true,
             }),
         );
@@ -3037,6 +3176,7 @@ mod tests {
             &world,
             Some(Pointer2D {
                 position: bare,
+                secondary: false,
                 pressed: false,
             }),
         );
@@ -3044,6 +3184,7 @@ mod tests {
             &world,
             Some(Pointer2D {
                 position: bare,
+                secondary: false,
                 pressed: true,
             }),
         );
@@ -3147,6 +3288,7 @@ mod tests {
             world,
             Some(Pointer2D {
                 position: norm(canvas.0, canvas.1),
+                secondary: false,
                 pressed: false,
             }),
         );
@@ -3154,6 +3296,7 @@ mod tests {
             world,
             Some(Pointer2D {
                 position: norm(canvas.0, canvas.1),
+                secondary: false,
                 pressed: true,
             }),
         )
@@ -3169,6 +3312,7 @@ mod tests {
             world,
             Some(Pointer2D {
                 position: norm(canvas.0, canvas.1),
+                secondary: false,
                 pressed: false,
             }),
         );
@@ -3176,6 +3320,7 @@ mod tests {
             world,
             Some(Pointer2D {
                 position: norm(canvas.0, canvas.1),
+                secondary: false,
                 pressed: true,
             }),
         );
@@ -3622,6 +3767,7 @@ mod tests {
                 &world,
                 Some(Pointer2D {
                     position: norm(23.5, 34.0),
+                    secondary: false,
                     pressed: false,
                 }),
             );
@@ -3629,6 +3775,7 @@ mod tests {
                 &world,
                 Some(Pointer2D {
                     position: norm(23.5, 34.0),
+                    secondary: false,
                     pressed: true,
                 }),
             );
@@ -4118,7 +4265,13 @@ mod tests {
     fn paused_updates_do_not_consume_the_double_click_window() {
         let (world, mut host, wrench, _inv) = drag_world();
         let position = norm(23.5, 34.0);
-        let pointer = |pressed| Some(Pointer2D { position, pressed });
+        let pointer = |pressed| {
+            Some(Pointer2D {
+                position,
+                pressed,
+                secondary: false,
+            })
+        };
 
         // The HTTP input command itself is a zero-time update and observes
         // the first press edge before the requested stepped frames begin.

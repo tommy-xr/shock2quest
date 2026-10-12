@@ -103,29 +103,36 @@ impl Swinekeeper {
         if self.mode == Mode::Reveal {
             self.reveal(index);
         } else {
-            match self.tiles[index] {
-                Tile::Hidden if self.flags > 0 => {
-                    self.tiles[index] = Tile::Flag;
-                    self.flags -= 1;
-                    self.mode = Mode::Reveal;
-                    // Finding the corn means flagging it all; uncovering every
-                    // safe square alone does not complete the game.
-                    if self.flags == 0
-                        && self
-                            .corn
-                            .iter()
-                            .zip(self.tiles)
-                            .all(|(&corn, tile)| corn == (tile == Tile::Flag))
-                    {
-                        self.mode = Mode::Won;
-                    }
+            self.flag(index);
+        }
+    }
+
+    pub(super) fn flag(&mut self, index: usize) {
+        if index >= self.tiles.len() || self.finished() {
+            return;
+        }
+        match self.tiles[index] {
+            Tile::Hidden if self.flags > 0 => {
+                self.tiles[index] = Tile::Flag;
+                self.flags -= 1;
+                self.mode = Mode::Reveal;
+                // Finding the corn means flagging it all; uncovering every
+                // safe square alone does not complete the game.
+                if self.flags == 0
+                    && self
+                        .corn
+                        .iter()
+                        .zip(self.tiles)
+                        .all(|(&corn, tile)| corn == (tile == Tile::Flag))
+                {
+                    self.mode = Mode::Won;
                 }
-                Tile::Flag => {
-                    self.tiles[index] = Tile::Hidden;
-                    self.flags += 1;
-                }
-                _ => {}
             }
+            Tile::Flag => {
+                self.tiles[index] = Tile::Hidden;
+                self.flags += 1;
+            }
+            _ => {}
         }
     }
 
@@ -275,5 +282,30 @@ mod tests {
         assert_eq!(game.mode, Mode::Flag, "removing a flag keeps flag mode");
         game.play(0);
         assert_eq!(game.mode, Mode::Won);
+    }
+    #[test]
+    fn swinekeeper_direct_flag_preserves_mode_and_completion_rules() {
+        let mut game = field();
+        game.flag(0);
+        assert_eq!(game.tiles[0], Tile::Flag);
+        assert_eq!(game.mode, Mode::Reveal);
+        game.play(0);
+        assert_eq!(game.tiles[0], Tile::Flag);
+        game.toggle_flag();
+        game.flag(0);
+        assert_eq!(game.tiles[0], Tile::Hidden);
+        assert_eq!(game.mode, Mode::Flag, "removal preserves flag mode");
+        game.flag(0);
+        assert_eq!(game.mode, Mode::Reveal, "placement returns to reveal mode");
+        for i in 1..CORN {
+            game.flag(i);
+        }
+        assert_eq!(game.mode, Mode::Won);
+        game.flag(0);
+        assert_eq!(
+            game.tiles[0],
+            Tile::Flag,
+            "finished games ignore direct flags"
+        );
     }
 }

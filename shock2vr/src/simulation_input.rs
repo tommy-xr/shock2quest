@@ -64,7 +64,8 @@ fn controls_changed(a: &InputContext, b: &InputContext) -> bool {
     a.jump != b.jump
         || a.jump_button_held != b.jump_button_held
         || a.crouch != b.crouch
-        || a.pointer.map(|p| p.pressed) != b.pointer.map(|p| p.pressed)
+        || a.pointer.map(|p| (p.pressed, p.secondary))
+            != b.pointer.map(|p| (p.pressed, p.secondary))
         || [(&a.left_hand, &b.left_hand), (&a.right_hand, &b.right_hand)]
             .into_iter()
             .any(|(a, b)| {
@@ -110,11 +111,34 @@ mod tests {
     }
 
     #[test]
+    fn secondary_pointer_click_survives_frames_without_a_simulation_tick() {
+        let mut queue = TickInput::default();
+        let mut input = InputContext::default();
+        input.pointer = Some(Pointer2D {
+            position: vec2(0.2, 0.3),
+            pressed: false,
+            secondary: false,
+        });
+        queue.push(&input, vec![]);
+        queue.next(&input);
+        input.pointer.as_mut().unwrap().secondary = true;
+        queue.push(&input, vec![]);
+        input.pointer.as_mut().unwrap().secondary = false;
+        input.pointer.as_mut().unwrap().position = vec2(0.8, 0.9);
+        queue.push(&input, vec![]);
+        let (press, _) = queue.next(&input);
+        assert!(press.pointer.unwrap().secondary);
+        assert_eq!(press.pointer.unwrap().position, vec2(0.2, 0.3));
+        assert!(!queue.next(&input).0.pointer.unwrap().secondary);
+    }
+
+    #[test]
     fn queued_click_keeps_its_point_but_uses_current_tracking() {
         let mut queue = TickInput::default();
         let mut input = InputContext::default();
         input.pointer = Some(Pointer2D {
             position: vec2(0.2, 0.3),
+            secondary: false,
             pressed: true,
         });
         queue.push(&input, vec![]);

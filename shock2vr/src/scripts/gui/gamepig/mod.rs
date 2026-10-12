@@ -131,6 +131,35 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         components
     }
 
+    fn pointer_secondary(
+        &self,
+        _entity: EntityId,
+        world: &World,
+        state: &mut GamePigGuiState,
+        position: cgmath::Point2<f32>,
+    ) -> Effect {
+        if state.boot.is_some() {
+            return Effect::NoEffect;
+        }
+        if let Some(Game::Swinekeeper(game)) = &mut state.game {
+            if game.finished() {
+                state.game = None;
+                state.selection = 0;
+            } else {
+                let canvas = crate::ui::UiCanvas::from_elements(
+                    self.get_config().screen_size_in_pixels,
+                    game.components(world),
+                );
+                if let Some(GamePigGuiMsg::SwineCell(index)) =
+                    canvas.click_at(vec2(position.x, position.y))
+                {
+                    game.flag(index);
+                }
+            }
+        }
+        Effect::NoEffect
+    }
+
     fn handheld_input(
         &self,
         entity: EntityId,
