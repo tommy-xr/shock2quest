@@ -17769,6 +17769,7 @@ impl MissionCore {
         scene.extend(crate::weapon_attachments::render_lasers(
             &self.world,
             &self.physics,
+            options.presentation_mode == crate::PresentationMode::Vr,
         ));
         {
             let blades = self
