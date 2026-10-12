@@ -245,6 +245,10 @@ pub struct PropDestLevel(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropDestLoc(pub i32);
 
+/// Objects eligible to travel in an inter-deck elevator (`P$ElevAble`).
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropElevAble(pub bool);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropExp(pub i32);
 
@@ -1892,6 +1896,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$DestLoc",
             |reader, _len| read_i32(reader),
             PropDestLoc,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ElevAble",
+            |reader, _len| read_bool(reader),
+            PropElevAble,
             accumulator::latest,
         ),
         define_prop(

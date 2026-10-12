@@ -658,6 +658,20 @@ readout. The amp's front alternative sits partly on the back of the hand;
 the behind-cord default stays on the forearm side of the connector. Check cord
 motion and both hands when experimenting with other values.
 
+### Elevator cargo and level persistence
+
+The main five-deck elevator carries loose objects marked `P$ElevAble` from
+the departure marker's authored room, including their contained items. Cargo
+keeps its offset relative to the elevator marker, falling back to the player's
+arrival point when destination geometry obstructs it. It is removed from the
+departing deck's snapshot, so revisiting does not duplicate it. This applies
+to floor-selector travel; an ordinary bulkhead or debug level warp leaves loose
+items on their current deck.
+
+Campaign saves include snapshots of every visited level. Items left elsewhere
+remain on that level when revisiting, including after quitting and loading a
+save on another deck. Carried inventory travels separately from those snapshots.
+
 ### Campaign difficulty
 
 New Game offers Easy, Normal (the default), Hard, and Impossible. Choose a level,

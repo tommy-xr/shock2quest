@@ -223,11 +223,9 @@ impl Gui<ElevatorGuiState, ElevatorGuiMsg> for ElevatorGui {
         match msg {
             ElevatorGuiMsg::ButtonPressed(level) => (
                 state.clone(),
-                Effect::GlobalEffect(crate::scripts::GlobalEffect::TransitionLevel {
+                Effect::GlobalEffect(crate::scripts::GlobalEffect::ElevatorTransition {
                     level_file: level.clone(),
-                    loc: Some(22),
-                    entities_to_trigger: vec![],
-                    vitals_transition: crate::scripts::PlayerVitalsTransition::Preserve,
+                    marker: 22,
                 }),
             ),
         }

@@ -16,6 +16,9 @@ pub struct HeldItemInstantiation {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct HeldItemSaveData {
+    /// Present only while riding an elevator; normal saves keep loose cargo
+    /// in their level snapshot and must not move it again when loaded.
+    pub elevator_cargo: Option<super::ElevatorCargo>,
     pub held_entities: EntitySaveData,
     pub entity_in_left_hand: Option<u64>,
     pub entity_in_right_hand: Option<u64>,
@@ -30,6 +33,7 @@ pub struct HeldItemSaveData {
 impl HeldItemSaveData {
     pub fn empty() -> HeldItemSaveData {
         HeldItemSaveData {
+            elevator_cargo: None,
             held_entities: EntitySaveData::empty(),
             entity_in_left_hand: None,
             entity_in_right_hand: None,
@@ -76,6 +80,9 @@ impl HeldItemSaveData {
 
     fn instantiate_with_script_state(&self, world: &mut World) -> HeldItemInstantiation {
         let (_, entity_id_map) = self.held_entities.instantiate(world);
+        if let Some(cargo) = &self.elevator_cargo {
+            cargo.place(world, &entity_id_map);
+        }
 
         let mut left_hand_entity_id = None;
         let mut right_hand_entity_id = None;

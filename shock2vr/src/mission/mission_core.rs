@@ -3901,6 +3901,9 @@ impl MissionCore {
         let mut entities_to_instantiate = HashSet::new();
 
         // Create rooms
+        world.add_unique(crate::save_load::ElevatorRooms(
+            abstract_mission.room_db.clone(),
+        ));
         create_room_entities(
             &abstract_mission.room_db,
             &template_to_entity_id,
@@ -4008,6 +4011,14 @@ impl MissionCore {
             &abstract_mission.entity_info,
             &template_to_entity_id,
         );
+        if let Some(cargo) = &held_item_save_data.elevator_cargo {
+            cargo.recover_blocked_cargo(
+                &mut world,
+                &mut physics,
+                &held_script_entity_id_map,
+                start_pos,
+            );
+        }
 
         // Dark clones the PlayerFactory marker onto its new player, which only
         // exists on a new game or a direct launch; a transition carries the

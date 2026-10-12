@@ -1231,6 +1231,10 @@ fn create_physics_representation_unfiltered(
         .borrow::<View<crate::runtime_props::RuntimePropModelBoundsPhysics>>()
         .unwrap()
         .contains(entity_id);
+    let restored_position = world
+        .borrow::<View<crate::runtime_props::RuntimePropRestoredPosition>>()
+        .unwrap()
+        .contains(entity_id);
     // A door the authors left permanently open (no travel between its open and
     // closed endpoints, authored open) has nowhere to retract to: a collider
     // for it is a slab welded across the doorway that nothing can ever move,
@@ -1701,7 +1705,7 @@ fn create_physics_representation_unfiltered(
             let shape = PhysicsShape::Cuboid(abs_dimensions * 1.0);
             rigid_body_handle = physics.add_dynamic(
                 entity_id,
-                if model_bounds_physics {
+                if model_bounds_physics || restored_position {
                     pos.position
                 } else {
                     pos.position + vec3(0.0, SCALE_FACTOR / 6.0, 0.0)

@@ -1125,7 +1125,7 @@ impl Game {
     /// Capture the outgoing scene's save data (so its state survives the transition)
     /// and return the context the new mission needs. Must run while the outgoing scene
     /// is still active.
-    fn save_active_scene(&mut self) -> PreservedSceneState {
+    fn save_active_scene(&mut self, elevator_marker: Option<i32>) -> PreservedSceneState {
         self.active_game_scene.end_level();
         let current_quest_info = self
             .active_game_scene
@@ -1134,9 +1134,10 @@ impl Game {
             .unwrap()
             .clone();
 
-        let (current_save_data, held_data) = save_load::to_save_data_with_scripts(
+        let (current_save_data, held_data) = save_load::to_transition_save_data(
             self.active_game_scene.world(),
             self.active_game_scene.script_world(),
+            elevator_marker,
         );
         game_log!(
             DEBUG,
@@ -1180,6 +1181,7 @@ impl Game {
         spawn_loc: SpawnLocation,
         entities_to_trigger: Vec<String>,
         vitals_transition: PlayerVitalsTransition,
+        elevator_marker: Option<i32>,
     ) {
         // A transition started while one is already in flight would capture the
         // *loading* scene as the outgoing save - wiping quest bits, held items
@@ -1210,7 +1212,7 @@ impl Game {
             mut active_psi,
         } = match preserved {
             Some(preserved) => preserved,
-            None => self.save_active_scene(),
+            None => self.save_active_scene(elevator_marker),
         };
         if vitals_transition == PlayerVitalsTransition::InitializeFromDestination {
             player_vitals = None;
@@ -2463,6 +2465,15 @@ impl Game {
                     self.active_game_scene.on_load_failed();
                 }
             }
+            GlobalEffect::ElevatorTransition { level_file, marker } => {
+                self.begin_transition(
+                    level_file,
+                    SpawnLocation::Marker(marker),
+                    vec![],
+                    PlayerVitalsTransition::Preserve,
+                    Some(marker),
+                );
+            }
             GlobalEffect::TransitionLevel {
                 level_file,
                 loc,
@@ -2479,6 +2490,7 @@ impl Game {
                     spawn_loc,
                     entities_to_trigger,
                     vitals_transition,
+                    None,
                 );
             }
             GlobalEffect::ShowHordeReport { wave, stats } => {
@@ -2514,6 +2526,7 @@ impl Game {
                     spawn_loc,
                     vec![],
                     PlayerVitalsTransition::Preserve,
+                    None,
                 );
             }
             GlobalEffect::GameOver => {
@@ -2657,7 +2670,7 @@ impl Game {
         }
         let preserved = match self.preserved_scene_state.take() {
             Some(carried) => carried,
-            None => self.save_active_scene(),
+            None => self.save_active_scene(None),
         };
         match scene {
             Some(scene) => {
