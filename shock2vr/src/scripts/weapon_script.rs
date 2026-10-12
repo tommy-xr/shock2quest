@@ -705,8 +705,11 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
     // consulting the cooldown, so what is left when the burst ends
     // is the last round's full wait - the gap the setting asks for
     // between pulls.
+    //
+    // A hand-worked VR pump paces the gun itself (the spent action
+    // blocks the next pull until racked), so it gets no wait on top.
     let cooldown = shot_cooldown_seconds(setting);
-    if is_gunshot && cooldown > 0.0 {
+    if is_gunshot && cooldown > 0.0 && !crate::vr_shotgun_pump::enabled(world, entity_id) {
         effects.push(Effect::BeginShotCooldown {
             entity_id,
             seconds: cooldown,

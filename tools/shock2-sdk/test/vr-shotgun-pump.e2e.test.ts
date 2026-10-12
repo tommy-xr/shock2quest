@@ -142,6 +142,25 @@ for (const [primary, mission, triple, physical, gripOffset = 0] of [
     assert.equal((await state()).phase, "Ready", JSON.stringify({state: await state(), support: await support()}));
     await fire();
     assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - 2 * roundsPerShot);
+    if (!triple) {
+      // The pump paces the gun: two quick rack-and-fire cycles land well
+      // inside the setting's 1 s between-shots wait. (Triple has spent the
+      // magazine by now; it shares the same path.)
+      const rackAndFire = async () => {
+        await place(1);
+        await game.step({ frames: 6 });
+        await place(0);
+        await game.step({ frames: 6 });
+        await game.input.set(`${primary}_hand.trigger`, 1);
+        await game.step({ frames: 1 });
+        await game.input.set(`${primary}_hand.trigger`, 0);
+        await game.step({ frames: 1 });
+      };
+      await rackAndFire();
+      await rackAndFire();
+      assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - 4 * roundsPerShot,
+        "a racked pump fires without waiting out the shot interval");
+    }
     const player = (await game.info()).player;
     assert.equal(primary === "left" ? player.wielded_entity_id : player.right_hand_entity_id, gun.id);
     assert.equal(other === "left" ? player.wielded_entity_id : player.right_hand_entity_id, null);
