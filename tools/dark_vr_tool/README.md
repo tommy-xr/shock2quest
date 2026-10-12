@@ -129,7 +129,11 @@ click **Install on Quest**. The window shows installation stages, ADB output,
 and success or failure. The APK is installed with `-r`; game assets are merged
 into `/sdcard/shock2quest`. Saves/settings and extra files are preserved. The
 app is stopped during installation and is not launched automatically.
-If several headsets are connected, choose one by serial under **Advanced**.
+The connection panel shows the detected model and authorization state. If several
+headsets are connected, a device picker appears; USB/Wi-Fi connections to the
+same headset are selected automatically. Devices other than Quest 3 show a
+compatibility warning but can still install. The installation log expands while
+installing or on failure and remains available after success.
 
 Packaged installers include ADB and the release APK. Development builds use ADB
 from PATH and require an APK selection. `--source`, `--apk`, and `--adb` can

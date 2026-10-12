@@ -64,7 +64,7 @@ pub fn run(options: &Options, serial: Option<&str>, emit: impl Fn(Event) + Sync)
         "Could not start ADB. Use the packaged installer, or pass --adb for a development build.",
     )?;
     let device = Device::resolve_with_adb(serial, adb.clone())
-        .context("Connect and unlock your headset, enable Developer Mode, and accept USB debugging. If several headsets are connected, select a serial under Advanced.")?;
+        .context("Connect and unlock your headset, enable Developer Mode, and accept USB debugging. If several headsets are connected, choose a headset in the installer or pass --serial.")?;
     emit(Event::Log(format!("Headset: {}\n", device.serial)));
     device.stop()?;
     emit(Event::Stage("Installing APK", 0.1));

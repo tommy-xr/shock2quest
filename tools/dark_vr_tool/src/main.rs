@@ -12,6 +12,8 @@ use std::{
 
 mod dashboard;
 #[cfg(feature = "installer")]
+mod headset;
+#[cfg(feature = "installer")]
 mod installer;
 #[cfg(feature = "installer")]
 mod installer_ui;
@@ -294,6 +296,43 @@ fn select_serial(list: &str, requested: Option<&str>) -> Result<String> {
     Ok(devices[0].into())
 }
 
+fn select_transport(
+    list: &str,
+    serial: Option<&str>,
+    mut identify: impl FnMut(&str) -> Result<String>,
+) -> Result<String> {
+    let devices = authorized_serials(list);
+    if serial.is_none() && devices.len() > 1 {
+        // USB and TCP transports expose the same hardware serial. Never
+        // collapse devices by model: two Quest 3s must remain ambiguous.
+        let mut identity = None;
+        for serial in &devices {
+            let hardware = identify(serial)
+                .context("could not identify transports; pass --serial (cargo dvr devices)")?;
+            let hardware = hardware.trim();
+            ensure!(
+                !hardware.is_empty()
+                    && hardware != "unknown"
+                    && identity.as_deref().is_none_or(|id| id == hardware),
+                "multiple or unidentified headsets; pass --serial (cargo dvr devices)"
+            );
+            identity = Some(hardware.to_owned());
+        }
+        let preferred = devices
+            .iter()
+            .find(|serial| {
+                Some(**serial) == identity.as_deref()
+                    || list.lines().any(|line| {
+                        let mut fields = line.split_whitespace();
+                        fields.next() == Some(**serial) && fields.any(|f| f.starts_with("usb:"))
+                    })
+            })
+            .unwrap_or(&devices[0]);
+        return Ok((*preferred).into());
+    }
+    select_serial(list, serial)
+}
+
 struct Device {
     serial: String,
     adb_path: PathBuf,
@@ -304,46 +343,14 @@ impl Device {
     }
     fn resolve_with_adb(serial: Option<&str>, adb_path: PathBuf) -> Result<Self> {
         let list = output(command(&adb_path).args(["devices", "-l"]))?;
-        let devices = authorized_serials(&list);
-        if serial.is_none() && devices.len() > 1 {
-            // USB and TCP transports expose the same hardware serial. Never
-            // collapse devices by model: two Quest 3s must remain ambiguous.
-            let mut identity = None;
-            for serial in &devices {
-                let hardware = Self {
-                    serial: (*serial).into(),
-                    adb_path: adb_path.clone(),
-                }
-                .shell("getprop ro.serialno")
-                .context("could not identify transports; pass --serial (cargo dvr devices)")?;
-                let hardware = hardware.trim();
-                ensure!(
-                    !hardware.is_empty()
-                        && hardware != "unknown"
-                        && identity.as_deref().is_none_or(|id| id == hardware),
-                    "multiple or unidentified headsets; pass --serial (cargo dvr devices)"
-                );
-                identity = Some(hardware.to_owned());
+        let serial = select_transport(&list, serial, |serial| {
+            Self {
+                serial: serial.into(),
+                adb_path: adb_path.clone(),
             }
-            let preferred = devices
-                .iter()
-                .find(|serial| {
-                    Some(**serial) == identity.as_deref()
-                        || list.lines().any(|line| {
-                            let mut fields = line.split_whitespace();
-                            fields.next() == Some(**serial) && fields.any(|f| f.starts_with("usb:"))
-                        })
-                })
-                .unwrap_or(&devices[0]);
-            return Ok(Self {
-                serial: (*preferred).into(),
-                adb_path,
-            });
-        }
-        Ok(Self {
-            serial: select_serial(&list, serial)?,
-            adb_path,
-        })
+            .shell("getprop ro.serialno")
+        })?;
+        Ok(Self { serial, adb_path })
     }
     fn adb(&self) -> Command {
         let mut command = command(&self.adb_path);
