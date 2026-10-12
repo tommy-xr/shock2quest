@@ -1,0 +1,56 @@
+{
+  "revision": "45f2491162050b242af4e5692c05b4d39b833eb5",
+  "dirty": false,
+  "runtimeSha256": "da0d92355deceea176b8afcb2a6f2ec3f5deddcca4df5ac8b0778f0c08216afc",
+  "capturedAt": "2026-10-12T17:49:18.129Z",
+  "mission": "ops3.mis",
+  "settings": {
+    "vr": {
+      "turning": "Smooth",
+      "vignette": "Off"
+    }
+  },
+  "lighting": [
+    {
+      "key": "ambient_light_intensity",
+      "value": 0,
+      "default": 0
+    },
+    {
+      "key": "held_light_floor",
+      "value": 0.15000000596046448,
+      "default": 0.15000000596046448
+    }
+  ],
+  "player": [
+    23.5,
+    -7.8,
+    149.8
+  ],
+  "subject": "Protocol Droid",
+  "loadout": {
+    "right": "Pistol"
+  },
+  "stats": {
+    "skills": {
+      "standard_weapons": 3
+    }
+  },
+  "fovDeg": 85,
+  "still": {
+    "file": "ops3.png",
+    "resolution": [
+      1280,
+      720
+    ]
+  },
+  "reload": {
+    "files": [
+      "ops3.gif",
+      "ops3.mp4"
+    ],
+    "frames": 78,
+    "fps": 15,
+    "loaded": 12
+  }
+}
