@@ -631,6 +631,7 @@ fn format_link_type(link: &dark::properties::Link) -> String {
         dark::properties::Link::AIPatrol => "AIPatrol".to_string(),
         dark::properties::Link::AICurrentPatrol => "AICurrentPatrol".to_string(),
         dark::properties::Link::Teleport => "Teleport".to_string(),
+        dark::properties::Link::TelePath => "TelePath".to_string(),
         // Include the payload: blast tuning (intensity/radius) is exactly what
         // one inspects these links for.
         dark::properties::Link::StimSource(opts) => format!("StimSource({:?})", opts),

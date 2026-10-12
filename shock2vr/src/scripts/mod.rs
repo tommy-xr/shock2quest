@@ -8,6 +8,7 @@ pub mod speech_registry;
 pub mod speech_util;
 pub mod stasis;
 mod swarm;
+mod teleport_path;
 
 mod apparition;
 mod armor;
@@ -1221,7 +1222,7 @@ impl ScriptWorld {
             "shodanshield" => Box::new(shodan_shield::ShodanShield::new()),
             "seatplayer" => Box::new(TrapTeleportPlayer::new()), // This is used in final battle -does this do anything else besides teleport?
             "dieshodandie" => Box::new(DieShodanDie::new()),
-            "teleportpath" => Box::new(NoopScript::new()), // end cutscene!
+            "teleportpath" => Box::new(teleport_path::TeleportPath::new()),
             "translucebydamage" => Box::new(shodan_shield::TransluceByDamage::default()),
 
             "earthtext" => Box::new(EarthText::new()),
