@@ -1,8 +1,8 @@
 {
-  "revision": "f5ba1127802a8e8e4d2ec9df018ae153f71b54b3",
+  "revision": "bd6bb2ed35e457078943ff0dfa8edcd502351b43",
   "dirty": false,
   "runtimeSha256": "da0d92355deceea176b8afcb2a6f2ec3f5deddcca4df5ac8b0778f0c08216afc",
-  "capturedAt": "2026-10-12T17:22:16.733Z",
+  "capturedAt": "2026-10-12T17:43:35.145Z",
   "mission": "ops3.mis",
   "settings": {
     "vr": {
@@ -49,7 +49,7 @@
       "ops3.gif",
       "ops3.mp4"
     ],
-    "frames": 63,
+    "frames": 78,
     "fps": 15,
     "loaded": 12
   }
