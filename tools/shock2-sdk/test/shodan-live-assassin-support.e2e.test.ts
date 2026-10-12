@@ -26,7 +26,7 @@ test(
       mission: "shodan.mis",
     });
     // This long terrain/AI observation must survive damage to the player
-    // while the authored spikes and hostile creatures remain active.
+    // while the authored spikes and the observed Assassin remain active.
     await game.devParams.set("cheat", 1);
     await game.step({ frames: 10 });
 
@@ -35,6 +35,21 @@ test(
       "Red Assassin mission object 649",
     );
     assert.equal(assassin.name, "Red Assassin");
+
+    // Other assassins can kill this subject with stray Ninja Shots while it
+    // remains fully supported. Isolate terrain support from that friendly fire.
+    for (const templateId of [643, 644, 659, 678]) {
+      const other = only(
+        await game.entities.byTemplate(templateId),
+        `Assassin ${templateId}`,
+      );
+      await game.entities.sendMessage(other.id, { type: "Damage", amount: 10_000 });
+      await game.step({ frames: 1 });
+      assert.ok(
+        Number(prop(await game.entities.detail(other.id), "HitPoints")) <= 0,
+        `other Assassin ${templateId} must stop firing`,
+      );
+    }
 
     // The east-loop tripwire activates these three authored DataShape movers
     // together. TurnOn is the exact production SwitchLink payload and keeps
