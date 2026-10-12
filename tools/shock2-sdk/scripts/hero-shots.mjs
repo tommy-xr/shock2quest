@@ -37,6 +37,8 @@ const RIFLE_RIGHT = [0.18, -0.3, -0.3];
 // A long gun shouldered, aimed down its length.
 const SHOULDER_RIGHT = [0.16, -0.27, -0.4];
 const RACK_RIGHT = [0.15, -0.31, -0.35];
+// When command1's shotgun racks its pump, in clip seconds.
+const RACKS = [0.45, 1.1, 1.75];
 // A melee weapon held up and ready, in frame.
 const READY_LEFT = [-0.16, -0.24, -0.45];
 
@@ -155,7 +157,7 @@ const SHOTS = [
       seconds: 2.3,
       // The gun dips and draws back as each rack yanks the pump.
       hands: {
-        right: [0.45, 1.1, 1.75].flatMap((t) => [
+        right: RACKS.flatMap((t) => [
           { t, value: SHOULDER_RIGHT },
           { t: t + 0.17, value: RACK_RIGHT },
           { t: t + 0.4, value: SHOULDER_RIGHT },
@@ -164,17 +166,11 @@ const SHOTS = [
       trigger: { right: [0.35, 0.95, 1.6] },
       // Each pull fires only if the pump was racked since the last.
       everyPullFires: true,
-      pump: [
-        { t: 0.45, value: 0 },
-        { t: 0.62, value: 1 },
-        { t: 0.8, value: 0 },
-        { t: 1.1, value: 0 },
-        { t: 1.27, value: 1 },
-        { t: 1.45, value: 0 },
-        { t: 1.75, value: 0 },
-        { t: 1.92, value: 1 },
-        { t: 2.1, value: 0 },
-      ],
+      pump: RACKS.flatMap((t) => [
+        { t, value: 0 },
+        { t: t + 0.17, value: 1 },
+        { t: t + 0.35, value: 0 },
+      ]),
     },
   },
   {
@@ -191,8 +187,8 @@ const SHOTS = [
     reload: {
       spare: -31, // A standard clip, offered by the pouch.
       emptyAt: [22.6, -7.8, 131.6], // The mission start, out of the droid's earshot.
-      keep: 2, // Rounds left for the clip to fire before it runs dry.
-      glance: 0.75, // How far (by angle) the eyes drop from the subject to the pouch...
+      shots: [0.15, 0.7], // Pulls, in seconds, before it runs dry and after the reload.
+      glance: 0.75, // How far the eyes drop from the subject toward the pouch...
       gunGlance: 0.85, // ...and then onto the magazine well.
       low: [0.12, -0.3, -0.4], // The pistol at low ready while the hand draws.
       seat: [0.02, -0.4, -0.34], // Pistol brought down to the belly to take the clip.
@@ -323,7 +319,7 @@ async function captureShot(shot) {
       fovDeg: Number(values.fov),
       still: { file: `${shot.name}.png`, resolution: result.resolution },
     };
-    if (shot.clip) provenance.clip = await recordClip(game, shot, subject.id);
+    if (shot.clip) provenance.clip = await recordClip(game, shot, subject.id, held);
     if (shot.melee) provenance.melee = await recordMelee(game, shot, subject.id, held);
     if (shot.reload) provenance.reload = await recordReload(game, shot, subject.id, held);
     await writeProvenance(shot.name, provenance);
@@ -347,19 +343,14 @@ async function aimPoints(game, id) {
  * sway, aimed at the (moving) subject, trigger pulls at the listed times -
  * capturing every 4th frame (15 fps) into `<name>.gif`.
  */
-async function recordClip(game, shot, subjectId) {
+async function recordClip(game, shot, subjectId, held) {
   const { clip } = shot;
   const frames = Math.round(clip.seconds * 60);
   const sink = await frameSink(game, shot.name);
   // Rounds left in each pulling hand's gun, for `everyPullFires`.
   const ammo = async () => {
-    const { player } = await game.info();
-    const held = { left: player.wielded_entity_id, right: player.right_hand_entity_id };
     const rounds = {};
-    for (const hand of Object.keys(clip.trigger)) {
-      const detail = await game.entities.detail(held[hand]);
-      rounds[hand] = Number(detail.properties.find((p) => p.name === "Ammo")?.value);
-    }
+    for (const hand of Object.keys(clip.trigger)) rounds[hand] = await ammoOf(game, held[hand]);
     return rounds;
   };
   const ammoBefore = clip.everyPullFires ? await ammo() : undefined;
@@ -403,6 +394,13 @@ async function recordClip(game, shot, subjectId) {
   } finally {
     await sink.dispose();
   }
+}
+
+/** Rounds loaded in gun `id`. A gun without ammo is a broken setup, not a bad take. */
+async function ammoOf(game, id) {
+  const ammo = (await game.entities.detail(id)).properties.find((p) => p.name === "Ammo");
+  if (!ammo) throw new Error(`entity ${id} has no Ammo`);
+  return Number(ammo.value);
 }
 
 /** Slide the support hand along the pump's rail to `fraction` (0 forward, 1 racked). */
@@ -574,8 +572,7 @@ async function recordMelee(game, shot, subjectId, held) {
  */
 async function recordReload(game, shot, subjectId, held) {
   const { reload } = shot;
-  const rounds = async () =>
-    Number((await game.entities.detail(held.right)).properties.find((p) => p.name === "Ammo")?.value);
+  const rounds = () => ammoOf(game, held.right);
   const pull = async (pulled) => game.input.set("right_hand.trigger", pulled ? 1 : 0);
   let point = await aimPoints(game, subjectId);
 
@@ -586,7 +583,7 @@ async function recordReload(game, shot, subjectId, held) {
   const [ex, ey, ez] = reload.emptyAt;
   await game.player.teleport({ x: ex, y: ey, z: ez });
   await game.step({ frames: 5 });
-  for (let pulls = 0; (await rounds()) > reload.keep; pulls++) {
+  for (let pulls = 0; (await rounds()) > reload.shots.length; pulls++) {
     assert.ok(pulls < 40, `${shot.name}: the pistol would not empty`);
     const { player } = await game.info();
     const ceiling = player.position.map((v, i) => v + (i === 1 ? 10 : 0));
@@ -612,7 +609,7 @@ async function recordReload(game, shot, subjectId, held) {
   const fromOffset = (eye, look, offset) => rotateY(offset, yawTo(eye, look)).map((v, i) => v + eye[i]);
   const lerp = (a, b, s) => a.map((v, i) => v + (b[i] - v) * s);
   const ease = (s) => s * s * (3 - 2 * s);
-  // A look point `g` of the way, by angle, from looking at `a` to looking at `b`.
+  // A look point a fraction `g` of the way from looking at `a` to looking at `b`.
   const glance = (eye, a, b, g) => {
     const unit = (p) => {
       const d = p.map((v, i) => v - eye[i]);
@@ -649,20 +646,25 @@ async function recordReload(game, shot, subjectId, held) {
 
   try {
     // 1. The last rounds.
-    await engage(0.9, [0.15, 0.7]);
+    await engage(0.9, reload.shots);
     assert.equal(await rounds(), 0, `${shot.name}: the pistol must run dry`);
 
     // 2. Glance down; the left hand drops to the pouch, the gun to low ready.
     const draw = 36;
-    const { player: start } = await game.info();
-    const pouch = start.hand_feedback?.ammo_pouch?.center;
-    assert.ok(pouch, `${shot.name}: no ammo pouch`);
+    // The belt follows the head, so the pouch is re-read every frame.
+    const pouchOf = (player) => {
+      const center = player.hand_feedback?.ammo_pouch?.center;
+      if (!center) throw new Error(`${shot.name}: no ammo pouch`);
+      return center;
+    };
     const head = point("head");
     let leftOffset = shot.hands.left;
+    let pouch;
     for (let f = 1; f <= draw; f++) {
       const s = ease(f / draw);
       const { player } = await game.info();
       const eye = eyeOf(player);
+      pouch = pouchOf(player);
       const look = glance(eye, head, pouch, s * reload.glance);
       // The pouch takes the palm, not the controller origin: aim the hand so
       // its palm lands there.
@@ -677,6 +679,7 @@ async function recordReload(game, shot, subjectId, held) {
     await game.input.set("left_hand.squeeze", 1);
     for (let f = 0; f < 6; f++) {
       const { player } = await game.info();
+      pouch = pouchOf(player);
       const look = glance(eyeOf(player), head, pouch, reload.glance);
       await pose(look, { left: leftOffset, right: reload.low }, { left: lerp(eyeOf(player), pouch, 2), right: point("torso") });
     }
@@ -700,7 +703,9 @@ async function recordReload(game, shot, subjectId, held) {
       // Move the hand by the clip's error from where it should be.
       leftOffset = toOffset(eye, look, leftWorld.map((v, i) => v + want[i] - mag.position[i]));
       await pose(look, { left: leftOffset, right: lerp(reload.low, reload.seat, s) }, {
-        left: anchor.map((v, i) => v + (i === 1 ? 1 : 0)), right: point("torso"),
+        // Up and forward in the view's frame, so the clip's yaw stays put
+        // whatever the loop is correcting.
+        left: fromOffset(eye, look, leftOffset.map((v, i) => v + [0, 1, -0.6][i])), right: point("torso"),
       });
     }
     const loaded = await rounds();
@@ -723,9 +728,9 @@ async function recordReload(game, shot, subjectId, held) {
 
     // 5. Back in the fight.
     const resumed = t;
-    await engage(1.0, [resumed + 0.15, resumed + 0.7]);
-    assert.equal(await rounds(), loaded - 2, `${shot.name}: both shots after the reload must fire`);
-    return { ...sink.finish(), rounds: { loaded, after: loaded - 2 } };
+    await engage(1.0, reload.shots.map((at) => resumed + at));
+    assert.equal(await rounds(), loaded - reload.shots.length, `${shot.name}: every shot after the reload must fire`);
+    return { ...sink.finish(), loaded };
   } finally {
     await sink.dispose();
   }
