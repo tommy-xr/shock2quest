@@ -106,3 +106,31 @@ test(
     assert.ok((after.stats?.cyber_modules ?? 50) < 50, "modules were spent");
   },
 );
+
+test(
+  "horde skills start at Standard 1 / Energy 1 with Earth's tutorial skill floor gone",
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "earth_horde" });
+    await game.step({ frames: 10 });
+    // The provisioned career sheet. Marker floors live on the runtime player,
+    // not the sheet - the maintenance attempt below is what proves they're gone.
+    const skills = (await game.info()).player.stats?.skills;
+    assert.ok(skills);
+    assert.equal(skills.standard_weapons, 1);
+    assert.equal(skills.energy_weapons, 1);
+    for (const [name, level] of Object.entries(skills)) {
+      if (name !== "standard_weapons" && name !== "energy_weapons") assert.equal(level, 0, name);
+    }
+
+    // The levels the game checks fold in a new player's start-marker floor.
+    // Earth's marker would floor Energy 2, Hack 3, Repair 3, Maintenance 5;
+    // horde must check its own sheet - including after a reload rebuilds the
+    // runtime player.
+    const saveName = `horde_skills_${Date.now()}`;
+    assert.equal((await game.save(saveName)).success, true);
+    assert.equal((await game.load(saveName)).success, true);
+    await game.step({ frames: 5 });
+    assert.deepEqual((await game.info()).player.checked_skills, skills);
+  },
+);

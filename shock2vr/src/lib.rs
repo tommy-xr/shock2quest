@@ -886,6 +886,10 @@ pub struct PlayerStateSnapshot {
     /// the scene has no `QuestInfo` (e.g. a menu). See `crate::player_stats`.
     pub stats: Option<crate::player_stats::PlayerStats>,
     pub effective_stats: Option<crate::player_stats::PlayerStats>,
+    /// Each skill at the level the game checks (weapon requirements,
+    /// maintenance, research): the sheet with a new player's start-marker
+    /// floor. `None` without a player.
+    pub checked_skills: Option<crate::player_stats::SkillLevels>,
     /// The audio logs the player has collected (frobbed), in pickup order. Empty
     /// when the scene has no `QuestInfo`. Persisted in `QuestInfo`, so it
     /// survives level transitions and save/load. See `crate::quest_info`.
@@ -1097,6 +1101,10 @@ impl Game {
                 .map(|radar| radar.contacts.clone())
                 .unwrap_or_default(),
             effective_stats: crate::implants::effective_stats(world),
+            checked_skills: world
+                .borrow::<UniqueView<crate::mission::PlayerInfo>>()
+                .is_ok()
+                .then(|| crate::scripts::script_util::checked_skill_levels(world)),
             stats: world
                 .borrow::<UniqueView<QuestInfo>>()
                 .ok()

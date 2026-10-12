@@ -4025,7 +4025,9 @@ impl MissionCore {
             .iter()
             .rev()
             .find_map(|link| template_to_entity_id.get(&link.src))
-            .filter(|_| seeds_player);
+            // Horde provisions its own starting stats and skills; Earth's
+            // tutorial loadout (PSI 5, Energy 2, Hack 3...) must not floor them.
+            .filter(|_| seeds_player && !super::earth_horde::is_horde(&mission));
         if let Some(factory) = factory {
             let weapons = world
                 .borrow::<View<dark::properties::PropBaseWeaponDesc>>()
@@ -4041,13 +4043,10 @@ impl MissionCore {
             if let Some(skills) = tech {
                 world.add_component(player_entity, skills);
             }
-            // Horde provisions its own starting stats; Earth's tutorial PSI 5
-            // must not floor them.
             let stats = world
                 .borrow::<View<dark::properties::PropBaseStats>>()
                 .ok()
-                .and_then(|stats| stats.get(factory.0).ok().copied())
-                .filter(|_| !super::earth_horde::is_horde(&mission));
+                .and_then(|stats| stats.get(factory.0).ok().copied());
             if let Some(stats) = stats {
                 world.add_component(player_entity, stats);
             }

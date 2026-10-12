@@ -619,6 +619,24 @@ pub(crate) fn player_skill_level(world: &World, skill: crate::player_stats::Skil
     trained.max(authored)
 }
 
+/// Every skill at the level the game checks it ([`player_skill_level`]): the
+/// trained sheet with a new player's start-marker floor. Debug introspection.
+pub(crate) fn checked_skill_levels(world: &World) -> crate::player_stats::SkillLevels {
+    use crate::player_stats::Skill;
+    let level = |skill| player_skill_level(world, skill);
+    crate::player_stats::SkillLevels {
+        standard_weapons: level(Skill::StandardWeapons),
+        energy_weapons: level(Skill::EnergyWeapons),
+        heavy_weapons: level(Skill::HeavyWeapons),
+        exotic_weapons: level(Skill::ExoticWeapons),
+        hack: level(Skill::Hack),
+        repair: level(Skill::Repair),
+        modify: level(Skill::Modify),
+        maintenance: level(Skill::Maintenance),
+        research: level(Skill::Research),
+    }
+}
+
 /// A gun's condition (`PropGunState`, 0..100), or `None` for a weapon that
 /// tracks none - a melee weapon, the psi amp.
 pub(crate) fn gun_condition(world: &World, entity_id: EntityId) -> Option<f32> {
