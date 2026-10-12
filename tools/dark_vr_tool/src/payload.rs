@@ -64,8 +64,13 @@ fn extract(files: &[(&str, &[u8])], base: &Path) -> Result<Payload> {
             temp.as_file()
                 .set_permissions(fs::Permissions::from_mode(0o755))?;
         }
-        temp.persist(&path)
-            .with_context(|| format!("could not prepare {}", path.display()))?;
+        if let Err(error) = temp.persist(&path) {
+            // Another installer may have published and started this executable;
+            // Windows will not replace it while it is running.
+            if !fs::read(&path).is_ok_and(|existing| existing == *bytes) {
+                return Err(error).with_context(|| format!("could not prepare {}", path.display()));
+            }
+        }
     }
     Ok(Payload {
         adb: dir.join(if cfg!(windows) { "adb.exe" } else { "adb" }),

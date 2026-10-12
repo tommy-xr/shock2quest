@@ -229,6 +229,7 @@ impl eframe::App for InstallerApp {
                 self.append_log("Wait for installation to finish before closing this window.\n");
             }
         }
+        egui::ScrollArea::vertical().id_salt("installer_form").show(ui, |ui| {
         egui::Frame::new().inner_margin(24.0).show(ui, |ui| {
             ui.heading(egui::RichText::new("Shock2Quest").size(30.0).strong());
             ui.label("Install the game on your Quest");
@@ -269,9 +270,10 @@ impl eframe::App for InstallerApp {
             }
             ui.small("Existing saves and settings are kept. Game files are copied into /sdcard/shock2quest.");
             ui.label("Installation log");
-            egui::ScrollArea::vertical().max_height(ui.available_height().max(80.0)).stick_to_bottom(true).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("installer_log").max_height(160.0).stick_to_bottom(true).show(ui, |ui| {
                 ui.add(egui::Label::new(egui::RichText::new(if self.log.is_empty() { "Waiting to begin…" } else { &self.log }).monospace()).wrap());
             });
+        });
         });
         self.capture(&ctx);
     }
