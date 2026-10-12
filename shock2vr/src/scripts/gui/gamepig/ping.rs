@@ -1,5 +1,5 @@
 //! Paddle game with fixed 33 ms simulation ticks and an accelerating opponent.
-use super::GamePigGuiMsg;
+use super::{GamePigGuiMsg, sprite};
 use crate::{
     gui::{self, GuiComponent, GuiCursor},
     scripts::gui::PanelText,
@@ -164,11 +164,6 @@ impl Ping {
     }
 
     pub fn components(&self, world: &World) -> Vec<GuiComponent<GamePigGuiMsg>> {
-        let sprite = |name: &str, x: i32, y: i32, w: f32, h: f32| {
-            gui::image(name)
-                .with_position(vec2(13.0 + x as f32 - w / 2.0, 11.0 + y as f32 - h / 2.0))
-                .with_size(vec2(w, h))
-        };
         let mut components = vec![
             gui::image("pongback.pcx")
                 .with_position(vec2(13.0, 11.0))

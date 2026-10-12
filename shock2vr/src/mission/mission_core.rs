@@ -12775,6 +12775,16 @@ impl MissionCore {
                     }
                 }
 
+                Effect::RecordMiniGameScore { game, score } => {
+                    self.world
+                        .borrow::<UniqueViewMut<QuestInfo>>()
+                        .unwrap()
+                        .mini_game_scores
+                        .entry(game)
+                        .or_default()
+                        .record(score);
+                }
+
                 Effect::InstallMiniGames { entity_id } => {
                     // Read at application time: duplicate queued frobs cannot use
                     // a cartridge after the first application destroys it.
