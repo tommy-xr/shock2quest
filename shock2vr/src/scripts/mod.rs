@@ -97,6 +97,7 @@ mod std_door;
 pub(crate) use std_door::player_door_frob_blocked;
 mod slot_machine;
 mod tool_consumable;
+mod torpedo;
 mod transluce;
 mod trap_collide_off;
 mod trap_delay;
@@ -222,6 +223,7 @@ use self::{
     room_trigger::RoomTrigger,
     std_door::StdDoor,
     tool_consumable::ToolConsumable,
+    torpedo::{TorpedoHack, TorpedoLift},
     transluce::TransluceInOutHolo,
     trap_collide_off::TrapCollideOff,
     trap_delay::TrapDelay,
@@ -1309,11 +1311,11 @@ impl ScriptWorld {
             // (e.g. the rec1 tram and the Rickenbacker shuttle buttons), so reuse the same
             // implemented script rather than duplicating it.
             "simplelevelchangebutton" => Box::new(LevelChangeButton::new()),
+            "torpedolift" => Box::new(TorpedoLift),
+            "torpedohack" => Box::new(TorpedoHack),
 
             // TODO:
             "freezefx" => Box::new(UnimplementedScript::new(&script_name)), // command1
-            "torpedolift" => Box::new(UnimplementedScript::new(&script_name)), // rick1
-            "torpedohack" => Box::new(UnimplementedScript::new(&script_name)), // rick1
             "flushradiation" | "eraseradiation" => {
                 Box::new(hazard_objects::HazardObject::Environment)
             } // rick1
@@ -1829,7 +1831,7 @@ mod script_support_tests {
     fn script_support_follows_the_registry_case_insensitively() {
         assert_eq!(script_support("LaserShot"), ScriptSupport::Implemented);
         assert_eq!(script_support("PlayerScript"), ScriptSupport::Implemented);
-        assert_eq!(script_support("TorpedoLift"), ScriptSupport::Stub);
+        assert_eq!(script_support("FreezeFX"), ScriptSupport::Stub);
         assert_eq!(script_support("teleportmarker"), ScriptSupport::Noop);
         assert_eq!(script_support("NoSuchScript"), ScriptSupport::Unregistered);
     }

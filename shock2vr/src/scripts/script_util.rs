@@ -978,6 +978,25 @@ pub fn localized_property_text(world: &World, raw: &str, table: &str) -> Option<
     (!text.is_empty()).then_some(text)
 }
 
+/// Particle groups riding `host`. The mission data links each one FX -> host
+/// with a concrete `ParticleAttachement`, so they are found by scanning
+/// incoming links. Mission-placed hosts only: a runtime-created host gets its
+/// riders attached without `Links`.
+pub fn attached_particles(world: &World, host: EntityId) -> Vec<EntityId> {
+    let v_links = world.borrow::<View<Links>>().unwrap();
+    v_links
+        .iter()
+        .with_id()
+        .filter(|(_, links)| {
+            links.to_links.iter().any(|l| {
+                matches!(l.link, Link::ParticleAttachement(_))
+                    && l.to_entity_id.map(|e| e.0) == Some(host)
+            })
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
 /// Every item the player is currently carrying: each wielded/hand-held entity
 /// plus everything nested under it, and the backpack (inventory) entity's
 /// contents - following `Contains` links to depth 2 (mirrors the item set the
