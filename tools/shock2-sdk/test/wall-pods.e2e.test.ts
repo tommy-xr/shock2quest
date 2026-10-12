@@ -34,9 +34,14 @@ test("command1's yawed wall pod respects its GooEgg override and emits out of th
   assert.ok(cloud, "this mission overrides Grub Wall Pod with GooEgg");
   assert.ok(cloud.position[2]! > pod.position[2]! + 1, "yaw180 turns local -Z mouth toward world +Z");
   assert.ok(Math.abs(cloud.position[1]! - pod.position[1]!) < 0.1);
-  await game.step({ frames: 4 });
-  const shot = (await game.entities.byTemplate(-1557)).find(e => !existingShots.has(e.id));
-  assert.ok(shot);
+  // The emitted shot can collide and disappear on the following frame. Observe
+  // its launch within the original window instead of sampling only its end.
+  let shot;
+  for (let frame = 0; frame < 4 && !shot; frame++) {
+    await game.step({ frames: 1 });
+    shot = (await game.entities.byTemplate(-1557)).find(e => !existingShots.has(e.id));
+  }
+  assert.ok(shot, "the GooEgg emitter must launch a projectile within four frames");
   const [body] = (await game.physics.bodies({ entityId: shot.id })).bodies;
   assert.ok(body && body.velocity[2]! > 1, "goo projectile's local launch frame must face outward");
 });
