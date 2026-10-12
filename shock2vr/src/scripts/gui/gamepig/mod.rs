@@ -25,7 +25,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         world: &World,
         _state: &GamePigGuiState,
     ) -> Vec<GuiComponent<GamePigGuiMsg>> {
-        // Retail shkminig.cpp's IndexDraw leaves locked rows empty and keeps
+        // The index leaves locked rows empty and keeps
         // each game's authored index, rather than packing unlocked titles.
         let games = world
             .borrow::<UniqueView<QuestInfo>>()
