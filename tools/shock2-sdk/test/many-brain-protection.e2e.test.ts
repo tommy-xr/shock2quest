@@ -49,8 +49,16 @@ test("many: real defender deaths release brain protection across full save/load"
   };
   assert.equal((await discover()).stars.length, 3);
   for (let remaining = 3; remaining >= 0; remaining--) {
-    await pose([302.6862, 6.941723, 150.71123]);
-    await game.step({ frames: 60 });
+    // The old perch collects moving BrainBall_Piece debris after a defender
+    // dies. Save on the lower floor clear of it, not on transient support.
+    await pose([305, -4.6, 145]);
+    await game.step({ frames: 30 });
+    const settled = (await game.info()).player.position;
+    await game.step({ frames: 30 });
+    const player = (await game.info()).player;
+    assert.equal(player.life_state, "alive", "the checkpoint observer must survive");
+    assert.ok(Math.hypot(...player.position.map((value, axis) => value - settled[axis]!)) < 0.01,
+      `the checkpoint must remain stationary before saving: ${settled} -> ${player.position}`);
     const save = `many_brain_${remaining}_${Date.now()}`;
     assert.equal((await game.save(save)).success, true);
     assert.equal((await game.load(save)).success, true);
