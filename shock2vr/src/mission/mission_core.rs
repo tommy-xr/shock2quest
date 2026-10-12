@@ -8032,7 +8032,9 @@ impl MissionCore {
                                     2.0 * pg.size / SCALE_FACTOR,
                                 )
                                 .with_num_particles(pg.num as usize)
-                                .with_launch_time(Duration::from_secs_f32(pg.launch_time))
+                                .with_launch_time(Duration::from_secs_f32(
+                                    crate::particle_group::launch_period(pg, launch_info),
+                                ))
                                 .with_alpha(pg.a as f32 / 255.0)
                                 .with_fade_time(pg.fade_time)
                                 // pg.r is the primary color as an index into the
@@ -17797,7 +17799,11 @@ impl MissionCore {
         // Render particle systems
         if options.render_particles {
             for (particle_entity_id, particle_system) in &self.id_to_particle_system {
-                if !self.visibility_engine.is_visible(*particle_entity_id) {
+                // A world-space trail outlives its emitter's cell, so culling
+                // it with the emitter would drop the whole streak at a portal.
+                if !particle_system.is_world_space()
+                    && !self.visibility_engine.is_visible(*particle_entity_id)
+                {
                     continue;
                 }
 

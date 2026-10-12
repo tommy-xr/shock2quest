@@ -2,7 +2,7 @@
 //! engine particle system, where the mapping is more than a unit conversion.
 
 use cgmath::Vector3;
-use dark::properties::PropParticleGroup;
+use dark::properties::{PropParticleGroup, PropParticleLaunchInfo};
 
 use crate::palette;
 
@@ -19,12 +19,29 @@ pub fn is_world_space(pg: &PropParticleGroup) -> bool {
     pg.motion_type == PGMT_OBJECT_TRAILING && pg.animation_type <= PAT_LAUNCH_CONTINUOUS
 }
 
+/// Seconds between launches. A continuous group spreads its particles evenly
+/// over an average lifetime, overriding the authored period (often 0, which
+/// would launch every frame until full and then pause - a dashed trail);
+/// pre-launched and one-shot groups keep the authored period.
+pub fn launch_period(pg: &PropParticleGroup, launch: &PropParticleLaunchInfo) -> f32 {
+    if pg.animation_type == PAT_LAUNCH_CONTINUOUS && !pg.pre_launch && pg.num > 0 {
+        (launch.min_time + launch.max_time) / 2.0 / pg.num as f32
+    } else {
+        pg.launch_time
+    }
+}
+
 /// Colour over a disk particle's remaining life, as engine color keys. The
 /// palette indices `g` / `b` are the fade targets: `r` until the shortest
 /// lifetime remains, then to `g` at death, or to `g` at half of it and `b`
-/// at death when both are set. Other render types draw a single colour.
+/// at death when both are set. Other render types and fixed (non-launch)
+/// animations draw a single colour.
 pub fn color_fade_keys(pg: &PropParticleGroup, min_lifetime: f32) -> Vec<(f32, Vector3<f32>)> {
-    if pg.render_type != PRT_SINGLE_COLOR_DISK || pg.fade_time <= 0.0 || (pg.g == 0 && pg.b == 0) {
+    if pg.render_type != PRT_SINGLE_COLOR_DISK
+        || pg.animation_type > PAT_LAUNCH_CONTINUOUS
+        || pg.fade_time <= 0.0
+        || (pg.g == 0 && pg.b == 0)
+    {
         return Vec::new();
     }
     let rgb = palette::index_to_rgb;
@@ -44,7 +61,9 @@ mod tests {
     use cgmath::Vector3;
     use dark::properties::PropParticleGroup;
 
-    use super::{color_fade_keys, is_world_space};
+    use dark::properties::PropParticleLaunchInfo;
+
+    use super::{color_fade_keys, is_world_space, launch_period};
     use crate::palette::index_to_rgb;
 
     fn group(motion_type: u32, animation_type: u32, g: u8, b: u8) -> PropParticleGroup {
@@ -63,6 +82,7 @@ mod tests {
             spin: zero,
             is_active: true,
             is_worldspace: false,
+            pre_launch: false,
             size: 1.0,
             scale_vel: 0.0,
             prev_loc: zero,
@@ -106,8 +126,39 @@ mod tests {
         let mut bitmap = group(0, 1, 20, 30);
         bitmap.render_type = 5;
         assert_eq!(color_fade_keys(&bitmap, 2.0), vec![], "disks only");
+        assert_eq!(
+            color_fade_keys(&group(0, 2, 20, 30), 2.0),
+            vec![],
+            "launch only"
+        );
         let mut no_fade = group(0, 1, 20, 30);
         no_fade.fade_time = 0.0;
         assert_eq!(color_fade_keys(&no_fade, 2.0), vec![]);
+    }
+
+    #[test]
+    fn continuous_groups_spread_launches_over_an_average_lifetime() {
+        let zero = Vector3::new(0.0, 0.0, 0.0);
+        let launch = PropParticleLaunchInfo {
+            launch_type: 0,
+            loc_min: zero,
+            loc_max: zero,
+            vel_min: zero,
+            vel_max: zero,
+            min_radius: 0.0,
+            max_radius: 0.0,
+            min_time: 0.4,
+            max_time: 0.6,
+        };
+        // 10 particles over a 0.5 s average lifetime.
+        assert!((launch_period(&group(3, 1, 0, 0), &launch) - 0.05).abs() < 1e-6);
+        let mut pre = group(3, 1, 0, 0);
+        pre.pre_launch = true;
+        assert_eq!(launch_period(&pre, &launch), 0.1, "authored period");
+        assert_eq!(
+            launch_period(&group(3, 0, 0, 0), &launch),
+            0.1,
+            "one-shot keeps it"
+        );
     }
 }

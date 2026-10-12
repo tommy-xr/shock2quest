@@ -319,6 +319,10 @@ impl ParticleSystem {
         }
     }
 
+    pub fn is_world_space(&self) -> bool {
+        self.world_space
+    }
+
     pub fn with_color_keys(self, color_keys: Vec<(f32, Vector3<f32>)>) -> ParticleSystem {
         ParticleSystem { color_keys, ..self }
     }
