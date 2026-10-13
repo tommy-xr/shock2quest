@@ -173,9 +173,9 @@ test(
     // Dropping while still aimed through the desk can legitimately offer it
     // back to that container instead of exercising the self-offer path.
     const pickupPosition = (await game.info()).player.position;
-    await game.input.set("right_hand.thumbstick", [0, -1]);
+    await game.input.set("left_hand.thumbstick", [0, -1]);
     await game.step({ frames: 20 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.step({ frames: 3 });
     const carried = (await game.info()).player;
     assert.equal(carried.right_hand_entity_id, toxin.id);
@@ -264,20 +264,20 @@ test(
       eyeHeight: retreatStart.camera_offset[1],
     });
     let retreatFrames = 0;
-    await game.input.set("right_hand.thumbstick", [0, -1]);
+    await game.input.set("left_hand.thumbstick", [0, -1]);
     while ((await uiBodies(game)).length > 0 && retreatFrames < 80) {
       await game.step({ frames: 10 });
       retreatFrames += 10;
     }
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     assert.equal(
       (await uiBodies(game)).length,
       0,
       "walking away must dismiss the world panel before recovering its host",
     );
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set("left_hand.thumbstick", [0, 1]);
     await game.step({ frames: retreatFrames });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.step({ frames: 3 });
 
     // Player-observable recovery: select the dropped vial through the real

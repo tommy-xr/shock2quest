@@ -16,6 +16,7 @@ test("a paid MedSci turret hack survives save/load", { skip: !enabled, timeout: 
   assert.ok(turret, "authored MedSci turret 610 must be present");
   const [x, y, z] = turret.position;
   await game.player.teleport({ x: x - 1.5, y, z });
+  await game.devParams.set("player_flight", 1);
   await game.input.set("left_hand.thumbstick", [0, 0.5]);
   await game.entities.sendMessage(turret.id, { type: "Frob" });
   await game.step({ frames: 5 });

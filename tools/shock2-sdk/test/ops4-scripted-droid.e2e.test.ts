@@ -36,7 +36,7 @@ test(
     await game.input.set("head.look", [0, 0]);
     await game.step({ frames: 5 });
     const move = async (stick: [number, number], frames: number) => {
-      await game.input.set("right_hand.thumbstick", stick);
+      await game.input.set("left_hand.thumbstick", stick);
       await game.step({ frames });
     };
     await move([0, 1], 30);

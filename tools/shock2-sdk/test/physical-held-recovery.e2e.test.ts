@@ -51,9 +51,9 @@ test("a snagged physical gun returns only after its destination and arm corridor
   const blocked = (await body()).position;
   assert.ok(blocked[2] > -1, "an obstructed arm corridor must not summon the gun through the post");
   const beforeWalk = (await game.info()).player.position;
-  await game.input.set("right_hand.thumbstick", [0, 1]);
+  await game.input.set("left_hand.thumbstick", [0, 1]);
   await game.step({ frames: 24 });
-  await game.input.set("right_hand.thumbstick", [0, 0]);
+  await game.input.set("left_hand.thumbstick", [0, 0]);
   await game.input.set("right_hand.position", [0.3, -0.4, -0.5]);
   await game.step({ frames: 20 });
   const afterWalk = (await game.info()).player;

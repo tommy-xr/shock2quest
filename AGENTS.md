@@ -432,8 +432,9 @@ For debugging visual/rendering changes without a full interactive session:
    curl -X POST http://127.0.0.1:8080/v1/entities/122/message -d '{"type": "Damage", "amount": 5.0}'
    curl -X POST http://127.0.0.1:8080/v1/entities/40/message -d '{"type": "TurnOn"}'
 
-   # Move the player: right stick = locomotion [strafe, forward], left stick
-   # x = turn, left stick y = fly up/down. Set a channel, then step to advance.
+   # Flat debug input: right stick = movement [strafe, forward], left x = turn.
+   # With --vr: left stick = movement, right x = turn. The turn stick y
+   # flies only with the player_flight dev parameter enabled (default off).
    # (Teleporting into a trigger volume fires it, same as walking in.)
    curl -X POST http://127.0.0.1:8080/v1/control/input -d '{"right_hand.thumbstick": [0.0, 1.0]}'
 

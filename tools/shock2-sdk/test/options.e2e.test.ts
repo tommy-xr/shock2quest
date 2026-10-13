@@ -26,10 +26,10 @@ for (const vr of [false, true]) {
       await game.input.set("head.look", [45, 0]);
       await game.step({ frames: 10 });
       assert.equal((await mask()).length, 0, "physical head motion must not activate the vignette");
-      await game.input.set("right_hand.thumbstick", [0, 1]);
+      await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 1]);
       await game.step({ frames: 20 });
       assert.ok((await mask()).length > 0);
-      await game.input.set("right_hand.thumbstick", [0, 0]);
+      await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
       await game.step({ frames: 30 });
       assert.equal((await mask()).length, 0);
       {
@@ -48,7 +48,7 @@ for (const vr of [false, true]) {
         };
         const eyeBefore = await eye();
         const before = await rotation();
-        await game.input.set("left_hand.thumbstick", [1, 0]);
+        await game.input.set(vr ? "right_hand.thumbstick" : "left_hand.thumbstick", [1, 0]);
         await game.step({ frames: 1 });
         const turned = await rotation();
         const eyeAfter = await eye();
@@ -59,12 +59,12 @@ for (const vr of [false, true]) {
         assert.ok(Math.abs(angle - 30) < 0.05, `expected 30 degree snap, got ${angle}`);
         await game.step({ frames: 30 });
         assert.deepEqual(await rotation(), turned, "held stick cannot repeat a snap");
-        await game.input.set("left_hand.thumbstick", [-1, 0]);
+        await game.input.set(vr ? "right_hand.thumbstick" : "left_hand.thumbstick", [-1, 0]);
         await game.step({ frames: 2 });
         assert.deepEqual(await rotation(), turned, "reversing without centering cannot snap");
-        await game.input.set("left_hand.thumbstick", [0, 0]);
+        await game.input.set(vr ? "right_hand.thumbstick" : "left_hand.thumbstick", [0, 0]);
         await game.step({ frames: 2 });
-        await game.input.set("left_hand.thumbstick", [-1, 0]);
+        await game.input.set(vr ? "right_hand.thumbstick" : "left_hand.thumbstick", [-1, 0]);
         await game.step({ frames: 1 });
         const returned = await rotation();
         assert.ok(returned.every((value, i) => Math.abs(value - before[i]!) < 1e-5));
@@ -90,7 +90,7 @@ for (const vr of [false, true]) {
       await using game = await GameServer.launch({ mission: "debug_minimal", debugFlags: vr ? ["--vr"] : [] });
       await game.step({ frames: 10 });
       const before = (await game.info()).player.rotation;
-      await game.input.set("left_hand.thumbstick", [1, 0]);
+      await game.input.set(vr ? "right_hand.thumbstick" : "left_hand.thumbstick", [1, 0]);
       await game.step({ frames: 30 });
       const after = (await game.info()).player.rotation;
       const dot = before.reduce((sum, value, i) => sum + value * after[i]!, 0);

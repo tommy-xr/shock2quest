@@ -31,26 +31,26 @@ for (const vr of [false, true]) {
         crouch: boolean,
         stick: [number, number],
       ) => {
-        await game.input.set("right_hand.thumbstick", [0, 0]);
+        await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
         await game.input.set("crouch", crouch ? 1 : 0);
         await game.player.setStats({ agility });
         await teleportVerified(game, { x: 0, y: 1.5, z: 0 });
         await game.input.set("head.look", [0, 0]);
         await game.step({ frames: 30 });
-        await game.input.set("right_hand.thumbstick", stick);
+        await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", stick);
         // Prime the queued kinematic target before measuring 60 full steps.
         await game.step({ frames: 1 });
         const before = (await game.info()).player.position;
         await game.step({ frames: 60 });
-        await game.input.set("right_hand.thumbstick", [0, 0]);
+        await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
         const after = (await game.info()).player.position;
         return planar(before, after);
       };
       const independentMotion = async () => {
         const before = (await game.info()).player.rotation;
-        await game.input.set("left_hand.thumbstick", [1, 0]);
+        await game.input.set(vr ? "right_hand.thumbstick" : "left_hand.thumbstick", [1, 0]);
         await game.step({ frames: 15 });
-        await game.input.set("left_hand.thumbstick", [0, 0]);
+        await game.input.set(vr ? "right_hand.thumbstick" : "left_hand.thumbstick", [0, 0]);
         const after = (await game.info()).player.rotation;
         const dot = Math.abs(
           before.reduce((sum, value, i) => sum + value * after[i], 0),
@@ -59,9 +59,9 @@ for (const vr of [false, true]) {
         await game.camera.set({ position: [0, 5, 0], lookAt: [-10, 5, 0] });
         const pawn = (await game.info()).player.position;
         const start = (await game.camera.state()).eye_position!;
-        await game.input.set("right_hand.thumbstick", [0, 1]);
+        await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 1]);
         await game.step({ frames: 60 });
-        await game.input.set("right_hand.thumbstick", [0, 0]);
+        await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
         const flight = planar(start, (await game.camera.state()).eye_position!);
         close(
           planar(pawn, (await game.info()).player.position),
@@ -203,7 +203,7 @@ test(
       });
       for (const agility of [1, 6]) {
         await game.input.set("right_hand.squeeze", 0);
-        await game.input.set("right_hand.thumbstick", [0, 0]);
+        await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
         await game.step({ frames: 1 });
         await game.player.setStats({ agility });
         await teleportVerified(game, { x: -6.4, y: 1.5, z: 0 });
@@ -226,9 +226,9 @@ test(
           const before = (await game.info()).player.position;
           const eye = (await game.info()).player.camera_offset[1];
           await game.input.lookAtWorldPoint([-7, before[1] + eye, 0]);
-          await game.input.set("right_hand.thumbstick", [0, 1]);
+          await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 1]);
           await game.step({ frames: 30 });
-          await game.input.set("right_hand.thumbstick", [0, 0]);
+          await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
           const after = (await game.info()).player.position;
           assert.ok(
             after[1] - before[1] > 0.7,

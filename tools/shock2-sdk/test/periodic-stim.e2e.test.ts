@@ -25,6 +25,7 @@ test(
     assert.ok(sparks !== undefined, "expected a concrete electrical-sparks source");
 
     const [x, y, z] = sparks.position;
+    await game.devParams.set("player_flight", 1);
     // Hold the raw debug fly channel at the value that cancels the fixed
     // character-controller gravity step, keeping the player at the source
     // center instead of dropping to the deck below it.

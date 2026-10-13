@@ -125,7 +125,8 @@ export class PlayerApi {
    * destination, not total path length. Requested Y is ignored.
    *
    * Try a longer bounded hop when `budget_limited`, or use production walking:
-   * set `right_hand.thumbstick` to [0, 1], call `game.step({ frames: 20 })`, then
+   * set `right_hand.thumbstick` (flat) or `left_hand.thumbstick` (VR) to [0, 1],
+   * call `game.step({ frames: 20 })`, then
    * reset the stick to [0, 0] in a `finally` block. Aim the camera first; walking
    * follows its heading. Unlike this between-frame hop, that advances physics,
    * scripts, moving props and triggers. Neither method plans a route around

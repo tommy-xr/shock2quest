@@ -30,9 +30,9 @@ for (const { mission, basin } of [
         await game.input.set("head.look", [0, pitch]);
         await game.step({ frames: 1 });
         const before = await game.player.position();
-        await game.input.set("right_hand.thumbstick", [0, 0.15]);
+        await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0.15]);
         await game.step({ frames: 20 });
-        await game.input.set("right_hand.thumbstick", [0, 0]);
+        await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
         const after = await game.player.position();
         const dy = after.y - before.y;
         assert.ok(pitch === 0 ? Math.abs(dy) < 0.03 : dy * Math.sign(-pitch) > 0.15,
@@ -85,10 +85,10 @@ test("debug_many_pool (VR): swim to the sloped rim and exit with the stick", {
   await game.step({ frames: 2 });
   await game.input.lookAtWorldPoint([41.3, 10.7, 30]);
   await game.input.hold("LeftHandLowerButton");
-  await game.input.set("right_hand.thumbstick", [0, 0.2]);
+  await game.input.set("left_hand.thumbstick", [0, 0.2]);
   await game.step({ frames: 210 });
   await game.input.release("LeftHandLowerButton");
-  await game.input.set("right_hand.thumbstick", [0, 0]);
+  await game.input.set("left_hand.thumbstick", [0, 0]);
   await game.step({ frames: 30 });
   const end = await game.player.position();
   assert.ok(end.y > 11.5 && end.z < 40.9, `must stand on the dry rim, got ${JSON.stringify(end)}`);

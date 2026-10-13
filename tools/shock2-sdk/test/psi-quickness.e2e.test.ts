@@ -7,14 +7,14 @@ import { aimVrHandAt } from "./helpers/vr-hand.js";
 
 // Short backward walks stay on the clear floor behind the psi pen. Avoid
 // teleporting with a held amp so hand and weapon stay together throughout.
-async function travel(game: GameServer): Promise<number> {
-  await game.input.set("right_hand.thumbstick", [0, 0]);
+async function travel(game: GameServer, vr: boolean): Promise<number> {
+  await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
   await game.step({ frames: 1 });
-  await game.input.set("right_hand.thumbstick", [0, -0.2]);
+  await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, -0.2]);
   await game.step({ frames: 1 });
   const before = (await game.info()).player.position;
   await game.step({ frames: 30 });
-  await game.input.set("right_hand.thumbstick", [0, 0]);
+  await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
   const after = (await game.info()).player.position;
   return Math.hypot(after[0] - before[0], after[2] - before[2]);
 }
@@ -34,7 +34,7 @@ for (const vr of [false, true]) {
     }
     await game.input.set("head.look", [0, 0]);
     const before = (await game.info()).player;
-    const baseline = await travel(game);
+    const baseline = await travel(game, vr);
     await selectPsiPower(game, "Quickness");
     await pullTrigger(game);
     let player = (await game.info()).player;
@@ -42,7 +42,7 @@ for (const vr of [false, true]) {
     assert.ok(player.active_psi_powers.includes("Quickness"));
     assert.equal(player.stats!.agility, 6, "training is unchanged");
     assert.equal(player.effective_stats!.agility, 8, "authored bonus adds two effective levels");
-    const faster = await travel(game);
+    const faster = await travel(game, vr);
     assert.ok(Math.abs(faster / baseline - 2 / 1.7) < 0.005, `authored speed ratio: ${baseline} → ${faster}`);
     await pullTrigger(game);
     player = (await game.info()).player;
@@ -66,6 +66,6 @@ for (const vr of [false, true]) {
     assert.ok(!player.active_psi_powers.includes("Quickness"));
     assert.equal(player.stats!.modifiers.filter(m => m.source === "psi:quickness").length, 0);
     await game.player.teleport({ x: 0, y: 100, z: 0 });
-    assert.ok(Math.abs((await travel(game)) / baseline - 1) < 0.005, "expiry restores the trained movement speed");
+    assert.ok(Math.abs((await travel(game, vr)) / baseline - 1) < 0.005, "expiry restores the trained movement speed");
   });
 }

@@ -1200,7 +1200,7 @@ on the turn stick's vertical axis: right stick in VR, left-stick channel in
 flatscreen (`↑` / `↓` on desktop). It moves the player through normal physics;
 fall damage still applies. Normal play ignores that axis. Enable it in the
 Camera developer parameters or via `POST /v1/dev-params` with
-`{"key":"player_flight","value":true}`.
+`{"key":"player_flight","value":1}`.
 
 **Free camera** detaches the view from the player: the camera stays where it
 was while the pawn stands still, so you can watch the simulation from outside

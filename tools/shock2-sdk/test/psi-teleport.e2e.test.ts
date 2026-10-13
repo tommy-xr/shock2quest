@@ -26,9 +26,9 @@ for (const vr of [false, true]) {
       assert.equal(marked.psi_points, before.psi_points! - 5, "marking costs five psi");
       const markers = (await game.entities.list({ filter: "Teleport Marker" })).entities;
       assert.equal(markers.length, 1, "first activation creates the authored marker");
-      await game.input.set("right_hand.thumbstick", [0, -1]);
+      await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, -1]);
       await game.step({ frames: 60 });
-      await game.input.set("right_hand.thumbstick", [0, 0]);
+      await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
       const moved = (await game.info()).player.position;
       assert.ok(Math.hypot(...moved.map((v, i) => v - before.position[i]!)) > 2, `movement ${before.position} -> ${moved}`);
       // Switching powers does not erase a recall destination.

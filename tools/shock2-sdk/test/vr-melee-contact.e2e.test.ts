@@ -259,7 +259,7 @@ test(
 
     // Walk into it, then keep walking after the pane is reached - the frame
     // the player is stopped by the wall behind it is the awkward one.
-    await game.input.set("right_hand.thumbstick", [0.0, 1.0]);
+    await game.input.set("left_hand.thumbstick", [0.0, 1.0]);
     await game.step({ frames: 90 });
 
     // The wrench must have been carried THROUGH the pane, or "nothing was

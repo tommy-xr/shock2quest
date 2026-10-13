@@ -36,10 +36,10 @@ test(
         const position = await game.player.position();
         if (Math.hypot(x - position.x, z - position.z) < 0.2) break;
         await game.input.lookAtWorldPoint([x, position.y + PLAYER_EYE_HEIGHT_WORLD, z]);
-        await game.input.set("right_hand.thumbstick", [0, 1]);
+        await game.input.set("left_hand.thumbstick", [0, 1]);
         await game.step({ frames: 1 });
       }
-      await game.input.set("right_hand.thumbstick", [0, 0]);
+      await game.input.set("left_hand.thumbstick", [0, 0]);
       await game.step({ frames: 90 });
       const landed = await game.player.position();
       assert.ok(
@@ -61,10 +61,10 @@ test(
 
     const seventhStep = await game.player.position();
     await game.input.lookAtWorldPoint([32, seventhStep.y + PLAYER_EYE_HEIGHT_WORLD, 14]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set("left_hand.thumbstick", [0, 1]);
     await pulseJump(game);
     await game.step({ frames: 59 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.step({ frames: 120 });
     const entrance = await game.player.position();
     assert.ok(
@@ -123,10 +123,10 @@ test(
       start.y + PLAYER_EYE_HEIGHT_WORLD,
       start.z - 4,
     ]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set("left_hand.thumbstick", [0, 1]);
     await pulseJump(game);
     await game.step({ frames: 7 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.step({ frames: 120 });
     const upperLip = await game.player.position();
     assert.ok(
@@ -139,10 +139,10 @@ test(
       upperLip.y + PLAYER_EYE_HEIGHT_WORLD,
       upperLip.z - 4,
     ]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set("left_hand.thumbstick", [0, 1]);
     await pulseJump(game);
     await game.step({ frames: 7 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
 
     let minimumCenterY = (await game.player.position()).y;
     for (let frame = 0; frame < 300; frame += 1) {

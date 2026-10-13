@@ -59,15 +59,15 @@ export async function turnPawnToward(game: Game, target: Vec3, toleranceDeg = 5)
     const { player } = await game.info();
     const error = pawnYawError(player.position, player.rotation, target);
     if (Math.abs(error) <= (toleranceDeg * Math.PI) / 180) {
-      await game.input.set("left_hand.thumbstick", [0, 0]);
+      await game.input.set("right_hand.thumbstick", [0, 0]);
       return;
     }
     // Stick x > 0 turns left (positive yaw); ease off near the target.
     const push = Math.min(1, Math.max(0.2, Math.abs(error)));
-    await game.input.set("left_hand.thumbstick", [error > 0 ? push : -push, 0]);
+    await game.input.set("right_hand.thumbstick", [error > 0 ? push : -push, 0]);
     await game.step({ frames: 1 });
   }
-  await game.input.set("left_hand.thumbstick", [0, 0]);
+  await game.input.set("right_hand.thumbstick", [0, 0]);
   throw new Error("pawn did not turn toward the target within 600 frames");
 }
 
