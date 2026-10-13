@@ -76,6 +76,7 @@ mod simulation_input;
 mod speech_playback;
 pub use physics::player_collision_shape;
 pub mod item_tools;
+pub mod mini_game_scores;
 pub mod player_stats;
 mod psi;
 mod psi_defenses;

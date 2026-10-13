@@ -1,4 +1,5 @@
 mod boot;
+mod kabacon;
 mod ping;
 mod swinekeeper;
 mod tictactriop;
@@ -27,6 +28,7 @@ pub struct GamePigGuiState {
 #[derive(Clone, Debug)]
 enum Game {
     Ping(ping::Ping),
+    KaBacon(kabacon::KaBacon),
     TicTacTriop(tictactriop::TicTacTriop),
     Swinekeeper(swinekeeper::Swinekeeper),
 }
@@ -34,6 +36,8 @@ enum Game {
 #[derive(Clone)]
 pub enum GamePigGuiMsg {
     SelectPing,
+    SelectKaBacon,
+    BaconActivate,
     SelectTicTacTriop,
     SelectSwinekeeper,
     PlayCell(usize),
@@ -68,11 +72,12 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         if let Some(game) = &state.game {
             components.extend(match game {
                 Game::Ping(game) => game.components(world),
+                Game::KaBacon(game) => game.components(world),
                 Game::TicTacTriop(game) => game.components(world),
                 Game::Swinekeeper(game) => game.components(world),
             });
             let board = match game {
-                Game::Ping(_) => None,
+                Game::Ping(_) | Game::KaBacon(_) => None,
                 Game::TicTacTriop(_) => Some((22.0, 91.0, 40.0, 3)),
                 Game::Swinekeeper(_) => Some((14.0, 52.0, 23.0, 6)),
             };
@@ -105,6 +110,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             let selection = match index {
                 2 => Some(GamePigGuiMsg::SelectPing),
                 3 => Some(GamePigGuiMsg::SelectSwinekeeper),
+                5 => Some(GamePigGuiMsg::SelectKaBacon),
                 8 => Some(GamePigGuiMsg::SelectTicTacTriop),
                 _ => None,
             };
@@ -143,6 +149,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 if let Some(Game::Ping(game)) = &mut state.game {
                     game.stick = Some(x);
                 }
+                if let Some(Game::KaBacon(game)) = &mut state.game {
+                    game.stick = Some(x);
+                }
                 return Effect::NoEffect;
             }
             HandheldControl::Back => {
@@ -152,7 +161,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             HandheldControl::Navigate { x, y } => {
                 let (width, height) = match &state.game {
-                    Some(Game::Ping(_)) => return Effect::NoEffect,
+                    Some(Game::Ping(_) | Game::KaBacon(_)) => return Effect::NoEffect,
                     Some(Game::TicTacTriop(_)) => (3, 3),
                     Some(Game::Swinekeeper(_)) => (6, 10),
                     None => (1, installed_games(world).len().max(1)),
@@ -165,6 +174,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             HandheldControl::Primary => match &state.game {
                 Some(Game::Ping(_)) => None,
+                Some(Game::KaBacon(_)) => Some(GamePigGuiMsg::BaconActivate),
                 Some(Game::TicTacTriop(game)) => Some(if game.finished() {
                     GamePigGuiMsg::Restart
                 } else {
@@ -178,6 +188,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 None => match installed_games(world).get(state.selection) {
                     Some(2) => Some(GamePigGuiMsg::SelectPing),
                     Some(3) => Some(GamePigGuiMsg::SelectSwinekeeper),
+                    Some(5) => Some(GamePigGuiMsg::SelectKaBacon),
                     Some(8) => Some(GamePigGuiMsg::SelectTicTacTriop),
                     _ => None,
                 },
@@ -205,7 +216,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
     fn on_frame(
         &self,
         entity: EntityId,
-        _world: &World,
+        world: &World,
         state: &mut GamePigGuiState,
         time: &crate::time::Time,
         cursor: Option<&GuiCursor>,
@@ -220,6 +231,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     state.game = None;
                     state.selection = 0;
                 }
+            }
+            if let Some(Game::KaBacon(game)) = &mut state.game {
+                return game.advance(time, cursor, state.controller_active, world);
             }
             return Effect::NoEffect;
         };
@@ -243,7 +257,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
 
     fn handle_msg(
         &self,
-        _entity_id: EntityId,
+        entity_id: EntityId,
         world: &World,
         state: &GamePigGuiState,
         msg: &GamePigGuiMsg,
@@ -253,6 +267,22 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             return (state, Effect::NoEffect);
         }
         match msg {
+            GamePigGuiMsg::SelectKaBacon => {
+                if world
+                    .borrow::<UniqueView<QuestInfo>>()
+                    .is_ok_and(|quest| quest.mini_games & (1 << 5) != 0)
+                {
+                    state.game = Some(Game::KaBacon(kabacon::KaBacon::default()));
+                }
+            }
+            GamePigGuiMsg::BaconActivate => {
+                if let Some(Game::KaBacon(game)) = &mut state.game {
+                    game.activate(
+                        super::keypad::object_state(world, entity_id)
+                            == dark::properties::ObjectState::Hacked,
+                    );
+                }
+            }
             GamePigGuiMsg::SelectPing => {
                 if world
                     .borrow::<UniqueView<QuestInfo>>()
@@ -297,6 +327,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             GamePigGuiMsg::Restart => {
                 state.game = state.game.map(|game| match game {
                     Game::Ping(game) => Game::Ping(game),
+                    Game::KaBacon(game) => Game::KaBacon(game),
                     Game::TicTacTriop(_) => Game::TicTacTriop(tictactriop::TicTacTriop::random()),
                     Game::Swinekeeper(_) => Game::Swinekeeper(swinekeeper::Swinekeeper::random()),
                 });
@@ -335,6 +366,25 @@ mod tests {
     use super::*;
     use crate::string_table::StringTable;
     use std::collections::HashMap;
+
+    #[test]
+    fn edge_sprite_crops_source_pixels_in_shared_layout() {
+        let component = sprite("kbbomber.pcx", 12, 32, 32.0, 32.0);
+        assert_eq!(component.rect(), Rect::new(13.0, 27.0, 28.0, 32.0));
+        assert!(matches!(
+            component,
+            GuiComponent::Image {
+                kind: crate::ui::ImageKind::Crop {
+                    u0: 0.125,
+                    v0: 0.0,
+                    u1: 1.0,
+                    v1: 1.0
+                },
+                alpha: 0.5,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn tictactriop_requires_unlock_and_reopening_returns_to_index() {
@@ -395,4 +445,23 @@ mod tests {
             vec2(188.0, 296.0)
         );
     }
+}
+
+fn sprite(name: &str, x: i32, y: i32, w: f32, h: f32) -> GuiComponent<GamePigGuiMsg> {
+    // Games draw into the authored field before either presentation maps it.
+    // Edge sprites must not spill over the flat casing or differ from VR's crop.
+    let left = x as f32 - w / 2.0;
+    let top = y as f32 - h / 2.0;
+    let x0 = left.max(0.0);
+    let y0 = top.max(0.0);
+    let x1 = (left + w).min(140.0).max(x0);
+    let y1 = (top + h).min(276.0).max(y0);
+    let mut canvas = crate::ui::UiCanvas::with_events(vec2(188.0, 296.0));
+    canvas.cropped_image(
+        Rect::new(13.0 + x0, 11.0 + y0, x1 - x0, y1 - y0),
+        name,
+        Rect::new(x0 - left, y0 - top, x1 - x0, y1 - y0),
+        vec2(w, h),
+    );
+    canvas.into_elements().pop().unwrap().with_alpha(0.5)
 }
