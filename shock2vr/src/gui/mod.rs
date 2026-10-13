@@ -6,6 +6,7 @@ use shipyard::{EntityId, World};
 mod gui_component;
 mod gui_manager;
 mod gui_script;
+pub(crate) mod handheld_screen;
 mod proxy_gui_script;
 pub use gui_component::*;
 pub use gui_manager::*;
@@ -63,6 +64,16 @@ where
     ) -> Vec<GuiComponent<TMsg>>;
 
     fn get_config(&self) -> GuiConfig;
+
+    fn handheld_input(
+        &self,
+        _entity: EntityId,
+        _world: &World,
+        _state: &mut TState,
+        _control: crate::handheld_input::HandheldControl,
+    ) -> crate::Effect {
+        crate::Effect::NoEffect
+    }
 
     /// State-aware panel geometry. Most panels are fixed-size and use
     /// `get_config`; panels with a companion plug (the HRM plug) keep its room

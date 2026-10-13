@@ -163,6 +163,11 @@ pub trait GameScene {
     /// Whether this scene wants a 2D mouse cursor (e.g. a menu). Flat runtimes
     /// show the OS cursor and populate `InputContext::pointer` when true; by
     /// default scenes capture the mouse for look.
+    /// The open diegetic panel, if this scene owns one.
+    fn active_world_panel(&self) -> Option<shipyard::EntityId> {
+        None
+    }
+
     fn wants_pointer(&self) -> bool {
         false
     }

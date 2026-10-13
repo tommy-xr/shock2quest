@@ -449,6 +449,9 @@ pub enum MessagePayload {
         is_grabbing: bool,
         hand: Handedness,
     },
+    /// Contextual controls from the hand holding an open handheld.
+    HandheldInput(crate::handheld_input::HandheldControl),
+
     // GUI Events... distilled by the raw hover event
     GUIHover {
         held_entity_id: Option<EntityId>,

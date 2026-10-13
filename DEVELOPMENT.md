@@ -466,10 +466,17 @@ that hand holds (`shock2vr/src/hand_buttons.rs`):
 | a gun | `Jump` | tap/release switches that gun's fire mode; hold ~0.5 s drops its loaded clip, with progress on its cuff meter |
 | an ammo clip | `Jump` | swap with the next compatible carried ammo type, returning the original clip to the backpack |
 | the psi amp | `Jump` | tap swaps current/alternate; hold 0.5 s opens its power carousel |
+| GamePig | open / primary game action | tap secondary game action; hold 0.5 s returns to the game list |
 
-The lower button is jump unconditionally: it is the one control a player reaches
-for with both hands full, so a held weapon must not take it away. Only the upper
-button is contextual. The settings MFD's UNLOAD and `EjectClip` still return rounds to the backpack;
+The lower button remains jump with a held weapon. GamePig captures only its
+holding hand: the thumbstick navigates or plays, X/A opens the closed handheld
+or performs the primary action, and Y/B taps the secondary action or holds to
+return to the game list. The opening input is consumed. The other hand retains
+its normal controls. When the handheld loses input ownership, held buttons and
+sticks remain consumed until release and neutral so they cannot leak into world
+movement or a jump.
+GamePig's shared content canvas fits uniformly inside the physical VR screen;
+flatscreen retains the full handheld frame. The settings MFD's UNLOAD and `EjectClip` still return rounds to the backpack;
 upper-button holding drops a physical clip instead. `CyclePsiPower` stays on
 the psi MFD's stick navigation. Both actions keep their flat keys and HTTP/SDK paths.
 

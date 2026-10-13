@@ -9,6 +9,7 @@ pub mod game_scene;
 pub mod hand_buttons;
 pub mod hand_pose;
 pub mod hand_pose_library;
+pub mod handheld_input;
 pub mod haptics;
 pub mod hit_feedback;
 pub mod horde_stats;
@@ -765,6 +766,7 @@ pub struct Game {
     /// a frame the scene is not updated at all.
     menu_hold: input::MenuHold,
     weapon_buttons: weapon_button_hold::WeaponButtons,
+    handheld_input: handheld_input::HandheldInput,
     menu_hold_ring: scenes::cutscene_skip::RingArt,
 
     /// Wall-clock time spent with the simulation suspended, subtracted from the
@@ -1645,6 +1647,7 @@ impl Game {
             pause_menu: pause_menu::PauseMenu::new(),
             menu_hold: input::MenuHold::default(),
             weapon_buttons: Default::default(),
+            handheld_input: Default::default(),
             menu_hold_ring: scenes::cutscene_skip::RingArt::default(),
             time_suspended: std::time::Duration::ZERO,
             simulation_clock: fixed_step::FixedStepClock::new(
@@ -1787,6 +1790,7 @@ impl Game {
             self.simulation_input.clear();
             self.active_game_scene.cancel_transient_input();
             self.weapon_buttons.cancel(self.active_game_scene.world());
+            self.handheld_input.cancel();
             // Paused: the scene is not updated (nothing simulates, and
             // `VirtualHand` is never advanced, so hands are inert but keep
             // whatever they were holding). It is still *rendered* every frame
@@ -1808,17 +1812,27 @@ impl Game {
         // consumed here so injected actions (e.g. from the debug runtime)
         // apply exactly once.
         let allowed = self.pause_is_allowed() && !self.active_game_scene.wants_pointer();
-        let mut action_effects = self.weapon_buttons.update(
+        let (handheld_context, mut action_effects, captured_lower) = self.handheld_input.update(
+            self.active_game_scene.world(),
+            self.active_game_scene.active_world_panel(),
+            actions,
+            input_context,
+            time.elapsed,
+            allowed && self.options.presentation_mode == PresentationMode::Vr,
+        );
+        let input_context = &handheld_context;
+        action_effects.extend(self.weapon_buttons.update(
             self.active_game_scene.world(),
             actions,
             time.elapsed,
             allowed,
             free_camera::FreeCamera::is_enabled(),
-        );
+        ));
         action_effects.extend(input::ActionDispatcher::dispatch(actions, input_context));
         actions.clear_triggered();
-        let jump_button_held = actions.is_held(input::InputAction::LeftHandLowerButton)
-            || actions.is_held(input::InputAction::RightHandLowerButton);
+        let jump_button_held = (!captured_lower[0]
+            && actions.is_held(input::InputAction::LeftHandLowerButton))
+            || (!captured_lower[1] && actions.is_held(input::InputAction::RightHandLowerButton));
         let with_jump_button;
         let input_context = if jump_button_held {
             with_jump_button = input_context::InputContext {
@@ -2092,6 +2106,7 @@ impl Game {
         self.menu_hold.cancel();
         throwing::cancel_tracking(self.active_game_scene.world());
         self.weapon_buttons.cancel(self.active_game_scene.world());
+        self.handheld_input.cancel();
     }
 
     /// Apply the pause toggle and, while open, drive the overlay.
@@ -2707,6 +2722,7 @@ impl Game {
             }
         }
         self.weapon_buttons.cancel(self.active_game_scene.world());
+        self.handheld_input.cancel();
         self.active_game_scene.on_exit(&mut self.audio_context);
         self.environmental_aux.clear(&mut self.audio_context);
         self.audio_context.stop_ambient_sounds();

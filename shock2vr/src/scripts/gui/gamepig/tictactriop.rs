@@ -54,7 +54,7 @@ impl TicTacTriop {
             .find(|line| board[line[0]] != 0 && line.iter().all(|&i| board[i] == board[line[0]]))
     }
 
-    fn finished(&self) -> bool {
+    pub(super) fn finished(&self) -> bool {
         Self::winning_line(&self.board).is_some() || !self.board.contains(&0)
     }
 

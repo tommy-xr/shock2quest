@@ -142,6 +142,10 @@ where
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
+            MessagePayload::HandheldInput(control) => {
+                self.gui
+                    .handheld_input(entity_id, world, &mut self.state, *control)
+            }
             // An offered item is a deposit by default (it goes into the
             // container), but a panel may claim it as a tool instead - see
             // `Gui::on_provide_for_consumption`.
@@ -476,6 +480,51 @@ mod tests {
         send(&mut script, entity, &world, Handedness::Left, false);
         send(&mut script, entity, &world, Handedness::Right, true);
         assert_eq!(script.state, 2);
+    }
+
+    #[test]
+    fn mounted_letterbox_preserves_press_and_release_edges() {
+        use crate::{
+            gui::{GuiPropProxySize, ProxyGuiScript, handheld_screen::HandheldScreen},
+            runtime_props::RuntimePropTransform,
+        };
+        let mut world = World::new();
+        let host = world.add_entity(HandheldScreen {
+            center: cgmath::vec3(0.0, 0.0, 0.0),
+            size: vec2(0.22, 0.32),
+        });
+        let proxy = world.add_entity((
+            GuiPropProxySize(vec2(0.22, 0.32)),
+            RuntimePropTransform(cgmath::Matrix4::from_scale(1.0)),
+        ));
+        let mut proxy_script = ProxyGuiScript::new(host);
+        let mut script = GuiScript::new(Box::new(CountingGui));
+        let physics = PhysicsWorld::new();
+        for (x, pressed, expected) in [
+            (0.0, false, 0),
+            (0.108, true, 0),
+            (0.0, true, 0),
+            (0.108, false, 0),
+            (0.0, true, 1),
+        ] {
+            let effect = proxy_script.handle_message(
+                proxy,
+                &world,
+                &physics,
+                &MessagePayload::Hover {
+                    held_entity_id: None,
+                    world_position: cgmath::vec3(x, 0.0, 0.0),
+                    is_triggered: pressed,
+                    is_grabbing: false,
+                    hand: Handedness::Right,
+                },
+            );
+            let Effect::Send { msg } = effect else {
+                panic!("margin must forward button edges");
+            };
+            script.handle_message(host, &world, &physics, &msg.payload);
+            assert_eq!(script.state, expected);
+        }
     }
 
     #[test]

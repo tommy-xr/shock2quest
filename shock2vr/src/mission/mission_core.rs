@@ -7940,7 +7940,8 @@ impl MissionCore {
         self.world.run(run_scale_tweq);
         self.world.run(run_bitmap_animation);
 
-        self.gui.update();
+        self.gui
+            .sync_mounted_screens(&mut self.world, &mut self.physics);
 
         let mut current_effects = self.world.borrow::<UniqueViewMut<EffectQueue>>().unwrap();
         effects.append(&mut current_effects.flush());
@@ -13680,6 +13681,26 @@ impl MissionCore {
                             is_player_backpack,
                             world_size,
                         );
+                        if crate::gui::handheld_screen::HandheldScreen::for_entity(
+                            &self.world,
+                            parent_entity,
+                        )
+                        .is_none()
+                            && crate::scripts::script_util::entity_has_script(
+                                &self.world,
+                                parent_entity,
+                                "MiniGameBoy",
+                            )
+                            && let Some(screen) = self
+                                .id_to_model
+                                .get(&parent_entity)
+                                .and_then(|model| model.static_interaction_triangles())
+                                .and_then(
+                                    crate::gui::handheld_screen::HandheldScreen::from_triangles,
+                                )
+                        {
+                            self.world.add_component(parent_entity, screen);
+                        }
                         self.gui.update_ui(
                             &mut self.world,
                             &mut self.physics,
@@ -21659,34 +21680,39 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             // The panel a client aims a controller at, reported straight off
             // the anchor that placed it - so a test cannot aim at a placement
             // the interface does not use.
-            panel_pose: self.vr_use_mode_pointer.is_some().then(|| {
-                let panel = self
-                    .device_panel
-                    .map(|p| {
-                        super::mfd_device::layout(self.flat_ui.device_screen_source())
-                            .surface_panel(p)
-                    })
-                    .unwrap_or_else(|| self.vr_use_mode_anchor.panel());
-                crate::game_scene::DebugUiPanelPose {
-                    center: [panel.center.x, panel.center.y, panel.center.z],
-                    rotation: [
-                        panel.rotation.v.x,
-                        panel.rotation.v.y,
-                        panel.rotation.v.z,
-                        panel.rotation.s,
-                    ],
-                    size: [panel.size.x, panel.size.y],
-                    canvas: if self.flat_ui.device {
-                        {
-                            let size =
-                                super::mfd_device::layout(self.flat_ui.device_screen_source()).size;
-                            [size.x, size.y]
-                        }
-                    } else {
-                        [640.0, 480.0]
-                    },
-                }
-            }),
+            panel_pose: self
+                .vr_use_mode_pointer
+                .is_some()
+                .then(|| {
+                    let panel = self
+                        .device_panel
+                        .map(|p| {
+                            super::mfd_device::layout(self.flat_ui.device_screen_source())
+                                .surface_panel(p)
+                        })
+                        .unwrap_or_else(|| self.vr_use_mode_anchor.panel());
+                    crate::game_scene::DebugUiPanelPose {
+                        center: [panel.center.x, panel.center.y, panel.center.z],
+                        rotation: [
+                            panel.rotation.v.x,
+                            panel.rotation.v.y,
+                            panel.rotation.v.z,
+                            panel.rotation.s,
+                        ],
+                        size: [panel.size.x, panel.size.y],
+                        canvas: if self.flat_ui.device {
+                            {
+                                let size =
+                                    super::mfd_device::layout(self.flat_ui.device_screen_source())
+                                        .size;
+                                [size.x, size.y]
+                            }
+                        } else {
+                            [640.0, 480.0]
+                        },
+                    }
+                })
+                .or_else(|| self.gui.debug_mounted_pose(&self.world)),
             scanner_pose: self.device_scan_pose.map(|(origin, rotation)| {
                 crate::game_scene::DebugScannerPose {
                     origin: [origin.x, origin.y, origin.z],
@@ -24355,6 +24381,10 @@ impl crate::game_scene::GameScene for MissionCore {
 
     fn queue_entity_trigger(&mut self, entity_name: String) {
         self.queue_entity_trigger(entity_name);
+    }
+
+    fn active_world_panel(&self) -> Option<EntityId> {
+        self.gui.active_panel()
     }
 
     fn wants_pointer(&self) -> bool {
