@@ -1,3 +1,4 @@
+mod swinekeeper;
 mod tictactriop;
 
 use super::PanelText;
@@ -15,13 +16,22 @@ pub struct GamePigGui;
 
 #[derive(Clone, Debug, Default)]
 pub struct GamePigGuiState {
-    game: Option<tictactriop::TicTacTriop>,
+    game: Option<Game>,
+}
+
+#[derive(Clone, Debug)]
+enum Game {
+    TicTacTriop(tictactriop::TicTacTriop),
+    Swinekeeper(swinekeeper::Swinekeeper),
 }
 
 #[derive(Clone)]
 pub enum GamePigGuiMsg {
     SelectTicTacTriop,
+    SelectSwinekeeper,
     PlayCell(usize),
+    SwineCell(usize),
+    SwineToggleFlag,
     Restart,
 }
 
@@ -45,7 +55,10 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 .with_size(vec2(188.0, 296.0)),
         ];
         if let Some(game) = &state.game {
-            components.extend(game.components(world));
+            components.extend(match game {
+                Game::TicTacTriop(game) => game.components(world),
+                Game::Swinekeeper(game) => game.components(world),
+            });
             return components;
         }
         for index in 1..=12 {
@@ -54,12 +67,17 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             let name =
                 PanelText::string(world, "minigame", &format!("GameName{index}"), "Test Game");
-            if index == 8 {
+            let selection = match index {
+                3 => Some(GamePigGuiMsg::SelectSwinekeeper),
+                8 => Some(GamePigGuiMsg::SelectTicTacTriop),
+                _ => None,
+            };
+            if let Some(selection) = selection {
                 components.push(
-                    gui::button(GamePigGuiMsg::SelectTicTacTriop)
+                    gui::button(selection)
                         .with_position(vec2(16.0, 14.0 + (index - 1) as f32 * 15.0))
                         .with_size(vec2(156.0, 15.0))
-                        .with_label("game-8")
+                        .with_label(&format!("game-{index}"))
                         .with_alpha(0.0),
                 );
             }
@@ -96,18 +114,37 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     .borrow::<UniqueView<QuestInfo>>()
                     .is_ok_and(|quest| quest.mini_games & (1 << 8) != 0)
                 {
-                    state.game = Some(tictactriop::TicTacTriop::random());
+                    state.game = Some(Game::TicTacTriop(tictactriop::TicTacTriop::random()));
+                }
+            }
+            GamePigGuiMsg::SelectSwinekeeper => {
+                if world
+                    .borrow::<UniqueView<QuestInfo>>()
+                    .is_ok_and(|quest| quest.mini_games & (1 << 3) != 0)
+                {
+                    state.game = Some(Game::Swinekeeper(swinekeeper::Swinekeeper::random()));
                 }
             }
             GamePigGuiMsg::PlayCell(index) => {
-                if let Some(game) = &mut state.game {
+                if let Some(Game::TicTacTriop(game)) = &mut state.game {
                     game.play(*index);
                 }
             }
-            GamePigGuiMsg::Restart => {
-                if state.game.is_some() {
-                    state.game = Some(tictactriop::TicTacTriop::random());
+            GamePigGuiMsg::SwineCell(index) => {
+                if let Some(Game::Swinekeeper(game)) = &mut state.game {
+                    game.play(*index);
                 }
+            }
+            GamePigGuiMsg::SwineToggleFlag => {
+                if let Some(Game::Swinekeeper(game)) = &mut state.game {
+                    game.toggle_flag();
+                }
+            }
+            GamePigGuiMsg::Restart => {
+                state.game = state.game.map(|game| match game {
+                    Game::TicTacTriop(_) => Game::TicTacTriop(tictactriop::TicTacTriop::random()),
+                    Game::Swinekeeper(_) => Game::Swinekeeper(swinekeeper::Swinekeeper::random()),
+                });
             }
         }
         (state, Effect::NoEffect)
