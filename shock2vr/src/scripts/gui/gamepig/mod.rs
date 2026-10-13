@@ -1,5 +1,6 @@
 mod boot;
 mod kabacon;
+mod pig_stacker;
 mod ping;
 mod swinekeeper;
 mod tictactriop;
@@ -28,6 +29,7 @@ pub struct GamePigGuiState {
 #[derive(Clone, Debug)]
 enum Game {
     Ping(ping::Ping),
+    PigStacker(pig_stacker::PigStacker),
     KaBacon(kabacon::KaBacon),
     TicTacTriop(tictactriop::TicTacTriop),
     Swinekeeper(swinekeeper::Swinekeeper),
@@ -36,6 +38,8 @@ enum Game {
 #[derive(Clone)]
 pub enum GamePigGuiMsg {
     SelectPing,
+    SelectPigStacker,
+    StackerPrimary,
     SelectKaBacon,
     BaconActivate,
     SelectTicTacTriop,
@@ -72,12 +76,13 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         if let Some(game) = &state.game {
             components.extend(match game {
                 Game::Ping(game) => game.components(world),
+                Game::PigStacker(game) => game.components(world),
                 Game::KaBacon(game) => game.components(world),
                 Game::TicTacTriop(game) => game.components(world),
                 Game::Swinekeeper(game) => game.components(world),
             });
             let board = match game {
-                Game::Ping(_) | Game::KaBacon(_) => None,
+                Game::Ping(_) | Game::KaBacon(_) | Game::PigStacker(_) => None,
                 Game::TicTacTriop(_) => Some((22.0, 91.0, 40.0, 3)),
                 Game::Swinekeeper(_) => Some((14.0, 52.0, 23.0, 6)),
             };
@@ -112,6 +117,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 3 => Some(GamePigGuiMsg::SelectSwinekeeper),
                 5 => Some(GamePigGuiMsg::SelectKaBacon),
                 8 => Some(GamePigGuiMsg::SelectTicTacTriop),
+                10 => Some(GamePigGuiMsg::SelectPigStacker),
                 _ => None,
             };
             if let Some(selection) = selection {
@@ -140,6 +146,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
     ) -> Effect {
         if state.boot.is_some() {
             return Effect::NoEffect;
+        }
+        if let Some(Game::PigStacker(game)) = &mut state.game {
+            game.hard_drop();
         }
         if let Some(Game::Swinekeeper(game)) = &mut state.game {
             if game.finished() {
@@ -181,6 +190,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 if let Some(Game::KaBacon(game)) = &mut state.game {
                     game.stick = Some(x);
                 }
+                if let Some(Game::PigStacker(game)) = &mut state.game {
+                    game.stick = Some(x);
+                }
                 return Effect::NoEffect;
             }
             HandheldControl::Back => {
@@ -190,7 +202,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             HandheldControl::Navigate { x, y } => {
                 let (width, height) = match &state.game {
-                    Some(Game::Ping(_) | Game::KaBacon(_)) => return Effect::NoEffect,
+                    Some(Game::Ping(_) | Game::KaBacon(_) | Game::PigStacker(_)) => {
+                        return Effect::NoEffect;
+                    }
                     Some(Game::TicTacTriop(_)) => (3, 3),
                     Some(Game::Swinekeeper(_)) => (6, 10),
                     None => (1, installed_games(world).len().max(1)),
@@ -203,6 +217,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             HandheldControl::Primary => match &state.game {
                 Some(Game::Ping(_)) => None,
+                Some(Game::PigStacker(_)) => Some(GamePigGuiMsg::StackerPrimary),
                 Some(Game::KaBacon(_)) => Some(GamePigGuiMsg::BaconActivate),
                 Some(Game::TicTacTriop(game)) => Some(if game.finished() {
                     GamePigGuiMsg::Restart
@@ -219,11 +234,17 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     Some(3) => Some(GamePigGuiMsg::SelectSwinekeeper),
                     Some(5) => Some(GamePigGuiMsg::SelectKaBacon),
                     Some(8) => Some(GamePigGuiMsg::SelectTicTacTriop),
+                    Some(10) => Some(GamePigGuiMsg::SelectPigStacker),
                     _ => None,
                 },
             },
-            HandheldControl::Secondary => matches!(state.game, Some(Game::Swinekeeper(_)))
-                .then_some(GamePigGuiMsg::SwineToggleFlag),
+            HandheldControl::Secondary => {
+                if let Some(Game::PigStacker(game)) = &mut state.game {
+                    game.hard_drop();
+                }
+                matches!(state.game, Some(Game::Swinekeeper(_)))
+                    .then_some(GamePigGuiMsg::SwineToggleFlag)
+            }
         };
         if let Some(message) = message {
             let (next, effect) = self.handle_msg(entity, world, state, &message);
@@ -264,6 +285,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             if let Some(Game::KaBacon(game)) = &mut state.game {
                 return game.advance(time, cursor, state.controller_active, world);
             }
+            if let Some(Game::PigStacker(game)) = &mut state.game {
+                return game.advance(time, cursor, state.controller_active, world);
+            }
             return Effect::NoEffect;
         };
         let effect = boot.advance(entity, time);
@@ -296,6 +320,19 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             return (state, Effect::NoEffect);
         }
         match msg {
+            GamePigGuiMsg::SelectPigStacker => {
+                if world
+                    .borrow::<UniqueView<QuestInfo>>()
+                    .is_ok_and(|quest| quest.mini_games & (1 << 10) != 0)
+                {
+                    state.game = Some(Game::PigStacker(pig_stacker::PigStacker::default()));
+                }
+            }
+            GamePigGuiMsg::StackerPrimary => {
+                if let Some(Game::PigStacker(game)) = &mut state.game {
+                    game.primary();
+                }
+            }
             GamePigGuiMsg::SelectKaBacon => {
                 if world
                     .borrow::<UniqueView<QuestInfo>>()
@@ -356,6 +393,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             GamePigGuiMsg::Restart => {
                 state.game = state.game.map(|game| match game {
                     Game::Ping(game) => Game::Ping(game),
+                    Game::PigStacker(game) => Game::PigStacker(game),
                     Game::KaBacon(game) => Game::KaBacon(game),
                     Game::TicTacTriop(_) => Game::TicTacTriop(tictactriop::TicTacTriop::random()),
                     Game::Swinekeeper(_) => Game::Swinekeeper(swinekeeper::Swinekeeper::random()),
@@ -493,4 +531,68 @@ fn sprite(name: &str, x: i32, y: i32, w: f32, h: f32) -> GuiComponent<GamePigGui
         vec2(w, h),
     );
     canvas.into_elements().pop().unwrap().with_alpha(0.5)
+}
+
+fn score_rank(world: &World, game: u8, points: i32) -> Option<usize> {
+    world
+        .borrow::<UniqueView<QuestInfo>>()
+        .ok()
+        .and_then(|quest| {
+            quest
+                .mini_game_scores
+                .get(&game)
+                .map(|scores| scores.rank(points))
+        })
+        .unwrap_or_else(|| crate::mini_game_scores::MiniGameScores::default().rank(points))
+}
+
+/// Campaign score rows share wrapping and empty-line handling across games.
+fn score_table(
+    world: &World,
+    game: u8,
+    rank: Option<usize>,
+    rect: Rect,
+) -> Vec<GuiComponent<GamePigGuiMsg>> {
+    let quest = world.borrow::<UniqueView<QuestInfo>>().unwrap();
+    let scores = quest.mini_game_scores.get(&game);
+    let rows: Vec<_> = (0..10)
+        .map(|index| {
+            let text = scores
+                .and_then(|scores| scores.entries().get(index))
+                .map_or("", |entry| entry.text.as_str());
+            PanelText::wrap(world, text, rect.w - 18.0)
+        })
+        .collect();
+    let lines = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    let mut components = Vec::new();
+    for (index, row) in rows
+        .iter()
+        .take(((rect.h / 11.0) as usize / lines).min(10))
+        .enumerate()
+    {
+        let y = rect.y + index as f32 * lines as f32 * 11.0;
+        components.push(PanelText::text(
+            &format!("{}:", index + 1),
+            Rect::new(rect.x, y, 18.0, 11.0),
+        ));
+        for (line, text) in row
+            .iter()
+            .enumerate()
+            .filter(|(_, text)| !text.trim().is_empty())
+        {
+            components.push(PanelText::text(
+                text,
+                Rect::new(rect.x + 18.0, y + line as f32 * 11.0, rect.w - 18.0, 11.0),
+            ));
+        }
+    }
+    let (key, fallback) = match rank {
+        Some(0) => ("minig_topscore", "A New High Score!"),
+        Some(_) => ("minig_newscore", "Score Number %d"),
+        None => ("minig_youlose", "Score not in top 10."),
+    };
+    let text = PanelText::string(world, "minigame", key, fallback);
+    let text = PanelText::format(&text, &[rank.unwrap_or(0) as i32 + 1]);
+    components.push(PanelText::text(&text, Rect::new(34.0, 265.0, 118.0, 15.0)));
+    components
 }
