@@ -181,7 +181,8 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
 
     fn on_panel_opened(&self, _world: &World, state: &mut GamePigGuiState) {
         *state = GamePigGuiState {
-            boot: Some(boot::Boot::default()),
+            boot: crate::dev_params::get_bool(crate::dev_params::GAMEPIG_INTRO)
+                .then(boot::Boot::default),
             ..Default::default()
         };
     }
@@ -193,6 +194,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         state: &mut GamePigGuiState,
         time: &crate::time::Time,
     ) -> Effect {
+        if !crate::dev_params::get_bool(crate::dev_params::GAMEPIG_INTRO) {
+            state.boot = None;
+        }
         let Some(boot) = &mut state.boot else {
             return Effect::NoEffect;
         };

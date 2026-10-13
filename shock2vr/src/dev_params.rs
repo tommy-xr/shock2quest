@@ -327,6 +327,9 @@ dev_params! {
     /// dealt all mines and every roll fails, so a critical failure (a repair
     /// destroying its gun) is drivable headlessly.
     HRM_FORCE_CRITICAL = Weapons::bool("hrm_force_critical", "Force HRM critical", false),
+    /// Optional handheld startup title, credit and chime. Disabling it also
+    /// cancels an intro that is already running on the next visible frame.
+    GAMEPIG_INTRO = Root::bool("gamepig_intro", "GamePig intro", false),
     /// Throw feel and balance. Launch values apply to the next release; damage
     /// values are read at impact. Tracking/teleport rejection stays fixed.
     THROW_SPEED_SCALE = Throwing::float("throw_speed_scale", "Speed scale", 1.0, 0.0, 3.0, 0.1),

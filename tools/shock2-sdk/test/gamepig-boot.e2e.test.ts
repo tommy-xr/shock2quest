@@ -7,6 +7,7 @@ for (const vr of [false, true]) {
   test(`GamePig startup descends and chimes once per opening (${vr ? "VR" : "flat"})`,
     { skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000 }, async () => {
       await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: vr ? ["--vr"] : [] });
+      await game.devParams.set("gamepig_intro", 1);
       await game.step({ frames: 30 });
       if (vr) await game.input.set("left_hand.squeeze", 1);
       const handheld = await game.player.spawnItem("Gameboy", vr ? { hand: "left" } : undefined);
@@ -93,5 +94,37 @@ for (const vr of [false, true]) {
       await game.step({ frames: 90 });
       assert.equal((await game.ui.state()).active_panel, null);
       assert.equal((await chimes()).length, 2, "closed startup never emits its pending chime");
+    });
+}
+
+for (const vr of [false, true]) {
+  test(`GamePig intro defaults off and can be cancelled live (${vr ? "VR" : "flat"})`,
+    { skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000 }, async () => {
+      await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: vr ? ["--vr"] : [] });
+      if (vr) await game.input.set("left_hand.squeeze", 1);
+      const handheld = await game.player.spawnItem("Gameboy", vr ? { hand: "left" } : undefined);
+      const cart = await game.player.spawnItem("Swinekeeper");
+      await game.entities.sendMessage(cart.entity_id, { type: "Frob" });
+      const open = async () => {
+        await game.entities.sendMessage(handheld.entity_id, { type: "Frob" });
+        await game.step({ frames: 2 });
+        return (await game.ui.state()).active_panel!.elements;
+      };
+      const chimes = async () => (await game.audio.recent({ sample: "ibeep1" })).sounds;
+      let elements = await open();
+      assert.ok(elements.some(e => e.label === "game-3"), "default opening goes straight to index");
+      assert.ok(!elements.some(e => e.text === "GamePig" || e.text === "TriOptimum"));
+      await game.step({ frames: 90 });
+      assert.equal((await chimes()).length, 0, "default opening has no startup beep");
+      await game.devParams.set("gamepig_intro", 1);
+      elements = await open();
+      assert.ok(elements.some(e => e.text === "GamePig"));
+      await game.step({ frames: 12 });
+      await game.devParams.set("gamepig_intro", 0);
+      await game.step({ frames: 2 });
+      elements = (await game.ui.state()).active_panel!.elements;
+      assert.ok(elements.some(e => e.label === "game-3"), "live disabling ends the intro immediately");
+      await game.step({ frames: 90 });
+      assert.equal((await chimes()).length, 0, "disabled intro cannot emit its pending beep");
     });
 }
