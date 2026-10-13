@@ -84,15 +84,20 @@ test("swimming: air survives a real mission save/load", {
   await game.player.teleport({ x: 16, y: -6.8, z: -231.1 });
   await game.step({ frames: 300 });
   const before = (await game.ui.state()).water!;
-  assert.ok(before.submerged && before.remaining_seconds < 66);
+  assert.equal(before.submerged, true);
+  // The mission's start-marker stats can raise Endurance above the character sheet.
+  assert.ok(before.maximum_seconds > 5);
+  assert.ok(Math.abs(before.maximum_seconds - before.remaining_seconds - 5) < 0.1,
+    "five underwater seconds must consume five seconds of air");
   const save = `swimming-oxygen-${Date.now()}`;
   assert.equal((await game.save(save)).success, true);
   await game.player.teleport({ x: 11, y: -3.8, z: -231.1 });
   await game.step({ frames: 120 });
-  assert.equal((await game.ui.state()).water!.remaining_seconds, 70);
+  assert.equal((await game.ui.state()).water!.remaining_seconds, before.maximum_seconds);
   assert.equal((await game.load(save)).success, true);
   await game.step({ frames: 1 });
   const restored = (await game.ui.state()).water!;
   assert.equal(restored.submerged, true);
+  assert.equal(restored.maximum_seconds, before.maximum_seconds);
   assert.ok(Math.abs(restored.remaining_seconds - before.remaining_seconds) < 0.1);
 });

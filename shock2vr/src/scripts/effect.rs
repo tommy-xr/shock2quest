@@ -313,6 +313,16 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// Install a cartridge's authored bits and consume it atomically.
+    InstallMiniGames {
+        entity_id: EntityId,
+    },
+
+    RecordMiniGameScore {
+        game: u8,
+        score: crate::mini_game_scores::MiniGameScore,
+    },
+
     /// Resolve a world slot-machine wager atomically in the effect applier.
     PlaySlotMachine {
         entity_id: EntityId,

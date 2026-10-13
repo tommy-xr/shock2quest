@@ -15,6 +15,7 @@ use super::{GUI_PIXEL_TO_WORLD_SIZE, GuiCursor};
 /// this panel. Taking it even for hidden panels prevents stale hover on reopen.
 #[derive(Clone, Debug)]
 pub struct GuiFrameInput {
+    time: Time,
     cursor: Point2<f32>,
     last_cursor: Option<GuiCursor>,
     hover_by_hand: [Option<Point2<f32>>; 2],
@@ -66,12 +67,13 @@ where
         entity_id: EntityId,
         _world: &World,
         _physics: &PhysicsWorld,
-        _time: &Time,
+        time: &Time,
     ) -> Effect {
         Effect::BuildUI {
             parent_entity: entity_id,
             handle: self.handle.unwrap(),
             input: GuiFrameInput {
+                time: time.clone(),
                 cursor: self.cursor,
                 last_cursor: self.last_cursor.take(),
                 hover_by_hand: std::mem::take(&mut self.hover_by_hand),
@@ -89,6 +91,13 @@ where
         if self.handle != Some(handle) {
             return None;
         }
+        let frame_effect = self.gui.on_frame(
+            entity_id,
+            world,
+            &mut self.state,
+            &input.time,
+            input.last_cursor.as_ref(),
+        );
         let config = self.gui.get_config_for(entity_id, world, &self.state);
         let components = {
             let cursor = &input.last_cursor;
@@ -98,7 +107,7 @@ where
         // An unavailable GUI must not create a second cursor-only world
         // panel over another script's active interface on the same entity.
         if components.is_empty() {
-            return Some(Effect::NoEffect);
+            return Some(frame_effect);
         }
         let mut canvas = UiCanvas::from_elements(config.screen_size_in_pixels, components);
         let size = vec2(16.0, 16.0);
@@ -124,13 +133,18 @@ where
             })
             .collect();
 
-        Some(Effect::SetUI {
+        let ui = Effect::SetUI {
             parent_entity: entity_id,
             handle,
             world_offset: config.world_offset,
             world_size: config.screen_size_in_pixels * GUI_PIXEL_TO_WORLD_SIZE,
             components: render_components,
             sidecar: self.gui.sidecar(entity_id, world, &self.state),
+        };
+        Some(if matches!(frame_effect, Effect::NoEffect) {
+            ui
+        } else {
+            Effect::combine(vec![frame_effect, ui])
         })
     }
 
@@ -142,6 +156,10 @@ where
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
+            MessagePayload::HandheldInput(control) => {
+                self.gui
+                    .handheld_input(entity_id, world, &mut self.state, *control)
+            }
             // An offered item is a deposit by default (it goes into the
             // container), but a panel may claim it as a tool instead - see
             // `Gui::on_provide_for_consumption`.
@@ -173,6 +191,18 @@ where
                 // The per-open reset arrives via `PanelOpened`, dispatched by
                 // the `OpenPanel` handler, so both open paths share one hook.
                 Effect::combine(vec![Effect::OpenPanel { entity: entity_id }, frob_effect])
+            }
+            MessagePayload::GUISecondary { screen_coordinates } => {
+                let config = self.gui.get_config_for(entity_id, world, &self.state);
+                self.gui.pointer_secondary(
+                    entity_id,
+                    world,
+                    &mut self.state,
+                    point2(
+                        screen_coordinates.x * config.screen_size_in_pixels.x,
+                        screen_coordinates.y * config.screen_size_in_pixels.y,
+                    ),
+                )
             }
             MessagePayload::GUIHover {
                 held_entity_id,
@@ -476,6 +506,51 @@ mod tests {
         send(&mut script, entity, &world, Handedness::Left, false);
         send(&mut script, entity, &world, Handedness::Right, true);
         assert_eq!(script.state, 2);
+    }
+
+    #[test]
+    fn mounted_letterbox_preserves_press_and_release_edges() {
+        use crate::{
+            gui::{GuiPropProxySize, ProxyGuiScript, handheld_screen::HandheldScreen},
+            runtime_props::RuntimePropTransform,
+        };
+        let mut world = World::new();
+        let host = world.add_entity(HandheldScreen {
+            center: cgmath::vec3(0.0, 0.0, 0.0),
+            size: vec2(0.22, 0.32),
+        });
+        let proxy = world.add_entity((
+            GuiPropProxySize(vec2(0.22, 0.32)),
+            RuntimePropTransform(cgmath::Matrix4::from_scale(1.0)),
+        ));
+        let mut proxy_script = ProxyGuiScript::new(host);
+        let mut script = GuiScript::new(Box::new(CountingGui));
+        let physics = PhysicsWorld::new();
+        for (x, pressed, expected) in [
+            (0.0, false, 0),
+            (0.108, true, 0),
+            (0.0, true, 0),
+            (0.108, false, 0),
+            (0.0, true, 1),
+        ] {
+            let effect = proxy_script.handle_message(
+                proxy,
+                &world,
+                &physics,
+                &MessagePayload::Hover {
+                    held_entity_id: None,
+                    world_position: cgmath::vec3(x, 0.0, 0.0),
+                    is_triggered: pressed,
+                    is_grabbing: false,
+                    hand: Handedness::Right,
+                },
+            );
+            let Effect::Send { msg } = effect else {
+                panic!("margin must forward button edges");
+            };
+            script.handle_message(host, &world, &physics, &msg.payload);
+            assert_eq!(script.state, expected);
+        }
     }
 
     #[test]

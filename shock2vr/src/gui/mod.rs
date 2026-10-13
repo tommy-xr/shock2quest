@@ -6,6 +6,7 @@ use shipyard::{EntityId, World};
 mod gui_component;
 mod gui_manager;
 mod gui_script;
+pub(crate) mod handheld_screen;
 mod proxy_gui_script;
 pub use gui_component::*;
 pub use gui_manager::*;
@@ -63,6 +64,40 @@ where
     ) -> Vec<GuiComponent<TMsg>>;
 
     fn get_config(&self) -> GuiConfig;
+
+    /// Advance transient animation only while a presentation requests this
+    /// panel. The scene clock stops during pause and loading.
+    fn on_frame(
+        &self,
+        _entity: EntityId,
+        _world: &World,
+        _state: &mut TState,
+        _time: &crate::time::Time,
+        _cursor: Option<&GuiCursor>,
+    ) -> crate::Effect {
+        crate::Effect::NoEffect
+    }
+
+    /// A fresh secondary pointer gesture, resolved into shared canvas pixels.
+    fn pointer_secondary(
+        &self,
+        _entity: EntityId,
+        _world: &World,
+        _state: &mut TState,
+        _position: cgmath::Point2<f32>,
+    ) -> crate::Effect {
+        crate::Effect::NoEffect
+    }
+
+    fn handheld_input(
+        &self,
+        _entity: EntityId,
+        _world: &World,
+        _state: &mut TState,
+        _control: crate::handheld_input::HandheldControl,
+    ) -> crate::Effect {
+        crate::Effect::NoEffect
+    }
 
     /// State-aware panel geometry. Most panels are fixed-size and use
     /// `get_config`; panels with a companion plug (the HRM plug) keep its room

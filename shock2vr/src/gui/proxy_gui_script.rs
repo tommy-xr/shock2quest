@@ -69,11 +69,28 @@ impl Script for ProxyGuiScript {
                     let local_point =
                         inv_transform.transform_point(vec3_to_point3(*world_position));
 
-                    let screen_point = point2(
+                    let mut screen_point = point2(
                         1.0 - (local_point.x + world_size.x / 2.0) / world_size.x,
                         1.0 - (local_point.y + world_size.y / 2.0) / world_size.y,
                     );
 
+                    if let Some(screen) = super::handheld_screen::HandheldScreen::for_entity(
+                        world,
+                        self.parent_entity_id,
+                    ) {
+                        let surface = screen.surface();
+                        // Margins are outside the content, but still carry
+                        // button edges so dragging a held press in cannot click
+                        // and releasing outside cannot leave a stale latch.
+                        let point = screen
+                            .viewport()
+                            .to_src_point(cgmath::vec2(
+                                screen_point.x * surface.w,
+                                screen_point.y * surface.h,
+                            ))
+                            .unwrap_or(cgmath::vec2(-188.0, -296.0));
+                        screen_point = point2(point.x / 188.0, point.y / 296.0);
+                    }
                     Effect::Send {
                         msg: Message {
                             payload: MessagePayload::GUIHover {

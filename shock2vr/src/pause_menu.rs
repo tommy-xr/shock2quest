@@ -926,6 +926,7 @@ mod tests {
         Some(Pointer2D {
             position: vec2(center.x / CANVAS_W, center.y / CANVAS_H),
             pressed,
+            secondary: false,
         })
     }
 
@@ -1419,6 +1420,7 @@ mod tests {
         let clicking = InputContext {
             pointer: Some(Pointer2D {
                 position: vec2(0.5, 0.5),
+                secondary: false,
                 pressed: true,
             }),
             ..InputContext::default()

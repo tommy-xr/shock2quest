@@ -1,4 +1,4 @@
-use super::{Effect, MessagePayload, Script};
+use super::{Effect, Message, MessagePayload, Script};
 use crate::{mission::PlayerInfo, physics::PhysicsWorld};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
@@ -72,7 +72,15 @@ impl Script for HazardObject {
                                         hierarchy.is_or_descends_from(t, class.template_id)
                                     })
                                 {
-                                    effects.push(Effect::SlayEntity { entity_id: id });
+                                    // Notify BaseLight before removal: Rad FX
+                                    // retains the object on Slain so it can
+                                    // extinguish its light and run ReallySlay.
+                                    effects.push(Effect::Send {
+                                        msg: Message {
+                                            to: id,
+                                            payload: MessagePayload::Slay,
+                                        },
+                                    });
                                 }
                             }
                         }

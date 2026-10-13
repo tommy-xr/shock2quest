@@ -266,6 +266,10 @@ click); tracking channels are not. The format and mapping are documented in
   force-exited file still owns.
 - Injected actions apply on the next game update, which runs even while
   paused (with zero delta time).
+- Hidden step batches simulate every 60 Hz tick but draw only the final frame.
+  `StepResult.frames_rendered` reports the submitted frames; visible windows,
+  screenshot requests, and rendering benchmarks still draw intermediate frames.
+  Scene preparation and visibility callbacks continue on every tick.
 - `game.logs()` returns recent runtime output (also included in launch
   failure errors). Pass `echoLogs: true` to stream it to stderr.
 - If the game thread panics during launch, the error includes the panic

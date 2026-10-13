@@ -31,6 +31,9 @@ pub struct CollectedLog {
 
 #[derive(Deserialize, Serialize, Unique, Clone, Debug)]
 pub struct QuestInfo {
+    /// Player\Mini Games unlock bitfield; global across saves and deck changes.
+    pub mini_games: u32,
+    pub mini_game_scores: HashMap<u8, crate::mini_game_scores::MiniGameScores>,
     pub(crate) breath: crate::swimming::Breath,
     /// Fixed at campaign creation. A typed field keeps invalid quest-bit values
     /// and generic quest mutations from changing the campaign rules.
@@ -77,6 +80,8 @@ impl QuestInfo {
 
     pub fn with_difficulty(difficulty: dark::gamesys::Difficulty) -> Self {
         QuestInfo {
+            mini_games: 0,
+            mini_game_scores: HashMap::new(),
             breath: Default::default(),
             difficulty,
             security_hack_seconds_remaining: 0.0,

@@ -3204,7 +3204,7 @@ struct FailedAnimationGuard {
     completion_owed: bool,
 }
 
-/// How fast the player turns on the left thumbstick, in radians per second at
+/// How fast the player turns on the turn thumbstick, in radians per second at
 /// full deflection. Shared with the free camera ([`crate::free_camera`]) so
 /// the detached view turns at the rate the body does; retuning one retunes
 /// both, rather than the two silently drifting apart.
@@ -4128,6 +4128,7 @@ impl MissionCore {
                 "modify1.str",
                 "modify2.str",
                 "hacktext.str",
+                "minigame.str",
             ],
         ));
         world.add_unique(crate::scripts::ElevatorContext::load(asset_cache, &mission));
@@ -7942,7 +7943,8 @@ impl MissionCore {
         self.world.run(run_scale_tweq);
         self.world.run(run_bitmap_animation);
 
-        self.gui.update();
+        self.gui
+            .sync_mounted_screens(&mut self.world, &mut self.physics);
 
         let mut current_effects = self.world.borrow::<UniqueViewMut<EffectQueue>>().unwrap();
         effects.append(&mut current_effects.flush());
@@ -10589,6 +10591,16 @@ impl MissionCore {
     }
 
     fn remove_entity_single(&mut self, entity_id: EntityId) {
+        // Lightmap/object-light intensities outlive their ECS owner. Clear
+        // the slot while its number is still available, including direct
+        // DestroyEntity paths that do not send a script Slay notification.
+        if let Some(controller) = &mut self.animated_lightmaps {
+            if let Ok(lights) = self.world.borrow::<View<PropAnimLight>>() {
+                if let Ok(light) = lights.get(entity_id) {
+                    controller.set_light_intensity(light.light_number, 0.0);
+                }
+            }
+        }
         // Shipyard recycles entity ids, so stale per-entity animation state
         // must not outlive the entity (a recycled id would inherit it).
         self.id_to_animation_player.remove(&entity_id);
@@ -12766,6 +12778,33 @@ impl MissionCore {
                     }
                 }
 
+                Effect::RecordMiniGameScore { game, score } => {
+                    self.world
+                        .borrow::<UniqueViewMut<QuestInfo>>()
+                        .unwrap()
+                        .mini_game_scores
+                        .entry(game)
+                        .or_default()
+                        .record(score);
+                }
+
+                Effect::InstallMiniGames { entity_id } => {
+                    // Read at application time: duplicate queued frobs cannot use
+                    // a cartridge after the first application destroys it.
+                    let games = self
+                        .world
+                        .borrow::<View<dark::properties::PropMiniGames>>()
+                        .ok()
+                        .and_then(|view| view.get(entity_id).ok().map(|prop| prop.0));
+                    if let Some(games) = games {
+                        self.world
+                            .borrow::<UniqueViewMut<QuestInfo>>()
+                            .unwrap()
+                            .mini_games |= games;
+                        self.destroy_entity(entity_id);
+                    }
+                }
+
                 Effect::InstallSoftware {
                     entity_id,
                     software,
@@ -13606,7 +13645,9 @@ impl MissionCore {
                             self.script_world
                                 .build_gui(parent_entity, &self.world, handle, &input)
                         {
-                            effects.push_front(ui);
+                            for effect in Effect::flatten(vec![ui]).into_iter().rev() {
+                                effects.push_front(effect);
+                            }
                         }
                     }
                 }
@@ -13655,6 +13696,26 @@ impl MissionCore {
                             is_player_backpack,
                             world_size,
                         );
+                        if crate::gui::handheld_screen::HandheldScreen::for_entity(
+                            &self.world,
+                            parent_entity,
+                        )
+                        .is_none()
+                            && crate::scripts::script_util::entity_has_script(
+                                &self.world,
+                                parent_entity,
+                                "MiniGameBoy",
+                            )
+                            && let Some(screen) = self
+                                .id_to_model
+                                .get(&parent_entity)
+                                .and_then(|model| model.static_interaction_triangles())
+                                .and_then(
+                                    crate::gui::handheld_screen::HandheldScreen::from_triangles,
+                                )
+                        {
+                            self.world.add_component(parent_entity, screen);
+                        }
                         self.gui.update_ui(
                             &mut self.world,
                             &mut self.physics,
@@ -17570,12 +17631,17 @@ impl MissionCore {
 
             rendered_model_count += 1;
 
+            let stasis = self.script_world.stasis(*entity_id, &self.world);
+            let frame_model = crate::model_frame_animation::model(
+                &self.world,
+                asset_cache,
+                *entity_id,
+                stasis.map(|state| state.visual_time()),
+            );
             let mut scene_objs = {
-                if let Some(pose) = self
-                    .script_world
-                    .stasis(*entity_id, &self.world)
-                    .and_then(|s| s.pose())
-                {
+                if let Some((_, model)) = &frame_model {
+                    model.to_scene_objects().clone()
+                } else if let Some(pose) = stasis.and_then(|s| s.pose()) {
                     objs.to_posed_scene_objects(pose)
                 } else if let Some(player) = self.id_to_animation_player.get(entity_id) {
                     objs.to_animated_scene_objects(player)
@@ -17601,7 +17667,9 @@ impl MissionCore {
             }
             self.script_world
                 .apply_morph_weights(*entity_id, &mut scene_objs);
-            let is_animated_model = objs.is_animated();
+            let is_animated_model = frame_model
+                .as_ref()
+                .map_or_else(|| objs.is_animated(), |(_, model)| model.is_animated());
 
             // Authored/scripted per-entity alpha (Renderer\Transparency (alpha):
             // 1.0 = opaque, 0.0 = invisible), e.g. the CS9 holo exhibits.
@@ -17627,7 +17695,10 @@ impl MissionCore {
             let debug_tag = Rc::new(engine::scene::SceneObjectDebugTag {
                 entity_id: Some(entity_id.inner()),
                 name: v_sym_name.get(*entity_id).ok().map(|n| n.0.clone()),
-                model: v_model_name.get(*entity_id).ok().map(|m| m.0.clone()),
+                model: frame_model
+                    .as_ref()
+                    .map(|(name, _)| name.clone())
+                    .or_else(|| v_model_name.get(*entity_id).ok().map(|m| m.0.clone())),
                 source: Some("entity".to_owned()),
             });
 
@@ -21624,34 +21695,39 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             // The panel a client aims a controller at, reported straight off
             // the anchor that placed it - so a test cannot aim at a placement
             // the interface does not use.
-            panel_pose: self.vr_use_mode_pointer.is_some().then(|| {
-                let panel = self
-                    .device_panel
-                    .map(|p| {
-                        super::mfd_device::layout(self.flat_ui.device_screen_source())
-                            .surface_panel(p)
-                    })
-                    .unwrap_or_else(|| self.vr_use_mode_anchor.panel());
-                crate::game_scene::DebugUiPanelPose {
-                    center: [panel.center.x, panel.center.y, panel.center.z],
-                    rotation: [
-                        panel.rotation.v.x,
-                        panel.rotation.v.y,
-                        panel.rotation.v.z,
-                        panel.rotation.s,
-                    ],
-                    size: [panel.size.x, panel.size.y],
-                    canvas: if self.flat_ui.device {
-                        {
-                            let size =
-                                super::mfd_device::layout(self.flat_ui.device_screen_source()).size;
-                            [size.x, size.y]
-                        }
-                    } else {
-                        [640.0, 480.0]
-                    },
-                }
-            }),
+            panel_pose: self
+                .vr_use_mode_pointer
+                .is_some()
+                .then(|| {
+                    let panel = self
+                        .device_panel
+                        .map(|p| {
+                            super::mfd_device::layout(self.flat_ui.device_screen_source())
+                                .surface_panel(p)
+                        })
+                        .unwrap_or_else(|| self.vr_use_mode_anchor.panel());
+                    crate::game_scene::DebugUiPanelPose {
+                        center: [panel.center.x, panel.center.y, panel.center.z],
+                        rotation: [
+                            panel.rotation.v.x,
+                            panel.rotation.v.y,
+                            panel.rotation.v.z,
+                            panel.rotation.s,
+                        ],
+                        size: [panel.size.x, panel.size.y],
+                        canvas: if self.flat_ui.device {
+                            {
+                                let size =
+                                    super::mfd_device::layout(self.flat_ui.device_screen_source())
+                                        .size;
+                                [size.x, size.y]
+                            }
+                        } else {
+                            [640.0, 480.0]
+                        },
+                    }
+                })
+                .or_else(|| self.gui.debug_mounted_pose(&self.world)),
             scanner_pose: self.device_scan_pose.map(|(origin, rotation)| {
                 crate::game_scene::DebugScannerPose {
                     origin: [origin.x, origin.y, origin.z],
@@ -24320,6 +24396,10 @@ impl crate::game_scene::GameScene for MissionCore {
 
     fn queue_entity_trigger(&mut self, entity_name: String) {
         self.queue_entity_trigger(entity_name);
+    }
+
+    fn active_world_panel(&self) -> Option<EntityId> {
+        self.gui.active_panel()
     }
 
     fn wants_pointer(&self) -> bool {

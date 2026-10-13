@@ -40,7 +40,7 @@ pub fn head_rotation_from_yaw_pitch(yaw_deg: f32, pitch_deg: f32) -> Quaternion<
 pub fn input_channels_help() -> &'static str {
     "valid channels: head.rotation [x,y,z,w], head.look [yaw_deg,pitch_deg], \
      head.position [x,y,z] (pawn-local), \
-     pointer.position [x,y] in [0,1] (origin top-left; null clears), pointer.pressed 0|1, \
+     pointer.position [x,y] in [0,1] (origin top-left; null clears), pointer.pressed 0|1, pointer.secondary 0|1, \
      {left,right}_hand.{trigger,squeeze,a} <number 0..1>, \
      {left,right}_hand.thumbstick [x,y], \
      {left,right}_hand.position [x,y,z] (pawn-local), \
@@ -208,12 +208,13 @@ pub fn apply_input_patch(
             }
             let pointer = input.pointer.get_or_insert(Pointer2D {
                 position: cgmath::vec2(0.0, 0.0),
+                secondary: false,
                 pressed: false,
             });
             pointer.position = cgmath::vec2(xy[0], xy[1]);
             Ok(())
         }
-        "pointer.pressed" => {
+        "pointer.pressed" | "pointer.secondary" => {
             let pressed = match num(channel, value)? {
                 v if v == 0.0 => false,
                 v if v == 1.0 => true,
@@ -223,9 +224,14 @@ pub fn apply_input_patch(
             };
             let pointer = input.pointer.get_or_insert(Pointer2D {
                 position: cgmath::vec2(0.0, 0.0),
+                secondary: false,
                 pressed: false,
             });
-            pointer.pressed = pressed;
+            if channel == "pointer.secondary" {
+                pointer.secondary = pressed;
+            } else {
+                pointer.pressed = pressed;
+            }
             Ok(())
         }
         // Crouch request: like the desktop LeftControl hold. The ACTUAL state
@@ -334,8 +340,8 @@ fn canonical_channel(channel: &str) -> Result<(String, bool), String> {
     }
     match channel {
         "head.look" => Ok(("head.rotation".to_owned(), true)),
-        "head.rotation" | "head.position" | "pointer.position" | "pointer.pressed" | "crouch"
-        | "jump" | "lean" => Ok((channel.to_owned(), false)),
+        "head.rotation" | "head.position" | "pointer.position" | "pointer.pressed"
+        | "pointer.secondary" | "crouch" | "jump" | "lean" => Ok((channel.to_owned(), false)),
         _ => Err(unknown_channel(channel)),
     }
 }
@@ -584,5 +590,20 @@ mod tests {
         assert_eq!(overrides.channels().len(), 2);
         overrides.clear();
         assert!(overrides.is_empty());
+    }
+    #[test]
+    fn secondary_pointer_channel_is_independent_and_numeric() {
+        let mut input = InputContext::default();
+        let mut overrides = InputOverrides::new();
+        overrides.set("pointer.secondary", json!(1)).unwrap();
+        apply_input_patch(&mut input, "pointer.secondary", &json!(1)).unwrap();
+        assert!(input.pointer.unwrap().secondary);
+        assert!(!input.pointer.unwrap().pressed);
+        apply_input_patch(&mut input, "pointer.pressed", &json!(1)).unwrap();
+        apply_input_patch(&mut input, "pointer.secondary", &json!(0)).unwrap();
+        assert!(!input.pointer.unwrap().secondary);
+        assert!(input.pointer.unwrap().pressed);
+        assert!(apply_input_patch(&mut input, "pointer.secondary", &json!(true)).is_err());
+        assert!(apply_input_patch(&mut input, "pointer.secondary", &json!(0.5)).is_err());
     }
 }

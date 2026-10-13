@@ -805,6 +805,7 @@ fn process_events(
         if let Some(MousePosition { x, y }) = &camera_context.mouse_position {
             input_context.pointer = Some(shock2vr::input_context::Pointer2D {
                 position: vec2(x / SCR_WIDTH as f32, y / SCR_HEIGHT as f32),
+                secondary: window.get_mouse_button(MouseButton::Button2) == Action::Press,
                 pressed: window.get_mouse_button(MouseButton::Button1) == Action::Press,
             });
         }

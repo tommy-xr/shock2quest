@@ -34,9 +34,11 @@ test(
     async function walkTo(x: number, z: number, expectedY: number): Promise<void> {
       for (let frame = 0; frame < 80; frame++) {
         const position = await game.player.position();
-        if (Math.hypot(x - position.x, z - position.z) < 0.2) break;
+        const distance = Math.hypot(x - position.x, z - position.z);
+        if (distance < 0.2) break;
         await game.input.lookAtWorldPoint([x, position.y + PLAYER_EYE_HEIGHT_WORLD, z]);
-        await game.input.set("left_hand.thumbstick", [0, 1]);
+        // Ease off near a tread so airborne momentum does not carry us past it.
+        await game.input.set("left_hand.thumbstick", [0, Math.min(1, distance)]);
         await game.step({ frames: 1 });
       }
       await game.input.set("left_hand.thumbstick", [0, 0]);
@@ -63,7 +65,13 @@ test(
     await game.input.lookAtWorldPoint([32, seventhStep.y + PLAYER_EYE_HEIGHT_WORLD, 14]);
     await game.input.set("left_hand.thumbstick", [0, 1]);
     await pulseJump(game);
-    await game.step({ frames: 59 });
+    // Keep facing the opening while airborne instead of sliding past it along the wall.
+    for (let frame = 0; frame < 120; frame++) {
+      const position = await game.player.position();
+      if (position.z > 12) break;
+      await game.input.lookAtWorldPoint([32, position.y + PLAYER_EYE_HEIGHT_WORLD, 14]);
+      await game.step({ frames: 1 });
+    }
     await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.step({ frames: 120 });
     const entrance = await game.player.position();

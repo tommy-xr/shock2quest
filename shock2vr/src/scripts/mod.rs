@@ -48,6 +48,7 @@ mod hazard_objects;
 pub mod healing_item;
 mod homing;
 pub(crate) mod impact_sound;
+mod mini_game_cart;
 mod shodan_head;
 pub(crate) mod shodan_shot;
 
@@ -448,6 +449,14 @@ pub enum MessagePayload {
         is_grabbing: bool,
         hand: Handedness,
     },
+    /// Contextual controls from the hand holding an open handheld.
+    HandheldInput(crate::handheld_input::HandheldControl),
+
+    /// Fresh secondary pointer press, in panel-local normalized coordinates.
+    GUISecondary {
+        screen_coordinates: Point2<f32>,
+    },
+
     // GUI Events... distilled by the raw hover event
     GUIHover {
         held_entity_id: Option<EntityId>,
@@ -1427,7 +1436,7 @@ impl ScriptWorld {
             // medsci2
             // Keycard in watt's office
             "minigameboy" => gui_script(Box::new(GamePigGui)),
-            "minigamecart" => Box::new(NoopScript::new()),
+            "minigamecart" => Box::new(mini_game_cart::MiniGameCart),
             "forcewallstructure" => Box::new(force_wall::ForceWallStructure::default()),
             "forcedoor" => Box::new(UnimplementedScript::new(&script_name)),
             "wormpilescript" => Box::new(crate::item_tools::WormPile),
