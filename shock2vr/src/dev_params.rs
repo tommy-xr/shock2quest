@@ -573,6 +573,8 @@ dev_params! {
     /// cannot detach the view. Turning it back off while detached also
     /// re-attaches the camera, so the switch is always a way out.
     FREE_CAMERA = Camera::bool("free_camera", "Free camera", false),
+    /// Allow the turn stick's vertical axis to move the player up/down for debugging.
+    PLAYER_FLIGHT = Camera::bool("player_flight", "Player flight", false),
     /// Experimental player avatar with controller-driven arms. Only
     /// submitted in VR while the spectator camera is detached.
     VR_DEBUG_BODY = Camera::bool("vr_debug_body", "Hacker VR body", false),
@@ -868,6 +870,7 @@ mod tests {
     /// The free camera is a debug tool: it must be off until asked for.
     #[test]
     fn the_free_camera_gate_defaults_off() {
+        assert_eq!(spec(PLAYER_FLIGHT).default, 0.0);
         assert!(!get_bool(FREE_CAMERA));
         assert!(!get_bool(FREE_CAMERA_CULL_FROM_CAMERA));
     }

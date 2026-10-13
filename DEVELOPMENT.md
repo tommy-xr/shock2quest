@@ -1195,6 +1195,13 @@ The deterministic regression uses the button post in `debug_interactions`:
 `tools/shock2-sdk/test/physical-held-recovery.e2e.test.ts` snags a rifle, walks
 past the post, and checks recovery and retained weapon state.
 
+**Player flight** (`player_flight`, off by default) enables debug ascent/descent
+on the turn stick's vertical axis: right stick in VR, left-stick channel in
+flatscreen (`↑` / `↓` on desktop). It moves the player through normal physics;
+fall damage still applies. Normal play ignores that axis. Enable it in the
+Camera developer parameters or via `POST /v1/dev-params` with
+`{"key":"player_flight","value":true}`.
+
 **Free camera** detaches the view from the player: the camera stays where it
 was while the pawn stands still, so you can watch the simulation from outside
 without perturbing it. Nothing in the simulation follows it - AI keeps reading
@@ -1210,11 +1217,14 @@ than sleepwalking off:
 
 | Control | Desktop | Effect |
 | ------- | ------- | ------ |
-| Right thumbstick | `W` `A` `S` `D` | fly along the view / strafe |
-| Left thumbstick x | `←` `→` | turn |
-| Left thumbstick y | `↑` `↓` | rise / fall |
+| Left thumbstick (VR) | `W` `A` `S` `D` | fly along the view / strafe |
+| Right thumbstick x (VR) | `←` `→` | turn |
+| Right thumbstick y (VR) | `↑` `↓` | rise / fall |
 | Head / mouse | mouse | aim (the camera is a freeze-frame of the eye, so looking works as it always does) |
 | — | `Shift` | double speed |
+
+Flat debug input keeps right-stick movement and left-stick turn/rise/fall.
+Detached camera flight does not require `player_flight`.
 
 The camera noclips - flying through a wall to look at the far side is the tool
 working, not a bug. **Cam speed** sets the pace in the player's own speed

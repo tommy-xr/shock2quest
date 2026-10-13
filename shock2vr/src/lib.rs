@@ -1836,7 +1836,8 @@ impl Game {
         // body can be looked at, damaged and scripted as usual - it just does
         // not walk. Done here, in the one place the scene is updated, so no
         // runtime has to know the camera exists.
-        self.free_camera.fly(time, input_context);
+        self.free_camera
+            .fly(time, input_context, self.options.presentation_mode);
         let withheld;
         let input_context = if self.free_camera.consumes_locomotion() {
             withheld = free_camera::without_locomotion(input_context);

@@ -49,8 +49,8 @@ pub fn input_channels_help() -> &'static str {
      crouch 0|1 (stand-up refused without headroom), \
      lean -1..1 (flat only; negative left, positive right), \
      jump 0|1 (held; launches on the grounded rising edge); \
-     locomotion: right_hand.thumbstick [strafe, forward] moves the player, \
-     left_hand.thumbstick.x turns, left_hand.thumbstick.y flies up/down"
+     locomotion: flat uses right_hand.thumbstick [strafe, forward] to move and left_hand.thumbstick.x to turn; \
+     VR uses left to move and right to turn; turn-stick y flies only with player_flight enabled"
 }
 
 /// Patch a single channel of an `InputContext`, returning an actionable error for

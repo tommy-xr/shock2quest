@@ -131,7 +131,12 @@ impl FreeCamera {
     /// integrated straight into the pose instead of driven through a
     /// character controller. That is what makes it noclip, and deliberately
     /// so: flying through a wall to look at the far side is the tool working.
-    pub fn fly(&mut self, time: &Time, input_context: &InputContext) {
+    pub fn fly(
+        &mut self,
+        time: &Time,
+        input_context: &InputContext,
+        presentation: crate::PresentationMode,
+    ) {
         let Some((position, rotation)) = self.pose else {
             return;
         };
@@ -142,7 +147,9 @@ impl FreeCamera {
             return;
         }
 
-        let turn = input_context.left_hand.thumbstick.x * delta_time * PLAYER_TURN_RATE;
+        let (move_thumbstick, turn_thumbstick) =
+            input_context.locomotion_sticks(presentation, true);
+        let turn = turn_thumbstick.x * delta_time * PLAYER_TURN_RATE;
         let rotation =
             rotation * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), cgmath::Rad(turn));
 
@@ -153,14 +160,13 @@ impl FreeCamera {
         let facing = rotation * input_context.head.rotation;
         let speed = dev_params::get(dev_params::FREE_CAMERA_SPEED) / dark::SCALE_FACTOR;
         let step = delta_time * speed;
-        let move_thumbstick = input_context.right_hand.thumbstick;
         let position = position
             + facing.rotate_vector(vec3(
                 -step * move_thumbstick.x,
                 0.0,
                 -step * move_thumbstick.y,
             ))
-            + vec3(0.0, step * input_context.left_hand.thumbstick.y, 0.0);
+            + vec3(0.0, step * turn_thumbstick.y, 0.0);
 
         self.pose = Some((position, rotation));
     }
@@ -378,7 +384,7 @@ mod tests {
         let mut input = InputContext::default();
         input.head.rotation = Quaternion::from_angle_y(Deg(0.0_f32));
         stick(&mut input);
-        camera.fly(&one_second(), &input);
+        camera.fly(&one_second(), &input, crate::PresentationMode::Flat);
         camera.camera_pose((
             vec3(99.0, 99.0, 99.0),
             Quaternion::from_angle_y(Deg(0.0_f32)),
@@ -420,7 +426,7 @@ mod tests {
         let mut camera = FreeCamera::new();
         let mut input = InputContext::default();
         input.right_hand.thumbstick.y = 1.0;
-        camera.fly(&one_second(), &input);
+        camera.fly(&one_second(), &input, crate::PresentationMode::Flat);
         assert_eq!(camera.camera_pose(pawn()), pawn());
     }
 
@@ -439,6 +445,7 @@ mod tests {
                 total: std::time::Duration::from_secs(1),
             },
             &input,
+            crate::PresentationMode::Flat,
         );
         assert_eq!(camera.camera_pose(pawn()), pawn());
     }

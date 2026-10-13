@@ -5003,10 +5003,14 @@ impl MissionCore {
         if self.use_mode || !self.player_is_alive() {
             self.dismiss_amp_carousel();
         }
+        let turn_hand = match game_options.presentation_mode {
+            crate::PresentationMode::Vr => crate::Handedness::Right,
+            crate::PresentationMode::Flat => crate::Handedness::Left,
+        };
         let turn_stick_captured = self
             .psi_carousel
             .as_ref()
-            .is_some_and(|menu| menu.hand == crate::Handedness::Left);
+            .is_some_and(|menu| menu.hand == turn_hand);
         if let Some(mut menu) = self.psi_carousel.take() {
             let held = crate::wielded_weapon::weapon_in_hand(&self.world, menu.hand);
             let tracked = input_context
@@ -5137,20 +5141,20 @@ impl MissionCore {
         }
         let input_context = &tracked_input;
 
+        let (move_thumbstick_value, turn_thumbstick_value) = input_context.locomotion_sticks(
+            game_options.presentation_mode,
+            crate::dev_params::get_bool(crate::dev_params::PLAYER_FLIGHT),
+        );
         let vr_settings = crate::user_settings::get().vr;
         let mut turn_radians = if turn_stick_captured
             || (self.psi_powers_open
-                && self.psi_navigation_hand(game_options.presentation_mode)
-                    == crate::vr_config::Handedness::Left)
+                && self.psi_navigation_hand(game_options.presentation_mode) == turn_hand)
         {
             self.vr_comfort.disarm_turn();
             0.0
         } else {
-            self.vr_comfort.turn_radians(
-                input_context.left_hand.thumbstick.x,
-                delta_time,
-                vr_settings,
-            )
+            self.vr_comfort
+                .turn_radians(turn_thumbstick_value.x, delta_time, vr_settings)
         };
         let mut new_rotation = player.rotation
             * cgmath::Quaternion::from_axis_angle(
@@ -5173,7 +5177,7 @@ impl MissionCore {
         }
 
         self.vr_comfort.update_vignette(
-            input_context.right_hand.thumbstick,
+            move_thumbstick_value,
             turn_radians,
             delta_time,
             vr_settings,
@@ -5181,7 +5185,6 @@ impl MissionCore {
 
         let dir = new_rotation * input_context.head.rotation;
         let facing = dir.rotate_vector(cgmath::vec3(0.0, 0.0, -1.0));
-        let move_thumbstick_value = input_context.right_hand.thumbstick;
         let movement_scale = {
             let stats = crate::implants::effective_stats(&self.world).unwrap_or_default();
             let params = self.world.borrow::<UniqueView<GlobalGameParams>>().unwrap();
@@ -5211,11 +5214,11 @@ impl MissionCore {
             -delta_time * move_thumbstick_value.y * move_speed / dark::SCALE_FACTOR,
         ));
 
-        let up_value = input_context.left_hand.thumbstick.y / dark::SCALE_FACTOR;
+        let up_value = turn_thumbstick_value.y / dark::SCALE_FACTOR;
 
         // VR climbs by hand: a gripping hand resolves to a body translation
-        // that replaces locomotion entirely for the frame (right-stick
-        // movement is ignored; left-stick turn above still applies). Flat has
+        // that replaces locomotion entirely for the frame (stick movement
+        // is ignored; turning above still applies). Flat has
         // no hands and keeps its push-into-ladder climb.
         //
         // Composed against the pose the coming step will land on, not the one
@@ -5441,7 +5444,7 @@ impl MissionCore {
 
         self.reference_grid.update(
             comfort_displacement,
-            input_context.right_hand.thumbstick.magnitude() > 0.15
+            move_thumbstick_value.magnitude() > 0.15
                 || (vr_settings.turning == crate::user_settings::TurnMode::Smooth
                     && turn_radians.abs() > 0.0001),
             delta_time,
@@ -5501,7 +5504,7 @@ impl MissionCore {
                     medium: water_medium,
                     travel: self.player_handle.self_translation(),
                     swimming_input: !self.player_handle.is_climbing()
-                        && (input_context.right_hand.thumbstick.magnitude() > 0.05
+                        && (move_thumbstick_value.magnitude() > 0.05
                             || input_context.jump
                             || input_context.jump_button_held
                             || self.button_jump_held),
