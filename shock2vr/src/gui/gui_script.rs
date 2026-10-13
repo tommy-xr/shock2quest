@@ -192,6 +192,18 @@ where
                 // the `OpenPanel` handler, so both open paths share one hook.
                 Effect::combine(vec![Effect::OpenPanel { entity: entity_id }, frob_effect])
             }
+            MessagePayload::GUISecondary { screen_coordinates } => {
+                let config = self.gui.get_config_for(entity_id, world, &self.state);
+                self.gui.pointer_secondary(
+                    entity_id,
+                    world,
+                    &mut self.state,
+                    point2(
+                        screen_coordinates.x * config.screen_size_in_pixels.x,
+                        screen_coordinates.y * config.screen_size_in_pixels.y,
+                    ),
+                )
+            }
             MessagePayload::GUIHover {
                 held_entity_id,
                 screen_coordinates,

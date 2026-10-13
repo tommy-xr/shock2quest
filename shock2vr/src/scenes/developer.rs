@@ -792,6 +792,7 @@ mod tests {
         Some(Pointer2D {
             position: vec2(canvas_point.x / CANVAS_W, canvas_point.y / CANVAS_H),
             pressed,
+            secondary: false,
         })
     }
 

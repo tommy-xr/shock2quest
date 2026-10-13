@@ -104,6 +104,8 @@ fn suppress_hand_controls(hand: &mut Hand, holds_item: bool) {
 /// resolution-independent; scenes scale it to their own canvas.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Pointer2D {
+    /// Secondary mouse button, sampled separately from the primary press.
+    pub secondary: bool,
     pub position: Vector2<f32>,
     pub pressed: bool,
 }
@@ -186,6 +188,7 @@ mod tests {
         input.right_hand.a_value = 1.0;
         input.pointer = Some(Pointer2D {
             position: Vector2::new(0.25, 0.75),
+            secondary: false,
             pressed: true,
         });
         input.crouch = true;

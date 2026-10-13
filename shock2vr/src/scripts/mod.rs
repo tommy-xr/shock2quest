@@ -452,6 +452,11 @@ pub enum MessagePayload {
     /// Contextual controls from the hand holding an open handheld.
     HandheldInput(crate::handheld_input::HandheldControl),
 
+    /// Fresh secondary pointer press, in panel-local normalized coordinates.
+    GUISecondary {
+        screen_coordinates: Point2<f32>,
+    },
+
     // GUI Events... distilled by the raw hover event
     GUIHover {
         held_entity_id: Option<EntityId>,

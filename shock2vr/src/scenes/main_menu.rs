@@ -766,6 +766,7 @@ mod tests {
         Some(Pointer2D {
             position: vec2(x, y),
             pressed,
+            secondary: false,
         })
     }
 
