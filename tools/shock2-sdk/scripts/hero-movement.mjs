@@ -44,11 +44,11 @@ const levelLight = 1.4;
 // runtime flips it): x > 0 is a push to the left, so strafe and turn go left.
 // Crouch toggles like the Quest's left stick click.
 const phases = [
-  { name: "walk", count: 7, right: [0, 0.7], left: [0, 0], crouch: 0 },
-  { name: "strafe", count: 6, right: [0.6, 0], left: [0, 0], crouch: 0 },
-  { name: "turn", count: 5, right: [0, 0], left: [0.8, 0], crouch: 0 },
+  { name: "walk", count: 7, right: [0, 0], left: [0, 0.7], crouch: 0 },
+  { name: "strafe", count: 6, right: [0, 0], left: [0.6, 0], crouch: 0 },
+  { name: "turn", count: 5, right: [0.8, 0], left: [0, 0], crouch: 0 },
   { name: "crouch", count: 6, right: [0, 0], left: [0, 0], crouch: 1 },
-  { name: "stand", count: 5, right: [0, 0], left: [-0.8, 0], crouch: 0 },
+  { name: "stand", count: 5, right: [-0.8, 0], left: [0, 0], crouch: 0 },
   // Long enough to land (~0.8 s here) and settle.
   { name: "jump", count: 14, right: [0, 0], left: [0, 0], crouch: 0 },
 ];
@@ -126,12 +126,12 @@ try {
   // Signed: forward along the staged heading, then to its left (+z when facing -x).
   const heading = [lookAt[0] - start.position[0], lookAt[2] - start.position[2]];
   const along = (a, b, [x, z]) => ((b.position[0] - a.position[0]) * x + (b.position[2] - a.position[2]) * z) / Math.hypot(x, z);
-  assert.ok(along(start, walk, heading) > 0.5, "right stick must move the player forward");
-  assert.ok(along(walk, strafe, [heading[1], -heading[0]]) > 0.3, "right stick x must strafe the player left");
+  assert.ok(along(start, walk, heading) > 0.5, "left stick must move the player forward");
+  assert.ok(along(walk, strafe, [heading[1], -heading[0]]) > 0.3, "left stick x must strafe the player left");
   // Yaw grows turning left; the stand phase turns back.
   const yaw = (s) => 2 * Math.atan2(s.rotation[1], s.rotation[3]);
-  assert.ok(yaw(turn) > yaw(strafe) + 0.2, "left stick must turn the player left");
-  assert.ok(Math.abs(yaw(stand) - yaw(strafe)) < 0.05, "left stick must turn the player back");
+  assert.ok(yaw(turn) > yaw(strafe) + 0.2, "right stick must turn the player left");
+  assert.ok(Math.abs(yaw(stand) - yaw(strafe)) < 0.05, "right stick must turn the player back");
   assert.ok(crouch.cameraOffset[1] < turn.cameraOffset[1] - 0.15, "crouch must lower the eye");
   assert.ok(stand.cameraOffset[1] > crouch.cameraOffset[1] + 0.15, "the player must stand before jumping");
   const maxJumpY = Math.max(...jump.map((s) => s.position[1]));

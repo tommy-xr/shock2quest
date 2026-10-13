@@ -10,8 +10,8 @@ export const MODES = [
     hot: { L: ["stick", "lower"], R: ["stick", "lower"] },
     clip: "movement",
     rows: [
-      ["Right stick", "Walk / strafe"],
-      ["Left stick ← →", "Turn"],
+      ["Left stick", "Walk / strafe"],
+      ["Right stick ← →", "Turn"],
       ["Left stick click", "Toggle crouch (or just crouch)"],
       ["X / A", "Jump — whatever your hands hold"],
     ],
