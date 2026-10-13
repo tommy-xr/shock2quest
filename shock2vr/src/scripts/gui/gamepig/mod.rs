@@ -1,4 +1,5 @@
 mod boot;
+mod ping;
 mod swinekeeper;
 mod tictactriop;
 
@@ -25,12 +26,14 @@ pub struct GamePigGuiState {
 
 #[derive(Clone, Debug)]
 enum Game {
+    Ping(ping::Ping),
     TicTacTriop(tictactriop::TicTacTriop),
     Swinekeeper(swinekeeper::Swinekeeper),
 }
 
 #[derive(Clone)]
 pub enum GamePigGuiMsg {
+    SelectPing,
     SelectTicTacTriop,
     SelectSwinekeeper,
     PlayCell(usize),
@@ -64,14 +67,16 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         }
         if let Some(game) = &state.game {
             components.extend(match game {
+                Game::Ping(game) => game.components(world),
                 Game::TicTacTriop(game) => game.components(world),
                 Game::Swinekeeper(game) => game.components(world),
             });
-            if state.controller_active {
-                let (x, y, size, width) = match game {
-                    Game::TicTacTriop(_) => (22.0, 91.0, 40.0, 3),
-                    Game::Swinekeeper(_) => (14.0, 52.0, 23.0, 6),
-                };
+            let board = match game {
+                Game::Ping(_) => None,
+                Game::TicTacTriop(_) => Some((22.0, 91.0, 40.0, 3)),
+                Game::Swinekeeper(_) => Some((14.0, 52.0, 23.0, 6)),
+            };
+            if let Some((x, y, size, width)) = board.filter(|_| state.controller_active) {
                 highlight(
                     &mut components,
                     Rect::new(
@@ -98,6 +103,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             let name =
                 PanelText::string(world, "minigame", &format!("GameName{index}"), "Test Game");
             let selection = match index {
+                2 => Some(GamePigGuiMsg::SelectPing),
                 3 => Some(GamePigGuiMsg::SelectSwinekeeper),
                 8 => Some(GamePigGuiMsg::SelectTicTacTriop),
                 _ => None,
@@ -133,6 +139,12 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         }
         let message = match control {
             HandheldControl::Focus => return Effect::NoEffect,
+            HandheldControl::Stick { x, .. } => {
+                if let Some(Game::Ping(game)) = &mut state.game {
+                    game.stick = Some(x);
+                }
+                return Effect::NoEffect;
+            }
             HandheldControl::Back => {
                 state.game = None;
                 state.selection = 0;
@@ -140,6 +152,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             HandheldControl::Navigate { x, y } => {
                 let (width, height) = match &state.game {
+                    Some(Game::Ping(_)) => return Effect::NoEffect,
                     Some(Game::TicTacTriop(_)) => (3, 3),
                     Some(Game::Swinekeeper(_)) => (6, 10),
                     None => (1, installed_games(world).len().max(1)),
@@ -151,6 +164,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 return Effect::NoEffect;
             }
             HandheldControl::Primary => match &state.game {
+                Some(Game::Ping(_)) => None,
                 Some(Game::TicTacTriop(game)) => Some(if game.finished() {
                     GamePigGuiMsg::Restart
                 } else {
@@ -162,6 +176,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     GamePigGuiMsg::SwineCell(state.selection)
                 }),
                 None => match installed_games(world).get(state.selection) {
+                    Some(2) => Some(GamePigGuiMsg::SelectPing),
                     Some(3) => Some(GamePigGuiMsg::SelectSwinekeeper),
                     Some(8) => Some(GamePigGuiMsg::SelectTicTacTriop),
                     _ => None,
@@ -193,11 +208,19 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         _world: &World,
         state: &mut GamePigGuiState,
         time: &crate::time::Time,
+        cursor: Option<&GuiCursor>,
     ) -> Effect {
         if !crate::dev_params::get_bool(crate::dev_params::GAMEPIG_INTRO) {
             state.boot = None;
         }
         let Some(boot) = &mut state.boot else {
+            if let Some(Game::Ping(game)) = &mut state.game {
+                let finished = game.advance(time, cursor, state.controller_active);
+                if finished {
+                    state.game = None;
+                    state.selection = 0;
+                }
+            }
             return Effect::NoEffect;
         };
         let effect = boot.advance(entity, time);
@@ -230,6 +253,14 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             return (state, Effect::NoEffect);
         }
         match msg {
+            GamePigGuiMsg::SelectPing => {
+                if world
+                    .borrow::<UniqueView<QuestInfo>>()
+                    .is_ok_and(|quest| quest.mini_games & (1 << 2) != 0)
+                {
+                    state.game = Some(Game::Ping(ping::Ping::default()));
+                }
+            }
             GamePigGuiMsg::SelectTicTacTriop => {
                 if world
                     .borrow::<UniqueView<QuestInfo>>()
@@ -265,6 +296,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             GamePigGuiMsg::Restart => {
                 state.game = state.game.map(|game| match game {
+                    Game::Ping(game) => Game::Ping(game),
                     Game::TicTacTriop(_) => Game::TicTacTriop(tictactriop::TicTacTriop::random()),
                     Game::Swinekeeper(_) => Game::Swinekeeper(swinekeeper::Swinekeeper::random()),
                 });

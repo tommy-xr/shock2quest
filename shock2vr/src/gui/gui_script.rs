@@ -91,9 +91,13 @@ where
         if self.handle != Some(handle) {
             return None;
         }
-        let frame_effect = self
-            .gui
-            .on_frame(entity_id, world, &mut self.state, &input.time);
+        let frame_effect = self.gui.on_frame(
+            entity_id,
+            world,
+            &mut self.state,
+            &input.time,
+            input.last_cursor.as_ref(),
+        );
         let config = self.gui.get_config_for(entity_id, world, &self.state);
         let components = {
             let cursor = &input.last_cursor;
