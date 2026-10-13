@@ -18,7 +18,7 @@ for (const hand of ["left", "right"] as const) {
       assert.equal((await game.ui.state()).active_panel, null, "held device starts closed");
       if (hand === "left") await game.input.trigger(lower);
       else await game.input.set("right_hand.thumbstick", [0, 1]);
-      await game.step({ frames: 3 });
+      await game.step({ frames: 80 }); // Startup consumes the opening gesture.
       assert.ok((await game.ui.state()).active_panel!.elements.some(e => e.label === "game-3"),
         "first primary or navigation opens the index and is consumed");
       await game.input.set(`${hand}_hand.thumbstick`, [0, 0]);

@@ -1,3 +1,4 @@
+mod boot;
 mod swinekeeper;
 mod tictactriop;
 
@@ -17,6 +18,7 @@ pub struct GamePigGui;
 #[derive(Clone, Debug, Default)]
 pub struct GamePigGuiState {
     game: Option<Game>,
+    boot: Option<boot::Boot>,
     selection: usize,
     controller_active: bool,
 }
@@ -56,6 +58,10 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 .with_position(vec2(0.0, 0.0))
                 .with_size(vec2(188.0, 296.0)),
         ];
+        if let Some(boot) = &state.boot {
+            components.extend(boot.components());
+            return components;
+        }
         if let Some(game) = &state.game {
             components.extend(match game {
                 Game::TicTacTriop(game) => game.components(world),
@@ -122,6 +128,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
     ) -> Effect {
         use crate::handheld_input::HandheldControl;
         state.controller_active = true;
+        if state.boot.is_some() {
+            return Effect::NoEffect;
+        }
         let message = match control {
             HandheldControl::Focus => return Effect::NoEffect,
             HandheldControl::Back => {
@@ -170,6 +179,30 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         }
     }
 
+    fn on_panel_opened(&self, _world: &World, state: &mut GamePigGuiState) {
+        *state = GamePigGuiState {
+            boot: Some(boot::Boot::default()),
+            ..Default::default()
+        };
+    }
+
+    fn on_frame(
+        &self,
+        entity: EntityId,
+        _world: &World,
+        state: &mut GamePigGuiState,
+        time: &crate::time::Time,
+    ) -> Effect {
+        let Some(boot) = &mut state.boot else {
+            return Effect::NoEffect;
+        };
+        let effect = boot.advance(entity, time);
+        if boot.ready() {
+            state.boot = None;
+        }
+        effect
+    }
+
     fn resets_state_on_frob(&self) -> bool {
         true
     }
@@ -189,6 +222,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         msg: &GamePigGuiMsg,
     ) -> (GamePigGuiState, Effect) {
         let mut state = state.clone();
+        if state.boot.is_some() {
+            return (state, Effect::NoEffect);
+        }
         match msg {
             GamePigGuiMsg::SelectTicTacTriop => {
                 if world

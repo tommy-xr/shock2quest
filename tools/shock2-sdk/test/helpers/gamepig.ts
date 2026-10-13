@@ -11,7 +11,7 @@ export async function openGamePig(game: GameServer, vr: boolean, cartridge: stri
   const cart = await game.player.spawnItem(cartridge);
   await game.entities.sendMessage(cart.entity_id, { type: "Frob" });
   await game.entities.sendMessage(handheld.entity_id, { type: "Frob" });
-  await game.step({ frames: 2 });
+  await game.step({ frames: 80 }); // Opening animation uses simulation time.
   const click: typeof clickUiElement = vr
     ? (g, element) => clickWorldPanelElement(g, [188, 296, 0], 1, element)
     : clickUiElement;

@@ -12,7 +12,7 @@ for (const vr of [false, true]) {
       await game.step({ frames: 2 });
       const handheld = await game.player.spawnItem("Gameboy");
       await game.entities.sendMessage(handheld.entity_id, { type: "Frob" });
-      await game.step({ frames: 2 });
+      await game.step({ frames: 80 });
       let ui = await game.ui.state();
       assert.ok(ui.active_panel, "the handheld opens its MFD");
       assert.ok(!ui.active_panel.elements.some(e => e.text?.includes("Recreation")), "GamePig must not display elevator stops");
@@ -23,7 +23,7 @@ for (const vr of [false, true]) {
         assert.ok(!(await game.entities.list()).entities.some(e => e.id === item.entity_id), "installing consumes even a duplicate cartridge");
       }
       await game.entities.sendMessage(handheld.entity_id, { type: "Frob" });
-      await game.step({ frames: 2 });
+      await game.step({ frames: 80 });
       ui = await game.ui.state();
       const labels = () => ui.active_panel!.elements.map(e => e.text);
       assert.ok(labels().includes("Swinekeeper"));
@@ -37,7 +37,7 @@ for (const vr of [false, true]) {
         const reloaded = (await game.entities.list({ filter: "Gameboy" })).entities.find(e => e.template_id === -3864);
         assert.ok(reloaded, "carried handheld survives reload");
         await game.entities.sendMessage(reloaded.id, { type: "Frob" });
-        await game.step({ frames: 2 });
+        await game.step({ frames: 80 });
         ui = await game.ui.state();
         assert.ok(labels().includes("Swinekeeper"));
         assert.ok(labels().includes("Tic-Tac-Triop"));
@@ -46,7 +46,7 @@ for (const vr of [false, true]) {
         const carried = (await game.entities.list({ filter: "Gameboy" })).entities.find(e => e.template_id === -3864);
         assert.ok(carried, "carried handheld survives a deck change");
         await game.entities.sendMessage(carried.id, { type: "Frob" });
-        await game.step({ frames: 2 });
+        await game.step({ frames: 80 });
         ui = await game.ui.state();
         assert.ok(labels().includes("Swinekeeper"));
         assert.ok(labels().includes("Tic-Tac-Triop"));
