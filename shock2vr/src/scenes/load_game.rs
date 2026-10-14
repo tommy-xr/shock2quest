@@ -650,18 +650,25 @@ impl GameScene for LoadGameScene {
             .selected
             .filter(|index| *index < saves_len && geometry.rows_per_page() > 0);
         let selected = self.selected;
+        let saves = &self.saves;
+        let saving = self.saving;
+        let resolve = |point| {
+            hit(point, &rects, saves_len, scroll, selected.is_some()).filter(
+                |action| match action {
+                    LoadGameAction::Select(index) => selectable_save(&saves[*index], saving),
+                    _ => true,
+                },
+            )
+        };
 
         let action = self.menu.update(
             time.elapsed,
             input_context,
             game_options.presentation_mode,
-            |point| hit(point, &rects, saves_len, scroll, selected.is_some()),
+            resolve,
             // Rows are deliberately silent: they highlight on selection
             // rather than hover, so only visible hover feedback makes noise.
-            |point| {
-                hit(point, &rects, saves_len, scroll, selected.is_some())
-                    .filter(|action| !matches!(action, LoadGameAction::Select(_)))
-            },
+            |point| resolve(point).filter(|action| !matches!(action, LoadGameAction::Select(_))),
         );
 
         self.apply_action(action, geometry)
