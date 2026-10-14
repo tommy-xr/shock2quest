@@ -1341,6 +1341,15 @@ cargo dvr deploy                  # release build and install only
 See [dark_vr_tool](tools/dark_vr_tool/README.md) for device selection, filesystem
 access, debug-port configuration, and the `ss2vr` shell alias.
 
+##### Saved games
+
+Quest saves live in `saves/` under Android's app-private files directory,
+resolved from the native activity at startup. Logcat records the actual path
+as `SHOCK2QUEST_SAVE_DIRECTORY path=...`. Saving needs no storage permission;
+retail assets still load from `/sdcard/shock2quest`. Clearing app data or
+uninstalling removes these saves. Existing saves on shared storage are not
+migrated. Desktop saves remain in `<data_root>/saves/`.
+
 ##### Launcher icon
 
 `runtimes/oculus_runtime/res/mipmap/icon.png` is a neutral placeholder, on

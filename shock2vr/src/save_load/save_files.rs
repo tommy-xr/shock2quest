@@ -1,6 +1,6 @@
 //! Discovery of saved games on disk.
 //!
-//! Named saves live in `<data_root>/saves/<name>.sav` (see
+//! Named saves live in `<save_root>/saves/<name>.sav` (see
 //! [`crate::save_file_path`]). Screens that offer a reload - the load-game
 //! screen, and the game-over screen after a terminal death - need to know what
 //! is actually available without hardcoding a file name, so they ask here.
@@ -25,7 +25,7 @@ pub struct SaveFile {
 
 /// The directory holding named saves.
 pub fn save_directory() -> PathBuf {
-    paths::data_root().join("saves")
+    paths::save_root().join("saves")
 }
 
 /// Every save on disk, most recent first. Empty when nothing has been saved
