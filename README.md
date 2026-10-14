@@ -12,6 +12,8 @@ You'll need a full retail copy of **System Shock 2: 25th Anniversary Remaster** 
 The APK does not include retail game data. See the [installation guide](INSTALL.md) for the files to copy from your remaster installation.
 
 > **Status:** This project is in pre-alpha. Expect incomplete features and bugs.
+> Save files are not guaranteed to work across releases. Updating may require
+> starting a new game.
 
 ## Screenshots
 

@@ -391,9 +391,9 @@ impl PauseMenu {
         self.load_game.as_ref()?.selected_path()
     }
 
-    pub(crate) fn show_load_failure(&mut self) {
+    pub(crate) fn show_load_failure(&mut self, error: std::io::ErrorKind) {
         if let Some(picker) = self.load_game.as_mut() {
-            crate::game_scene::GameScene::on_load_failed(picker);
+            crate::game_scene::GameScene::on_load_failed(picker, error);
         }
     }
 

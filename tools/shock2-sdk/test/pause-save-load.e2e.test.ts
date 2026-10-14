@@ -111,6 +111,61 @@ test("QuickLoad interrupts a fixed-step batch before a failed load", {
 });
 
 for (const vr of [false, true]) {
+  for (const changeMission of [false, true]) {
+    test(`menu load restores ${changeMission ? "another" : "the same"} mission's entities (${vr ? "VR" : "flat"})`,
+      { skip: !enabled, timeout: 300_000 }, async () => {
+        using assets = isolatedAssets();
+        await using game = await GameServer.launch({
+          mission: "earth.mis",
+          debugFlags: ["--defer-transitions", ...(vr ? ["--vr"] : [])],
+        });
+        const click = vr ? vrClickCanvasPoint : clickCanvas;
+        await game.step({ frames: 30 });
+        const originalCount = (await game.entities.byTemplate(-397)).length;
+        if (changeMission) {
+          for (let i = 0; i < 2; i++) {
+            await game.input.trigger("SpawnDebugMonster");
+            await game.step({ frames: 1 });
+          }
+        }
+        const savedCount = originalCount + (changeMission ? 2 : 0);
+        assert.equal((await game.entities.byTemplate(-397)).length, savedCount);
+
+        await game.input.trigger("TogglePauseMenu");
+        await game.step({ frames: 5 });
+        await click(game, pauseEntry(1));
+        await click(game, SLOT_ROW);
+        await click(game, DEV_ACTION);
+        const save = JSON.parse(readFileSync(join(assets.root, "saves", "slot12.sav"), "utf8"));
+        assert.equal(save.metadata.mission, "earth.mis");
+        await click(game, DEV_DONE);
+        await click(game, pauseEntry(0));
+
+        // This extra spawn must disappear even if a transition caches this newer world.
+        await game.input.trigger("SpawnDebugMonster");
+        await game.step({ frames: 1 });
+        assert.equal((await game.entities.byTemplate(-397)).length, savedCount + 1);
+        if (changeMission) {
+          await game.transitionLevel("medsci1.mis");
+          await game.waitFor(async () => (await game.info()).mission === "medsci1.mis", {
+            timeoutMs: 60_000, description: "switch away from the saved mission",
+          });
+        }
+
+        await game.input.trigger("TogglePauseMenu");
+        await game.step({ frames: 5 });
+        await click(game, pauseEntry(2));
+        await click(game, SLOT_ROW);
+        await click(game, DEV_ACTION);
+        await finishLoading(game, vr);
+        const loaded = await game.info();
+        assert.equal(loaded.mission, "earth.mis", "load must return to the saved mission");
+        assert.equal(loaded.paused, false);
+        assert.equal((await game.entities.byTemplate(-397)).length, savedCount,
+          "load must restore saved spawns and remove post-save spawns");
+      });
+  }
+
   test(`pause save slots and load preserve the live mission (${vr ? "VR" : "flat"})`,
     { skip: !enabled, timeout: 600_000 }, async () => {
       using assets = isolatedAssets();
@@ -194,7 +249,7 @@ for (const vr of [false, true]) {
         await game.input.set(pressChannel, 0);
         await game.step({ frames: 2 });
 
-        for (const failure of ["corrupt", "missing", "missing mission", "future format"] as const) {
+        for (const failure of ["corrupt", "missing", "missing mission", "future format", "old schema"] as const) {
           await click(game, pauseEntry(2));
           await click(game, SLOT_ROW);
           if (failure === "corrupt") writeFileSync(savePath, "invalid save");
@@ -203,6 +258,11 @@ for (const vr of [false, true]) {
             const future = JSON.parse(goodSave.toString("utf8"));
             future.metadata.format_version = 999;
             writeFileSync(savePath, JSON.stringify(future));
+          }
+          else if (failure === "old schema") {
+            const old = JSON.parse(goodSave.toString("utf8"));
+            delete old.global_data.quest_info.mini_games;
+            writeFileSync(savePath, JSON.stringify(old));
           }
           else {
             const unavailable = JSON.parse(goodSave.toString("utf8"));
@@ -243,6 +303,17 @@ for (const vr of [false, true]) {
         await game.step({ frames: 1 });
         await finishLoading(game, vr);
         assert.equal((await game.info()).player.hit_points, savedHitPoints);
+
+        // Quickload has no picker; its failure must reach the gameplay HUD instead.
+        const incompatible = JSON.parse(goodSave.toString("utf8"));
+        delete incompatible.global_data.quest_info.mini_games;
+        writeFileSync(join(assets.root, "saves", "save1.sav"), JSON.stringify(incompatible));
+        await game.input.trigger("QuickLoad");
+        await game.step({ frames: 1 });
+        await finishLoading(game, vr);
+        assert.equal((await game.info()).mission, "medsci1.mis");
+        assert.ok((await game.ui.state()).messages.includes(
+          "This save is incompatible with the current version."));
       }
 
       // A second runtime proves the slot is read from disk across process lifetimes.

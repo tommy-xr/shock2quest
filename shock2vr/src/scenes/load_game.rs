@@ -137,7 +137,24 @@ enum LoadGameStatus {
     #[default]
     Initial,
     Failed,
+    Incompatible,
     Saved,
+}
+
+/// Shared archive-screen feedback, placed below the slots on the original canvas.
+pub(crate) fn draw_load_failure(canvas: &mut UiCanvas, error: std::io::ErrorKind) {
+    for (line, text) in crate::save_load::load_failure_message(error)
+        .lines()
+        .enumerate()
+    {
+        canvas.text_native(
+            Rect::new(261.0, 346.0 + line as f32 * 11.0, 202.0, 11.0),
+            text,
+            LIST_FONT,
+            HAlign::Center,
+            VAlign::Top,
+        );
+    }
 }
 
 /// Resolve the screen's widget rects from `GAMELODR.BIN`, falling back to the
@@ -406,6 +423,7 @@ impl LoadGameScene {
                 },
             ),
             LoadGameStatus::Saved => label(strings, "success", "Save Successful"),
+            LoadGameStatus::Incompatible => "Incompatible save".to_owned(),
         }
     }
 
@@ -437,8 +455,8 @@ impl LoadGameScene {
                 Vec::new()
             }
             Some(LoadGameAction::Load) => {
-                // Clear stale feedback while the retry is dispatched. A
-                // synchronous failure sets it again through `on_load_failed`;
+                // Clear stale feedback while the retry is dispatched;
+                // a failed load sets it again through `on_load_failed`;
                 // success replaces this scene.
                 self.status = LoadGameStatus::Initial;
                 self.selected_path()
@@ -498,6 +516,9 @@ impl LoadGameScene {
             HAlign::Center,
             VAlign::Middle,
         );
+        if self.status == LoadGameStatus::Incompatible {
+            draw_load_failure(&mut canvas, std::io::ErrorKind::Unsupported);
+        }
 
         let geometry = list_geometry(&rects);
         let rows = geometry.visible_rows(self.saves.len(), self.scroll);
@@ -723,8 +744,12 @@ impl GameScene for LoadGameScene {
         self.menu.stop_sfx(audio_context);
     }
 
-    fn on_load_failed(&mut self) {
-        self.status = LoadGameStatus::Failed;
+    fn on_load_failed(&mut self, error: std::io::ErrorKind) {
+        self.status = if error == std::io::ErrorKind::Unsupported {
+            LoadGameStatus::Incompatible
+        } else {
+            LoadGameStatus::Failed
+        };
     }
 
     fn wants_pointer(&self) -> bool {
@@ -1180,8 +1205,23 @@ mod tests {
         let mut scene = scene_with_save();
 
         assert_eq!(scene.header_label(Some(&strings)), HEADER_FALLBACK);
-        scene.on_load_failed();
+        scene.on_load_failed(std::io::ErrorKind::InvalidData);
         assert_eq!(scene.header_label(Some(&strings)), FAILED_FALLBACK);
+    }
+
+    #[test]
+    fn incompatible_load_explains_the_failure_and_allows_retry() {
+        let mut scene = scene_with_save();
+        scene.on_load_failed(std::io::ErrorKind::Unsupported);
+        assert_eq!(scene.header_label(None), "Incompatible save");
+        assert_eq!(scene.selected_path().unwrap().to_str(), Some("corrupt.sav"));
+        let effects =
+            scene.apply_action(Some(LoadGameAction::Load), list_geometry(&FALLBACK_RECTS));
+        assert_eq!(scene.status, LoadGameStatus::Initial);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::GlobalEffect(GlobalEffect::Load { .. })]
+        ));
     }
 
     #[test]
@@ -1189,7 +1229,7 @@ mod tests {
         let mut scene = scene_with_save();
         scene.menu.set_last_pressed(true);
 
-        scene.on_load_failed();
+        scene.on_load_failed(std::io::ErrorKind::InvalidData);
         assert_eq!(scene.status, LoadGameStatus::Failed);
         assert!(
             scene.menu.last_pressed(),
@@ -1202,7 +1242,7 @@ mod tests {
         );
         assert_eq!(scene.status, LoadGameStatus::Initial);
 
-        scene.on_load_failed();
+        scene.on_load_failed(std::io::ErrorKind::InvalidData);
         let effects =
             scene.apply_action(Some(LoadGameAction::Load), list_geometry(&FALLBACK_RECTS));
         assert_eq!(scene.status, LoadGameStatus::Initial);
@@ -1214,7 +1254,7 @@ mod tests {
 
         // A failed retry reports the same state again, while leaving and
         // re-entering constructs a new prompt rather than preserving it.
-        scene.on_load_failed();
+        scene.on_load_failed(std::io::ErrorKind::InvalidData);
         assert_eq!(scene.status, LoadGameStatus::Failed);
         assert_eq!(scene_with_save().status, LoadGameStatus::Initial);
     }

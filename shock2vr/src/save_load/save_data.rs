@@ -14,6 +14,14 @@ use std::{collections::HashMap, io};
 /// Increment when persisted state needs an upgrade, not for every release.
 pub const SAVE_FORMAT_VERSION: u32 = 1;
 
+pub(crate) fn load_failure_message(error: io::ErrorKind) -> &'static str {
+    if error == io::ErrorKind::Unsupported {
+        "This save is incompatible\nwith the current version."
+    } else {
+        "Unable to load this save."
+    }
+}
+
 /// Build provenance is diagnostic; only the format version gates loading.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct SaveWriter {
@@ -98,7 +106,7 @@ impl SaveData {
             let version: u32 = serde_json::from_value(version.clone())?;
             if version != SAVE_FORMAT_VERSION {
                 return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
+                    io::ErrorKind::Unsupported,
                     format!(
                         "Unsupported save format {version}; this build supports {SAVE_FORMAT_VERSION}"
                     ),
@@ -107,8 +115,9 @@ impl SaveData {
         } else {
             tracing::warn!("Loading unversioned save best-effort; compatibility is not guaranteed");
         }
+        // Valid JSON with an unreadable schema belongs to a different save format.
         serde_json::from_value(json)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+            .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))
     }
 }
 
@@ -250,7 +259,7 @@ mod tests {
                 r#"{{"metadata":{{"format_version":{version}}},"global_data":"incompatible"}}"#
             );
             let error = SaveData::read(&mut json.as_bytes()).unwrap_err();
-            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
             assert!(
                 error
                     .to_string()
@@ -261,6 +270,30 @@ mod tests {
             let json = format!(r#"{{"metadata":{{"format_version":{version}}}}}"#);
             assert!(SaveData::read(&mut json.as_bytes()).is_err());
         }
+    }
+
+    #[test]
+    fn schema_mismatch_is_incompatible_but_broken_json_is_invalid() {
+        let save = SaveData {
+            metadata: SaveMetadata::default(),
+            global_data: global_data(None),
+            level_data: HashMap::new(),
+        };
+        let mut json = serde_json::to_value(save).unwrap();
+        json["global_data"]["quest_info"]
+            .as_object_mut()
+            .unwrap()
+            .remove("mini_games");
+        let bytes = serde_json::to_vec(&json).unwrap();
+        let error = SaveData::read(&mut bytes.as_slice()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("mini_games"));
+        assert_eq!(
+            SaveData::read(&mut b"{broken".as_slice())
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
