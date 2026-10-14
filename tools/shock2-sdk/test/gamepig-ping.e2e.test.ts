@@ -38,13 +38,13 @@ for (const vr of [false, true]) {
         await game.step({ frames: 12 });
         const still = (await game.ui.state()).active_panel!.elements.filter(e => e.texture === "pongpadd.pcx").sort((a, b) => b.rect[1] - a.rect[1])[0];
         assert.equal(still.rect[0], stopped.rect[0], "releasing the stick stops the paddle");
-        const beforeOther = (await game.info()).player.position;
+        const beforeOther = (await game.info()).player.rotation;
         await game.input.set("right_hand.thumbstick", [1, 0]);
         await game.step({ frames: 12 });
         await game.input.set("right_hand.thumbstick", [0, 0]);
         await game.step({ frames: 2 });
-        const afterOther = (await game.info()).player.position;
-        assert.ok(Math.hypot(...afterOther.map((v, i) => v - beforeOther[i]!)) > 0.05, "other hand still moves the player");
+        const afterOther = (await game.info()).player.rotation;
+        assert.notDeepEqual(afterOther, beforeOther, "other hand still turns the player");
         const isolated = (await game.ui.state()).active_panel!.elements.filter(e => e.texture === "pongpadd.pcx").sort((a, b) => b.rect[1] - a.rect[1])[0];
         assert.equal(isolated.rect[0], stopped.rect[0], "other hand cannot move the paddle");
         await game.input.hold("LeftHandUpperButton");

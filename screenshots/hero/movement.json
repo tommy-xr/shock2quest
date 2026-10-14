@@ -1,11 +1,11 @@
 {
   "mission": "rec3.mis",
   "presentation": "Vr",
-  "revision": "13512633c7ac0ec424d206fa588abadfbce882a9",
+  "revision": "79afe03b12b14709e012fb156f51a708311b91fa",
   "revisionParents": [
-    "93f3fe412bd91080c2f3e193cf3deb3d0c50d62d"
+    "0a949acf55d7d033d5508e60f206198eccc380ac"
   ],
-  "runtimeSha256": "a759a8ec3b03e128ecb2afa79d991d98f5a1ddddeface1623fc8c7fcca617703",
+  "runtimeSha256": "6a2b4ab609593ef4baec86a7dc155e5e8776bc3fd38383759dc9ca900d8d78ab",
   "assetRoot": "/Users/bryphe/ss2-25th",
   "assetFiles": [
     "sshock2.kpf",
@@ -90,11 +90,11 @@
         "count": 7,
         "right": [
           0,
-          0.7
+          0
         ],
         "left": [
           0,
-          0
+          0.7
         ],
         "crouch": 0
       },
@@ -102,11 +102,11 @@
         "name": "strafe",
         "count": 6,
         "right": [
-          0.6,
+          0,
           0
         ],
         "left": [
-          0,
+          0.6,
           0
         ],
         "crouch": 0
@@ -115,11 +115,11 @@
         "name": "turn",
         "count": 5,
         "right": [
-          0,
+          0.8,
           0
         ],
         "left": [
-          0.8,
+          0,
           0
         ],
         "crouch": 0
@@ -141,11 +141,11 @@
         "name": "stand",
         "count": 5,
         "right": [
-          0,
+          -0.8,
           0
         ],
         "left": [
-          -0.8,
+          0,
           0
         ],
         "crouch": 0

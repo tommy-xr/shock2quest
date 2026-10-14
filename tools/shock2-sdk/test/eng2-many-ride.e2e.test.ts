@@ -232,9 +232,9 @@ test(
     // The restored pose is ordinary level geometry and controls are live: a
     // full strafe must move the player instead of leaving them on the isolated
     // continuously-moving cutscene cage.
-    await game.input.set("right_hand.thumbstick", [1, 0]);
+    await game.input.set("left_hand.thumbstick", [1, 0]);
     await game.step({ frames: 60 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     assert.ok(
       distance(await game.player.position(), returned) > 1,
       "StandUp should restore controls on the normal Engineering route",

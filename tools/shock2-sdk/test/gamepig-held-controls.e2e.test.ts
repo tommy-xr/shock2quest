@@ -76,7 +76,7 @@ for (const hand of ["left", "right"] as const) {
       await game.input.set(`${otherHand}_hand.thumbstick`, [0, 0]);
       await game.step({ frames: 2 });
       const afterOtherStick = (await game.info()).player;
-      if (otherHand === "left") assert.notDeepEqual(afterOtherStick.rotation, beforeOtherStick.rotation,
+      if (otherHand === "right") assert.notDeepEqual(afterOtherStick.rotation, beforeOtherStick.rotation,
         "other hand can still turn normally");
       else assert.ok(Math.hypot(...afterOtherStick.position.map((v, i) => v - beforeOtherStick.position[i]!)) > 0.05,
         "other hand can still move normally");

@@ -146,9 +146,9 @@ for (const vr of [false, true]) {
     const eye = (await game.info()).player.camera_offset[1];
     await game.input.lookAtWorldPoint([before.x, before.y + eye, before.z + 6], { eyeHeight: eye });
     await game.step({ frames: 15 });
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 1]);
     await game.step({ frames: 105 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
     const blocked = await game.player.position();
     // Negative-first: the half-radius hull let the player slide through the
     // visible egg and emerge on the far side (z > 91) with identical input.

@@ -251,9 +251,9 @@ test(
     const standing = (await game.info()).player.position[1];
     await game.input.set("crouch", 1);
     await game.step({ frames: 10 });
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set("left_hand.thumbstick", [0, 1]);
     await game.step({ frames: 60 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.input.set("crouch", 0);
     await game.step({ frames: 30 });
     const y = (await game.info()).player.position[1];

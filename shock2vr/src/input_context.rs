@@ -51,6 +51,25 @@ pub struct PoseTracking {
 }
 
 impl InputContext {
+    /// Resolve movement and turn sticks without changing physical hand identity.
+    /// Flat keyboard/debug channels keep their existing layout; VR uses left to move.
+    pub fn locomotion_sticks(
+        &self,
+        presentation: crate::PresentationMode,
+        allow_flight: bool,
+    ) -> (Vector2<f32>, Vector2<f32>) {
+        let (movement, mut turn) = match presentation {
+            crate::PresentationMode::Vr => (self.left_hand.thumbstick, self.right_hand.thumbstick),
+            crate::PresentationMode::Flat => {
+                (self.right_hand.thumbstick, self.left_hand.thumbstick)
+            }
+        };
+        if !allow_flight {
+            turn.y = 0.0;
+        }
+        (movement, turn)
+    }
+
     pub fn default() -> InputContext {
         InputContext {
             head: Head::default(),
@@ -165,6 +184,38 @@ impl Hand {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vr_moves_left_turns_right_and_requires_opt_in_to_fly() {
+        let mut input = InputContext::default();
+        input.left_hand.thumbstick = Vector2::new(0.25, 1.0);
+        input.right_hand.thumbstick = Vector2::new(-0.5, -0.75);
+        assert_eq!(
+            input.locomotion_sticks(crate::PresentationMode::Vr, false),
+            (Vector2::new(0.25, 1.0), Vector2::new(-0.5, 0.0)),
+        );
+        assert_eq!(
+            input.locomotion_sticks(crate::PresentationMode::Vr, true),
+            (input.left_hand.thumbstick, input.right_hand.thumbstick),
+        );
+        // Resolving locomotion must not remap sticks used by a held item's UI.
+        assert_eq!(input.right_hand.thumbstick, Vector2::new(-0.5, -0.75));
+    }
+
+    #[test]
+    fn flat_keeps_existing_channels_but_flight_is_opt_in() {
+        let mut input = InputContext::default();
+        input.right_hand.thumbstick = Vector2::new(0.25, 1.0);
+        input.left_hand.thumbstick = Vector2::new(-0.5, -0.75);
+        assert_eq!(
+            input.locomotion_sticks(crate::PresentationMode::Flat, false),
+            (Vector2::new(0.25, 1.0), Vector2::new(-0.5, 0.0)),
+        );
+        assert_eq!(
+            input.locomotion_sticks(crate::PresentationMode::Flat, true),
+            (input.right_hand.thumbstick, input.left_hand.thumbstick),
+        );
+    }
+
     use cgmath::{Quaternion, Vector2, Vector3};
 
     use super::{InputContext, Pointer2D};

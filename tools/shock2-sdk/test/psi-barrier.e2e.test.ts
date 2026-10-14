@@ -44,9 +44,9 @@ for (const vr of [false, true]) {
       assert.ok(shotHp < Number(hp), "an actual cryokinesis projectile hits and damages the wall");
       await selectPsiPower(game, "ForceWall");
       await game.input.set("head.look", [0, 0]);
-      await game.input.set("right_hand.thumbstick", [0, 1]);
+      await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 1]);
       await game.step({ frames: 120 });
-      await game.input.set("right_hand.thumbstick", [0, 0]);
+      await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
       const stopped = (await game.info()).player.position;
       assert.ok(stopped[0] > wall.position[0], `player stops before wall: ${stopped} / ${wall.position}`);
       await game.entities.sendMessage(wall.id, { type: "Damage", amount: 10 });
@@ -55,9 +55,9 @@ for (const vr of [false, true]) {
       await game.entities.sendMessage(wall.id, { type: "Damage", amount: Number(hp) });
       await game.step({ frames: 2 });
       assert.equal((await game.entities.byTemplate(-3450)).length, 0);
-      await game.input.set("right_hand.thumbstick", [0, 1]);
+      await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 1]);
       await game.step({ frames: 25 });
-      await game.input.set("right_hand.thumbstick", [0, 0]);
+      await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
       assert.ok((await game.info()).player.position[0] < wall.position[0], "destroying the barrier clears the way");
       // Return to the same clear floor for the expiry/refusal checks.
       await game.player.teleport({ x: before.position[0], y: before.position[1], z: before.position[2] });

@@ -279,10 +279,10 @@ test(
     assert.ok(Math.abs(before.y + 9.156) < 0.05, "the pawn must start supported");
     await game.input.lookAtWorldPoint([17, -8.1, -15.5]);
     await game.input.setJump(true);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set("left_hand.thumbstick", [0, 1]);
     await game.step({ frames: 27 });
     await game.input.setJump(false);
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.step({ frames: 150 });
     const landed = await game.player.position();
     await game.step({ frames: 120 });
@@ -309,12 +309,12 @@ test(
     await game.step({ frames: 30 });
     const before = await game.player.position();
     await game.input.lookAtWorldPoint([before.x, before.y + 1.04, before.z + 4]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set("left_hand.thumbstick", [0, 1]);
     await game.input.setJump(true);
     await game.step({ frames: 1 });
     await game.input.setJump(false);
     await game.step({ frames: 59 });
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.step({ frames: 240 });
     const after = await game.player.position();
     assert.ok(after.z < 32 && Math.abs(after.y - before.y) < 0.2,

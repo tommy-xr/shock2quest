@@ -45,9 +45,9 @@ test(
 
     // Turn and sidestep the pawn: the hand is re-solved against the new pose.
     const before = (await game.info()).player;
-    await game.input.set("left_hand.thumbstick", [1, 0]);
+    await game.input.set("right_hand.thumbstick", [1, 0]);
     await game.step({ frames: 10 });
-    await game.input.set("left_hand.thumbstick", [0, 0]);
+    await game.input.set("right_hand.thumbstick", [0, 0]);
     await teleportVerified(game, { x: STAND[0], y: STAND[1], z: STAND[2] + 0.3 });
     await game.step({ frames: 30 });
     const after = (await game.info()).player;

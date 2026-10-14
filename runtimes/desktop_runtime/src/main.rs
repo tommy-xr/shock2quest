@@ -765,6 +765,10 @@ fn process_events(
         right_thumbstick_value *= 2.0;
     }
 
+    // Keep WASD movement and arrow-key turning in both presentations.
+    if presentation == shock2vr::PresentationMode::Vr {
+        std::mem::swap(&mut left_thumbstick_value, &mut right_thumbstick_value);
+    }
     let mut input_context = InputContext::default();
     if presentation == shock2vr::PresentationMode::Flat && !wants_pointer && !is_alt_pressed {
         input_context.lean = f32_from_bool(window.get_key(Key::E) == Action::Press)

@@ -70,11 +70,11 @@ for (const vr of [false, true]) {
       assert.ok(Math.abs(aligned - released) <= 11, "release only completes current pixel-grid alignment");
       await game.step({ frames: 30 });
       assert.equal(await left(), aligned, "neutral input remains stable after alignment");
-      const player = (await game.info()).player.position;
+      const player = (await game.info()).player.rotation;
       await game.input.set("right_hand.thumbstick", [1, 0]);
       await game.step({ frames: 12 });
       await game.input.set("right_hand.thumbstick", [0, 0]);
-      assert.ok(Math.hypot(...(await game.info()).player.position.map((v, i) => v - player[i]!)) > 0.05);
+      assert.notDeepEqual((await game.info()).player.rotation, player, "other hand still turns the player");
       assert.equal(await left(), aligned, "other hand cannot move the piece");
       await game.input.hold("LeftHandUpperButton");
       await game.step({ frames: 20 });

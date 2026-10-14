@@ -302,7 +302,7 @@ test(
     const rails = stack.rails.flatMap(([bottom]) => rungs.map(([x, y]): Vec3 => [x, y, bottom[2]]));
     const start = await player(game);
     await game.input.lookAtWorldPoint([-17, start.position[1] + 0.5, MIDMOUNT]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set("left_hand.thumbstick", [0, 1]);
     // The rungs are 1.6 from the hole's edge: only a falling body comes
     // within reach (a player would lean), so catch the first rung in reach.
     let caught: Vec3 | null = null;
@@ -315,7 +315,7 @@ test(
         }
       }
     }
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     assert.ok(caught, "a rail came within reach");
     assert.equal((await vrGrab(game, "right", caught)).kind, "ladder");
     assert.ok((await player(game)).position[1] > start.position[1] - 1.5, "caught high on the stack");
@@ -351,7 +351,7 @@ test(
 
     // Walk east to the takeoff (w -1.27), then jump toward the ladder.
     await game.input.lookAtWorldPoint([start[0], start[1] + 0.5, start[2] + 10]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set("left_hand.thumbstick", [0, 1]);
     for (let f = 0; f < 60 && (await player(game)).position[2] < JUMP_GRAB - 1.269; f += 1) {
       await game.step({ frames: 1 });
     }
@@ -372,7 +372,7 @@ test(
         }
       }
     }
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     assert.ok(caught, "a ladder hold came within reach during the jump");
     assert.equal((await vrGrab(game, "left", caught)).kind, "ladder");
     await game.step({ frames: 30 });
@@ -398,11 +398,11 @@ test(
     // Walk to the far edge (the far ladder stands at d -2.1), crouch, and
     // hook a rail of the far ladder just under its cap.
     await game.input.lookAtWorldPoint([-20, landed[1] + 1, ARCH]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set("left_hand.thumbstick", [0, 1]);
     for (let f = 0; f < 120 && (await player(game)).position[0] > -8.6; f += 1) {
       await game.step({ frames: 1 });
     }
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.step({ frames: 10 });
     await game.input.set("crouch", 1);
     await game.step({ frames: 5 });
@@ -445,9 +445,9 @@ for (const face of ["near", "far"] as const) {
       if (face === "far") {
         // Snap turning is edge-triggered: six 30-degree flicks face +X.
         for (let turn = 0; turn < 6; turn++) {
-          await game.input.set("left_hand.thumbstick", [1, 0]);
+          await game.input.set("right_hand.thumbstick", [1, 0]);
           await game.step({ frames: 1 });
-          await game.input.set("left_hand.thumbstick", [0, 0]);
+          await game.input.set("right_hand.thumbstick", [0, 0]);
           await game.step({ frames: 1 });
         }
         assert.ok((await viewRight(game))[2] > 0.999, "face the ladder from its far side");

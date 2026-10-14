@@ -211,7 +211,7 @@ test(
     ]) {
       await teleportVerified(game, { x: STAND[0], y: STAND[1], z: STAND[2] });
       await game.step({ frames: 20 });
-      await game.input.set("right_hand.thumbstick", stick);
+      await game.input.set("left_hand.thumbstick", stick);
       await game.step({ frames: 120 });
       const y = (await game.info()).player.position[1];
       assert.ok(
@@ -219,7 +219,7 @@ test(
         `stick ${stick.join(",")} climbed to y=${y} in VR`,
       );
     }
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
   },
 );
 

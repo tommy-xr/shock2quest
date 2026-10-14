@@ -134,9 +134,9 @@ test("physical wrench glove stays attached during walking and wall contact", {
     assert.ok(distance(modelFromGlove,vector(g.support.model_position)) < .0001,"glove and rendered physical weapon agree every frame");
     return g;
   };
-  await game.input.set("right_hand.thumbstick",[.7,0]);
+  await game.input.set("left_hand.thumbstick",[.7,0]);
   for (let frame=0;frame<20;frame++) { await game.step({frames:1}); await check(); }
-  await game.input.set("right_hand.thumbstick",[0,0]);
+  await game.input.set("left_hand.thumbstick",[0,0]);
   await game.player.teleport({x:-11,y:1,z:0});
   await game.step({frames:30});
   // The debug_melee back wall is x=-13. Sweep the held controller through it.

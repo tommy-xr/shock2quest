@@ -55,6 +55,7 @@ const flat = (p: Pos, q: Pos) => Math.hypot(p.x - q.x, p.z - q.z);
 /// the first position seen there, or fails after `maxFrames`.
 async function walkUntilArrival(
   game: GameServer,
+  vr: boolean,
   target: Pos,
   arrival: Pos,
   maxFrames = 900,
@@ -66,15 +67,15 @@ async function walkUntilArrival(
     const yaw =
       (Math.atan2(-(target.z - p.z), -(target.x - p.x)) * 180) / Math.PI;
     await game.input.set("head.look", [yaw, 0]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 1]);
     await game.step({ frames: 1 });
     p = await game.player.position();
     if (flat(p, arrival) < 0.3) {
-      await game.input.set("right_hand.thumbstick", [0, 0]);
+      await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
       return p;
     }
   }
-  await game.input.set("right_hand.thumbstick", [0, 0]);
+  await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
   assert.fail(
     `never arrived at (${arrival.x}, ${arrival.z}) walking to (${target.x}, ${target.z}); ` +
       `ended at (${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)})`,
@@ -103,10 +104,10 @@ for (const vr of [false, true]) {
       });
       await game.step({ frames: 5 });
 
-      await walkUntilArrival(game, GO_PAD, START);
+      await walkUntilArrival(game, vr, GO_PAD, START);
       await assertStaysAt(game, START, "on the start pad");
 
-      await walkUntilArrival(game, EXIT_PAD, BACK, 300);
+      await walkUntilArrival(game, vr, EXIT_PAD, BACK, 300);
       await assertStaysAt(game, BACK, "back beside the go pad");
     },
   );
@@ -142,6 +143,7 @@ for (const { vr, held } of [
       // (centre + crouched half height 0.56) under the ceiling.
       const arrived = await walkUntilArrival(
         game,
+        vr,
         JUMP_GO_PAD,
         JUMP_START,
         120,
@@ -159,9 +161,9 @@ for (const { vr, held } of [
       // Walk off the pipe (+X) onto the shaft floor, where there is headroom.
       if (held) await game.input.set("crouch", 1);
       await game.input.set("head.look", [180, 0]);
-      await game.input.set("right_hand.thumbstick", [0, 1]);
+      await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 1]);
       await game.step({ frames: 30 });
-      await game.input.set("right_hand.thumbstick", [0, 0]);
+      await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
       await game.step({ frames: 120 });
       const floor = await game.player.position();
       const expected = held ? CROUCHED_LIFT : STANDING_LIFT;
@@ -172,7 +174,7 @@ for (const { vr, held } of [
 
       // The shaft floor's exit pad leads back out, standing.
       if (!held) {
-        await walkUntilArrival(game, JUMP_FLOOR_EXIT, JUMP_BACK, 300);
+        await walkUntilArrival(game, vr, JUMP_FLOOR_EXIT, JUMP_BACK, 300);
         await assertStaysAt(game, JUMP_BACK, "back beside the go pad");
       }
     },

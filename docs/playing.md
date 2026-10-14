@@ -9,8 +9,8 @@ Flat-mode equivalents are included below where relevant.
 
 | Control | Action |
 | --- | --- |
-| Right stick | Move |
-| Left stick left/right | Turn (30° snap by default; center the stick between turns) |
+| Left stick | Move |
+| Right stick left/right | Turn (30° snap by default; center the stick between turns) |
 | Crouch physically, or click the left stick | Crouch; click again to stand |
 | Lower face button: left **X** / right **A** | Jump, even with both hands full; close the cyber interface when it is open |
 | Left **Menu** | Tap to toggle the cyber interface; hold 0.5 seconds to pause |

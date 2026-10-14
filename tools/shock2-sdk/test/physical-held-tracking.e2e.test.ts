@@ -49,7 +49,7 @@ for (const hand of ["left", "right"] as const) {
     // A fixed controller pose must remain fixed relative to the moving pawn.
     // Reversals also expose an old target that a steady-speed check could miss.
     for (const stick of [[1, 0], [-1, 0], [0, 1], [0, -1], [0, 0]] as [number, number][]) {
-      await game.input.set("right_hand.thumbstick", stick);
+      await game.input.set("left_hand.thumbstick", stick);
       let previous = await snapshot();
       let distance = 0;
       for (let frame = 0; frame < 8; frame++) {
@@ -63,14 +63,14 @@ for (const hand of ["left", "right"] as const) {
       if (stick.some(v => v !== 0)) assert.ok(distance > 0.5, "exercise real unobstructed locomotion");
     }
     const beforeTurn = await snapshot();
-    await game.input.set("left_hand.thumbstick", [1, 0]);
+    await game.input.set("right_hand.thumbstick", [1, 0]);
     for (let frame = 0; frame < 8; frame++) {
       await game.step({ frames: 1 });
       const current = await snapshot();
       const error = Math.hypot(...current.relative.map((v, i) => v - resting.relative[i]!));
       assert.ok(error < 0.002, `turn frame ${frame}: pawn-local weapon pose error ${error}`);
     }
-    await game.input.set("left_hand.thumbstick", [0, 0]);
+    await game.input.set("right_hand.thumbstick", [0, 0]);
     const afterTurn = await snapshot();
     assert.ok(Math.hypot(...afterTurn.rotation.map((v, i) => v - beforeTurn.rotation[i]!)) > 0.01,
       "the turn input must actually rotate the pawn");

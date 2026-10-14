@@ -526,10 +526,10 @@ async function recordMelee(game, shot, subjectId, held) {
       );
     };
     for (let frame = 0; frame < 240 && (await reach()) > 1.5; frame++) {
-      await game.input.set("right_hand.thumbstick", [0, 0.6]);
+      await game.input.set("left_hand.thumbstick", [0, 0.6]);
       await hold(1 / 60, shot.hands);
     }
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     const beforeSwingHp = await hp();
 
     // Overhead wrench swing: raise it over the shoulder, then chop down through
