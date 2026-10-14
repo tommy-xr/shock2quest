@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
+import { crossEarthTrainingTripwire } from "./helpers/earth-tripwire.js";
 import { add, sub, scale, normalize, quatRotate, quatConjugate, aimVrHandAt, drawPersonalCard } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
@@ -49,6 +50,7 @@ for (const hand of ["left", "right"] as const) {
     await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
     await game.devParams.set("vr_mfd_device", 0); // Exercise the legacy card toggle.
     await game.step({ frames: 30 });
+    await crossEarthTrainingTripwire(game, 313, 319);
     const [reader] = await game.entities.byTemplate(262);
     assert.ok(reader);
     const [x, , z] = reader.position;
@@ -56,7 +58,7 @@ for (const hand of ["left", "right"] as const) {
     await game.step({ frames: 120 });
     const aim = await game.player.aimAt(reader.id, { hitbox: "center", visibility: "required" });
     assert.ok(aim.target_confirmed);
-    await aimVrHandAt(game, aim.world_point, .2, 1, 0, { hand });
+    await aimVrHandAt(game, aim.world_point, .2, 0, 0, { hand });
     await game.step({ frames: 8 });
     assert.equal((await game.ui.state()).active_panel, null);
     await game.input.set(`${hand}_hand.squeeze`, 0);

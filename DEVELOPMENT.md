@@ -1551,6 +1551,10 @@ The design follows [Armature's RE4 Quest developer interview](https://www.unreal
 ### Belt MFD device
 
 The handheld MFD is enabled by default in VR (`cargo dbgr --mission earth.mis --vr`).
+Key doors/readers accept an ordinary frob when you have the matching credential;
+scanning remains an alternative. Frobbing a replicator, trainer or O/S upgrade
+opens its MFD on the held tricorder, or in the cyber interface when stowed.
+Opening a machine does not purchase anything. Keypads retain their in-world UI.
 Scanned machine panels on the handheld tricorder stay connected within 8 metres
 of the player. An open machine panel suspends automatic focus scanning so arm
 movement cannot replace it; the holding-hand trigger can explicitly scan another

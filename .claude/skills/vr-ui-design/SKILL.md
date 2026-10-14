@@ -108,9 +108,10 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
 - **The personal belt card is permanent.** Available before the first credential,
   drawn by either free hand, returned on release, never consumable or lost. In VR,
   credential-locked doors/readers accept either frob or scanning; both use the
-  normal key checks. Supported machines still require scanning; ordinary unlocked
-  doors remain ordinary interactions. A scan authorizes a machine
-  interface, never a purchase. Require withdrawal before another scan. This design
+  normal key checks. Replicators, trainers and O/S upgrades also accept frob,
+  opening the held tricorder or the cyber interface when stowed. Keypads retain
+  their in-world UI. Other supported machines still require scanning. Opening a
+  machine interface never purchases anything. Require withdrawal before another scan. This design
   supersedes the immediate-VR-pickup/no-wielding rule and PR #1387's optional card.
 - When implementing any pickup, check which model the original game uses
   (collected flag / credential vs. inventory object) before defaulting to
