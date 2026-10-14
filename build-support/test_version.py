@@ -71,7 +71,7 @@ class BuildVersionTests(unittest.TestCase):
                              ["0.2.0", "a" * 40, "false"])
             self.assertEqual(build(), ["dev", commit, "false"])
             # Source archives retain CI provenance even without a Git checkout.
-            shutil.rmtree(root / ".git")
+            (root / ".git").rename(root / "archived-git")
             self.assertEqual(build(SHOCK2QUEST_RELEASE_VERSION="0.3.0",
                                    SHOCK2QUEST_GIT_SHA="b" * 40),
                              ["0.3.0", "b" * 40, "unknown"])
