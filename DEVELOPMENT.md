@@ -1343,8 +1343,9 @@ access, debug-port configuration, and the `ss2vr` shell alias.
 
 ##### Saved games
 
-The pause menu's **Save Game** opens 15 manual slots plus a separate quicksave
-slot. Select a row, then **Save**; selecting an occupied slot overwrites it.
+The pause menu's **Save Game** opens 12 manual slots, quicksave, and a disabled
+reserved autosave row, fitting all 14 rows without scrolling. Select a row, then
+**Save**; selecting an occupied slot overwrites it.
 Labels use the localized map name and elapsed campaign time (`H:MM:SS`). Paused
 and loading time do not count. **Load Game** lists existing saves; **Done**
 returns to the paused game, including after a failed load. Names are automatic.

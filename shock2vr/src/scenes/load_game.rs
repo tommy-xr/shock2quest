@@ -44,6 +44,8 @@ use crate::{
 /// The screen is authored on the original 640x480 `GAMELOD.PCX` canvas.
 const CANVAS_W: f32 = 640.0;
 const CANVAS_H: f32 = 480.0;
+// Manual slots, quicksave and the reserved autosave row fit without scrolling.
+const MANUAL_SLOT_COUNT: usize = 12;
 const BACKDROP_TEXTURE: &str = "GAMELOD.PCX";
 /// The original load screen's widget layout - LTRB rects (`UI_LAYOUT_IMPORTER`).
 const LAYOUT_FILE: &str = "GAMELODR.BIN";
@@ -292,9 +294,12 @@ impl LoadGameScene {
     pub(crate) fn for_saving() -> Self {
         let mut existing = all_saves();
         let mut slots = Vec::new();
-        for name in (1..=15)
+        for name in (1..=MANUAL_SLOT_COUNT)
             .map(|slot| format!("slot{slot}"))
-            .chain(std::iter::once(crate::input::QUICK_SAVE_NAME.to_owned()))
+            .chain([
+                crate::input::QUICK_SAVE_NAME.to_owned(),
+                "autosave".to_owned(),
+            ])
         {
             let saved = existing
                 .iter()
@@ -310,7 +315,7 @@ impl LoadGameScene {
         }
         let selected = slots
             .iter()
-            .take(15)
+            .take(MANUAL_SLOT_COUNT)
             .position(|slot| !slot.occupied)
             .unwrap_or(0);
         let mut picker = Self::from_saves(slots);
@@ -352,6 +357,7 @@ impl LoadGameScene {
             self.scroll,
             self.selected.is_some(),
         )
+        .filter(|action| !self.saving || *action != LoadGameAction::Select(MANUAL_SLOT_COUNT + 1))
     }
 
     pub(crate) fn selected_path(&self) -> Option<std::path::PathBuf> {
@@ -486,6 +492,7 @@ impl LoadGameScene {
             let rows = geometry.visible_rows(self.saves.len(), self.scroll);
             for (slot, index) in rows.clone().enumerate() {
                 let save = &self.saves[index];
+                let reserved = self.saving && index == MANUAL_SLOT_COUNT + 1;
                 let description = if !save.occupied {
                     label(strings, EMPTY_KEY, EMPTY_FALLBACK)
                 } else {
@@ -495,7 +502,9 @@ impl LoadGameScene {
                         .unwrap_or_else(|| save.name.clone())
                 };
                 let description = if self.saving {
-                    if index == 15 {
+                    if reserved {
+                        "Autosave (reserved)".to_owned()
+                    } else if index == MANUAL_SLOT_COUNT {
                         format!("Quick: {description}")
                     } else {
                         format!("{}: {description}", index + 1)
@@ -513,13 +522,15 @@ impl LoadGameScene {
                     description
                 };
                 let rect = geometry.text_rect(self.saves.len(), slot);
-                let opacity = if self.selected == Some(index) {
+                let opacity = if reserved {
+                    DISABLED_OPACITY
+                } else if self.selected == Some(index) {
                     ACTIVE_OPACITY
                 } else {
                     IDLE_OPACITY
                 };
                 // Reserve the clock's width so a long map name cannot hide the elapsed time.
-                if save.occupied && save.metadata.is_some() {
+                if !reserved && save.occupied && save.metadata.is_some() {
                     let (name, time) = description.rsplit_once(' ').unwrap();
                     let clock_w = 56.0;
                     canvas
@@ -780,6 +791,26 @@ mod tests {
         // Only two saves exist, so the third row is bare backdrop.
         let list = FALLBACK_RECTS[LIST_RECT_INDEX];
         assert_eq!(click(at_canvas(row_rect(list, 2).center()), 2, false), None);
+    }
+
+    #[test]
+    fn save_slots_fit_without_arrows_and_reserve_autosave() {
+        let picker = LoadGameScene::for_saving();
+        let geometry = list_geometry(&FALLBACK_RECTS);
+        assert_eq!(picker.saves.len(), geometry.rows_per_page());
+        assert!(geometry.rocker(picker.saves.len()).is_none());
+        assert_eq!(
+            picker.saves[MANUAL_SLOT_COUNT].name,
+            crate::input::QUICK_SAVE_NAME
+        );
+        let last_row = geometry.row_rect(picker.saves.len(), MANUAL_SLOT_COUNT + 1);
+        assert_eq!(picker.saves.last().unwrap().name, "autosave");
+        assert_eq!(picker.hit(last_row.center(), &FALLBACK_RECTS), None);
+        let quick_row = geometry.row_rect(picker.saves.len(), MANUAL_SLOT_COUNT);
+        assert_eq!(
+            picker.hit(quick_row.center(), &FALLBACK_RECTS),
+            Some(LoadGameAction::Select(MANUAL_SLOT_COUNT))
+        );
     }
 
     #[test]
