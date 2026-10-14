@@ -1953,14 +1953,17 @@ impl Game {
             .contains("fixed_simulation")
         {
             self.simulation_input.push(input_context, action_effects);
-            // Collect at most eight ticks, retaining all excess debt in the clock.
-            // Head tracking, pause/menu input and the free camera ran above even
-            // on a frame that has no complete simulation tick.
-            let ticks: Vec<_> = self.simulation_clock.advance(time.elapsed).collect();
-            for tick in ticks {
+            // Keep unconsumed ticks pending if a load interrupts this batch.
+            // A local clock lets scene updates borrow Game while advancing lazily.
+            let mut clock = self.simulation_clock.clone();
+            for tick in clock.advance(time.elapsed) {
                 let (input, effects) = self.simulation_input.next(input_context);
                 self.update_scene_tick(&tick, &input, effects);
+                if self.pending_save_load.is_some() {
+                    break;
+                }
             }
+            self.simulation_clock = clock;
         } else {
             self.update_scene_tick(time, input_context, action_effects);
         }
@@ -2461,6 +2464,7 @@ impl Game {
         let worker = thread::spawn(move || {
             parse_saved_mission(Path::new(&worker_path), &**assets, &base_path, &context)
         });
+        throwing::cancel_tracking(self.active_game_scene.world());
         self.active_game_scene.cancel_transient_input();
         self.weapon_buttons.cancel(self.active_game_scene.world());
         self.pending_save_load = Some(PendingSaveLoad {
@@ -3335,6 +3339,10 @@ impl Game {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) {
+        // Loading uses a different camera; leave the retained world's visibility intact.
+        if self.pending_save_load.is_some() {
+            return;
+        }
         // Culling follows the *player*, not the detached camera: flying out
         // then shows exactly what the player's viewpoint decided to draw,
         // which is the whole point of watching from outside. The fixup was
