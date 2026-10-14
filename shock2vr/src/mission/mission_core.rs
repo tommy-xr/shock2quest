@@ -9827,12 +9827,14 @@ impl MissionCore {
                 use crate::hud::ammo_panel::ReadoutButton;
                 use crate::psi::PsiSelectionAxis;
                 let step = |axis, forward| vec![Effect::StepPsiSelection { axis, forward }];
-                if !matches!(button, ReadoutButton::Logs | ReadoutButton::SystemMenu)
-                    && weapon
-                        .and_then(|entity| {
-                            crate::wielded_weapon::resolve_weapon_target(&self.world, Some(entity))
-                        })
-                        .is_none()
+                if !matches!(
+                    button,
+                    ReadoutButton::Logs | ReadoutButton::SystemMenu | ReadoutButton::CloseUseMode
+                ) && weapon
+                    .and_then(|entity| {
+                        crate::wielded_weapon::resolve_weapon_target(&self.world, Some(entity))
+                    })
+                    .is_none()
                 {
                     return Vec::new();
                 }
@@ -9868,6 +9870,7 @@ impl MissionCore {
                             vec![Effect::ReadLastUnreadLog]
                         }
                     }
+                    ReadoutButton::CloseUseMode => vec![self.leave_use_mode()],
                     ReadoutButton::CycleAmmo => vec![Effect::CycleAmmo { weapon }],
                     // The exception: SETTING opens the weapon settings MFD
                     // (the original's own behavior for this button), where the

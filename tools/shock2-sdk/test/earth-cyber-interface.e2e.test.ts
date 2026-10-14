@@ -15,13 +15,24 @@ for (const vr of [false, true]) {
       assert.equal(missing.mode, "use");
       assert.equal(missing.strip, null);
       assert.equal(missing.active_panel, null);
-      assert.deepEqual(missing.readout.map(e => e.label), ["system_menu"]);
+      assert.deepEqual(missing.readout.map(e => e.label), ["system_menu", "close_use_mode"]);
       assert.equal(missing.utilities.length, 0);
       assert.ok(missing.messages.includes("Cyber Interface software not installed."));
 
-      const menu = missing.readout[0]!;
+      const exit = missing.readout.find(e => e.label === "close_use_mode");
+      assert.ok(exit);
       if (vr) {
-        await clickCanvasWithRay(game, requirePanelPose(missing), canvasCenter(menu));
+        await clickCanvasWithRay(game, requirePanelPose(missing), canvasCenter(exit));
+      } else {
+        await clickUiElement(game, exit);
+      }
+      assert.equal((await game.ui.state()).mode, "shooter");
+      await game.input.trigger("ToggleUseMode");
+      await game.step({ frames: 30 });
+      const reopened = await game.ui.state();
+      const menu = reopened.readout[0]!;
+      if (vr) {
+        await clickCanvasWithRay(game, requirePanelPose(reopened), canvasCenter(menu));
       } else {
         await clickUiElement(game, menu);
       }
@@ -49,7 +60,7 @@ for (const vr of [false, true]) {
       await game.step({ frames: 3 });
       const disabled = await game.ui.state();
       assert.equal(disabled.strip, null);
-      assert.deepEqual(disabled.readout.map(e => e.label), ["system_menu"]);
+      assert.deepEqual(disabled.readout.map(e => e.label), ["system_menu", "close_use_mode"]);
       assert.ok(disabled.messages.includes("Cyber Interface software not installed."));
     });
 }

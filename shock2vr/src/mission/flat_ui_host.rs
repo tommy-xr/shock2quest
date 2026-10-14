@@ -756,7 +756,7 @@ impl FlatUiHost {
     /// ones [`readouts::emit_use_mode`] drew.
     fn readout_buttons(&self) -> Vec<ReadoutButtonSpec> {
         if self.software_missing {
-            return vec![readouts::system_button()];
+            return vec![readouts::system_button(), readouts::exit_button()];
         }
         self.readouts
             .as_ref()
@@ -778,7 +778,9 @@ impl FlatUiHost {
                     .readouts
                     .as_ref()
                     .and_then(|r| match spec.button {
-                        ReadoutButton::SystemMenu | ReadoutButton::Logs => None,
+                        ReadoutButton::SystemMenu
+                        | ReadoutButton::Logs
+                        | ReadoutButton::CloseUseMode => None,
                         ReadoutButton::SelectLeftHand => r.hand_entities[0],
                         ReadoutButton::SelectRightHand => r.hand_entities[1],
                         _ => r.weapon,
@@ -822,7 +824,7 @@ impl FlatUiHost {
             return Vec::new();
         };
         let mut canvas = UiCanvas::new(CANVAS_SIZE);
-        readouts::emit_use_mode(&mut canvas, readouts);
+        readouts::emit_use_mode(&mut canvas, readouts, self.cursor_canvas);
         canvas
             .elements()
             .iter()
@@ -1235,6 +1237,21 @@ impl FlatUiHost {
         let pressed = pointer.map(|p| p.pressed).unwrap_or(false);
         let pressed_edge = pressed && !self.last_pointer_pressed;
         self.last_pointer_pressed = pressed;
+
+        // Exit remains reachable while dragging or without interface software.
+        // The mission returns the cursor item and swallows held weapon input.
+        if !self.device
+            && (self.readouts.is_some() || self.software_missing)
+            && pressed_edge
+            && pointer
+                .and_then(|p| p.canvas_pos)
+                .is_some_and(|p| readouts::exit_button().rect.contains(p))
+        {
+            return (
+                Vec::new(),
+                vec![FlatUiDragAction::Readout(ReadoutButton::CloseUseMode, None)],
+            );
+        }
 
         if self.software_missing {
             self.cursor_canvas = pointer.and_then(|p| p.canvas_pos);
@@ -1687,6 +1704,7 @@ impl FlatUiHost {
             let mut canvas = UiCanvas::new(CANVAS_SIZE);
             let menu = readouts::system_button();
             crate::hud::ammo_panel::draw_button(&mut canvas, &menu, menu.rect);
+            readouts::emit_exit_button(&mut canvas, self.cursor_canvas);
             if let Some(cursor) = self.cursor_canvas.filter(|_| arrow) {
                 canvas.image(
                     Rect::new(cursor.x, cursor.y, CURSOR_SIZE.x, CURSOR_SIZE.y),
@@ -1705,7 +1723,7 @@ impl FlatUiHost {
         // overlaps the bio panel by - the stacking the flat HUD had when it
         // drew them under this canvas.
         if let Some(readouts) = self.readouts.as_ref() {
-            readouts::emit_use_mode(&mut canvas, readouts);
+            readouts::emit_use_mode(&mut canvas, readouts, self.cursor_canvas);
         }
         if self.device {
             self.utilities.draw(&mut canvas);
@@ -4140,11 +4158,32 @@ mod tests {
     }
 
     #[test]
-    fn missing_software_exposes_only_the_working_system_menu() {
+    fn exit_is_reachable_while_dragging_and_requires_a_fresh_press() {
+        let (world, mut host, item, _inv) = drag_world();
+        host.set_readouts(Some(readout_fixture()));
+        host.cursor_item = Some(make_cursor_item(&world, item));
+        assert_eq!(
+            press_edge(&mut host, &world, (320.0, 457.0)),
+            vec![FlatUiDragAction::Readout(ReadoutButton::CloseUseMode, None)]
+        );
+        assert_eq!(host.take_cursor_item(), Some(item));
+        let (_, actions) = host.update(
+            &world,
+            Some(Pointer2D {
+                position: norm(320.0, 457.0),
+                pressed: true,
+                secondary: false,
+            }),
+        );
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn missing_software_keeps_system_menu_and_exit_available() {
         let (world, mut host, _wrench, _inv) = drag_world();
         host.set_readouts(Some(readout_fixture()));
         host.software_missing = true;
-        assert_eq!(host.readout_buttons_debug().len(), 1);
+        assert_eq!(host.readout_buttons_debug().len(), 2);
         assert!(host.utility_elements_debug().is_empty());
         assert_eq!(
             press_edge(&mut host, &world, (320.0, 390.0)),
@@ -4154,10 +4193,14 @@ mod tests {
         let canvas = host.build_canvas_with(false).unwrap();
         assert!(canvas.elements().iter().all(|element| {
             let rect = element.rect();
-            rect.x >= 288.0
+            (rect.x >= 288.0
                 && rect.x + rect.w <= 352.0
                 && rect.y >= 372.0
-                && rect.y + rect.h <= 408.0
+                && rect.y + rect.h <= 408.0)
+                || (rect.x >= 281.0
+                    && rect.x + rect.w <= 359.0
+                    && rect.y >= 434.0
+                    && rect.y + rect.h <= 478.0)
         }));
         host.software_missing = false;
         assert!(host.readout_buttons_debug().len() > 1);
@@ -4187,7 +4230,13 @@ mod tests {
                 .iter()
                 .map(|e| e.label.as_deref().unwrap())
                 .collect::<Vec<_>>(),
-            vec!["gun_setting", "cycle_ammo", "system_menu", "logs"]
+            vec![
+                "gun_setting",
+                "cycle_ammo",
+                "system_menu",
+                "logs",
+                "close_use_mode"
+            ]
         );
         assert_eq!(elements[0].text.as_deref(), Some("NORM"));
         assert!(elements.iter().all(|e| e.kind == "button"));

@@ -117,7 +117,7 @@ test(
     // ...and every control the pistol offers is on it, clickable.
     assert.deepEqual(
       ui.readout.map((e) => e.label),
-      ["gun_setting", "reload", "cycle_ammo", "select_right_hand", "system_menu", "logs"],
+      ["gun_setting", "reload", "cycle_ammo", "select_right_hand", "system_menu", "logs", "close_use_mode"],
     );
     assert.equal(
       control(ui, "gun_setting").text,

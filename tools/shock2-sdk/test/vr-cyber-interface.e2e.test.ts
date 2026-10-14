@@ -4,7 +4,8 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { cycleToWeapon } from "./helpers/weapon.js";
 import type { Vec3 } from "../src/index.js";
-import { aimVrHandAt, normalize, quatFromTo } from "./helpers/vr-hand.js";
+import { canvasCenter, requirePanelPose } from "./helpers/ui.js";
+import { aimVrHandAt, aimVrHandAtCanvas, normalize, quatFromTo } from "./helpers/vr-hand.js";
 
 // The VR cyber interface (use-mode skeleton): in VR presentation
 // `ToggleUseMode` (left-controller X on Quest) presents the flat use-mode
@@ -187,7 +188,13 @@ test(
     // Exit under the held trigger: the stale press must NOT fire on the way
     // out (rising-edge / swallow-until-release).
     const acrossExit = await shotsFired(async () => {
-      await game.input.trigger("ToggleUseMode");
+      const ui = await game.ui.state();
+      const exit = ui.readout.find(e => e.label === "close_use_mode");
+      assert.ok(exit);
+      const pose = requirePanelPose(ui);
+      await aimVrHandAtCanvas(game, pose, canvasCenter(exit), { hand: "left", trigger: 0 });
+      await game.step({ frames: 2 });
+      await aimVrHandAtCanvas(game, pose, canvasCenter(exit), { hand: "left", trigger: 1 });
       await game.step({ frames: 10 });
     });
     assert.equal(await uiMode(game), "shooter");
@@ -195,6 +202,7 @@ test(
 
     // Release and pull again: the weapon works normally after the mode.
     await game.input.set("right_hand.trigger", 0);
+    await game.input.set("left_hand.trigger", 0);
     await game.step({ frames: 3 });
     const afterRelease = await shotsFired(async () => {
       await game.input.set("right_hand.trigger", 1);
