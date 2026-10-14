@@ -1347,7 +1347,8 @@ The pause menu's **Save Game** opens 12 manual slots, quicksave, and a disabled
 reserved autosave row, fitting all 14 rows without scrolling. Select a row, then
 **Save**; selecting an occupied slot overwrites it.
 Labels use the localized map name and elapsed campaign time (`H:MM:SS`). Paused
-and loading time do not count. **Load Game** lists existing saves; **Done**
+and loading time do not count. **Load Game** keeps the same slot positions, disables empty rows, and lists extra
+imported saves after the fixed slots; **Done**
 returns to the paused game, including after a failed load. Names are automatic.
 
 Each `.sav` contains its own menu metadata; there is no separate index.

@@ -23,7 +23,7 @@ pub struct SaveFile {
     /// Write time, used to order "most recent first".
     pub modified: SystemTime,
     pub metadata: Option<super::SaveMetadata>,
-    /// False for an empty slot offered by the save picker.
+    /// False for an empty slot shown in the save and load pickers.
     pub occupied: bool,
 }
 

@@ -11,7 +11,8 @@ import {
 } from "./helpers/frontend-menu.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
-const FIRST_ROW: [number, number] = [362, 63.5];
+// The twelfth slot stays in row 12 in both pickers, even with rows 1–11 empty.
+const SLOT_ROW: [number, number] = [362, 63.5 + 11 * 19];
 
 // Menu saves use fixed slots. Give each test its own writable save directory,
 // while sharing the retail assets, so no click can overwrite a user's save.
@@ -72,10 +73,10 @@ for (const vr of [false, true]) {
         const paused = await game.info();
 
         await click(game, pauseEntry(1));
-        await click(game, FIRST_ROW);
+        await click(game, SLOT_ROW);
         await click(game, DEV_ACTION);
         const files = readdirSync(join(assets.root, "saves")).filter(name => name.endsWith(".sav"));
-        assert.deepEqual(files, ["slot1.sav"], "Save must create the selected manual slot");
+        assert.deepEqual(files, ["slot12.sav"], "Save must create the selected manual slot");
         savePath = join(assets.root, "saves", files[0]);
         const goodSave = readFileSync(savePath);
         assert.ok(goodSave.length > 1000, "slot must contain a serialized mission");
@@ -128,7 +129,7 @@ for (const vr of [false, true]) {
 
         for (const failure of ["corrupt", "missing", "missing mission"] as const) {
           await click(game, pauseEntry(2));
-          await click(game, FIRST_ROW);
+          await click(game, SLOT_ROW);
           if (failure === "corrupt") writeFileSync(savePath, "invalid save");
           else if (failure === "missing") rmSync(savePath);
           else {
@@ -156,7 +157,7 @@ for (const vr of [false, true]) {
         await game.input.trigger("TogglePauseMenu");
         await game.step({ frames: 5 });
         await click(game, pauseEntry(2));
-        await click(game, FIRST_ROW);
+        await click(game, SLOT_ROW);
         await click(game, DEV_ACTION);
         const loaded = await game.info();
         assert.equal(loaded.paused, false, "successful load resumes gameplay");
@@ -170,7 +171,7 @@ for (const vr of [false, true]) {
         await game.input.trigger("TogglePauseMenu");
         await game.step({ frames: 5 });
         await click(game, pauseEntry(2));
-        await click(game, FIRST_ROW);
+        await click(game, SLOT_ROW);
         await click(game, DEV_ACTION);
         const restored = await game.info();
         assert.equal(restored.mission, "medsci1.mis");
@@ -189,7 +190,7 @@ for (const vr of [false, true]) {
         await game.input.trigger("TogglePauseMenu");
         await game.step({ frames: 5 });
         await click(game, pauseEntry(1));
-        await click(game, FIRST_ROW);
+        await click(game, SLOT_ROW);
         await click(game, DEV_ACTION);
         const resumed = JSON.parse(readFileSync(savePath!, "utf8"));
         assert.ok(resumed.metadata.played.secs >= 3723, "startup load retains campaign play time");
