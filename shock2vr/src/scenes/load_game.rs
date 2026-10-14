@@ -148,7 +148,7 @@ pub(crate) fn draw_load_failure(canvas: &mut UiCanvas, error: std::io::ErrorKind
         .enumerate()
     {
         canvas.text_native(
-            Rect::new(261.0, 354.0 + line as f32 * 14.0, 202.0, 14.0),
+            Rect::new(261.0, 346.0 + line as f32 * 11.0, 202.0, 11.0),
             text,
             LIST_FONT,
             HAlign::Center,
