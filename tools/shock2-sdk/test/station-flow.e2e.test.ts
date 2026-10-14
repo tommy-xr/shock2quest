@@ -141,6 +141,7 @@ test(
     });
     await game.step({ frames: 5 });
     await game.screenshot("station-flow-earth.png");
+    assert.equal(await game.quests.get("HideInterface"), "incomplete", "Earth starts without the interface");
 
     // Step 1: enlist as a Marine by walking through the Marine career door.
     // Teleport ONTO its tripwire volume (equivalent to walking in: fires the same
@@ -255,6 +256,7 @@ test(
     // Save/load leg: persist mid-flow (after year 2) and reload in the same
     // runtime; the accumulated stats must survive the round-trip byte-for-byte.
     const statsBeforeSave = info.player.stats;
+    assert.equal(await game.quests.get("HideInterface"), "incomplete", "training has not installed the interface yet");
     const saveName = `station_flow_453_${Date.now()}`;
     await game.save(saveName);
     await game.load(saveName);
@@ -283,6 +285,7 @@ test(
       "medsci1.mis",
       "the third tour (year 4) should deploy to MedSci1",
     );
+    assert.equal(await game.quests.get("HideInterface"), "unknown", "final deployment installs the interface");
     assert.deepEqual(
       await completeTrainingYears(game),
       ["training_year_2", "training_year_3", "training_year_4"],
@@ -303,6 +306,18 @@ test(
       info.player.position.every(Number.isFinite),
       `deploy position should be finite, got ${JSON.stringify(info.player.position)}`,
     );
+
+    // The first wrench corpse must be searchable after carrying Earth's state
+    // through training, including the mid-training save/load above.
+    const [corpse] = await game.entities.byTemplate(1177);
+    assert.ok(corpse?.position, "MedSci1 has the first wrench corpse");
+    await game.player.teleport({ x: corpse.position[0] + 1.2, y: corpse.position[1] + 0.5, z: corpse.position[2] });
+    await game.step({ frames: 5 });
+    await game.entities.sendMessage(corpse.id, { type: "Frob" });
+    await game.step({ frames: 3 });
+    const ui = await game.ui.state();
+    assert.equal(ui.active_panel?.entity_id, corpse.id, "the corpse search panel opens");
+    assert.ok(!ui.messages.includes("Cyber Interface software not installed."));
   },
 );
 

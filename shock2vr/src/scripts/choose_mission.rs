@@ -223,6 +223,11 @@ impl Script for ChooseMissionScript {
                     Effect::Multiple(vec![
                         set_year_effect,
                         grant_effect,
+                        // Graduation installs the interface before campaign state leaves training.
+                        Effect::SetQuestBit {
+                            quest_bit_name: crate::cyber_interface::QUEST_NAME.into(),
+                            quest_bit_value: QuestBitValue::UNKNOWN,
+                        },
                         Effect::GlobalEffect(transition),
                     ])
                 }
