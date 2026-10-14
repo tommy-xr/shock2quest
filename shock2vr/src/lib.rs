@@ -1816,6 +1816,8 @@ impl Game {
                     }
                     Err(error) => {
                         warn!("Unable to load '{}': {error}", pending.path);
+                        // Quest captures stdout without a tracing subscriber.
+                        println!("SHOCK2QUEST_LOAD_FAILED path={} error={error}", pending.path);
                         if self.pause_menu.is_open() {
                             self.pause_menu.show_load_failure();
                         } else {

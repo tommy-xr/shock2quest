@@ -111,6 +111,64 @@ test("QuickLoad interrupts a fixed-step batch before a failed load", {
 });
 
 for (const vr of [false, true]) {
+  for (const changeMission of [false, true]) {
+    test(`menu load restores ${changeMission ? "another" : "the same"} mission's entities (${vr ? "VR" : "flat"})`,
+      { skip: !enabled, timeout: 300_000 }, async () => {
+        using assets = isolatedAssets();
+        await using game = await GameServer.launch({
+          mission: "earth.mis",
+          debugFlags: ["--defer-transitions", ...(vr ? ["--vr"] : [])],
+        });
+        const click = vr ? vrClickCanvasPoint : clickCanvas;
+        await game.step({ frames: 30 });
+        const originalCount = (await game.entities.byTemplate(-397)).length;
+        if (changeMission) {
+          for (let i = 0; i < 2; i++) {
+            await game.input.trigger("SpawnDebugMonster");
+            await game.step({ frames: 1 });
+          }
+        }
+        const savedCount = originalCount + (changeMission ? 2 : 0);
+        assert.equal((await game.entities.byTemplate(-397)).length, savedCount);
+
+        await game.input.trigger("TogglePauseMenu");
+        await game.step({ frames: 5 });
+        await click(game, pauseEntry(1));
+        await click(game, SLOT_ROW);
+        await click(game, DEV_ACTION);
+        const save = JSON.parse(readFileSync(join(assets.root, "saves", "slot12.sav"), "utf8"));
+        assert.equal(save.metadata.mission, "earth.mis");
+        await click(game, DEV_DONE);
+        await click(game, pauseEntry(0));
+
+        // This extra spawn must disappear even if a transition caches this newer world.
+        await game.input.trigger("SpawnDebugMonster");
+        await game.step({ frames: 1 });
+        assert.equal((await game.entities.byTemplate(-397)).length, savedCount + 1);
+        if (changeMission) {
+          await game.transitionLevel("medsci1.mis");
+          await game.waitFor(async () => (await game.info()).mission === "medsci1.mis", {
+            timeoutMs: 60_000, description: "switch away from the saved mission",
+          });
+        }
+
+        await game.input.trigger("TogglePauseMenu");
+        await game.step({ frames: 5 });
+        await click(game, pauseEntry(2));
+        await click(game, SLOT_ROW);
+        await click(game, DEV_ACTION);
+        await finishLoading(game, vr);
+        const loaded = await game.info();
+        assert.equal(loaded.mission, "earth.mis", "load must return to the saved mission");
+        assert.equal(loaded.paused, false);
+        assert.equal((await game.entities.byTemplate(-397)).length, savedCount,
+          "load must restore saved spawns and remove post-save spawns");
+        const { x, y, z } = save.global_data.position;
+        assert.ok(Math.hypot(...loaded.player.position.map((v, i) => v - [x, y, z][i])) < 0.1,
+          "load must restore the saved player position");
+      });
+  }
+
   test(`pause save slots and load preserve the live mission (${vr ? "VR" : "flat"})`,
     { skip: !enabled, timeout: 600_000 }, async () => {
       using assets = isolatedAssets();
