@@ -1,7 +1,7 @@
 //! Read-only body gear feedback. Inventory ownership stays in the pouch/holsters.
 use cgmath::{Deg, Matrix4, vec3, vec4};
 use engine::scene::{self, SceneObject};
-use shipyard::{EntityId, World};
+use shipyard::{EntityId, Get, View, World};
 
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -56,12 +56,25 @@ impl PouchReadout {
         Self {
             weapon: weapon.map(|id| id.inner() as i32),
             icon: offer.map_or_else(
-                || crate::hud::get_weapon_ammo_icon(world, weapon),
-                |offer| crate::hud::get_projectile_ammo_icon(world, offer.projectile),
+                || {
+                    if weapon.is_some_and(|gun| crate::wielded_weapon::is_energy_weapon(world, gun))
+                    {
+                        Some("i_batt".to_owned())
+                    } else {
+                        crate::hud::get_weapon_ammo_icon(world, weapon)
+                    }
+                },
+                |offer| match offer.projectile {
+                    Some(projectile) => crate::hud::get_projectile_ammo_icon(world, projectile),
+                    None => world
+                        .borrow::<View<dark::properties::PropObjIcon>>()
+                        .ok()
+                        .and_then(|icons| icons.get(offer.reserve).ok().map(|icon| icon.0.clone())),
+                },
             ),
             count: weapon.map(|_| {
                 offer.map_or(0, |offer| {
-                    super::reload::reserve_rounds(world, offer.projectile)
+                    super::reload::reserve_count(world, offer.projectile)
                 })
             }),
             state,

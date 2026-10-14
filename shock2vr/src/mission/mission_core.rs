@@ -6553,7 +6553,10 @@ impl MissionCore {
             pouch_available,
             pouch_weapons,
             held.map(|item| {
-                item.is_some_and(|item| super::reload::is_ammo_clip(&self.world, item))
+                item.is_some_and(|item| {
+                    super::reload::is_ammo_clip(&self.world, item)
+                        || super::reload::is_portable_battery(&self.world, item)
+                })
             }),
             pouch_offers,
             body_gear && !self.use_mode,
@@ -19057,7 +19060,9 @@ impl MissionCore {
             hand,
         );
         if let Some(clip) = clip {
-            self.prepare_magazine_model(asset_cache, weapon, clip);
+            if offer.projectile.is_some() {
+                self.prepare_magazine_model(asset_cache, weapon, clip);
+            }
             effects.push(Effect::ShowMessage {
                 text: "Ammo drawn".to_owned(),
             });
