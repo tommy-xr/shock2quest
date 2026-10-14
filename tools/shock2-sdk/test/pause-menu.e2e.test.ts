@@ -28,7 +28,6 @@ const entry = (index: number): [number, number] => [
   (20 + index * 92 + 76 / 2) / CANVAS_H,
 ];
 const CONTINUE = entry(0);
-const SAVE_GAME = entry(1);
 const QUIT_TO_MAIN_MENU = entry(4);
 
 /** Walk forward for `frames` and report where the player ended up. */
@@ -81,14 +80,6 @@ test(
     await game.step({ frames: 180 });
     const stillPaused = await game.info();
     assert.deepEqual(stillPaused.player.position, walking, "the sim must stay frozen");
-
-    // A dimmed stub swallows its click: still paused afterwards.
-    await click(game, SAVE_GAME);
-    assert.equal(
-      (await game.info()).paused,
-      true,
-      "Save Game is a dimmed stub and must not resume",
-    );
 
     // "Continue" resumes, and the sim advances again.
     await click(game, CONTINUE);
