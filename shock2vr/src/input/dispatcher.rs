@@ -18,7 +18,7 @@ const DEBUG_MONSTER_TEMPLATE_ID: i32 = -397;
 /// [`crate::save_file_path`] so quicksaves land beside every other named save
 /// in `<data_root>/saves`, which is the directory the load/game-over screens
 /// search for a save to offer.
-const QUICK_SAVE_NAME: &str = "save1";
+pub(crate) const QUICK_SAVE_NAME: &str = "save1";
 
 fn quick_save_file() -> String {
     crate::save_file_path(QUICK_SAVE_NAME)

@@ -571,11 +571,11 @@ pub fn resource_path(str: &str) -> String {
     paths::data_root().join(str).to_string_lossy().into_owned()
 }
 
-/// Resolve a bare save name to its on-disk `.sav` path under `<data_root>/saves`.
+/// Resolve a bare save name in the platform's save directory.
 ///
 /// `name` is expected to be a bare name (no extension / path separators - the
 /// caller validates that at the edge). Named saves live in a stable directory
-/// keyed off the data root so a save written in one runtime launch can be
+/// resolved by [`save_load::save_directory`] so a save written in one launch can be
 /// reloaded in a later launch (frontier persistence for automated play-through
 /// loops).
 pub fn save_file_path(name: &str) -> std::path::PathBuf {
@@ -770,6 +770,8 @@ pub struct Game {
     /// Wall-clock time spent with the simulation suspended, subtracted from the
     /// clock the scene sees. See [`Game::scene_time`].
     time_suspended: std::time::Duration,
+    /// Campaign simulation time, preserved across missions and saves.
+    played: std::time::Duration,
     simulation_clock: fixed_step::FixedStepClock,
     simulation_input: simulation_input::TickInput,
     simulation_focused: bool,
@@ -1376,10 +1378,10 @@ impl Game {
         });
     }
 
-    /// Save the current game to a named save file under `<data_root>/saves`.
+    /// Save the current game to a named file in the platform's save directory.
     ///
     /// `file` is a bare name (no extension / path separators - validate at the
-    /// edge); it resolves to `<data_root>/saves/<file>.sav`. This is the same
+    /// edge); it resolves through [`save_file_path`]. This is the same
     /// serialization an in-game quicksave performs (`GlobalEffect::Save`) -
     /// active mission, player position/rotation, quest bits, held items, and
     /// exact current/maximum player vitals.
@@ -1394,7 +1396,7 @@ impl Game {
         Ok(self.scene_name().to_string())
     }
 
-    /// Load a previously-saved game from `<data_root>/saves/<file>.sav`,
+    /// Load a named game from the platform's save directory,
     /// restoring the active mission, player position/rotation, quest bits, held
     /// items, and exact current/maximum player vitals. The switch is synchronous
     /// (no loading-screen deferral), so the returned scene name already reflects
@@ -1647,6 +1649,7 @@ impl Game {
             weapon_buttons: Default::default(),
             menu_hold_ring: scenes::cutscene_skip::RingArt::default(),
             time_suspended: std::time::Duration::ZERO,
+            played: std::time::Duration::ZERO,
             simulation_clock: fixed_step::FixedStepClock::new(
                 std::num::NonZeroU32::new(60).unwrap(),
                 std::num::NonZeroU32::new(8).unwrap(),
@@ -1871,6 +1874,9 @@ impl Game {
         input_context: &input_context::InputContext,
         action_effects: Vec<Effect>,
     ) {
+        if self.active_game_scene.is_pausable() {
+            self.played += time.elapsed;
+        }
         audio_log::set_sim_time(time.total.as_secs_f64());
         // Update the scene (handles movement, physics, collision, teleport internally)
         let effects = self.active_game_scene.update(
@@ -2142,6 +2148,28 @@ impl Game {
                 self.apply_scene_effects(vec![Effect::ContinueHorde]);
             }
             Some(PauseAction::Resume) => self.close_pause_menu(true),
+            Some(PauseAction::SaveSelectedGame) => {
+                if let Some(path) = self.pause_menu.selected_save_path() {
+                    match self.save_to_file(path.to_string_lossy().into_owned()) {
+                        Ok(()) => self.pause_menu.show_save_result(Some(self.save_metadata())),
+                        Err(error) => {
+                            warn!("Unable to save from pause menu: {error}");
+                            self.pause_menu.show_save_result(None);
+                        }
+                    }
+                }
+            }
+            Some(PauseAction::LoadSelectedGame) => {
+                if let Some(path) = self.pause_menu.selected_save_path() {
+                    match self.load_game_at(&path) {
+                        Ok(_) => self.close_pause_menu(true),
+                        Err(error) => {
+                            warn!("Unable to load '{}': {error}", path.display());
+                            self.pause_menu.show_load_failure();
+                        }
+                    }
+                }
+            }
             Some(PauseAction::QuitToMainMenu) => {
                 // Keep the overlay open through the swap so the new menu
                 // inherits its placement before the pause session ends.
@@ -2278,7 +2306,7 @@ impl Game {
             });
         }
         let save_data = self.build_save_data()?;
-        // Saves live in `<data_root>/saves`, which may not exist yet on a fresh
+        // The save directory may not exist yet on a fresh
         // install - a quicksave must create it rather than fail (and a failure
         // must not take the game down).
         let path = Path::new(&file_name);
@@ -2292,21 +2320,36 @@ impl Game {
                 player_pose: None,
             })?;
         }
-        let mut zip_file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-            .map_err(|error| SaveGameError {
+        // Replace the slot only after a complete write, so a full disk preserves the previous save.
+        let temporary = path.with_extension("sav.tmp");
+        let result = (|| -> io::Result<()> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&temporary)?;
+            save_data.write(&mut file)?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&temporary, path)
+        })();
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(SaveGameError {
                 error_code: "save_io_error",
-                reason: format!("unable to write '{}': {}", file_name, error),
+                reason: format!("unable to write '{}': {}", path.display(), error),
                 player_pose: None,
-            })?;
-        save_data.write(&mut zip_file);
+            });
+        }
+        println!(
+            "SHOCK2QUEST_SAVE path={} mission={scene_name}",
+            path.display()
+        );
         Ok(())
     }
 
     fn load_from_file(&mut self, file_name: String) -> io::Result<()> {
+        println!("SHOCK2QUEST_LOAD path={file_name}");
         let save_data = read_save_file(Path::new(&file_name))?;
         let scene_name = &save_data.global_data.active_mission;
         if scenes::debug_scene_names().any(|name| name.eq_ignore_ascii_case(scene_name)) {
@@ -2317,6 +2360,7 @@ impl Game {
                 ),
             ));
         }
+        let played = save_data.metadata.played;
         let was_crouched = save_data.global_data.is_crouched;
         let (mut mission, level_map) = Self::load_from_save_data(
             save_data,
@@ -2334,12 +2378,17 @@ impl Game {
         }
         self.set_active_scene(Box::new(mission));
         self.mission_to_save_data = level_map;
+        self.played = played;
         self.campaign_completed = false;
         // A load replaces the world wholesale, so any transition still in
         // flight (a quickload while the loading screen is up) must be dropped -
         // otherwise it lands a few frames later and overwrites the loaded save
         // with the pre-load destination.
         self.pending_transition = None;
+        println!(
+            "SHOCK2QUEST_LOAD_COMPLETE path={file_name} mission={}",
+            self.scene_name()
+        );
         Ok(())
     }
 
@@ -2391,6 +2440,13 @@ impl Game {
             position
         };
         Ok((position, rotation))
+    }
+
+    fn save_metadata(&self) -> save_load::SaveMetadata {
+        save_load::SaveMetadata {
+            mission: self.scene_name().to_owned(),
+            played: self.played,
+        }
     }
 
     fn build_save_data(&self) -> Result<SaveData, SaveGameError> {
@@ -2448,6 +2504,7 @@ impl Game {
         };
 
         Ok(SaveData {
+            metadata: self.save_metadata(),
             global_data,
             level_data,
         })
@@ -2547,6 +2604,7 @@ impl Game {
             GlobalEffect::StartNewCampaign { difficulty }
             | GlobalEffect::StartNewHorde { difficulty } => {
                 let horde = matches!(global_effect, GlobalEffect::StartNewHorde { .. });
+                self.played = std::time::Duration::ZERO;
                 self.pending_transition = None;
                 self.campaign_completed = false;
                 self.mission_to_save_data.clear();

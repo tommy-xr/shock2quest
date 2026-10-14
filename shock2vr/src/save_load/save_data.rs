@@ -13,6 +13,9 @@ use std::{collections::HashMap, io};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct SaveData {
+    // Keep this first: save discovery reads only the leading metadata object.
+    #[serde(default)]
+    pub metadata: SaveMetadata,
     // The global state of the game (what level we're in, where the player is, what they're carrying, etc.)
     pub global_data: GlobalData,
 
@@ -20,10 +23,38 @@ pub struct SaveData {
     pub level_data: HashMap<String, EntitySaveData>,
 }
 
+/// Menu labels travel with their save, so discovery needs no separate index.
+#[derive(Clone, Default, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct SaveMetadata {
+    pub mission: String,
+    pub played: std::time::Duration,
+}
+
+impl SaveMetadata {
+    pub fn label(&self, map_names: Option<&HashMap<String, String>>) -> String {
+        let key = self.mission.trim_end_matches(".mis");
+        let name = map_names
+            .and_then(|names| {
+                names
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            })
+            .map(|(_, label)| label.as_str())
+            .unwrap_or(key);
+        let seconds = self.played.as_secs();
+        format!(
+            "{name} {}:{:02}:{:02}",
+            seconds / 3600,
+            seconds / 60 % 60,
+            seconds % 60
+        )
+    }
+}
+
 impl SaveData {
-    pub fn write<T: std::io::Write>(&self, writer: &mut T) {
-        let save_data_json = serde_json::to_string(&self).unwrap();
-        writer.write_all(save_data_json.as_bytes()).unwrap();
+    pub fn write<T: std::io::Write>(&self, writer: &mut T) -> io::Result<()> {
+        let save_data_json = serde_json::to_vec(self)?;
+        writer.write_all(&save_data_json)
     }
 
     pub fn read<T: std::io::Read>(reader: &mut T) -> io::Result<SaveData> {
@@ -140,6 +171,45 @@ mod tests {
     use super::*;
     use crate::save_load::{PlayerVitalPool, PlayerVitals};
     use cgmath::{Quaternion, vec3};
+
+    #[test]
+    fn menu_metadata_round_trips_and_uses_localized_map_and_play_time() {
+        let metadata = SaveMetadata {
+            mission: "medsci1.mis".to_owned(),
+            played: std::time::Duration::from_secs(3723),
+        };
+        let decoded: SaveMetadata =
+            serde_json::from_slice(&serde_json::to_vec(&metadata).unwrap()).unwrap();
+        assert_eq!(decoded, metadata);
+        let names = HashMap::from([("Medsci1".to_owned(), "MedSci - Science Sector".to_owned())]);
+        assert_eq!(
+            decoded.label(Some(&names)),
+            "MedSci - Science Sector 1:02:03"
+        );
+        assert_eq!(decoded.label(None), "medsci1 1:02:03");
+    }
+
+    #[test]
+    fn save_write_propagates_disk_errors() {
+        struct FullDisk;
+        impl std::io::Write for FullDisk {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("disk full"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let save = SaveData {
+            metadata: SaveMetadata::default(),
+            global_data: global_data(None),
+            level_data: HashMap::new(),
+        };
+        assert_eq!(
+            save.write(&mut FullDisk).unwrap_err().to_string(),
+            "disk full"
+        );
+    }
 
     fn global_data(player_vitals: Option<PlayerVitals>) -> GlobalData {
         GlobalData {

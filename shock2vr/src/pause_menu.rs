@@ -108,6 +108,8 @@ pub enum PauseAction {
     /// Close the menu and let the simulation run again.
     Resume,
     ContinueHorde,
+    SaveSelectedGame,
+    LoadSelectedGame,
     /// Abandon the run and go back to the main menu.
     QuitToMainMenu,
     /// Carry out a developer cheat. The overlay stays up - a cheat sets a
@@ -121,6 +123,8 @@ pub enum PauseAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuPage {
     Root,
+    LoadGame,
+    SaveGame,
     Options,
     HordeReport,
     Developer,
@@ -136,6 +140,8 @@ enum PauseMenuPage {
 enum PauseMenuEntry {
     Action(PauseAction),
     Options,
+    LoadGame,
+    SaveGame,
     /// Switch to the Developer page.
     Developer,
 }
@@ -145,6 +151,7 @@ enum PauseMenuTarget {
     Options(crate::ui::options_panel::OptionsEvent),
     HordeReport(bool),
     Root(PauseMenuEntry),
+    LoadGame(crate::scenes::load_game::LoadGameAction),
     Developer(dev_params_panel::DevParamsEvent),
     /// The Developer page's upper framed button - the slot the main menu's
     /// Developer scene fills with its scene launcher.
@@ -165,13 +172,13 @@ const MENU_ITEMS: &[FrontendMenuItem<PauseMenuEntry>] = &[
     FrontendMenuItem {
         string_key: "save_game",
         fallback_label: "Save Game",
-        action: None,
+        action: Some(PauseMenuEntry::SaveGame),
         label_override: None,
     },
     FrontendMenuItem {
         string_key: "load_game",
         fallback_label: "Load Game",
-        action: None,
+        action: Some(PauseMenuEntry::LoadGame),
         label_override: None,
     },
     FrontendMenuItem {
@@ -260,7 +267,7 @@ fn target_at(
     match page {
         // Options resolves its authored layout in update, independently of
         // the Developer panel's geometry passed to this helper.
-        PauseMenuPage::Options => None,
+        PauseMenuPage::Options | PauseMenuPage::LoadGame | PauseMenuPage::SaveGame => None,
         PauseMenuPage::Root => hit(point, rects).map(PauseMenuTarget::Root),
         PauseMenuPage::HordeReport => crate::ui::horde_report::continue_at(
             point,
@@ -317,6 +324,8 @@ fn resolve_click(
 
 /// The pause overlay. Closed by default; [`PauseMenu::open`] arms it.
 pub struct PauseMenu {
+    load_game: Option<crate::scenes::LoadGameScene>,
+    load_rects: Vec<Rect>,
     options_panel: crate::ui::options_panel::OptionsPanel,
     horde_report: Option<(u32, crate::horde_stats::HordeBattleStats)>,
     open: bool,
@@ -353,6 +362,8 @@ impl Default for PauseMenu {
 impl PauseMenu {
     pub fn new() -> Self {
         Self {
+            load_game: None,
+            load_rects: Vec::new(),
             options_panel: Default::default(),
             open: false,
             horde_report: None,
@@ -367,6 +378,22 @@ impl PauseMenu {
             navigation: Default::default(),
             cheats_ack: None,
             cheats_scroll: 0,
+        }
+    }
+
+    pub(crate) fn show_save_result(&mut self, metadata: Option<crate::save_load::SaveMetadata>) {
+        if let Some(picker) = self.load_game.as_mut() {
+            picker.save_result(metadata);
+        }
+    }
+
+    pub(crate) fn selected_save_path(&self) -> Option<std::path::PathBuf> {
+        self.load_game.as_ref()?.selected_path()
+    }
+
+    pub(crate) fn show_load_failure(&mut self) {
+        if let Some(picker) = self.load_game.as_mut() {
+            crate::game_scene::GameScene::on_load_failed(picker);
         }
     }
 
@@ -430,6 +457,7 @@ impl PauseMenu {
     /// frame - the game-over screen shipped with exactly that bug.
     pub fn open(&mut self) {
         self.open = true;
+        self.load_game = None;
         self.horde_report = None;
         // Always land on the root page: reopening straight onto a parameter
         // list the player forgot they left would read as a broken menu.
@@ -477,6 +505,25 @@ impl PauseMenu {
     ) -> Option<PauseAction> {
         if !self.open {
             return None;
+        }
+
+        if matches!(self.page, PauseMenuPage::LoadGame | PauseMenuPage::SaveGame) {
+            self.head = (input_context.head.position, input_context.head.rotation);
+            let picker = self.load_game.as_ref().expect("load page owns its picker");
+            self.load_rects = picker.rects(asset_cache);
+            let resolve = |point| {
+                picker
+                    .hit(point, &self.load_rects)
+                    .map(PauseMenuTarget::LoadGame)
+            };
+            let target = self.menu.update(
+                elapsed,
+                input_context,
+                options.presentation_mode,
+                resolve,
+                resolve,
+            );
+            return self.handle_target(target);
         }
 
         if self.page == PauseMenuPage::Options {
@@ -539,6 +586,16 @@ impl PauseMenu {
         pressed: bool,
         rects: &[Rect],
     ) -> Option<PauseAction> {
+        if matches!(self.page, PauseMenuPage::LoadGame | PauseMenuPage::SaveGame) {
+            let picker = self.load_game.as_ref().expect("load page owns its picker");
+            let resolve = |point| {
+                picker
+                    .hit(point, &self.load_rects)
+                    .map(PauseMenuTarget::LoadGame)
+            };
+            let target = self.menu.resolve_pointer(point, pressed, resolve, resolve);
+            return self.handle_target(target);
+        }
         if self.page == PauseMenuPage::Options {
             let layout = crate::ui::options_panel::OptionsLayout::default();
             let panel = &self.options_panel;
@@ -561,6 +618,26 @@ impl PauseMenu {
 
     fn handle_target(&mut self, target: Option<PauseMenuTarget>) -> Option<PauseAction> {
         match target {
+            Some(PauseMenuTarget::LoadGame(action)) => {
+                use crate::scenes::load_game::{LoadGameAction, list_geometry};
+                match action {
+                    LoadGameAction::Done => self.page = PauseMenuPage::Root,
+                    LoadGameAction::Load => {
+                        return Some(if self.page == PauseMenuPage::SaveGame {
+                            PauseAction::SaveSelectedGame
+                        } else {
+                            PauseAction::LoadSelectedGame
+                        });
+                    }
+                    _ => {
+                        self.load_game
+                            .as_mut()
+                            .expect("load page owns its picker")
+                            .apply_action(Some(action), list_geometry(&self.load_rects));
+                    }
+                }
+                None
+            }
             Some(PauseMenuTarget::Options(event)) => {
                 if self.options_panel.activate(event) {
                     self.page = PauseMenuPage::Root;
@@ -588,6 +665,17 @@ impl PauseMenu {
     /// Developer entry switches pages inside the overlay.
     fn handle_root_entry(&mut self, entry: Option<PauseMenuEntry>) -> Option<PauseAction> {
         match entry {
+            Some(PauseMenuEntry::SaveGame) => {
+                self.load_game = Some(crate::scenes::LoadGameScene::for_saving());
+                self.page = PauseMenuPage::SaveGame;
+                None
+            }
+            Some(PauseMenuEntry::LoadGame) => {
+                // Keep the mission alive underneath the picker so Done and a failed load are reversible.
+                self.load_game = Some(crate::scenes::LoadGameScene::new());
+                self.page = PauseMenuPage::LoadGame;
+                None
+            }
             Some(PauseMenuEntry::Options) => {
                 self.options_panel = Default::default();
                 self.page = PauseMenuPage::Options;
@@ -764,6 +852,13 @@ impl PauseMenu {
         asset_cache: &mut AssetCache,
         pointer_canvas: Option<Vector2<f32>>,
     ) -> UiCanvas {
+        if matches!(self.page, PauseMenuPage::LoadGame | PauseMenuPage::SaveGame) {
+            return self
+                .load_game
+                .as_ref()
+                .expect("load page owns its picker")
+                .build_canvas(asset_cache, pointer_canvas);
+        }
         if self.page == PauseMenuPage::Options {
             return self.options_panel.canvas(asset_cache, pointer_canvas);
         }
@@ -961,12 +1056,15 @@ mod tests {
     }
 
     #[test]
-    fn the_stubbed_entries_are_inert() {
+    fn save_and_load_entries_are_actionable() {
         let rects = menu_rects(None);
-        for index in [SAVE_INDEX, LOAD_INDEX] {
+        for (index, expected) in [
+            (SAVE_INDEX, PauseMenuEntry::SaveGame),
+            (LOAD_INDEX, PauseMenuEntry::LoadGame),
+        ] {
             let (action, _, _) =
                 resolve_click(pointer_at(rects[index], true), false, SCREEN, &rects);
-            assert_eq!(action, None, "entry {index} is a dimmed stub");
+            assert_eq!(action, Some(expected));
         }
     }
 
@@ -1449,7 +1547,10 @@ mod tests {
             hit(rects[RESUME_INDEX].center(), &rects),
             Some(PauseMenuEntry::Action(PauseAction::Resume))
         );
-        assert_eq!(hit(rects[SAVE_INDEX].center(), &rects), None);
+        assert_eq!(
+            hit(rects[SAVE_INDEX].center(), &rects),
+            Some(PauseMenuEntry::SaveGame)
+        );
         assert_eq!(
             hit(rects[OPTIONS_INDEX].center(), &rects),
             Some(PauseMenuEntry::Options)
