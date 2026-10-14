@@ -51,7 +51,10 @@ for (const vr of [false, true]) {
     { skip: !enabled, timeout: 600_000 }, async () => {
       using assets = isolatedAssets();
       const click = vr ? vrClickCanvasPoint : clickCanvas;
-      const launch = (mission: string) => GameServer.launch({ mission, debugFlags: vr ? ["--vr"] : [] });
+      const launch = (mission: string, saveFile?: string) => GameServer.launch({
+        mission,
+        debugFlags: [...(vr ? ["--vr"] : []), ...(saveFile ? ["--save-file", saveFile] : [])],
+      });
       const pressChannel = vr ? "right_hand.trigger" : "pointer.pressed";
       let savedHitPoints: number;
       let savePath: string;
@@ -123,11 +126,19 @@ for (const vr of [false, true]) {
         await game.input.set(pressChannel, 0);
         await game.step({ frames: 2 });
 
-        for (const failure of ["corrupt", "missing"] as const) {
+        for (const failure of ["corrupt", "missing", "missing mission"] as const) {
           await click(game, pauseEntry(2));
           await click(game, FIRST_ROW);
           if (failure === "corrupt") writeFileSync(savePath, "invalid save");
-          else rmSync(savePath);
+          else if (failure === "missing") rmSync(savePath);
+          else {
+            const unavailable = JSON.parse(goodSave.toString("utf8"));
+            const mission = "missing-save-review.mis";
+            unavailable.level_data[mission] = unavailable.level_data[unavailable.global_data.active_mission];
+            unavailable.global_data.active_mission = mission;
+            unavailable.metadata.mission = mission;
+            writeFileSync(savePath, JSON.stringify(unavailable));
+          }
           await click(game, DEV_ACTION);
           const failed = await game.info();
           assert.equal(failed.paused, true, `${failure} save leaves the menu open`);
@@ -165,6 +176,24 @@ for (const vr of [false, true]) {
         assert.equal(restored.mission, "medsci1.mis");
         assert.equal(restored.paused, false);
         assert.equal(restored.player.hit_points, savedHitPoints);
+      }
+
+      // Command-line resume must preserve prior campaign time when saving again.
+      const prior = JSON.parse(readFileSync(savePath!, "utf8"));
+      prior.metadata.played = { secs: 3723, nanos: 0 };
+      writeFileSync(savePath!, JSON.stringify(prior));
+      {
+        await using game = await launch("earth.mis", savePath!);
+        await game.step({ frames: 30 });
+        assert.equal((await game.info()).mission, "medsci1.mis");
+        await game.input.trigger("TogglePauseMenu");
+        await game.step({ frames: 5 });
+        await click(game, pauseEntry(1));
+        await click(game, FIRST_ROW);
+        await click(game, DEV_ACTION);
+        const resumed = JSON.parse(readFileSync(savePath!, "utf8"));
+        assert.ok(resumed.metadata.played.secs >= 3723, "startup load retains campaign play time");
+        assert.equal(resumed.metadata.mission, "medsci1.mis");
       }
     });
 }
