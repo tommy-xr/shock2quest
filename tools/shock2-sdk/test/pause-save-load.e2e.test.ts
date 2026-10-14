@@ -166,11 +166,16 @@ for (const vr of [false, true]) {
 
       // A second runtime proves the slot is read from disk across process lifetimes.
       {
-        await using game = await launch("earth.mis");
+        await using game = await launch("main_menu");
         await game.step({ frames: 5 });
-        await game.input.trigger("TogglePauseMenu");
-        await game.step({ frames: 5 });
-        await click(game, pauseEntry(2));
+        await click(game, [489.5, 126]);
+        const sounds = (await game.audio.recent()).sounds;
+        const lastSound = sounds.at(-1)?.sequence ?? 0;
+        await click(game, [362, 63.5]);
+        assert.equal((await game.info()).mission, "load_game");
+        assert.equal((await game.audio.recent()).sounds.some(sound =>
+          sound.sequence > lastSound && sound.sample === "sfx/mselect1.wav"), false,
+          "an empty Load row must not play a selection sound");
         await click(game, SLOT_ROW);
         await click(game, DEV_ACTION);
         const restored = await game.info();
