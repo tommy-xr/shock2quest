@@ -93,7 +93,7 @@ test("QuickLoad interrupts a fixed-step batch before a failed load", {
   await game.step({ frames: 1 });
   assert.equal((await game.info()).mission, "loading");
 
-  assert.equal((await game.save("interrupted-tick")).scene, "medsci1.mis");
+  assert.equal((await game.save("interrupted-tick")).mission, "medsci1.mis");
   const interrupted = JSON.parse(readFileSync(join(assets.root, "saves", "interrupted-tick.sav"), "utf8"));
   assert.equal(interrupted.metadata.mission, interrupted.global_data.active_mission);
   const seconds = (time: { secs: number; nanos: number }) => time.secs + time.nanos / 1e9;
