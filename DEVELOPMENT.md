@@ -1351,6 +1351,12 @@ and loading time do not count. **Load Game** keeps the same slot positions, disa
 imported saves after the fixed slots; **Done**
 returns to the paused game, including after a failed load. Names are automatic.
 
+Menu loads and quickload show the animated loading screen while a worker reads
+the save and parses its mission. The current game stays frozen until loading
+succeeds; failures return to the same picker or game. The final GPU build still
+runs on the main thread. Debug API loads remain synchronous; use
+`--defer-transitions` to inspect menu loading screens in the debug runtime.
+
 Each `.sav` contains its own menu metadata; there is no separate index.
 Writes replace the selected slot only after the temporary file is complete.
 `SHOCK2QUEST_SAVE`, `SHOCK2QUEST_LOAD`, and `SHOCK2QUEST_LOAD_COMPLETE` log the
