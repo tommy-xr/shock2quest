@@ -1441,7 +1441,7 @@ impl Game {
             let _ = std::fs::create_dir_all(parent);
         }
         self.save_to_file(path.to_string_lossy().into_owned())?;
-        Ok(self.scene_name().to_string())
+        Ok(self.active_game_scene.scene_name().to_string())
     }
 
     /// Load a named game from the platform's save directory,
@@ -2563,7 +2563,7 @@ impl Game {
         save_load::SaveMetadata {
             format_version: Some(save_load::SAVE_FORMAT_VERSION),
             writer: Some(self.options.save_writer.clone()),
-            mission: self.scene_name().to_owned(),
+            mission: self.active_game_scene.scene_name().to_owned(),
             played: self.played,
         }
     }
