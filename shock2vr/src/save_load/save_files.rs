@@ -126,6 +126,7 @@ mod tests {
             Some(super::super::SaveMetadata {
                 mission: "medsci1.mis".to_owned(),
                 played: Duration::from_secs(3723),
+                ..Default::default()
             })
         );
     }

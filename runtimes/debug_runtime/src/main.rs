@@ -658,6 +658,11 @@ fn run_game_blocking(
 
     let options = GameOptions {
         build_label: env!("SHOCK2QUEST_BUILD_LABEL"),
+        save_writer: shock2vr::save_load::SaveWriter::new(
+            env!("SHOCK2QUEST_BUILD_VERSION"),
+            env!("SHOCK2QUEST_BUILD_COMMIT"),
+            env!("SHOCK2QUEST_BUILD_DIRTY"),
+        ),
         mission: mission.clone(),
         difficulty: args.difficulty,
         presentation_mode,

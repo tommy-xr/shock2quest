@@ -41,6 +41,9 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
 
+      - name: Test build provenance and incremental rebuilds
+        run: python3 -m unittest discover -s build-support -p 'test_*.py'
+
       # Install Linux-specific dependencies
       - name: Install ALSA (Linux only)
         if: runner.os == 'Linux'

@@ -1395,6 +1395,25 @@ retail assets still load from `/sdcard/shock2quest`. Clearing app data or
 uninstalling removes these saves. Existing saves on shared storage are not
 migrated. Desktop saves remain in `<data_root>/saves/`.
 
+##### Save format and build provenance
+
+Each save's leading `metadata` object records `format_version` and a `writer`
+with the build version (`dev` or release version), full Git commit, and tracked
+working-tree `dirty` status. Missing Git information is `null`; untracked local
+files are excluded from dirty status. All runtimes use the same build stamp.
+Release CI supplies `SHOCK2QUEST_RELEASE_VERSION` and `SHOCK2QUEST_GIT_SHA`;
+local builds derive the commit and dirty status from Git.
+
+`SAVE_FORMAT_VERSION` in `shock2vr/src/save_load/save_data.rs` is the compatibility
+boundary, independent of release versions and commits. Increment it when a
+persisted shape or meaning requires an upgrade. The loader currently accepts
+only format 1; other explicit versions fail before replacing the live game.
+Unversioned saves load best-effort with a warning, without a compatibility
+guarantee. There are no migrations yet. A successful load never rewrites its
+source file; saving again records the current writer and format.
+
+Build-stamp verification: `python3 -m unittest discover -s build-support -p 'test_*.py'`.
+
 ##### Launcher icon
 
 `runtimes/oculus_runtime/res/mipmap/icon.png` is a neutral placeholder, on
