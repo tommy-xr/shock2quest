@@ -117,6 +117,7 @@ pub(crate) fn ui_scene_world() -> shipyard::World {
 }
 
 pub struct SceneInitResult {
+    pub played: std::time::Duration,
     pub scene: Box<dyn GameScene>,
     pub mission_save_data: HashMap<String, EntitySaveData>,
 }
@@ -265,6 +266,7 @@ pub fn create_initial_scene(
                 // bad invocation, so fail loudly rather than boot elsewhere.
                 .unwrap_or_else(|err| panic!("{err}"));
         return SceneInitResult {
+            played: std::time::Duration::ZERO,
             scene: Box::new(cutscene),
             mission_save_data: HashMap::new(),
         };
@@ -272,6 +274,7 @@ pub fn create_initial_scene(
 
     if options.mission.eq_ignore_ascii_case("main_menu") {
         return SceneInitResult {
+            played: std::time::Duration::ZERO,
             scene: Box::new(MainMenuScene::new()),
             mission_save_data: HashMap::new(),
         };
@@ -285,6 +288,7 @@ pub fn create_initial_scene(
         audio_context,
     ) {
         return SceneInitResult {
+            played: std::time::Duration::ZERO,
             scene,
             mission_save_data: HashMap::new(),
         };
@@ -293,6 +297,7 @@ pub fn create_initial_scene(
     if let Some(save_file_path) = &options.save_file {
         let mut file = OpenOptions::new().read(true).open(save_file_path).unwrap();
         let save_data = SaveData::read(&mut file).unwrap();
+        let played = save_data.metadata.played;
         let (mission, mission_to_save_data) = load_mission_from_save_data(
             save_data,
             asset_cache,
@@ -301,6 +306,7 @@ pub fn create_initial_scene(
             options,
         );
         return SceneInitResult {
+            played,
             scene: Box::new(mission),
             mission_save_data: mission_to_save_data,
         };
@@ -320,6 +326,7 @@ pub fn create_initial_scene(
     );
 
     SceneInitResult {
+        played: std::time::Duration::ZERO,
         scene: Box::new(active_mission),
         mission_save_data,
     }

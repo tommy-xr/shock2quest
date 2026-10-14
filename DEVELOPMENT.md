@@ -1373,6 +1373,28 @@ cargo dvr assets recopy           # replace retail assets; preserves saves/setti
 See [dark_vr_tool](tools/dark_vr_tool/README.md) for device selection, filesystem
 access, debug-port configuration, and the `ss2vr` shell alias.
 
+##### Saved games
+
+The pause menu's **Save Game** opens 12 manual slots, quicksave, and a disabled
+reserved autosave row, fitting all 14 rows without scrolling. Select a row, then
+**Save**; selecting an occupied slot overwrites it.
+Labels use the localized map name and elapsed campaign time (`H:MM:SS`). Paused
+and loading time do not count. **Load Game** keeps the same slot positions, disables empty rows, and lists extra
+imported saves after the fixed slots; **Done**
+returns to the paused game, including after a failed load. Names are automatic.
+
+Each `.sav` contains its own menu metadata; there is no separate index.
+Writes replace the selected slot only after the temporary file is complete.
+`SHOCK2QUEST_SAVE`, `SHOCK2QUEST_LOAD`, and `SHOCK2QUEST_LOAD_COMPLETE` log the
+actual file paths and successful operations.
+
+Quest saves live in `saves/` under Android's app-private files directory,
+resolved from the native activity at startup. Logcat records the actual path
+as `SHOCK2QUEST_SAVE_DIRECTORY path=...`. Saving needs no storage permission;
+retail assets still load from `/sdcard/shock2quest`. Clearing app data or
+uninstalling removes these saves. Existing saves on shared storage are not
+migrated. Desktop saves remain in `<data_root>/saves/`.
+
 ##### Launcher icon
 
 `runtimes/oculus_runtime/res/mipmap/icon.png` is a neutral placeholder, on

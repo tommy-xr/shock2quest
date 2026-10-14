@@ -1,12 +1,13 @@
 //! Discovery of saved games on disk.
 //!
-//! Named saves live in `<data_root>/saves/<name>.sav` (see
+//! Named saves live in `<save_root>/saves/<name>.sav` (see
 //! [`crate::save_file_path`]). Screens that offer a reload - the load-game
 //! screen, and the game-over screen after a terminal death - need to know what
 //! is actually available without hardcoding a file name, so they ask here.
 
 use std::{
     fs,
+    io::{BufReader, Read},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -21,11 +22,14 @@ pub struct SaveFile {
     pub path: PathBuf,
     /// Write time, used to order "most recent first".
     pub modified: SystemTime,
+    pub metadata: Option<super::SaveMetadata>,
+    /// False for an empty slot shown in the save and load pickers.
+    pub occupied: bool,
 }
 
 /// The directory holding named saves.
 pub fn save_directory() -> PathBuf {
-    paths::data_root().join("saves")
+    paths::save_root().join("saves")
 }
 
 /// Every save on disk, most recent first. Empty when nothing has been saved
@@ -52,7 +56,10 @@ fn all_saves_in(directory: &Path) -> Vec<SaveFile> {
                 return None;
             }
             let modified = entry.metadata().ok()?.modified().ok()?;
+            let metadata = fs::File::open(&path).ok().and_then(read_metadata);
             Some(SaveFile {
+                metadata,
+                occupied: true,
                 name: path.file_stem()?.to_string_lossy().into_owned(),
                 path,
                 modified,
@@ -72,6 +79,22 @@ fn all_saves_in(directory: &Path) -> Vec<SaveFile> {
     saves
 }
 
+fn read_metadata(reader: impl Read) -> Option<super::SaveMetadata> {
+    use serde::Deserialize;
+
+    // SaveData writes metadata first. Bound discovery even for damaged saves;
+    // the remaining world snapshot can span megabytes and is decoded only on load.
+    const PREFIX: &[u8] = b"{\"metadata\":";
+    let mut reader = BufReader::new(reader.take(4096));
+    let mut prefix = [0; PREFIX.len()];
+    reader.read_exact(&mut prefix).ok()?;
+    if prefix != PREFIX {
+        return None;
+    }
+    // Direct deserialization stops at this object instead of requiring file EOF.
+    super::SaveMetadata::deserialize(&mut serde_json::Deserializer::from_reader(reader)).ok()
+}
+
 /// [`latest_save`] against an explicit directory (missing directory -> `None`).
 fn latest_save_in(directory: &Path) -> Option<SaveFile> {
     all_saves_in(directory).into_iter().next()
@@ -85,6 +108,50 @@ mod tests {
 
     fn write_save(dir: &Path, name: &str) {
         fs::write(dir.join(name), b"save").unwrap();
+    }
+
+    #[test]
+    fn discovery_reads_metadata_without_decoding_the_world_snapshot() {
+        let dir = TempDir::new("save-files-metadata");
+        fs::write(
+            dir.path().join("slot01.sav"),
+            br#"{"metadata":{"mission":"medsci1.mis","played":{"secs":3723,"nanos":0}},"global_data":not decoded"#,
+        )
+        .unwrap();
+
+        let saves = all_saves_in(dir.path());
+        assert_eq!(saves.len(), 1);
+        assert_eq!(
+            saves[0].metadata,
+            Some(super::super::SaveMetadata {
+                mission: "medsci1.mis".to_owned(),
+                played: Duration::from_secs(3723),
+            })
+        );
+    }
+
+    #[test]
+    fn missing_or_malformed_metadata_keeps_save_available() {
+        let dir = TempDir::new("save-files-legacy");
+        fs::write(dir.path().join("legacy.sav"), br#"{"global_data":{}}"#).unwrap();
+        fs::write(dir.path().join("damaged.sav"), br#"{"metadata":broken"#).unwrap();
+
+        let saves = all_saves_in(dir.path());
+        assert_eq!(saves.len(), 2);
+        assert!(
+            saves
+                .iter()
+                .all(|save| save.occupied && save.metadata.is_none())
+        );
+    }
+
+    #[test]
+    fn metadata_discovery_is_bounded() {
+        let json = format!(
+            "{{\"metadata\":{{\"mission\":\"{}\",\"played\":{{\"secs\":0,\"nanos\":0}}}}}}",
+            "x".repeat(4096)
+        );
+        assert_eq!(read_metadata(json.as_bytes()), None);
     }
 
     #[test]

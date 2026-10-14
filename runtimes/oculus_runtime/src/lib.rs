@@ -39,6 +39,20 @@ unsafe extern "C" {}
 
 #[cfg_attr(target_os = "android", ndk_glue::main)]
 fn main() {
+    #[cfg(target_os = "android")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+
+        let files_directory = std::ffi::OsStr::from_bytes(
+            ndk_glue::native_activity().internal_data_path().to_bytes(),
+        );
+        paths::init_android_save_root(std::path::Path::new(files_directory));
+        println!(
+            "SHOCK2QUEST_SAVE_DIRECTORY path={}",
+            shock2vr::save_load::save_directory().display()
+        );
+    }
+
     #[cfg(feature = "linked")]
     let entry = xr::Entry::linked();
     #[cfg(not(feature = "linked"))]

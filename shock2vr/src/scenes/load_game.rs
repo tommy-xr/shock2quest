@@ -44,6 +44,8 @@ use crate::{
 /// The screen is authored on the original 640x480 `GAMELOD.PCX` canvas.
 const CANVAS_W: f32 = 640.0;
 const CANVAS_H: f32 = 480.0;
+// Manual slots, quicksave and the reserved autosave row fit without scrolling.
+const MANUAL_SLOT_COUNT: usize = 12;
 const BACKDROP_TEXTURE: &str = "GAMELOD.PCX";
 /// The original load screen's widget layout - LTRB rects (`UI_LAYOUT_IMPORTER`).
 const LAYOUT_FILE: &str = "GAMELODR.BIN";
@@ -119,7 +121,7 @@ const DONE_KEY: &str = "done";
 const DONE_FALLBACK: &str = "Done";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LoadGameAction {
+pub(crate) enum LoadGameAction {
     /// Highlight the save at this index in the visible list.
     Select(usize),
     /// Move the save list by one row.
@@ -135,6 +137,7 @@ enum LoadGameStatus {
     #[default]
     Initial,
     Failed,
+    Saved,
 }
 
 /// Resolve the screen's widget rects from `GAMELODR.BIN`, falling back to the
@@ -157,7 +160,7 @@ fn visible_row_count(list: Rect) -> usize {
     list_scroll::rows_per_page(list, FIELD_TOP_Y, ROW_HEIGHT)
 }
 
-fn list_geometry(rects: &[Rect]) -> list_scroll::ListGeometry {
+pub(crate) fn list_geometry(rects: &[Rect]) -> list_scroll::ListGeometry {
     list_scroll::ListGeometry {
         pane: rects[LIST_RECT_INDEX],
         bottom_limit: FIELD_TOP_Y,
@@ -167,6 +170,7 @@ fn list_geometry(rects: &[Rect]) -> list_scroll::ListGeometry {
 }
 
 /// The canvas rect of the `index`-th row of the list.
+#[cfg(test)]
 fn row_rect(list: Rect, index: usize) -> Rect {
     Rect::new(
         list.x,
@@ -249,12 +253,21 @@ fn hit(
     }
 }
 
+fn selectable_save(save: &SaveFile, saving: bool) -> bool {
+    if saving {
+        save.name != "autosave"
+    } else {
+        save.occupied
+    }
+}
+
 pub struct LoadGameScene {
     world: World,
     scene_name: String,
     /// Saves offered by the list, resolved once when the screen opens so the
-    /// rows and the click agree. Most recent first.
+    /// rows and the click agree. Fixed slots first, then extra saves by recency.
     saves: Vec<SaveFile>,
+    saving: bool,
     /// Index of the first save drawn in the list.
     scroll: usize,
     /// Index into [`Self::saves`] of the highlighted row, if any.
@@ -267,39 +280,149 @@ pub struct LoadGameScene {
 
 impl LoadGameScene {
     pub fn new() -> Self {
-        Self::from_saves(all_saves())
+        Self::from_saves(all_saves(), false)
     }
 
-    fn from_saves(saves: Vec<SaveFile>) -> Self {
-        // Preselect the most recent save so "Load" is immediately meaningful,
-        // matching the recovery the game-over screen offers.
-        let selected = (!saves.is_empty()).then_some(0);
+    pub(crate) fn for_saving() -> Self {
+        Self::from_saves(all_saves(), true)
+    }
 
+    fn from_saves(mut existing: Vec<SaveFile>, saving: bool) -> Self {
+        let latest = existing.first().map(|save| save.path.clone());
+        let mut slots = Vec::new();
+        for name in (1..=MANUAL_SLOT_COUNT)
+            .map(|slot| format!("slot{slot}"))
+            .chain([
+                crate::input::QUICK_SAVE_NAME.to_owned(),
+                "autosave".to_owned(),
+            ])
+        {
+            let saved = existing
+                .iter()
+                .position(|save| save.name == name)
+                .map(|index| existing.remove(index));
+            slots.push(saved.unwrap_or_else(|| SaveFile {
+                path: crate::save_file_path(&name),
+                name,
+                modified: std::time::UNIX_EPOCH,
+                metadata: None,
+                occupied: false,
+            }));
+        }
+        let selected = if saving {
+            Some(
+                slots
+                    .iter()
+                    .take(MANUAL_SLOT_COUNT)
+                    .position(|slot| !slot.occupied)
+                    .unwrap_or(0),
+            )
+        } else {
+            // Keep imported saves reachable without shifting the fixed slots.
+            slots.extend(existing);
+            latest.and_then(|path| slots.iter().position(|save| save.path == path))
+        };
+        let scroll = selected
+            .unwrap_or(0)
+            .saturating_sub(list_geometry(&FALLBACK_RECTS).rows_per_page() - 1);
         Self {
             world: super::ui_scene_world(),
             scene_name: "load_game".to_owned(),
-            saves,
-            scroll: 0,
+            saves: slots,
+            saving,
+            scroll,
             selected,
             status: LoadGameStatus::Initial,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
         }
     }
 
-    fn header_label(&self, strings: Option<&HashMap<String, String>>) -> String {
-        match self.status {
-            LoadGameStatus::Initial => label(strings, HEADER_KEY, HEADER_FALLBACK),
-            LoadGameStatus::Failed => label(strings, FAILED_KEY, FAILED_FALLBACK),
+    pub(crate) fn save_result(&mut self, result: Option<crate::save_load::SaveMetadata>) {
+        self.status = if result.is_some() {
+            LoadGameStatus::Saved
+        } else {
+            LoadGameStatus::Failed
+        };
+        if let (Some(index), Some(metadata)) = (self.selected, result) {
+            self.saves[index].metadata = Some(metadata);
+            self.saves[index].occupied = true;
         }
     }
 
-    fn apply_action(
+    pub(crate) fn rects(&self, asset_cache: &mut AssetCache) -> Vec<Rect> {
+        self.menu.rects(
+            asset_cache,
+            if self.saving {
+                "GAMESAVR.BIN"
+            } else {
+                LAYOUT_FILE
+            },
+            &FALLBACK_RECTS,
+        )
+    }
+
+    pub(crate) fn hit(&self, point: Vector2<f32>, rects: &[Rect]) -> Option<LoadGameAction> {
+        hit(
+            point,
+            rects,
+            self.saves.len(),
+            self.scroll,
+            self.selected.is_some(),
+        )
+        .filter(|action| match action {
+            LoadGameAction::Select(index) => self
+                .saves
+                .get(*index)
+                .is_some_and(|save| selectable_save(save, self.saving)),
+            _ => true,
+        })
+    }
+
+    pub(crate) fn selected_path(&self) -> Option<std::path::PathBuf> {
+        self.selected
+            .and_then(|index| self.saves.get(index))
+            .filter(|save| selectable_save(save, self.saving))
+            .map(|save| save.path.clone())
+    }
+
+    fn header_label(&self, strings: Option<&HashMap<String, String>>) -> String {
+        match self.status {
+            LoadGameStatus::Initial => label(
+                strings,
+                HEADER_KEY,
+                if self.saving {
+                    "Select a file to save."
+                } else {
+                    HEADER_FALLBACK
+                },
+            ),
+            LoadGameStatus::Failed => label(
+                strings,
+                FAILED_KEY,
+                if self.saving {
+                    "Save Failed"
+                } else {
+                    FAILED_FALLBACK
+                },
+            ),
+            LoadGameStatus::Saved => label(strings, "success", "Save Successful"),
+        }
+    }
+
+    pub(crate) fn apply_action(
         &mut self,
         action: Option<LoadGameAction>,
         geometry: list_scroll::ListGeometry,
     ) -> Vec<Effect> {
         match action {
             Some(LoadGameAction::Select(index)) => {
+                if !self
+                    .saves
+                    .get(index)
+                    .is_some_and(|save| selectable_save(save, self.saving))
+                {
+                    return Vec::new();
+                }
                 self.selected = Some(index);
                 // The previous failure belonged to the old selection.
                 self.status = LoadGameStatus::Initial;
@@ -318,11 +441,10 @@ impl LoadGameScene {
                 // synchronous failure sets it again through `on_load_failed`;
                 // success replaces this scene.
                 self.status = LoadGameStatus::Initial;
-                self.selected
-                    .and_then(|index| self.saves.get(index))
-                    .map(|save| {
+                self.selected_path()
+                    .map(|path| {
                         vec![Effect::GlobalEffect(GlobalEffect::Load {
-                            file_name: save.path.to_string_lossy().into_owned(),
+                            file_name: path.to_string_lossy().into_owned(),
                         })]
                     })
                     .unwrap_or_default()
@@ -342,16 +464,31 @@ impl LoadGameScene {
     ///
     /// `pointer_canvas` is the hover position in canvas pixels, whatever
     /// produced it - the mouse or a VR controller ray.
-    fn build_canvas(
+    pub(crate) fn build_canvas(
         &self,
         asset_cache: &mut AssetCache,
         pointer_canvas: Option<Vector2<f32>>,
     ) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
-        canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
+        canvas.image(
+            Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H),
+            if self.saving {
+                "GAMESAV.PCX"
+            } else {
+                BACKDROP_TEXTURE
+            },
+        );
 
-        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
-        let strings = asset_cache.get_opt(&STRINGS_IMPORTER, LABELS_FILE);
+        let rects = self.rects(asset_cache);
+        let strings = asset_cache.get_opt(
+            &STRINGS_IMPORTER,
+            if self.saving {
+                "GAMESAV.STR"
+            } else {
+                LABELS_FILE
+            },
+        );
+        let map_names = asset_cache.get_opt(&STRINGS_IMPORTER, "savename.str");
         let strings = strings.as_deref();
 
         canvas.text_native(
@@ -362,66 +499,98 @@ impl LoadGameScene {
             VAlign::Middle,
         );
 
-        let list = rects[LIST_RECT_INDEX];
         let geometry = list_geometry(&rects);
-        if self.saves.is_empty() {
-            // Deliberately header-styled rather than row-styled: this is a
-            // message about the list, not an entry in it, so it stays centered
-            // in MENU_FONT while real saves read as left-aligned data.
-            canvas
-                .text_native(
-                    row_rect(list, 0),
-                    &label(strings, EMPTY_KEY, EMPTY_FALLBACK),
-                    MENU_FONT,
-                    HAlign::Center,
-                    VAlign::Middle,
-                )
-                .opacity(DISABLED_OPACITY);
-        } else {
-            let rows = geometry.visible_rows(self.saves.len(), self.scroll);
-            for (slot, index) in rows.clone().enumerate() {
-                let save = &self.saves[index];
+        let rows = geometry.visible_rows(self.saves.len(), self.scroll);
+        for (slot, index) in rows.clone().enumerate() {
+            let save = &self.saves[index];
+            let reserved = save.name == "autosave" && (self.saving || !save.occupied);
+            let description = if !save.occupied {
+                label(strings, EMPTY_KEY, EMPTY_FALLBACK)
+            } else {
+                save.metadata
+                    .as_ref()
+                    .map(|metadata| metadata.label(map_names.as_deref()))
+                    .unwrap_or_else(|| save.name.clone())
+            };
+            let description = if reserved {
+                "Autosave (reserved)".to_owned()
+            } else if save.name == "autosave" {
+                format!("Auto: {description}")
+            } else if save.name == crate::input::QUICK_SAVE_NAME {
+                format!("Quick: {description}")
+            } else if let Some(slot) = save
+                .name
+                .strip_prefix("slot")
+                .and_then(|n| n.parse::<u8>().ok())
+                .filter(|n| (1..=15).contains(n))
+            {
+                format!("{slot}: {description}")
+            } else {
+                description
+            };
+            let rect = geometry.text_rect(self.saves.len(), slot);
+            let opacity = if !selectable_save(save, self.saving) {
+                DISABLED_OPACITY
+            } else if self.selected == Some(index) {
+                ACTIVE_OPACITY
+            } else {
+                IDLE_OPACITY
+            };
+            // Reserve the clock's width so a long map name cannot hide the elapsed time.
+            if !reserved && save.occupied && save.metadata.is_some() {
+                let (name, time) = description.rsplit_once(' ').unwrap();
+                let clock_w = 56.0;
                 canvas
-                    // Save names are player-authored and unbounded, so they
-                    // are ellipsized to the list width rather than spilling
-                    // over the Load button.
                     .text_native_fit(
-                        geometry.text_rect(self.saves.len(), slot),
-                        &save.name,
+                        Rect::new(rect.x, rect.y, rect.w - clock_w, rect.h),
+                        name,
                         LIST_FONT,
                         HAlign::Left,
                         VAlign::Middle,
                     )
-                    .opacity(if self.selected == Some(index) {
-                        ACTIVE_OPACITY
-                    } else {
-                        IDLE_OPACITY
-                    });
-            }
-            if let Some(rocker) = geometry.rocker(self.saves.len()) {
-                let hovered = pointer_canvas.and_then(|point| {
-                    list_scroll::hit(
-                        &rocker,
-                        rows.start,
-                        geometry.max_scroll(self.saves.len()),
-                        point,
+                    .opacity(opacity);
+                canvas
+                    .text_native(
+                        Rect::new(rect.x + rect.w - clock_w, rect.y, clock_w, rect.h),
+                        time,
+                        LIST_FONT,
+                        HAlign::Right,
+                        VAlign::Middle,
                     )
-                });
-                list_scroll::draw(
-                    &mut canvas,
+                    .opacity(opacity);
+            } else {
+                canvas
+                    .text_native_fit(rect, &description, LIST_FONT, HAlign::Left, VAlign::Middle)
+                    .opacity(opacity);
+            }
+        }
+        if let Some(rocker) = geometry.rocker(self.saves.len()) {
+            let hovered = pointer_canvas.and_then(|point| {
+                list_scroll::hit(
                     &rocker,
                     rows.start,
                     geometry.max_scroll(self.saves.len()),
-                    hovered,
-                );
-            }
+                    point,
+                )
+            });
+            list_scroll::draw(
+                &mut canvas,
+                &rocker,
+                rows.start,
+                geometry.max_scroll(self.saves.len()),
+                hovered,
+            );
         }
 
         // "Load" is inert with nothing selected, so it reads as disabled.
         for (index, text, enabled) in [
             (
                 LOAD_RECT_INDEX,
-                label(strings, LOAD_KEY, LOAD_FALLBACK),
+                if self.saving {
+                    label(strings, "save", "Save")
+                } else {
+                    label(strings, LOAD_KEY, LOAD_FALLBACK)
+                },
                 self.selected.is_some(),
             ),
             (
@@ -470,7 +639,7 @@ impl GameScene for LoadGameScene {
             *world_time = time.clone();
         }
 
-        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
+        let rects = self.rects(asset_cache);
         let geometry = list_geometry(&rects);
         let saves_len = self.saves.len();
         let scroll = self.scroll;
@@ -481,18 +650,25 @@ impl GameScene for LoadGameScene {
             .selected
             .filter(|index| *index < saves_len && geometry.rows_per_page() > 0);
         let selected = self.selected;
+        let saves = &self.saves;
+        let saving = self.saving;
+        let resolve = |point| {
+            hit(point, &rects, saves_len, scroll, selected.is_some()).filter(
+                |action| match action {
+                    LoadGameAction::Select(index) => selectable_save(&saves[*index], saving),
+                    _ => true,
+                },
+            )
+        };
 
         let action = self.menu.update(
             time.elapsed,
             input_context,
             game_options.presentation_mode,
-            |point| hit(point, &rects, saves_len, scroll, selected.is_some()),
+            resolve,
             // Rows are deliberately silent: they highlight on selection
             // rather than hover, so only visible hover feedback makes noise.
-            |point| {
-                hit(point, &rects, saves_len, scroll, selected.is_some())
-                    .filter(|action| !matches!(action, LoadGameAction::Select(_)))
-            },
+            |point| resolve(point).filter(|action| !matches!(action, LoadGameAction::Select(_))),
         );
 
         self.apply_action(action, geometry)
@@ -626,6 +802,78 @@ mod tests {
     }
 
     #[test]
+    fn load_and_save_keep_sparse_slots_in_the_same_rows() {
+        let saves = ["slot12", "slot3", crate::input::QUICK_SAVE_NAME]
+            .into_iter()
+            .map(|name| SaveFile {
+                name: name.to_owned(),
+                path: std::path::PathBuf::from(format!("{name}.sav")),
+                modified: std::time::UNIX_EPOCH,
+                metadata: None,
+                occupied: true,
+            })
+            .collect::<Vec<_>>();
+        let load = LoadGameScene::from_saves(saves.clone(), false);
+        let save = LoadGameScene::from_saves(saves, true);
+        assert_eq!(load.saves, save.saves);
+        assert_eq!(load.saves.len(), 14);
+        assert_eq!(load.selected, Some(11), "the newest save stays selected");
+        assert_eq!(load.scroll, 0);
+        assert_eq!(save.selected, Some(0), "save offers the first empty slot");
+        let geometry = list_geometry(&FALLBACK_RECTS);
+        for index in 0..14 {
+            let expected = [2, 11, 12]
+                .contains(&index)
+                .then_some(LoadGameAction::Select(index));
+            assert_eq!(
+                load.hit(geometry.row_rect(14, index).center(), &FALLBACK_RECTS),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn empty_load_slots_cannot_be_selected_or_loaded() {
+        let mut scene = LoadGameScene::from_saves(Vec::new(), false);
+        let geometry = list_geometry(&FALLBACK_RECTS);
+        assert_eq!(scene.saves.len(), 14);
+        for index in 0..14 {
+            assert_eq!(
+                scene.hit(geometry.row_rect(14, index).center(), &FALLBACK_RECTS),
+                None
+            );
+            scene.apply_action(Some(LoadGameAction::Select(index)), geometry);
+            assert_eq!(scene.selected, None);
+        }
+        assert_eq!(scene.selected_path(), None);
+        assert!(
+            scene
+                .apply_action(Some(LoadGameAction::Load), geometry)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn save_slots_fit_without_arrows_and_reserve_autosave() {
+        let picker = LoadGameScene::for_saving();
+        let geometry = list_geometry(&FALLBACK_RECTS);
+        assert_eq!(picker.saves.len(), geometry.rows_per_page());
+        assert!(geometry.rocker(picker.saves.len()).is_none());
+        assert_eq!(
+            picker.saves[MANUAL_SLOT_COUNT].name,
+            crate::input::QUICK_SAVE_NAME
+        );
+        let last_row = geometry.row_rect(picker.saves.len(), MANUAL_SLOT_COUNT + 1);
+        assert_eq!(picker.saves.last().unwrap().name, "autosave");
+        assert_eq!(picker.hit(last_row.center(), &FALLBACK_RECTS), None);
+        let quick_row = geometry.row_rect(picker.saves.len(), MANUAL_SLOT_COUNT);
+        assert_eq!(
+            picker.hit(quick_row.center(), &FALLBACK_RECTS),
+            Some(LoadGameAction::Select(MANUAL_SLOT_COUNT))
+        );
+    }
+
+    #[test]
     fn a_fifteenth_save_exposes_a_scroll_arrow() {
         let list = FALLBACK_RECTS[LIST_RECT_INDEX];
         let arrow = crate::ui::list_scroll::rocker(list, FIELD_TOP_Y, true)
@@ -640,14 +888,22 @@ mod tests {
 
     #[test]
     fn scrolling_selects_and_loads_the_fifteenth_save() {
-        let saves = (0..15)
-            .map(|index| SaveFile {
-                name: format!("save {index}"),
-                path: std::path::PathBuf::from(format!("save{index}.sav")),
+        let saves = (1..=12)
+            .map(|index| format!("slot{index}"))
+            .chain([
+                crate::input::QUICK_SAVE_NAME.to_owned(),
+                "autosave".to_owned(),
+                "imported".to_owned(),
+            ])
+            .map(|name| SaveFile {
+                metadata: None,
+                occupied: true,
+                path: std::path::PathBuf::from(format!("{name}.sav")),
+                name,
                 modified: std::time::SystemTime::UNIX_EPOCH,
             })
             .collect();
-        let mut scene = LoadGameScene::from_saves(saves);
+        let mut scene = LoadGameScene::from_saves(saves, false);
         let geometry = list_geometry(&FALLBACK_RECTS);
         let rocker = geometry.rocker(scene.saves.len()).unwrap();
 
@@ -672,7 +928,7 @@ mod tests {
         assert!(matches!(
             effects.as_slice(),
             [Effect::GlobalEffect(GlobalEffect::Load { file_name })]
-                if file_name == "save14.sav"
+                if file_name == "imported.sav"
         ));
         assert_eq!(
             hit(rocker.down.center(), &FALLBACK_RECTS, 15, 1, true),
@@ -905,11 +1161,16 @@ mod tests {
     }
 
     fn scene_with_save() -> LoadGameScene {
-        LoadGameScene::from_saves(vec![SaveFile {
-            name: "corrupt".to_owned(),
-            path: std::path::PathBuf::from("corrupt.sav"),
-            modified: std::time::SystemTime::UNIX_EPOCH,
-        }])
+        LoadGameScene::from_saves(
+            vec![SaveFile {
+                metadata: None,
+                occupied: true,
+                name: "slot1".to_owned(),
+                path: std::path::PathBuf::from("corrupt.sav"),
+                modified: std::time::SystemTime::UNIX_EPOCH,
+            }],
+            false,
+        )
     }
 
     #[test]

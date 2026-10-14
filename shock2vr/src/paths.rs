@@ -1,9 +1,4 @@
-use std::path::Path;
-
-#[cfg(not(target_os = "android"))]
-use std::path::PathBuf;
-
-#[cfg(not(target_os = "android"))]
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 #[cfg(not(target_os = "android"))]
@@ -12,6 +7,32 @@ use tracing::warn;
 #[cfg(target_os = "android")]
 pub fn data_root() -> &'static Path {
     Path::new("/sdcard/shock2quest")
+}
+
+#[cfg(target_os = "android")]
+static ANDROID_SAVE_ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+/// Set Android's app-private files directory before constructing the game.
+#[cfg(target_os = "android")]
+pub fn init_android_save_root(files_directory: &Path) {
+    ANDROID_SAVE_ROOT
+        .set(files_directory.to_path_buf())
+        .expect("Android save root was already initialized");
+}
+
+/// Parent of the saves directory; Android keeps saves separate from retail assets.
+pub fn save_root() -> &'static Path {
+    #[cfg(target_os = "android")]
+    {
+        ANDROID_SAVE_ROOT
+            .get()
+            .expect("Initialize Android app-private save root before accessing saves")
+            .as_path()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        data_root()
+    }
 }
 
 #[cfg(not(target_os = "android"))]
