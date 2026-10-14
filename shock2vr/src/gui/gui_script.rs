@@ -180,6 +180,8 @@ where
             // Opened without a frob (the audio-log reader): give the gui the
             // same fresh per-open state a frob-open would have.
             MessagePayload::PanelOpened => {
+                // Reopening must not turn the held opening trigger into a click.
+                self.last_input_info_by_hand = [None, None];
                 self.gui.on_panel_opened(world, &mut self.state);
                 Effect::NoEffect
             }
@@ -551,6 +553,32 @@ mod tests {
             script.handle_message(host, &world, &physics, &msg.payload);
             assert_eq!(script.state, expected);
         }
+    }
+
+    #[test]
+    fn reopening_a_panel_requires_release_before_either_hand_can_click() {
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        let mut script = GuiScript::new(Box::new(CountingGui));
+        for hand in [Handedness::Left, Handedness::Right] {
+            send(&mut script, entity, &world, hand, false);
+        }
+        script.handle_message(
+            entity,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::PanelOpened,
+        );
+        for hand in [Handedness::Left, Handedness::Right] {
+            send(&mut script, entity, &world, hand, true);
+            send(&mut script, entity, &world, hand, true);
+        }
+        assert_eq!(script.state, 0);
+        for hand in [Handedness::Left, Handedness::Right] {
+            send(&mut script, entity, &world, hand, false);
+            send(&mut script, entity, &world, hand, true);
+        }
+        assert_eq!(script.state, 2);
     }
 
     #[test]

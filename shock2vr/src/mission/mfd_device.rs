@@ -563,6 +563,20 @@ mod tests {
 }
 
 /// Scanning never picks up, fires, purchases or activates an arbitrary prop.
+/// These machines use the MFD whether reached by a hand frob or a scan.
+pub(super) fn machine_uses_mfd(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
+    [
+        "ReplicatorScript",
+        "StatsTrainer",
+        "WeaponTrainer",
+        "TechTrainer",
+        "PsiTrainer",
+        "TraitMachine",
+    ]
+    .iter()
+    .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))
+}
+
 /// Only existing reader/panel scripts receive Frob; all other objects are queried.
 pub fn opens_panel(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
     super::personal_card::is_reader(world, entity)

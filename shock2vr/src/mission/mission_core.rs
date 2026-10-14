@@ -6026,6 +6026,10 @@ impl MissionCore {
             self.device_scanner.trigger(false, false);
         }
         if self.flat_ui.device != device_active {
+            // Stowing must not replay the scanner's held trigger as a world frob.
+            if !device_active && let Some(hand) = self.personal_card.hand {
+                self.vr_trigger_safe_latch[hand] = Some(true);
+            }
             self.flat_ui.close();
             self.flat_ui.utilities = Default::default();
             self.flat_ui.guard_held_press();
@@ -7135,7 +7139,7 @@ impl MissionCore {
             interaction_msgs.retain(|effect| {
                 let blocked = matches!(effect,
                     VirtualHandEffect::OutMessage { message: Message { to, payload: MessagePayload::Frob } }
-                        if super::personal_card::is_reader(&self.world, *to));
+                        if super::personal_card::requires_scan(&self.world, *to));
                 scan_required |= blocked;
                 !blocked
             });
@@ -7717,7 +7721,7 @@ impl MissionCore {
         for msg in ui_messages {
             if game_options.presentation_mode == crate::PresentationMode::Vr
                 && matches!(msg.payload, MessagePayload::Frob)
-                && super::personal_card::is_reader(&self.world, msg.to)
+                && super::personal_card::requires_scan(&self.world, msg.to)
             {
                 continue;
             }
@@ -11980,17 +11984,7 @@ impl MissionCore {
                     }
                     // Machines share the cyber interface unless the handheld
                     // MFD already owns the panel. Frob never toggles it closed.
-                    let machine = [
-                        "StatsTrainer",
-                        "TechTrainer",
-                        "WeaponTrainer",
-                        "PsiTrainer",
-                        "ReplicatorScript",
-                    ]
-                    .iter()
-                    .any(|script| {
-                        crate::scripts::script_util::entity_has_script(&self.world, entity, script)
-                    });
+                    let machine = super::mfd_device::machine_uses_mfd(&self.world, entity);
                     match game_options.presentation_mode {
                         crate::PresentationMode::Vr if self.flat_ui.device => {
                             // Hand frobs and scans share one panel owner, even
