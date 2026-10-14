@@ -371,6 +371,12 @@ runtime (`POST /v1/input/action`) or through the SDK (`game.input.trigger(...)`)
 
 #### The cyber interface carries the use-mode readouts
 
+The bottom-center mouse-look button exits the entire cyber interface in one
+click, in flat and VR. It remains available without interface software and
+returns any cursor-held item to the backpack. The shared canvas uses the
+remaster's `MICELOOK.png` / `ML0.png` / `ML1.png` art; `/v1/ui.readout` exposes
+the button as `close_use_mode`.
+
 The expanded bio (BIOFULL) and ammo (AMMOFULL) readouts along the bottom of the
 640x480 interface canvas are part of the interface itself, not the flat HUD -
 one emit (`shock2vr/src/hud/readouts.rs`) drawn by the pointer host, so the VR

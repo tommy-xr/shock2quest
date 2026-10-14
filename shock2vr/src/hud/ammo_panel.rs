@@ -140,6 +140,8 @@ pub enum ReadoutButton {
     /// is a control on that canvas, so it travels with the rest through the
     /// one list the host draws and hit-tests.
     SystemMenu,
+    /// Leave the entire cyber interface and return to world input.
+    CloseUseMode,
     Logs,
     SelectLeftHand,
     SelectRightHand,
@@ -158,6 +160,7 @@ impl ReadoutButton {
             ReadoutButton::PsiPowerNext => "psi_power_next",
             ReadoutButton::PsiSelect => "psi_select",
             ReadoutButton::SystemMenu => "system_menu",
+            ReadoutButton::CloseUseMode => "close_use_mode",
             ReadoutButton::Logs => "logs",
             ReadoutButton::SelectLeftHand => "select_left_hand",
             ReadoutButton::SelectRightHand => "select_right_hand",

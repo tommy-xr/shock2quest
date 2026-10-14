@@ -40,7 +40,7 @@ async function button(game: GameServer, label: string): Promise<UiElement> {
 async function labels(game: GameServer): Promise<string[]> {
   return (await readout(game))
     .map((e) => e.label ?? "")
-    .filter((label) => !["system_menu", "logs", "select_left_hand", "select_right_hand"].includes(label));
+    .filter((label) => !["system_menu", "logs", "close_use_mode", "select_left_hand", "select_right_hand"].includes(label));
 }
 
 test(
