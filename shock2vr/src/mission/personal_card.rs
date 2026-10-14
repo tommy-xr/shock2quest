@@ -28,6 +28,14 @@ pub(crate) fn is_reader(world: &World, entity: EntityId) -> bool {
         .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))
 }
 
+/// Key targets use their normal lock checks on frob; scanning is optional.
+pub(crate) fn requires_scan(world: &World, entity: EntityId) -> bool {
+    is_reader(world, entity)
+        && !world
+            .borrow::<View<dark::properties::PropKeyDst>>()
+            .is_ok_and(|keys| keys.get(entity).is_ok())
+}
+
 pub(super) struct PersonalCard {
     pub center: Option<Vector3<f32>>,
     pub device_mode: bool,

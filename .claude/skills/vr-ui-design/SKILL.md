@@ -107,8 +107,9 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
   behavior. Flat pickup remains immediate.
 - **The personal belt card is permanent.** Available before the first credential,
   drawn by either free hand, returned on release, never consumable or lost. In VR,
-  scanning is mandatory at credential-locked doors/readers and supported machines;
-  ordinary unlocked doors remain ordinary interactions. A scan authorizes a machine
+  credential-locked doors/readers accept either frob or scanning; both use the
+  normal key checks. Supported machines still require scanning; ordinary unlocked
+  doors remain ordinary interactions. A scan authorizes a machine
   interface, never a purchase. Require withdrawal before another scan. This design
   supersedes the immediate-VR-pickup/no-wielding rule and PR #1387's optional card.
 - When implementing any pickup, check which model the original game uses

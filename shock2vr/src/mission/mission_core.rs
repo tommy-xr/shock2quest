@@ -7135,7 +7135,7 @@ impl MissionCore {
             interaction_msgs.retain(|effect| {
                 let blocked = matches!(effect,
                     VirtualHandEffect::OutMessage { message: Message { to, payload: MessagePayload::Frob } }
-                        if super::personal_card::is_reader(&self.world, *to));
+                        if super::personal_card::requires_scan(&self.world, *to));
                 scan_required |= blocked;
                 !blocked
             });
@@ -7717,7 +7717,7 @@ impl MissionCore {
         for msg in ui_messages {
             if game_options.presentation_mode == crate::PresentationMode::Vr
                 && matches!(msg.payload, MessagePayload::Frob)
-                && super::personal_card::is_reader(&self.world, msg.to)
+                && super::personal_card::requires_scan(&self.world, msg.to)
             {
                 continue;
             }

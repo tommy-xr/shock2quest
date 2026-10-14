@@ -8,6 +8,7 @@ import {
   LOOT_PANEL_SIZE_PX,
   drawPersonalCard,
   aimVrHandAt,
+  aimMfdAt,
   aimVrHandAtCanvas,
   squeezeWorldPanelElement,
 } from "./helpers/vr-hand.js";
@@ -17,7 +18,7 @@ import {
 //   card slots 1120/1122 --SwitchLink--> HydroSectorB door 1127
 //
 // VR physical grips hold found cards until release. The downloaded credential
-// opens its authored gate only after presenting the permanent personal card.
+// opens its authored gate through either an empty-hand frob or a tricorder scan.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const CORPSE = 754;
 const CARD = 942;
@@ -47,6 +48,7 @@ function requirePanel(ui: UiState): UiPanelPose {
 async function assertCardCollectedAndDoorOpens(
   game: GameServer,
   collectedTemplate: number,
+  scan = false,
 ): Promise<void> {
   assert.equal(
     (await game.entities.byTemplate(collectedTemplate)).length,
@@ -74,18 +76,20 @@ async function assertCardCollectedAndDoorOpens(
   assert.equal(aim.target_confirmed, true, JSON.stringify(aim));
   await aimVrHandAt(game, aim.world_point);
   const since = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
-  await game.input.set("right_hand.trigger", 1);
-  await game.step({ frames: 2 });
-  await game.input.set("right_hand.trigger", 0);
-  await game.step({ frames: 180 });
-
-  assert.ok(distance((await game.entities.detail(door.id)).position, before) < 0.05,
-    "owning a credential must not let empty-hand Frob bypass scanning");
-  await drawPersonalCard(game);
-  await aimVrHandAt(game, aim.world_point, 0.20, 1);
-  await game.step({ frames: 180 });
-  await game.input.set("right_hand.squeeze", 0);
-  await game.step({ frames: 3 });
+  if (scan) {
+    await drawPersonalCard(game);
+    await aimMfdAt(game, aim.world_point, 0.55, 1, 0, { hand: "right" });
+    await game.step({ frames: 180 });
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 3 });
+  } else {
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 180 });
+    assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.scans, 0,
+      "empty-hand frob must authorize access without a scan");
+  }
 
   const after = (await game.entities.detail(door.id)).position;
   assert.ok(
@@ -106,7 +110,6 @@ test(
       mission: "hydro2.mis",
       debugFlags: ["--vr"],
     });
-    await game.devParams.set("vr_mfd_device", 0); // This path scans by physical card contact.
     await game.step({ frames: 5 });
     const corpse = only(await game.entities.byTemplate(CORPSE), "Hydro2 corpse 754");
     const card = only(await game.entities.byTemplate(CARD), "Hydro Card B 942");
@@ -131,13 +134,13 @@ test(
     assert.ok(cardElement, "corpse 754 must expose its real Card B button");
     await squeezeWorldPanelElement(game, LOOT_PANEL_SIZE_PX, 1, cardElement);
     // The panel helper completes the release too; leave the MFD before
-    // drawing the personal card for the world reader.
+    // drawing the tricorder for the world reader.
     await game.input.trigger("LeftHandLowerButton");
     await game.step({ frames: 2 });
     await game.input.set("right_hand.position", [0.3, 0.9, -0.5]);
     await game.input.set("right_hand.squeeze", 0);
     await game.step({ frames: 8 });
-    await assertCardCollectedAndDoorOpens(game, CARD);
+    await assertCardCollectedAndDoorOpens(game, CARD, true);
   },
 );
 
@@ -149,7 +152,7 @@ test(
       mission: "hydro2.mis",
       debugFlags: ["--vr"],
     });
-    await game.devParams.set("vr_mfd_device", 0); // This path scans by physical card contact.
+    await game.devParams.set("vr_mfd_device", 0); // Frob also works with the legacy personal card.
     await game.step({ frames: 5 });
 
     // Stage the authored card in the backpack to exercise the strip's grip
@@ -202,3 +205,32 @@ test(
     await assertCardCollectedAndDoorOpens(game, CARD_ARCHETYPE);
   },
 );
+
+test("Hydro2 VR reader denies frob without its key, then opens with one frob after collection", {
+  skip: !e2eEnabled, timeout: 600_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "hydro2.mis", debugFlags: ["--vr"] });
+  await game.step({ frames: 5 });
+  const slot = only(await game.entities.byTemplate(CARD_SLOT), "Card B reader");
+  const door = only(await game.entities.byTemplate(DOOR), "Sector B door");
+  await teleportVerified(game, {
+    x: slot.position[0] + 1.1, y: slot.position[1] + 0.4, z: slot.position[2] + 1.1,
+  });
+  const aim = await game.player.aimAt(slot, { hitbox: "center", visibility: "required" });
+  assert.ok(aim.target_confirmed);
+  await aimVrHandAt(game, aim.world_point);
+  const since = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 2 });
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({ frames: 180 });
+  assert.ok(distance((await game.entities.detail(door.id)).position, door.position) < 0.05,
+    "missing key must leave the door closed");
+  assert.ok((await game.audio.recent()).sounds.some(sound =>
+    sound.sequence > since && sound.sample.toLowerCase().includes("hackfail")),
+    "missing key must reach the reader's normal denial feedback");
+  const card = await game.player.spawnItem(CARD_ARCHETYPE);
+  await game.entities.sendMessage(card.entity_id, { type: "Frob" });
+  await game.step({ frames: 5 });
+  await assertCardCollectedAndDoorOpens(game, CARD_ARCHETYPE);
+});
