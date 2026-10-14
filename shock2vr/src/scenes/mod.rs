@@ -339,6 +339,31 @@ pub fn load_mission_from_save_data(
     global_context: &GlobalContext,
     game_options: &GameOptions,
 ) -> (Mission, HashMap<String, EntitySaveData>) {
+    let level = Mission::parse(
+        asset_cache.asset_paths(),
+        asset_cache.base_path(),
+        &save_data.global_data.active_mission,
+        global_context,
+    );
+    build_mission_from_save_data(
+        level,
+        save_data,
+        asset_cache,
+        audio_context,
+        global_context,
+        game_options,
+    )
+}
+
+/// Restore a save after its CPU-only mission parse has completed.
+pub(crate) fn build_mission_from_save_data(
+    level: dark::mission::SystemShock2Level,
+    save_data: SaveData,
+    asset_cache: &mut AssetCache,
+    audio_context: &mut AudioContext<EntityId, String>,
+    global_context: &GlobalContext,
+    game_options: &GameOptions,
+) -> (Mission, HashMap<String, EntitySaveData>) {
     let current_mission = save_data.global_data.active_mission.clone();
     let active_healing = save_data.global_data.active_healing.clone();
     let active_radiation = save_data.global_data.active_radiation.clone();
@@ -363,7 +388,8 @@ pub fn load_mission_from_save_data(
         save_data.global_data.rotation,
     );
 
-    let mut active_mission = Mission::load(
+    let mut active_mission = Mission::build(
+        level,
         current_mission,
         asset_cache,
         audio_context,

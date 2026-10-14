@@ -47,6 +47,20 @@ async function aim(game: GameServer, vr: boolean, point: [number, number]): Prom
   }
 }
 
+async function finishLoading(game: GameServer, vr: boolean): Promise<void> {
+  assert.equal((await game.info()).mission, "loading", "save loads must show the loading screen");
+  const { objects } = await game.scene.objects();
+  assert.equal(objects.length, 3, "only the loading backdrop, disc and progress bar should draw");
+  for (const object of objects) {
+    const distance = Math.hypot(...object.position);
+    assert.ok(vr ? distance > 1 : distance === 0,
+      "loading canvas must use the correct flat/VR presentation");
+  }
+  await game.waitFor(async () => (await game.info()).mission !== "loading", {
+    timeoutMs: 60_000, description: "save load completion",
+  });
+}
+
 for (const vr of [false, true]) {
   test(`pause save slots and load preserve the live mission (${vr ? "VR" : "flat"})`,
     { skip: !enabled, timeout: 600_000 }, async () => {
@@ -54,7 +68,7 @@ for (const vr of [false, true]) {
       const click = vr ? vrClickCanvasPoint : clickCanvas;
       const launch = (mission: string, saveFile?: string) => GameServer.launch({
         mission,
-        debugFlags: [...(vr ? ["--vr"] : []), ...(saveFile ? ["--save-file", saveFile] : [])],
+        debugFlags: ["--defer-transitions", ...(vr ? ["--vr"] : []), ...(saveFile ? ["--save-file", saveFile] : [])],
       });
       const pressChannel = vr ? "right_hand.trigger" : "pointer.pressed";
       let savedHitPoints: number;
@@ -150,6 +164,7 @@ for (const vr of [false, true]) {
             writeFileSync(savePath, JSON.stringify(unavailable));
           }
           await click(game, DEV_ACTION);
+          await finishLoading(game, vr);
           const failed = await game.info();
           assert.equal(failed.paused, true, `${failure} save leaves the menu open`);
           assert.equal(failed.mission, "medsci1.mis");
@@ -168,9 +183,17 @@ for (const vr of [false, true]) {
         await click(game, pauseEntry(2));
         await click(game, SLOT_ROW);
         await click(game, DEV_ACTION);
+        await finishLoading(game, vr);
         const loaded = await game.info();
         assert.equal(loaded.paused, false, "successful load resumes gameplay");
         assert.equal(loaded.player.hit_points, savedHitPoints);
+
+        // Quickload uses the same deferred path; direct API loads stay synchronous.
+        writeFileSync(join(assets.root, "saves", "save1.sav"), goodSave);
+        await game.input.trigger("QuickLoad");
+        await game.step({ frames: 1 });
+        await finishLoading(game, vr);
+        assert.equal((await game.info()).player.hit_points, savedHitPoints);
       }
 
       // A second runtime proves the slot is read from disk across process lifetimes.
@@ -187,6 +210,7 @@ for (const vr of [false, true]) {
           "an empty Load row must not play a selection sound");
         await click(game, SLOT_ROW);
         await click(game, DEV_ACTION);
+        await finishLoading(game, vr);
         const restored = await game.info();
         assert.equal(restored.mission, "medsci1.mis");
         assert.equal(restored.paused, false);

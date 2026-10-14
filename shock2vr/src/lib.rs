@@ -137,7 +137,7 @@ pub mod zip_asset_path;
 
 use scenes::{
     CutscenePlayerScene, DebriefScene, DeveloperScene, GameOverScene, LoadGameScene, MainMenuScene,
-    SceneInitResult, create_initial_scene, load_mission_from_save_data, resolve_ending_cutscene,
+    SceneInitResult, build_mission_from_save_data, create_initial_scene, resolve_ending_cutscene,
 };
 
 pub use mission::SpawnLocation;
@@ -278,6 +278,37 @@ fn listener_ear_positions(
 fn read_save_file(path: &Path) -> io::Result<SaveData> {
     let mut file = File::open(path)?;
     SaveData::read(&mut file)
+}
+
+fn parse_saved_mission(
+    path: &Path,
+    assets: &dyn engine::assets::asset_paths::AbstractAssetPath,
+    base_path: &str,
+    context: &GlobalContext,
+) -> io::Result<(SaveData, dark::mission::SystemShock2Level)> {
+    println!("SHOCK2QUEST_LOAD path={}", path.display());
+    let save = read_save_file(path)?;
+    let name = &save.global_data.active_mission;
+    if scenes::debug_scene_names().any(|scene| scene.eq_ignore_ascii_case(name)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Cannot load debug scene '{name}': generated scenes have no mission file"),
+        ));
+    }
+    if assets
+        .get_reader(
+            base_path.to_owned(),
+            mission::earth_horde::asset_mission(name).to_ascii_lowercase(),
+        )
+        .is_none()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Mission '{name}' is unavailable"),
+        ));
+    }
+    let level = Mission::parse(assets, base_path, name, context);
+    Ok((save, level))
 }
 
 /// Whether the resolved data root is a 25th Anniversary Edition install rather
@@ -670,6 +701,15 @@ struct PendingTransition {
     parse_done_frame: Option<u32>,
 }
 
+/// The old scene and pause picker stay intact until the save is ready to install.
+struct PendingSaveLoad {
+    path: String,
+    scene: LoadingScene,
+    worker: thread::JoinHandle<io::Result<(SaveData, dark::mission::SystemShock2Level)>>,
+    frames_shown: u32,
+    parse_done_frame: Option<u32>,
+}
+
 /// Minimum number of frames to show the loading screen before swapping to the mission,
 /// even if the background parse finished sooner. ~0.4s at 60fps.
 const MIN_LOADING_FRAMES: u32 = 24;
@@ -732,6 +772,7 @@ pub struct Game {
     scene_generation: u64,
     /// Set while a deferred transition is in flight (loading screen showing).
     pending_transition: Option<PendingTransition>,
+    pending_save_load: Option<PendingSaveLoad>,
     /// Set while a cutscene stands in for the scene that queued the transition
     /// following it. See [`PreservedSceneState`].
     preserved_scene_state: Option<PreservedSceneState>,
@@ -947,7 +988,7 @@ impl Game {
     /// (#784) - needs this to know a transition still needs frames pumped even
     /// while otherwise idle.
     pub fn has_pending_transition(&self) -> bool {
-        self.pending_transition.is_some()
+        self.pending_transition.is_some() || self.pending_save_load.is_some()
     }
 
     /// Model name, world holds and face normal of the ladder entity `id` (see
@@ -1196,7 +1237,7 @@ impl Game {
         // Taken before the refusal below, so a rejected transition cannot leave
         // a cutscene's carried state behind for an unrelated later one.
         let preserved = self.preserved_scene_state.take();
-        if self.pending_transition.is_some() {
+        if self.has_pending_transition() {
             warn!(
                 "Ignoring transition to '{}': a level transition is already in flight",
                 level_name
@@ -1340,7 +1381,8 @@ impl Game {
     pub fn wants_pointer(&self) -> bool {
         // The pause menu is pointer-driven in flat presentation, and it is
         // drawn over scenes that otherwise capture the mouse for look.
-        self.pause_menu.is_open() || self.active_game_scene.wants_pointer()
+        self.pending_save_load.is_none()
+            && (self.pause_menu.is_open() || self.active_game_scene.wants_pointer())
     }
 
     /// Whether the in-game pause menu is up (and therefore the simulation is
@@ -1358,7 +1400,11 @@ impl Game {
     }
 
     pub fn scene_name(&self) -> &str {
-        self.active_game_scene.scene_name()
+        if self.pending_save_load.is_some() {
+            "loading"
+        } else {
+            self.active_game_scene.scene_name()
+        }
     }
 
     /// Trigger a level transition programmatically (debug/testing lever).
@@ -1639,6 +1685,7 @@ impl Game {
             active_game_scene,
             scene_generation: 0,
             pending_transition: None,
+            pending_save_load: None,
             preserved_scene_state: None,
             global_context: Arc::new(global_context),
             last_env_sound: None,
@@ -1729,6 +1776,54 @@ impl Game {
         // frozen at full strength until the simulation resumes.
         self.head_pose = (input_context.head.position, input_context.head.rotation);
         self.hit_feedback.update(delta_time);
+
+        if let Some(pending) = self.pending_save_load.as_mut() {
+            // Animate only the loading UI; the retained world must not age on failure.
+            self.time_suspended += time.elapsed;
+            self.simulation_input.clear();
+            actions.clear_triggered();
+            self.audio_context.set_scene_paused(true);
+            self.audio_context.reap_finished_sounds();
+            pending.frames_shown += 1;
+            if pending.parse_done_frame.is_none() && pending.worker.is_finished() {
+                pending.parse_done_frame = Some(pending.frames_shown);
+            }
+            pending.scene.set_progress(transition_progress(
+                pending.frames_shown,
+                pending.parse_done_frame,
+            ));
+            pending.scene.update(
+                time,
+                input_context,
+                &mut self.asset_cache,
+                &self.options,
+                vec![],
+            );
+            if transition_ready(pending.frames_shown, pending.parse_done_frame) {
+                let pending = self.pending_save_load.take().unwrap();
+                let result = pending
+                    .worker
+                    .join()
+                    .unwrap_or_else(|_| Err(io::Error::other("Save mission parse failed")));
+                match result {
+                    Ok((save, level)) => {
+                        self.restore_save(pending.path, save, level);
+                        self.close_pause_menu(true);
+                    }
+                    Err(error) => {
+                        warn!("Unable to load '{}': {error}", pending.path);
+                        if self.pause_menu.is_open() {
+                            self.pause_menu.show_load_failure();
+                        } else {
+                            self.active_game_scene.on_load_failed();
+                        }
+                    }
+                }
+                self.audio_context
+                    .set_scene_paused(self.pause_menu.suspends_scene());
+            }
+            return;
+        }
 
         // The free camera is consumed here rather than dispatched as an
         // `Effect`, for the same reason `TogglePauseMenu` is: it is `Game`'s
@@ -1985,7 +2080,7 @@ impl Game {
     /// level transition in flight owns the scene swap, so pausing over the
     /// loading screen would only hide it.
     fn pause_is_allowed(&self) -> bool {
-        self.pending_transition.is_none()
+        !self.has_pending_transition()
             && self.active_game_scene.is_pausable()
             && self.player_is_alive()
     }
@@ -2164,13 +2259,7 @@ impl Game {
             }
             Some(PauseAction::LoadSelectedGame) => {
                 if let Some(path) = self.pause_menu.selected_save_path() {
-                    match self.load_game_at(&path) {
-                        Ok(_) => self.close_pause_menu(true),
-                        Err(error) => {
-                            warn!("Unable to load '{}': {error}", path.display());
-                            self.pause_menu.show_load_failure();
-                        }
-                    }
+                    self.begin_save_load(path.to_string_lossy().into_owned());
                 }
             }
             Some(PauseAction::QuitToMainMenu) => {
@@ -2351,32 +2440,59 @@ impl Game {
         Ok(())
     }
 
+    fn begin_save_load(&mut self, path: String) {
+        if self.has_pending_transition() {
+            return;
+        }
+        let mut scene = LoadingScene::new();
+        scene.set_progress(PROGRESS_PARSING);
+        let anchor = if self.pause_menu.is_open() {
+            Some(self.pause_menu.panel_anchor())
+        } else {
+            self.active_game_scene.frontend_panel_anchor()
+        };
+        if let Some(anchor) = anchor {
+            *scene.frontend_panel_anchor().unwrap() = anchor.clone();
+        }
+        let assets = self.asset_cache.asset_paths_arc();
+        let base_path = self.asset_cache.base_path().to_owned();
+        let context = Arc::clone(&self.global_context);
+        let worker_path = path.clone();
+        let worker = thread::spawn(move || {
+            parse_saved_mission(Path::new(&worker_path), &**assets, &base_path, &context)
+        });
+        self.active_game_scene.cancel_transient_input();
+        self.weapon_buttons.cancel(self.active_game_scene.world());
+        self.pending_save_load = Some(PendingSaveLoad {
+            path,
+            scene,
+            worker,
+            frames_shown: 0,
+            parse_done_frame: None,
+        });
+    }
+
     fn load_from_file(&mut self, file_name: String) -> io::Result<()> {
-        println!("SHOCK2QUEST_LOAD path={file_name}");
-        let save_data = read_save_file(Path::new(&file_name))?;
-        let scene_name = &save_data.global_data.active_mission;
-        if scenes::debug_scene_names().any(|name| name.eq_ignore_ascii_case(scene_name)) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "Cannot load debug scene '{scene_name}': generated scenes have no mission file"
-                ),
-            ));
-        }
-        // Resolve through the same mounted assets as mission loading before replacing the live world.
-        if self
-            .asset_cache
-            .get_raw_reader(mission::earth_horde::asset_mission(scene_name))
-            .is_none()
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("Mission '{scene_name}' is unavailable"),
-            ));
-        }
+        let (save, level) = parse_saved_mission(
+            Path::new(&file_name),
+            self.asset_cache.asset_paths(),
+            self.asset_cache.base_path(),
+            &self.global_context,
+        )?;
+        self.restore_save(file_name, save, level);
+        Ok(())
+    }
+
+    fn restore_save(
+        &mut self,
+        file_name: String,
+        save_data: SaveData,
+        level: dark::mission::SystemShock2Level,
+    ) {
         let played = save_data.metadata.played;
         let was_crouched = save_data.global_data.is_crouched;
-        let (mut mission, level_map) = Self::load_from_save_data(
+        let (mut mission, level_map) = build_mission_from_save_data(
+            level,
             save_data,
             &mut self.asset_cache,
             &mut self.audio_context,
@@ -2403,23 +2519,6 @@ impl Game {
             "SHOCK2QUEST_LOAD_COMPLETE path={file_name} mission={}",
             self.scene_name()
         );
-        Ok(())
-    }
-
-    fn load_from_save_data(
-        save_data: SaveData,
-        asset_cache: &mut AssetCache,
-        audio_context: &mut AudioContext<EntityId, String>,
-        global_context: &GlobalContext,
-        game_options: &GameOptions,
-    ) -> (Mission, HashMap<String, EntitySaveData>) {
-        load_mission_from_save_data(
-            save_data,
-            asset_cache,
-            audio_context,
-            global_context,
-            game_options,
-        )
     }
 
     /// Player transform with the center normalized to a collision-valid
@@ -2534,10 +2633,7 @@ impl Game {
                 }
             }
             GlobalEffect::Load { file_name } => {
-                if let Err(error) = self.load_from_file(file_name.clone()) {
-                    warn!("Unable to load save '{}': {}", file_name, error);
-                    self.active_game_scene.on_load_failed();
-                }
+                self.begin_save_load(file_name);
             }
             GlobalEffect::ElevatorTransition { level_file, marker } => {
                 self.begin_transition(
@@ -2739,7 +2835,7 @@ impl Game {
         // vitals. Nothing in-game can reach this (the loading scene runs no
         // scripts), but an external caller can, so refuse rather than corrupt -
         // the transition already under way is what the player is waiting for.
-        if self.pending_transition.is_some() {
+        if self.has_pending_transition() {
             warn!("Ignoring a scene standing in for the mission: a level transition is in flight");
             return;
         }
@@ -2767,6 +2863,7 @@ impl Game {
     /// what it owns beyond its own frame (see [`GameScene::on_exit`]). Every
     /// scene swap goes through here so that hook cannot be forgotten.
     fn set_active_scene(&mut self, mut scene: Box<dyn GameScene>) {
+        self.pending_save_load = None;
         if let Some(next) = scene.frontend_panel_anchor() {
             let previous = if self.pause_menu.is_open() {
                 Some(self.pause_menu.panel_anchor())
@@ -2839,7 +2936,7 @@ impl Game {
         // The lights belong to the hands: with the hands suppressed they would
         // be two pools cast by nothing - and, being world lighting, they light
         // the scene *before* the pause dim and show straight through it.
-        if self.pause_menu.is_open() {
+        if self.pause_menu.is_open() || self.pending_save_load.is_some() {
             return Vec::new();
         }
         self.active_game_scene.get_hand_lights(&self.options)
@@ -2851,7 +2948,9 @@ impl Game {
     /// Flat runtimes should use this for their camera `head_offset` so the
     /// view matches the flat controller's shot origin.
     pub fn player_eye_height(&self) -> f32 {
-        player_eye_height_for(self.active_game_scene.player_is_crouched())
+        player_eye_height_for(
+            self.pending_save_load.is_none() && self.active_game_scene.player_is_crouched(),
+        )
     }
 
     /// Vertical FOV (degrees) the flat runtimes should build their projection
@@ -2918,7 +3017,7 @@ impl Game {
         tracked_head_offset: Vector3<f32>,
         tracked_head_rotation: Quaternion<f32>,
     ) -> death_camera::CameraPose {
-        let flat_eye = (!self.free_camera.is_detached())
+        let flat_eye = (self.pending_save_load.is_none() && !self.free_camera.is_detached())
             .then(|| self.active_game_scene.flat_eye_pose())
             .flatten();
         self.resolve_free_camera(
@@ -2943,11 +3042,18 @@ impl Game {
             pawn_rotation,
             head_offset,
             head_rotation,
-            self.active_game_scene.death_camera(),
+            self.pending_save_load
+                .is_none()
+                .then(|| self.active_game_scene.death_camera())
+                .flatten(),
         )
     }
 
     pub fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
+        if let Some(pending) = self.pending_save_load.as_mut() {
+            self.free_camera_view_fixup = None;
+            return pending.scene.render(&mut self.asset_cache, &self.options);
+        }
         let (mut scene, pos, rot) = self
             .active_game_scene
             .render(&mut self.asset_cache, &self.options);
@@ -3134,6 +3240,15 @@ impl Game {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) -> Vec<SceneObject> {
+        if let Some(pending) = self.pending_save_load.as_mut() {
+            return pending.scene.render_per_eye(
+                &mut self.asset_cache,
+                view,
+                projection,
+                screen_size,
+                &self.options,
+            );
+        }
         // Record how far the host's picture reaches for the next frame's
         // `render`, which is where the view-locked hit tint is emitted (see
         // `hit_feedback::view_extents_from_projection`).
