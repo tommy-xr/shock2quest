@@ -1606,6 +1606,7 @@ impl Game {
         // }
 
         let SceneInitResult {
+            played,
             scene: active_game_scene,
             mission_save_data: mission_to_save_data,
         } = create_initial_scene(
@@ -1649,7 +1650,7 @@ impl Game {
             weapon_buttons: Default::default(),
             menu_hold_ring: scenes::cutscene_skip::RingArt::default(),
             time_suspended: std::time::Duration::ZERO,
-            played: std::time::Duration::ZERO,
+            played,
             simulation_clock: fixed_step::FixedStepClock::new(
                 std::num::NonZeroU32::new(60).unwrap(),
                 std::num::NonZeroU32::new(8).unwrap(),
@@ -2358,6 +2359,17 @@ impl Game {
                 format!(
                     "Cannot load debug scene '{scene_name}': generated scenes have no mission file"
                 ),
+            ));
+        }
+        // Resolve through the same mounted assets as mission loading before replacing the live world.
+        if self
+            .asset_cache
+            .get_raw_reader(mission::earth_horde::asset_mission(scene_name))
+            .is_none()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Mission '{scene_name}' is unavailable"),
             ));
         }
         let played = save_data.metadata.played;
