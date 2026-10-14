@@ -11,6 +11,34 @@ use cgmath::{Quaternion, Vector3};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io};
 
+/// Increment when persisted state needs an upgrade, not for every release.
+pub const SAVE_FORMAT_VERSION: u32 = 1;
+
+/// Build provenance is diagnostic; only the format version gates loading.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct SaveWriter {
+    pub version: String,
+    pub commit: Option<String>,
+    /// Tracked source changes at build time; None means Git was unavailable.
+    pub dirty: Option<bool>,
+}
+
+impl SaveWriter {
+    pub fn new(version: &str, commit: &str, dirty: &str) -> Self {
+        Self {
+            version: version.to_owned(),
+            commit: (commit != "unknown").then(|| commit.to_owned()),
+            dirty: dirty.parse().ok(),
+        }
+    }
+}
+
+impl Default for SaveWriter {
+    fn default() -> Self {
+        Self::new("dev", "unknown", "unknown")
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct SaveData {
     // Keep this first: save discovery reads only the leading metadata object.
@@ -26,6 +54,10 @@ pub struct SaveData {
 /// Menu labels travel with their save, so discovery needs no separate index.
 #[derive(Clone, Default, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct SaveMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_version: Option<u32>,
+    #[serde(default)]
+    pub writer: Option<SaveWriter>,
     pub mission: String,
     pub played: std::time::Duration,
 }
@@ -58,9 +90,24 @@ impl SaveData {
     }
 
     pub fn read<T: std::io::Read>(reader: &mut T) -> io::Result<SaveData> {
-        let mut save_data_json = String::new();
-        reader.read_to_string(&mut save_data_json)?;
-        serde_json::from_str(&save_data_json)
+        let mut text = String::new();
+        reader.read_to_string(&mut text)?;
+        let json: serde_json::Value = serde_json::from_str(&text)?;
+        // Check the envelope before decoding a potentially incompatible world.
+        if let Some(version) = json.get("metadata").and_then(|m| m.get("format_version")) {
+            let version: u32 = serde_json::from_value(version.clone())?;
+            if version != SAVE_FORMAT_VERSION {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Unsupported save format {version}; this build supports {SAVE_FORMAT_VERSION}"
+                    ),
+                ));
+            }
+        } else {
+            tracing::warn!("Loading unversioned save best-effort; compatibility is not guaranteed");
+        }
+        serde_json::from_value(json)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 }
@@ -173,10 +220,74 @@ mod tests {
     use cgmath::{Quaternion, vec3};
 
     #[test]
+    fn format_and_writer_round_trip_without_gating_on_build_identity() {
+        for writer in [
+            SaveWriter::new("dev", "abc123", "true"),
+            SaveWriter::new("0.2.0", "def456", "false"),
+            SaveWriter::default(),
+        ] {
+            let save = SaveData {
+                metadata: SaveMetadata {
+                    format_version: Some(SAVE_FORMAT_VERSION),
+                    writer: Some(writer.clone()),
+                    ..Default::default()
+                },
+                global_data: global_data(None),
+                level_data: HashMap::new(),
+            };
+            let mut bytes = Vec::new();
+            save.write(&mut bytes).unwrap();
+            let loaded = SaveData::read(&mut bytes.as_slice()).unwrap();
+            assert_eq!(loaded.metadata.format_version, Some(SAVE_FORMAT_VERSION));
+            assert_eq!(loaded.metadata.writer, Some(writer));
+        }
+    }
+
+    #[test]
+    fn unsupported_format_is_rejected_before_decoding_world() {
+        for version in [0, SAVE_FORMAT_VERSION + 1] {
+            let json = format!(
+                r#"{{"metadata":{{"format_version":{version}}},"global_data":"incompatible"}}"#
+            );
+            let error = SaveData::read(&mut json.as_bytes()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("Unsupported save format {version}"))
+            );
+        }
+        for version in ["null", "-1", "1.5", "\"1\""] {
+            let json = format!(r#"{{"metadata":{{"format_version":{version}}}}}"#);
+            assert!(SaveData::read(&mut json.as_bytes()).is_err());
+        }
+    }
+
+    #[test]
+    fn unversioned_saves_remain_best_effort() {
+        let save = SaveData {
+            metadata: SaveMetadata::default(),
+            global_data: global_data(None),
+            level_data: HashMap::new(),
+        };
+        let mut json = serde_json::to_value(save).unwrap();
+        for with_metadata in [true, false] {
+            if !with_metadata {
+                json.as_object_mut().unwrap().remove("metadata");
+            }
+            let bytes = serde_json::to_vec(&json).unwrap();
+            let loaded = SaveData::read(&mut bytes.as_slice()).unwrap();
+            assert_eq!(loaded.metadata.format_version, None);
+            assert_eq!(loaded.global_data.active_mission, "earth.mis");
+        }
+    }
+
+    #[test]
     fn menu_metadata_round_trips_and_uses_localized_map_and_play_time() {
         let metadata = SaveMetadata {
             mission: "medsci1.mis".to_owned(),
             played: std::time::Duration::from_secs(3723),
+            ..Default::default()
         };
         let decoded: SaveMetadata =
             serde_json::from_slice(&serde_json::to_vec(&metadata).unwrap()).unwrap();

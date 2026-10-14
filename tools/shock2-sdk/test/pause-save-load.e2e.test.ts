@@ -82,6 +82,10 @@ for (const vr of [false, true]) {
         assert.ok(goodSave.length > 1000, "slot must contain a serialized mission");
         const saved = JSON.parse(goodSave.toString("utf8"));
         assert.equal(saved.metadata.mission, "medsci1.mis");
+        assert.equal(saved.metadata.format_version, 1);
+        assert.equal(typeof saved.metadata.writer.version, "string");
+        assert.match(saved.metadata.writer.commit, /^[0-9a-f]{40}$/);
+        assert.equal(typeof saved.metadata.writer.dirty, "boolean");
         assert.ok(saved.metadata.played.secs > 0 || saved.metadata.played.nanos > 0,
           "save carries elapsed gameplay time for the slot label");
         assert.equal((await game.info()).paused, true);
@@ -127,11 +131,16 @@ for (const vr of [false, true]) {
         await game.input.set(pressChannel, 0);
         await game.step({ frames: 2 });
 
-        for (const failure of ["corrupt", "missing", "missing mission"] as const) {
+        for (const failure of ["corrupt", "missing", "missing mission", "future format"] as const) {
           await click(game, pauseEntry(2));
           await click(game, SLOT_ROW);
           if (failure === "corrupt") writeFileSync(savePath, "invalid save");
           else if (failure === "missing") rmSync(savePath);
+          else if (failure === "future format") {
+            const future = JSON.parse(goodSave.toString("utf8"));
+            future.metadata.format_version = 999;
+            writeFileSync(savePath, JSON.stringify(future));
+          }
           else {
             const unavailable = JSON.parse(goodSave.toString("utf8"));
             const mission = "missing-save-review.mis";

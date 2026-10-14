@@ -34,15 +34,42 @@ pub fn emit_build_label() {
             }
         }
     }
+    // Cargo must refresh provenance for source edits as well as new commits.
+    // Untracked files are excluded: local reports/assets are not build inputs.
+    if let (Some(root), Some(files)) = (
+        git(&["rev-parse", "--show-toplevel"]),
+        git(&["ls-files", "--full-name", "-z", "--", ":/"]),
+    ) {
+        for file in files.split('\0').filter(|file| !file.is_empty()) {
+            println!(
+                "cargo:rerun-if-changed={}",
+                PathBuf::from(&root).join(file).display()
+            );
+        }
+    }
+    if let Some(index) = git(&["rev-parse", "--git-path", "index"]) {
+        println!("cargo:rerun-if-changed={index}");
+    }
+    let dirty = git(&["status", "--porcelain", "--untracked-files=no"])
+        .map(|status| (!status.is_empty()).to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
     let commit = env::var("SHOCK2QUEST_GIT_SHA")
         .ok()
+        .filter(|value| !value.is_empty())
         .or_else(|| git(&["rev-parse", "HEAD"]))
         .unwrap_or_else(|| "unknown".to_owned());
-    let commit: String = commit.chars().take(7).collect();
     let version = env::var("SHOCK2QUEST_RELEASE_VERSION")
         .ok()
         .filter(|value| !value.is_empty())
-        .map(|value| format!("v{value}"))
         .unwrap_or_else(|| "dev".to_owned());
-    println!("cargo:rustc-env=SHOCK2QUEST_BUILD_LABEL={version} | {commit}");
+    println!("cargo:rustc-env=SHOCK2QUEST_BUILD_VERSION={version}");
+    println!("cargo:rustc-env=SHOCK2QUEST_BUILD_COMMIT={commit}");
+    println!("cargo:rustc-env=SHOCK2QUEST_BUILD_DIRTY={dirty}");
+    let label = if version == "dev" {
+        version
+    } else {
+        format!("v{version}")
+    };
+    let short_commit: String = commit.chars().take(7).collect();
+    println!("cargo:rustc-env=SHOCK2QUEST_BUILD_LABEL={label} | {short_commit}");
 }

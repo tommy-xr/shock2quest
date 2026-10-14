@@ -599,6 +599,7 @@ pub enum PresentationMode {
 pub struct GameOptions {
     /// Supplied by the runtime so Git/version changes do not rebuild gameplay.
     pub build_label: &'static str,
+    pub save_writer: save_load::SaveWriter,
     /// Used only when starting a fresh campaign; loaded campaigns retain theirs.
     pub difficulty: dark::gamesys::Difficulty,
     pub mission: String,
@@ -627,6 +628,7 @@ impl Default for GameOptions {
     fn default() -> Self {
         Self {
             build_label: "dev | unknown",
+            save_writer: save_load::SaveWriter::default(),
             difficulty: dark::gamesys::Difficulty::Normal,
             mission: "earth.mis".to_owned(),
             presentation_mode: PresentationMode::Vr,
@@ -2456,6 +2458,8 @@ impl Game {
 
     fn save_metadata(&self) -> save_load::SaveMetadata {
         save_load::SaveMetadata {
+            format_version: Some(save_load::SAVE_FORMAT_VERSION),
+            writer: Some(self.options.save_writer.clone()),
             mission: self.scene_name().to_owned(),
             played: self.played,
         }
