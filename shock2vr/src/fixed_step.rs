@@ -6,6 +6,7 @@ use std::{num::NonZeroU32, time::Duration};
 
 use crate::time::Time;
 
+#[derive(Clone)]
 pub struct FixedStepClock {
     hz: NonZeroU32,
     max_steps: NonZeroU32,

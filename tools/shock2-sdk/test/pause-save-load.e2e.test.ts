@@ -22,7 +22,7 @@ function isolatedAssets(): { root: string; [Symbol.dispose](): void } {
   assert.ok(existsSync(join(source, "sshock2.kpf")), "25AE assets are required");
   const root = mkdtempSync(join(tmpdir(), "shock2-pause-save-"));
   for (const entry of readdirSync(source, { withFileTypes: true })) {
-    if (entry.name !== "saves") {
+    if (entry.name !== "saves" && entry.name !== "recordings") {
       symlinkSync(join(source, entry.name), join(root, entry.name), entry.isDirectory() ? "dir" : "file");
     }
   }
@@ -47,6 +47,69 @@ async function aim(game: GameServer, vr: boolean, point: [number, number]): Prom
   }
 }
 
+async function finishLoading(game: GameServer, vr: boolean): Promise<void> {
+  assert.equal((await game.info()).mission, "loading", "save loads must show the loading screen");
+  const { objects } = await game.scene.objects();
+  assert.equal(objects.length, 3, "only the loading backdrop, disc and progress bar should draw");
+  for (const object of objects) {
+    const distance = Math.hypot(...object.position);
+    assert.ok(vr ? distance > 1 : distance === 0,
+      "loading canvas must use the correct flat/VR presentation");
+  }
+  await game.waitFor(async () => (await game.info()).mission !== "loading", {
+    timeoutMs: 60_000, description: "save load completion",
+  });
+}
+
+test("QuickLoad interrupts a fixed-step batch before a failed load", {
+  skip: !enabled, timeout: 300_000,
+}, async () => {
+  using assets = isolatedAssets();
+  await using game = await GameServer.launch({
+    mission: "medsci1.mis",
+    debugFlags: ["--defer-transitions", "--experimental", "fixed_simulation"],
+  });
+  await game.step({ frames: 30 });
+  await game.input.trigger("ToggleInputRecording");
+  await game.step({ frames: 1 });
+  await game.input.trigger("ToggleInputRecording");
+  await game.step({ frames: 1 });
+
+  const recordings = join(assets.root, "recordings");
+  const recording = join(recordings, readdirSync(recordings).find(name => name.endsWith(".jsonl"))!);
+  const [header, frame] = readFileSync(recording, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  const baseline = JSON.parse(readFileSync(join(recordings, header.save), "utf8"));
+  // Replay supplies a long render frame, forcing eight fixed ticks. QuickLoad
+  // starts on the first tick; the remaining ticks must wait for loading to end.
+  frame.total = frame.total - frame.dt + 8 / 60;
+  frame.dt = 8 / 60;
+  frame.triggered = ["QuickLoad"];
+  frame.held = [];
+  frame.input.right_hand.thumbstick = { x: 0, y: 1 };
+  writeFileSync(recording, `${JSON.stringify(header)}\n${JSON.stringify(frame)}\n`);
+  mkdirSync(join(assets.root, "saves"), { recursive: true });
+  writeFileSync(join(assets.root, "saves", "save1.sav"), "invalid save");
+  await game.replay(recording);
+  await game.step({ frames: 1 });
+  assert.equal((await game.info()).mission, "loading");
+
+  assert.equal((await game.save("interrupted-tick")).mission, "medsci1.mis");
+  const interrupted = JSON.parse(readFileSync(join(assets.root, "saves", "interrupted-tick.sav"), "utf8"));
+  assert.equal(interrupted.metadata.mission, interrupted.global_data.active_mission);
+  const seconds = (time: { secs: number; nanos: number }) => time.secs + time.nanos / 1e9;
+  const simulated = seconds(interrupted.metadata.played) - seconds(baseline.metadata.played);
+  assert.ok(simulated > 0.01 && simulated < 0.04,
+    `QuickLoad must stop after one tick, simulated ${simulated} seconds`);
+
+  await game.step({ frames: 3 });
+  await game.save("loading-frozen");
+  const frozen = JSON.parse(readFileSync(join(assets.root, "saves", "loading-frozen.sav"), "utf8"));
+  assert.deepEqual(frozen.metadata.played, interrupted.metadata.played);
+  assert.deepEqual(frozen.global_data, interrupted.global_data, "loading must preserve the retained player");
+  await finishLoading(game, false);
+  assert.equal((await game.info()).mission, "medsci1.mis");
+});
+
 for (const vr of [false, true]) {
   test(`pause save slots and load preserve the live mission (${vr ? "VR" : "flat"})`,
     { skip: !enabled, timeout: 600_000 }, async () => {
@@ -54,7 +117,7 @@ for (const vr of [false, true]) {
       const click = vr ? vrClickCanvasPoint : clickCanvas;
       const launch = (mission: string, saveFile?: string) => GameServer.launch({
         mission,
-        debugFlags: [...(vr ? ["--vr"] : []), ...(saveFile ? ["--save-file", saveFile] : [])],
+        debugFlags: ["--defer-transitions", ...(vr ? ["--vr"] : []), ...(saveFile ? ["--save-file", saveFile] : [])],
       });
       const pressChannel = vr ? "right_hand.trigger" : "pointer.pressed";
       let savedHitPoints: number;
@@ -150,6 +213,7 @@ for (const vr of [false, true]) {
             writeFileSync(savePath, JSON.stringify(unavailable));
           }
           await click(game, DEV_ACTION);
+          await finishLoading(game, vr);
           const failed = await game.info();
           assert.equal(failed.paused, true, `${failure} save leaves the menu open`);
           assert.equal(failed.mission, "medsci1.mis");
@@ -168,9 +232,17 @@ for (const vr of [false, true]) {
         await click(game, pauseEntry(2));
         await click(game, SLOT_ROW);
         await click(game, DEV_ACTION);
+        await finishLoading(game, vr);
         const loaded = await game.info();
         assert.equal(loaded.paused, false, "successful load resumes gameplay");
         assert.equal(loaded.player.hit_points, savedHitPoints);
+
+        // Quickload uses the same deferred path; direct API loads stay synchronous.
+        writeFileSync(join(assets.root, "saves", "save1.sav"), goodSave);
+        await game.input.trigger("QuickLoad");
+        await game.step({ frames: 1 });
+        await finishLoading(game, vr);
+        assert.equal((await game.info()).player.hit_points, savedHitPoints);
       }
 
       // A second runtime proves the slot is read from disk across process lifetimes.
@@ -187,6 +259,7 @@ for (const vr of [false, true]) {
           "an empty Load row must not play a selection sound");
         await click(game, SLOT_ROW);
         await click(game, DEV_ACTION);
+        await finishLoading(game, vr);
         const restored = await game.info();
         assert.equal(restored.mission, "medsci1.mis");
         assert.equal(restored.paused, false);
