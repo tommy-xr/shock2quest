@@ -1,7 +1,7 @@
 //! Read-only body gear feedback. Inventory ownership stays in the pouch/holsters.
 use cgmath::{Deg, Matrix4, vec3, vec4};
 use engine::scene::{self, SceneObject};
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, World};
 
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -66,10 +66,7 @@ impl PouchReadout {
                 },
                 |offer| match offer.projectile {
                     Some(projectile) => crate::hud::get_projectile_ammo_icon(world, projectile),
-                    None => world
-                        .borrow::<View<dark::properties::PropObjIcon>>()
-                        .ok()
-                        .and_then(|icons| icons.get(offer.reserve).ok().map(|icon| icon.0.clone())),
+                    None => crate::scripts::gui::inventory_icon(world, offer.reserve),
                 },
             ),
             count: weapon.map(|_| {
@@ -185,10 +182,12 @@ pub(super) fn item_badge(
     ring.set_transparency(Some(1.0 - color.w));
     ring.set_transform(plate * Matrix4::from_scale(BADGE_DIAMETER));
     let mut objects = vec![ring];
-    if let Some(name) = icon_name {
+    if let Some(name) =
+        icon_name.and_then(|name| dark::util::resolve_object_icon_name(assets, name))
+    {
         if let Some(texture) = assets.get_ext_opt(
             &dark::importers::TEXTURE_IMPORTER,
-            name,
+            &name,
             &engine::texture::TextureOptions {
                 wrap: false,
                 transparent_index_0: true,

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { drawPouchAmmo } from "./helpers/ammo-pouch.js";
 import { ammoOf } from "./helpers/weapon.js";
+import { stackCount } from "./helpers/nanites.js";
 
 for (const [name, weapon, ammo, hand] of [
   ["laser battery", -22, -3641, "left"],
@@ -26,7 +27,7 @@ for (const [name, weapon, ammo, hand] of [
     const reserve = await game.player.spawnItem(ammo);
     if (weapon !== -23) await game.player.spawnItem(ammo);
     await game.step({ frames: 5 });
-    const rounds = async (id: number) => Number((await game.entities.detail(id)).properties.find(p => p.name === "StackCount")?.value);
+    const rounds = async (id: number) => stackCount((await game.entities.detail(id)).properties)!;
     const stock = await rounds(reserve.entity_id);
     const loaded = ammoOf(await game.entities.detail(gun.entity_id));
     const readout = (await game.info()).player.hand_feedback?.body_gear?.pouch;
