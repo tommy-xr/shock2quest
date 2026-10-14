@@ -377,6 +377,12 @@ returns any cursor-held item to the backpack. The shared canvas uses the
 remaster's `MICELOOK.png` / `ML0.png` / `ML1.png` art; `/v1/ui.readout` exposes
 the button as `close_use_mode`.
 
+Frobbing a trainer (stats, tech, weapons, or psi) or replicator opens its panel
+inside the cyber interface in both presentations. A held VR MFD keeps the
+panel on its screen. Closing the object panel leaves the interface open; the
+mouse-look button exits both. The full interface requires installed
+cyber-interface software.
+
 The expanded bio (BIOFULL) and ammo (AMMOFULL) readouts along the bottom of the
 640x480 interface canvas are part of the interface itself, not the flat HUD -
 one emit (`shock2vr/src/hud/readouts.rs`) drawn by the pointer host, so the VR

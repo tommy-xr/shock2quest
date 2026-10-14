@@ -53,7 +53,8 @@ test(
       mission: "earth.mis",
       rustLog: "debug_runtime=info,shock2vr=debug",
     });
-    await game.step({ frames: 5 });
+    // The shop helper advances the fifth setup frame while installing interface software.
+    await game.step({ frames: 4 });
 
     const [nanites] = await game.entities.byTemplate(EARTH_NANITES);
     const [replicator] = await game.entities.byTemplate(EARTH_REPLICATOR);

@@ -1,6 +1,8 @@
 import type { GameServer } from "../../src/index.js";
 import type { EntitySummary } from "../../src/types.js";
 import { teleportVerified } from "./teleport.js";
+import { installEarthCyberInterface } from "./cyber-interface.js";
+import { clickUiElement } from "./ui.js";
 
 // Re-exported for existing importers - the balance helper itself is not
 // replicator-specific, so it lives in ./nanites.js alongside stackCount.
@@ -14,6 +16,14 @@ export async function physicallyOpenEarthReplicator(
   game: GameServer,
   replicator: EntitySummary,
 ): Promise<void> {
+  // These scenarios teleport past the doorway that installs the interface.
+  await installEarthCyberInterface(game);
+  const ui = await game.ui.state();
+  if (ui.mode === "use") {
+    const exit = ui.readout.find(element => element.label === "close_use_mode");
+    if (!exit) throw new Error("the cyber interface must offer its exit button");
+    await clickUiElement(game, exit);
+  }
   const [x, _y, z] = (await game.entities.detail(replicator.id)).position;
   await teleportVerified(game, { x: x - 1.59, y: 21.404, z: z - 2.23 });
   await game.input.set("head.look", [-35.3, -22]);
