@@ -11978,12 +11978,20 @@ impl MissionCore {
                     if self.flat_ui.utilities.has_left_panel() {
                         self.flat_ui.utilities = Default::default();
                     }
-                    // Bind the presentation's single object-panel slot to the
-                    // frobbed entity (the original's frob-script -> overlay
-                    // flow). Flat docks it in the MFD; VR creates a world
-                    // quad beside the object.
+                    // Machines share the cyber interface unless the handheld
+                    // MFD already owns the panel. Frob never toggles it closed.
+                    let machine = [
+                        "StatsTrainer",
+                        "TechTrainer",
+                        "WeaponTrainer",
+                        "PsiTrainer",
+                        "ReplicatorScript",
+                    ]
+                    .iter()
+                    .any(|script| {
+                        crate::scripts::script_util::entity_has_script(&self.world, entity, script)
+                    });
                     match game_options.presentation_mode {
-                        crate::PresentationMode::Flat => self.flat_ui.open(entity),
                         crate::PresentationMode::Vr if self.flat_ui.device => {
                             // Hand frobs and scans share one panel owner, even
                             // if an old world quad was opened earlier this frame.
@@ -11995,22 +12003,29 @@ impl MissionCore {
                             );
                             self.flat_ui.open(entity)
                         }
-                        crate::PresentationMode::Vr
-                            if ["ContainerScript", "HackableCrate"].iter().any(|script| {
-                                crate::scripts::script_util::entity_has_script(
-                                    &self.world,
-                                    entity,
-                                    script,
-                                )
-                            }) || (crate::scripts::script_util::entity_has_script(
-                                &self.world,
-                                entity,
-                                "CreatureContainer",
-                            ) && crate::scripts::gui::creature_is_lootable(
-                                &self.world,
-                                entity,
-                            )) =>
+                        presentation
+                            if machine
+                                || (presentation == crate::PresentationMode::Vr
+                                    && (["ContainerScript", "HackableCrate"].iter().any(
+                                        |script| {
+                                            crate::scripts::script_util::entity_has_script(
+                                                &self.world,
+                                                entity,
+                                                script,
+                                            )
+                                        },
+                                    ) || (crate::scripts::script_util::entity_has_script(
+                                        &self.world,
+                                        entity,
+                                        "CreatureContainer",
+                                    ) && crate::scripts::gui::creature_is_lootable(
+                                        &self.world,
+                                        entity,
+                                    )))) =>
                         {
+                            if !self.player_is_alive() {
+                                continue;
+                            }
                             self.gui.close_panel(
                                 &mut self.world,
                                 &mut self.physics,
@@ -12027,6 +12042,7 @@ impl MissionCore {
                             }
                             self.flat_ui.open(entity);
                         }
+                        crate::PresentationMode::Flat => self.flat_ui.open(entity),
                         crate::PresentationMode::Vr => {
                             // The other half of "one UI at a time": a world
                             // panel replaces an open log reader, exactly as the
