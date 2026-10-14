@@ -71,8 +71,9 @@ pub(super) fn can_back_off(world: &World, physics: &PhysicsWorld, entity: Entity
     let backwards =
         -(Quaternion::from_angle_y(ai_util::current_yaw(entity, world)) * Vector3::unit_z());
     const STRIDE: f32 = 1.2;
-    if physics.projectile_spawn_distance(origin, backwards, STRIDE, 0.45, &|other| other != entity)
-        < STRIDE - 0.02
+    if physics.projectile_spawn_distance(origin, backwards, STRIDE, 0.45, false, &|other| {
+        other != entity
+    }) < STRIDE - 0.02
     {
         return false;
     }

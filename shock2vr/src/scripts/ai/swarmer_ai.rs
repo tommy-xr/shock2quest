@@ -106,6 +106,7 @@ fn clearance(
         direction,
         distance,
         SWARM_CORE_RADIUS,
+        false,
         &|other| other != entity,
     )
 }

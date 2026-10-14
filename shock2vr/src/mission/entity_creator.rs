@@ -183,18 +183,24 @@ pub fn create_entity_with_position(
 
     let root_transform = if let Some(origin) = additional_options.projectile_launch_origin {
         // Enclose the authored projectile sphere, including its local offset.
-        let radius = world
+        let (radius, point_vs_terrain) = world
             .borrow::<View<PropPhysDimensions>>()
             .unwrap()
             .get(entity_id)
-            .map(|dims| dims.radius0.abs().max(dims.radius1.abs()) + dims.offset0.magnitude())
-            .unwrap_or(0.0);
+            .map(|dims| {
+                (
+                    dims.radius0.abs().max(dims.radius1.abs()) + dims.offset0.magnitude(),
+                    dims.point_vs_terrain != 0,
+                )
+            })
+            .unwrap_or((0.0, false));
         let requested = root_transform.transform_point(position);
         let clamped = crate::weapon_muzzle::clamp_projectile_spawn(
             physics,
             origin,
             requested,
             radius,
+            point_vs_terrain,
             &|entity| !crate::wielded_weapon::held_in_hand(world, entity),
         );
         Matrix4::from_translation(clamped - requested) * root_transform
@@ -1215,6 +1221,15 @@ fn create_physics_representation_with_options(
         launch_projectile,
         flinderize_debris,
     );
+    if let Some(body) = body {
+        let dimensions = world.borrow::<View<PropPhysDimensions>>().unwrap();
+        if dimensions
+            .get(entity_id)
+            .is_ok_and(|dims| dims.point_vs_terrain != 0)
+        {
+            physics.set_projectile_point_vs_terrain(body);
+        }
+    }
     apply_object_collision_properties(world, physics, entity_id);
     body
 }
@@ -3081,6 +3096,77 @@ mod tests {
             assert_eq!(
                 physics.debug_list_bodies().len(),
                 usize::from(should_have_body)
+            );
+        }
+    }
+
+    #[test]
+    fn launched_point_vs_terrain_clears_cover_but_keeps_object_hits() {
+        for (launch_projectile, point_vs_terrain, terrain, wall_x, should_hit) in [
+            (true, 1, true, 0.3, false),
+            (false, 1, true, 0.3, false),
+            (true, 0, true, 0.3, true),
+            (true, 1, false, 0.3, true),
+            (true, 1, true, 0.0, true),
+        ] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let shot = world.add_entity((
+                PropPosition {
+                    position: vec3(0.0, 2.0, 0.0),
+                    cell: 0,
+                    rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                },
+                PropPhysType {
+                    phys_type: PhysicsModelType::SPHERE,
+                    num_submodels: 1,
+                    remove_on_sleep: false,
+                    is_special: false,
+                },
+                PropPhysDimensions {
+                    point_vs_terrain,
+                    offset0: Vector3::zero(),
+                    ..sphere_dimensions(0.4, 0.0)
+                },
+            ));
+            create_physics_representation_with_options(
+                &mut world,
+                &mut physics,
+                &None,
+                shot,
+                launch_projectile,
+                false,
+            )
+            .unwrap();
+            let wall = world.add_entity(());
+            physics.add_kinematic(
+                wall,
+                vec3(wall_x, 2.0, 2.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                Vector3::zero(),
+                vec3(0.2, 10.0, 0.02),
+                if terrain {
+                    CollisionGroup::world_for_test()
+                } else {
+                    CollisionGroup::entity()
+                },
+                false,
+            );
+            let player = world.add_entity(());
+            let mut player = physics.create_player(vec3(20.0, 0.0, 0.0), player);
+            physics.set_velocity(shot, vec3(0.0, 0.0, 12.0));
+            let mut hit = false;
+            for _ in 0..25 {
+                let (_, events) = physics.update(Vector3::zero(), &mut player);
+                hit |= events.iter().any(|event| matches!(event,
+                    crate::physics::CollisionEvent::CollisionStarted { entity1_id, entity2_id, .. }
+                    if (*entity1_id == shot && *entity2_id == wall)
+                        || (*entity1_id == wall && *entity2_id == shot)
+                ));
+            }
+            assert_eq!(
+                hit, should_hit,
+                "point={point_vs_terrain}, terrain={terrain}, x={wall_x}"
             );
         }
     }
