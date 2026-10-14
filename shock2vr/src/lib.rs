@@ -1817,11 +1817,18 @@ impl Game {
                     Err(error) => {
                         warn!("Unable to load '{}': {error}", pending.path);
                         // Quest captures stdout without a tracing subscriber.
-                        println!("SHOCK2QUEST_LOAD_FAILED path={} error={error}", pending.path);
+                        println!(
+                            "SHOCK2QUEST_LOAD_FAILED path={} error={error}",
+                            pending.path
+                        );
                         if self.pause_menu.is_open() {
-                            self.pause_menu.show_load_failure();
+                            self.pause_menu.show_load_failure(error.kind());
                         } else {
-                            self.active_game_scene.on_load_failed();
+                            self.active_game_scene.on_load_failed(error.kind());
+                            self.apply_scene_effects(vec![Effect::ShowMessage {
+                                text: save_load::load_failure_message(error.kind())
+                                    .replace('\n', " "),
+                            }]);
                         }
                     }
                 }

@@ -151,7 +151,7 @@ pub trait GameScene {
     /// A successful load replaces the scene, so only the failure result needs
     /// routing back. Frontend scenes that offer loading can turn this into
     /// player-visible feedback; every other scene deliberately ignores it.
-    fn on_load_failed(&mut self) {}
+    fn on_load_failed(&mut self, _error: std::io::ErrorKind) {}
 
     /// Discard level-local state before caching an outgoing mission. Ordinary
     /// save/load snapshots do not call this hook.

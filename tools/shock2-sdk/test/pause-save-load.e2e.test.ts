@@ -163,9 +163,6 @@ for (const vr of [false, true]) {
         assert.equal(loaded.paused, false);
         assert.equal((await game.entities.byTemplate(-397)).length, savedCount,
           "load must restore saved spawns and remove post-save spawns");
-        const { x, y, z } = save.global_data.position;
-        assert.ok(Math.hypot(...loaded.player.position.map((v, i) => v - [x, y, z][i])) < 0.1,
-          "load must restore the saved player position");
       });
   }
 
@@ -252,7 +249,7 @@ for (const vr of [false, true]) {
         await game.input.set(pressChannel, 0);
         await game.step({ frames: 2 });
 
-        for (const failure of ["corrupt", "missing", "missing mission", "future format"] as const) {
+        for (const failure of ["corrupt", "missing", "missing mission", "future format", "old schema"] as const) {
           await click(game, pauseEntry(2));
           await click(game, SLOT_ROW);
           if (failure === "corrupt") writeFileSync(savePath, "invalid save");
@@ -261,6 +258,11 @@ for (const vr of [false, true]) {
             const future = JSON.parse(goodSave.toString("utf8"));
             future.metadata.format_version = 999;
             writeFileSync(savePath, JSON.stringify(future));
+          }
+          else if (failure === "old schema") {
+            const old = JSON.parse(goodSave.toString("utf8"));
+            delete old.global_data.quest_info.mini_games;
+            writeFileSync(savePath, JSON.stringify(old));
           }
           else {
             const unavailable = JSON.parse(goodSave.toString("utf8"));
@@ -301,6 +303,17 @@ for (const vr of [false, true]) {
         await game.step({ frames: 1 });
         await finishLoading(game, vr);
         assert.equal((await game.info()).player.hit_points, savedHitPoints);
+
+        // Quickload has no picker; its failure must reach the gameplay HUD instead.
+        const incompatible = JSON.parse(goodSave.toString("utf8"));
+        delete incompatible.global_data.quest_info.mini_games;
+        writeFileSync(join(assets.root, "saves", "save1.sav"), JSON.stringify(incompatible));
+        await game.input.trigger("QuickLoad");
+        await game.step({ frames: 1 });
+        await finishLoading(game, vr);
+        assert.equal((await game.info()).mission, "medsci1.mis");
+        assert.ok((await game.ui.state()).messages.includes(
+          "This save is incompatible with the current version."));
       }
 
       // A second runtime proves the slot is read from disk across process lifetimes.

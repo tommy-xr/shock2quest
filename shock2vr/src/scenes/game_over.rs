@@ -165,6 +165,7 @@ pub struct GameOverScene {
     /// The save offered by "Load", resolved once when the screen opens so the
     /// label and the click agree.
     save: Option<SaveFile>,
+    load_failure: Option<std::io::ErrorKind>,
     menu: FrontendMenu<GameOverAction>,
 }
 
@@ -179,6 +180,7 @@ impl GameOverScene {
             world,
             scene_name: "game_over".to_owned(),
             save: latest_save(),
+            load_failure: None,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
         }
     }
@@ -200,6 +202,9 @@ impl GameOverScene {
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
         let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
+        if let Some(error) = self.load_failure {
+            super::load_game::draw_load_failure(&mut canvas, error);
+        }
 
         canvas.text_native(
             rects[HEADER_RECT_INDEX],
@@ -344,6 +349,10 @@ impl GameScene for GameOverScene {
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
         self.menu.stop_sfx(audio_context);
+    }
+
+    fn on_load_failed(&mut self, error: std::io::ErrorKind) {
+        self.load_failure = Some(error);
     }
 
     fn wants_pointer(&self) -> bool {
