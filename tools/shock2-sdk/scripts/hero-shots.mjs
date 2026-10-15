@@ -415,6 +415,8 @@ async function recordClip(game, shot, subjectId, held) {
  * switches it on; throws if it is not on afterwards. */
 async function installAccessory(game, id, accessory) {
   await installWeaponUpgrade(game, accessory);
+  // Let the "Installed ..." HUD line (5 s) expire before the still.
+  await game.step({ frames: 310 });
   const saved = (await game.entities.detail(id)).properties.find((p) => p.name === "WeaponUpgrades");
   const enabled = saved && JSON.parse(saved.value)[`${accessory.toLowerCase()}_enabled`];
   if (!enabled) throw new Error(`entity ${id}: ${accessory} not installed and on`);

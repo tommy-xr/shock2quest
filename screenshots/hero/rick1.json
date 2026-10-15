@@ -1,14 +1,12 @@
 {
   "mission": "rick1.mis",
   "presentation": "Vr",
-  "revision": "13512633c7ac0ec424d206fa588abadfbce882a9",
-  "runtimeSha256": "a759a8ec3b03e128ecb2afa79d991d98f5a1ddddeface1623fc8c7fcca617703",
+  "revision": "156ff8a120e78089b79171a903a1c5a5cabed301",
+  "runtimeSha256": "5eba0821166dab786d32d8b66f88c65d46dc309db6d705529f9816dbcb398456",
   "assetRoot": "/Users/bryphe/ss2-25th",
   "devParams": {
     "cheat": 1,
     "fov_override_deg": 85,
-    "ambient_light_intensity": 1.6,
-    "level_light_intensity": 2,
     "held_light_floor": 1
   },
   "stats": {
@@ -32,6 +30,7 @@
   },
   "pistol": {
     "holsterSlot": 0,
+    "accessory": "Laser",
     "pulls": 5,
     "rounds": [
       12,
@@ -46,8 +45,8 @@
       "ricklad6"
     ],
     "strokes": 3,
-    "startEye": 0.8743272000000002,
-    "endEye": 3.2743464
+    "startEye": 0.8743267000000001,
+    "endEye": 3.2743459
   },
   "video": {
     "file": "rick1.mp4",
@@ -63,6 +62,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -76,6 +77,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -89,6 +92,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -102,6 +107,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -115,6 +122,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -128,6 +137,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -141,6 +152,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -154,6 +167,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -167,6 +182,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -180,6 +197,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -193,6 +212,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -206,6 +227,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -219,6 +242,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -232,6 +257,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -245,6 +272,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -258,6 +287,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -271,6 +302,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -284,6 +317,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -297,6 +332,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -310,6 +347,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -323,6 +362,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -336,6 +377,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -349,6 +392,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -362,6 +407,8 @@
       "grips": [
         "right"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -375,6 +422,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -388,6 +437,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -401,6 +452,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -414,6 +467,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -427,6 +482,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -440,6 +497,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -453,6 +512,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -466,6 +527,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -479,6 +542,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -492,6 +557,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -505,6 +572,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -518,6 +587,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -531,6 +602,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -544,6 +617,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -557,6 +632,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -570,6 +647,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -583,6 +662,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -596,6 +677,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -609,6 +692,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -622,6 +707,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -635,6 +722,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -648,6 +737,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -661,6 +752,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -674,6 +767,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -687,6 +782,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -700,6 +797,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -713,6 +812,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -726,6 +827,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -739,6 +842,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -752,6 +857,8 @@
       "grips": [
         "left"
       ],
+      "beam": false,
+      "dot": false,
       "holding": null,
       "health": 35,
       "assassin": {
@@ -765,7 +872,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": false,
+      "dot": false,
+      "holding": null,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -778,7 +887,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -791,7 +902,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -804,7 +917,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -817,7 +932,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -830,7 +947,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -843,7 +962,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -856,7 +977,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -869,7 +992,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -878,15 +1003,17 @@
     },
     {
       "frame": 252,
-      "phase": "fire",
+      "phase": "aim",
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
-        "hp": 12
+        "hp": 15
       }
     },
     {
@@ -895,10 +1022,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.024346,
+        "y": 2.0243454,
         "hp": 12
       }
     },
@@ -908,10 +1037,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.024346,
+        "y": 2.0243454,
         "hp": 12
       }
     },
@@ -921,10 +1052,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243464,
+        "y": 2.0243454,
         "hp": 12
       }
     },
@@ -934,10 +1067,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243464,
+        "y": 2.0243454,
         "hp": 12
       }
     },
@@ -947,10 +1082,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243437,
+        "y": 2.0243444,
         "hp": 12
       }
     },
@@ -960,7 +1097,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -973,7 +1112,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -986,7 +1127,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -999,11 +1142,13 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.024345,
-        "hp": 9
+        "hp": 12
       }
     },
     {
@@ -1012,7 +1157,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1025,7 +1172,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1038,7 +1187,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1051,7 +1202,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1064,7 +1217,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1077,7 +1232,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1090,7 +1247,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1103,7 +1262,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1116,7 +1277,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1129,7 +1292,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1142,7 +1307,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1155,7 +1322,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1168,7 +1337,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1181,7 +1352,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1194,7 +1367,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1207,7 +1382,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1220,7 +1397,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1233,11 +1412,13 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
-        "hp": 2
+        "hp": 4
       }
     },
     {
@@ -1246,11 +1427,13 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
-        "hp": 2
+        "hp": 1
       }
     },
     {
@@ -1259,11 +1442,13 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
-        "hp": 2
+        "hp": 1
       }
     },
     {
@@ -1272,11 +1457,13 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
-        "hp": 2
+        "hp": 1
       }
     },
     {
@@ -1285,11 +1472,13 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
-        "hp": 2
+        "hp": 1
       }
     },
     {
@@ -1298,11 +1487,13 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
-        "hp": 2
+        "hp": 1
       }
     },
     {
@@ -1311,11 +1502,13 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
-        "hp": 2
+        "hp": 1
       }
     },
     {
@@ -1324,11 +1517,13 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
-        "hp": 2
+        "hp": 1
       }
     },
     {
@@ -1337,11 +1532,13 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
-        "hp": 2
+        "hp": 1
       }
     },
     {
@@ -1350,11 +1547,13 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
-        "hp": 0
+        "hp": 1
       }
     },
     {
@@ -1363,7 +1562,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1376,7 +1577,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1389,7 +1592,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1402,7 +1607,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1415,7 +1622,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1428,7 +1637,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1441,7 +1652,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1454,7 +1667,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1467,7 +1682,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1480,7 +1697,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1493,7 +1712,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1506,7 +1727,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1519,7 +1742,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1532,7 +1757,9 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1545,10 +1772,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.024363,
         "hp": 0
       }
     },
@@ -1558,10 +1787,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.024351,
         "hp": 0
       }
     },
@@ -1571,10 +1802,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.0244527,
         "hp": 0
       }
     },
@@ -1584,10 +1817,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.024383,
         "hp": 0
       }
     },
@@ -1597,10 +1832,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.0243688,
         "hp": 0
       }
     },
@@ -1610,10 +1847,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.0243635,
         "hp": 0
       }
     },
@@ -1623,10 +1862,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.02436,
         "hp": 0
       }
     },
@@ -1636,10 +1877,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.0243583,
         "hp": 0
       }
     },
@@ -1649,10 +1892,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.0243583,
         "hp": 0
       }
     },
@@ -1662,10 +1907,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.024355,
         "hp": 0
       }
     },
@@ -1675,10 +1922,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.0243545,
         "hp": 0
       }
     },
@@ -1688,10 +1937,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.0243545,
         "hp": 0
       }
     },
@@ -1701,10 +1952,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.0243545,
         "hp": 0
       }
     },
@@ -1714,10 +1967,12 @@
       "grips": [
         "left"
       ],
-      "holding": 601,
+      "beam": true,
+      "dot": true,
+      "holding": 961,
       "health": 35,
       "assassin": {
-        "y": 2.0243452,
+        "y": 2.0243545,
         "hp": 0
       }
     }

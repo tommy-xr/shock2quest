@@ -37,8 +37,9 @@ const PRE_WOUND = 45;
 const STATS = { skills: { standard_weapons: 3 } };
 // The README/website clips' field of view (hero-shots.mjs).
 const FOV_DEG = 85;
-// Engine lighting controls only; geometry and materials stay production.
-const LIGHTING = { ambient_light_intensity: 1.6, level_light_intensity: 2.0, held_light_floor: 1.0 };
+// Level lighting stays production - a brighter deck washes out the laser
+// beam - but held items are lit evenly so the pistol reads.
+const LIGHTING = { held_light_floor: 1.0 };
 // Horizontal distance from the ladder's centre line to the climber's pawn.
 const CLIMB_STANDOFF = 0.68;
 // Climbing, the tracked head leans this far toward the ladder (pawn-local
@@ -79,8 +80,9 @@ const SETTLE_FRAMES = 8;
 const LOOK_RIGHT = 0.4;
 // Frames held on the death crumple before the clip ends.
 const DEATH_HOLD_FRAMES = 110;
-// Pistol at aim, from the eye: x right, y up, -z toward the target.
-const AIM_RIGHT = [0.2, -0.27, -0.5];
+// Pistol at aim, from the eye: x right, y up, -z toward the target. Low and
+// wide of the eye, so the laser beam crosses the view rather than along it.
+const AIM_RIGHT = [0.26, -0.36, -0.45];
 // Trigger pulls after the pistol settles on target (seconds); irregular, as
 // a person fires, but past the pistol's refire delay (~0.5 s; a pull sooner
 // does nothing). The clip stops pulling once the assassin is down.
@@ -452,8 +454,9 @@ async function take(game, framesDir) {
   assert.equal(roundsBefore - roundsAfter, pulls, "every trigger pull must fire a round");
   assert.ok(samples.filter((s) => s.phase !== "climb").every((s) => s.grips.includes("left")), "the left hand must hold the ladder throughout");
   assert.ok(samples.every((s) => s.health === samples[0].health), "no damage during the clip");
-  const firing = samples.filter((s) => s.phase === "fire");
-  assert.ok(firing.every((s) => s.beam && s.dot), "the laser beam and dot must show while firing");
+  // From the settled aim (the poster) through the death hold.
+  const firstFire = samples.findIndex((s) => s.phase === "fire");
+  assert.ok(samples.slice(firstFire - 1).every((s) => s.beam && s.dot), "the laser beam and dot must show while firing");
   // AI varies: a take where the assassin leaves its deck (it can drop into
   // the shaft) frames the fight at the player's feet.
   assert.ok(samples.every((s) => !s.assassin || s.assassin.hp <= 0 || Math.abs(s.assassin.y - deckY) < 0.6),
@@ -476,8 +479,9 @@ async function take(game, framesDir) {
     // near the other clips' size.
     "-vf", "scale=400:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
     resolve(out, `${clip}.gif`)]);
-  // Poster: the first shot, muzzle flash on the assassin.
-  const poster = samples.find((s) => s.phase === "fire");
+  // Poster: settled on the assassin just before the first shot, whose muzzle
+  // flash would hide the laser.
+  const poster = samples[firstFire - 1];
   await copyFile(poster.image, resolve(out, `${clip}.png`));
   await writeFile(resolve(out, `${clip}.json`), JSON.stringify({
     mission: MISSION, presentation: "Vr", revision: git("rev-parse", "HEAD"),
