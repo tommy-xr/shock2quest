@@ -1,8 +1,8 @@
 {
   "mission": "rick1.mis",
   "presentation": "Vr",
-  "revision": "156ff8a120e78089b79171a903a1c5a5cabed301",
-  "runtimeSha256": "5eba0821166dab786d32d8b66f88c65d46dc309db6d705529f9816dbcb398456",
+  "revision": "42d3e41eec2e3df52d7587dcc747ac422860532f",
+  "runtimeSha256": "61d4eb592da87a9981822592b57a7b8b44d373ecea19f4c5ab4ea9853621f476",
   "assetRoot": "/Users/bryphe/ss2-25th",
   "devParams": {
     "cheat": 1,
@@ -889,7 +889,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -904,7 +904,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -919,7 +919,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -934,7 +934,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -949,7 +949,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -964,7 +964,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -979,7 +979,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -994,7 +994,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -1009,7 +1009,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243456,
@@ -1024,7 +1024,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243454,
@@ -1039,7 +1039,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243454,
@@ -1054,7 +1054,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243454,
@@ -1069,7 +1069,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243454,
@@ -1084,7 +1084,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243444,
@@ -1099,7 +1099,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1114,7 +1114,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1129,7 +1129,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1144,7 +1144,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1159,7 +1159,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1174,7 +1174,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1189,7 +1189,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1204,7 +1204,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1219,7 +1219,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1234,7 +1234,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1249,7 +1249,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.024345,
@@ -1264,7 +1264,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1279,7 +1279,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1294,7 +1294,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1309,7 +1309,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1324,7 +1324,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1339,7 +1339,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1354,7 +1354,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1369,7 +1369,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1384,7 +1384,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1399,7 +1399,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1414,7 +1414,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1429,7 +1429,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1444,7 +1444,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1459,7 +1459,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1474,7 +1474,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1489,7 +1489,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1504,7 +1504,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1519,7 +1519,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1534,7 +1534,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1549,7 +1549,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1564,7 +1564,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1579,7 +1579,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1594,7 +1594,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1609,7 +1609,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1624,7 +1624,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1639,7 +1639,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1654,7 +1654,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1669,7 +1669,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1684,7 +1684,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1699,7 +1699,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1714,7 +1714,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1729,7 +1729,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1744,7 +1744,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1759,7 +1759,7 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
         "y": 2.0243452,
@@ -1774,10 +1774,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.024363,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1789,10 +1789,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.024351,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1804,10 +1804,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.0244527,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1819,10 +1819,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.024383,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1834,10 +1834,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.0243688,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1849,10 +1849,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.0243635,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1864,10 +1864,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.02436,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1879,10 +1879,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.0243583,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1894,10 +1894,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.0243583,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1909,10 +1909,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.024355,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1924,10 +1924,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.0243545,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1939,10 +1939,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.0243545,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1954,10 +1954,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.0243545,
+        "y": 2.0243452,
         "hp": 0
       }
     },
@@ -1969,10 +1969,10 @@
       ],
       "beam": true,
       "dot": true,
-      "holding": 961,
+      "holding": 415,
       "health": 35,
       "assassin": {
-        "y": 2.0243545,
+        "y": 2.0243452,
         "hp": 0
       }
     }
