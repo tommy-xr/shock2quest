@@ -130,6 +130,8 @@ const SHOTS = [
       spot: [-40, -4.4, 25.3],
       terror: -3156,
       pyro: -1144,
+      // The Stun Cloud a stunned creature wears.
+      stunCloud: -608,
       // Carousel flicks from Cryokinesis, the amps' starting power: up two
       // tiers to tier 3's first power, then left, wrapping to its last -
       // Hypnogenesis, then Pyrokinesis.
@@ -368,15 +370,15 @@ async function captureShot(shot) {
         .filter((param) => ["ambient_light_intensity", "held_light_floor"].includes(param.key))
         .map(({ key, value, default: defaultValue }) => ({ key, value, default: defaultValue })),
       player: shot.player,
-      subject: shot.subject ?? `template ${shot.spawnMonster ?? shot.psi.monster}`,
+      subject: shot.subject ?? `template ${shot.spawnMonster ?? shot.psi?.monster}`,
       loadout: shot.loadout,
       accessory: shot.accessory,
       stats: shot.stats,
       fovDeg: Number(values.fov),
     };
     // A psi shot takes its still mid-clip, with the carousel open.
-    if (!shot.psi) provenance.still = await takeStill(game, shot.name);
     if (shot.psi) Object.assign(provenance, await recordPsi(game, shot, held));
+    else provenance.still = await takeStill(game, shot.name);
     if (shot.clip) provenance.clip = await recordClip(game, shot, subject.id, held);
     if (shot.melee) provenance.melee = await recordMelee(game, shot, subject.id, held);
     if (shot.reload) provenance.reload = await recordReload(game, shot, subject.id, held);
@@ -958,19 +960,16 @@ async function recordPsi(game, shot, held) {
   const sink = await frameSink(game, shot.name);
   let t = 0;
   // The left amp rises while it browses, so its carousel is in view, and
-  // drops once the confirm closes it (frames: hold, release, flicks, tap).
-  const confirmed = (36 + 4 + 14 * psi.leftFlicks.length + 3) / 60;
-  const left = [
-    { t: 0, value: shot.hands.left },
-    { t: 0.35, value: psi.browse },
-    { t: confirmed + 0.05, value: psi.browse },
-    { t: confirmed + 0.3, value: shot.hands.left },
-  ];
+  // drops once the confirm closes it, at `dropAt`.
+  let dropAt = Infinity;
+  const leftHand = (t) => t < dropAt
+    ? sampleTrack([{ t: 0, value: shot.hands.left }, { t: 0.35, value: psi.browse }], t)
+    : sampleTrack([{ t: dropAt, value: psi.browse }, { t: dropAt + 0.25, value: shot.hands.left }], t);
   let point;
   const onCamera = async (frames) => {
     for (let f = 0; f < frames; f++, t += 1 / 60) {
       point = (await aimPoints(game, target)) ?? point;
-      await trackSubject(game, point, t, { left: sampleTrack(left, t), right: shot.hands.right });
+      await trackSubject(game, point, t, { left: leftHand(t), right: shot.hands.right });
       await sink.step();
     }
   };
@@ -979,6 +978,7 @@ async function recordPsi(game, shot, held) {
     await browse("left", psi.leftFlicks, onCamera);
     const still = await takeStill(game, shot.name);
     await tap("left", onCamera);
+    dropAt = t;
     assert.deepEqual(await pair("left"), { current: psi.terror, alternate: start }, `${shot.name}: left amp must select Hypnogenesis`);
 
     // 2. Tap the right amp over to Pyrokinesis.
@@ -991,8 +991,9 @@ async function recordPsi(game, shot, held) {
     assert.equal(await cast("left", onCamera), 3, `${shot.name}: hypnogenesis must cast`);
     for (let f = 0; f < 60 && (await prop(target, "AIBehavior")) !== "Stunned"; f++) await onCamera(1);
     assert.equal(await prop(target, "AIBehavior"), "Stunned", `${shot.name}: the hybrid must be stunned`);
-    assert.equal((await game.entities.byTemplate(-608)).length, 1, `${shot.name}: the stun cloud must show`);
-    await onCamera(30);
+    assert.equal((await game.entities.byTemplate(psi.stunCloud)).length, 1, `${shot.name}: the stun cloud must show`);
+    // Hold on the stunned, reeling hybrid.
+    await onCamera(50);
 
     // 4. Burn it.
     const before = await hp(target);
@@ -1000,8 +1001,8 @@ async function recordPsi(game, shot, held) {
     for (let f = 0; f < 60 && (await hp(target)) >= before; f++) await onCamera(1);
     const after = await hp(target);
     assert.ok(after < before, `${shot.name}: pyrokinesis must hit the hybrid (${before} -> ${after})`);
-    // Let it burn.
-    await onCamera(45);
+    // Hold through its death.
+    await onCamera(80);
     return { still, clip: sink.finish(), hp: [before, after] };
   } finally {
     await sink.dispose();

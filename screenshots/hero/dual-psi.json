@@ -1,7 +1,7 @@
 {
-  "revision": "78683e545c740fdb237b62ae0b074885261cb506",
-  "dirty": false,
-  "capturedAt": "2026-10-15T18:12:07.035Z",
+  "revision": "e20a59f45d95873bb51fbf4f2b03b96eeff4977f",
+  "dirty": true,
+  "capturedAt": "2026-10-15T18:19:18.928Z",
   "mission": "medsci1.mis",
   "difficulty": "easy",
   "settings": {
@@ -49,7 +49,7 @@
       "dual-psi.gif",
       "dual-psi.mp4"
     ],
-    "frames": 55,
+    "frames": 69,
     "fps": 15
   },
   "hp": [
