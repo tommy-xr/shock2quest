@@ -1,5 +1,6 @@
 mod boot;
 mod kabacon;
+mod overworld;
 mod pig_stacker;
 mod ping;
 mod swinekeeper;
@@ -28,6 +29,7 @@ pub struct GamePigGuiState {
 
 #[derive(Clone, Debug)]
 enum Game {
+    OverWorld(overworld::Adventure),
     Ping(ping::Ping),
     PigStacker(pig_stacker::PigStacker),
     KaBacon(kabacon::KaBacon),
@@ -37,6 +39,8 @@ enum Game {
 
 #[derive(Clone)]
 pub enum GamePigGuiMsg {
+    SelectOverWorld,
+    OverWorld(overworld::Message),
     SelectPing,
     SelectPigStacker,
     StackerPrimary,
@@ -54,7 +58,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
     fn get_components(
         &self,
         _cursor: &Option<GuiCursor>,
-        _entity_id: EntityId,
+        entity_id: EntityId,
         world: &World,
         state: &GamePigGuiState,
     ) -> Vec<GuiComponent<GamePigGuiMsg>> {
@@ -75,6 +79,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         }
         if let Some(game) = &state.game {
             components.extend(match game {
+                Game::OverWorld(game) => game.components(world, entity_id),
                 Game::Ping(game) => game.components(world),
                 Game::PigStacker(game) => game.components(world),
                 Game::KaBacon(game) => game.components(world),
@@ -82,7 +87,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 Game::Swinekeeper(game) => game.components(world),
             });
             let board = match game {
-                Game::Ping(_) | Game::KaBacon(_) | Game::PigStacker(_) => None,
+                Game::OverWorld(_) | Game::Ping(_) | Game::KaBacon(_) | Game::PigStacker(_) => None,
                 Game::TicTacTriop(_) => Some((22.0, 91.0, 40.0, 3)),
                 Game::Swinekeeper(_) => Some((14.0, 52.0, 23.0, 6)),
             };
@@ -115,6 +120,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             let selection = match index {
                 2 => Some(GamePigGuiMsg::SelectPing),
                 3 => Some(GamePigGuiMsg::SelectSwinekeeper),
+                4 => Some(GamePigGuiMsg::SelectOverWorld),
                 5 => Some(GamePigGuiMsg::SelectKaBacon),
                 8 => Some(GamePigGuiMsg::SelectTicTacTriop),
                 10 => Some(GamePigGuiMsg::SelectPigStacker),
@@ -139,13 +145,16 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
 
     fn pointer_secondary(
         &self,
-        _entity: EntityId,
+        entity: EntityId,
         world: &World,
         state: &mut GamePigGuiState,
         position: cgmath::Point2<f32>,
     ) -> Effect {
         if state.boot.is_some() {
             return Effect::NoEffect;
+        }
+        if let Some(Game::OverWorld(game)) = &state.game {
+            return game.inspect(entity, world, position);
         }
         if let Some(Game::PigStacker(game)) = &mut state.game {
             game.hard_drop();
@@ -181,6 +190,16 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         if state.boot.is_some() {
             return Effect::NoEffect;
         }
+        if let Some(Game::OverWorld(game)) = &mut state.game {
+            if matches!(control, HandheldControl::Primary) && game.wants_back() {
+                state.game = None;
+                state.selection = 0;
+                return Effect::NoEffect;
+            }
+            if !matches!(control, HandheldControl::Back) {
+                return game.controller(entity, world, control);
+            }
+        }
         let message = match control {
             HandheldControl::Focus => return Effect::NoEffect,
             HandheldControl::Stick { x, .. } => {
@@ -202,7 +221,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             HandheldControl::Navigate { x, y } => {
                 let (width, height) = match &state.game {
-                    Some(Game::Ping(_) | Game::KaBacon(_) | Game::PigStacker(_)) => {
+                    Some(
+                        Game::OverWorld(_) | Game::Ping(_) | Game::KaBacon(_) | Game::PigStacker(_),
+                    ) => {
                         return Effect::NoEffect;
                     }
                     Some(Game::TicTacTriop(_)) => (3, 3),
@@ -216,7 +237,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 return Effect::NoEffect;
             }
             HandheldControl::Primary => match &state.game {
-                Some(Game::Ping(_)) => None,
+                Some(Game::OverWorld(_) | Game::Ping(_)) => None,
                 Some(Game::PigStacker(_)) => Some(GamePigGuiMsg::StackerPrimary),
                 Some(Game::KaBacon(_)) => Some(GamePigGuiMsg::BaconActivate),
                 Some(Game::TicTacTriop(game)) => Some(if game.finished() {
@@ -232,6 +253,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 None => match installed_games(world).get(state.selection) {
                     Some(2) => Some(GamePigGuiMsg::SelectPing),
                     Some(3) => Some(GamePigGuiMsg::SelectSwinekeeper),
+                    Some(4) => Some(GamePigGuiMsg::SelectOverWorld),
                     Some(5) => Some(GamePigGuiMsg::SelectKaBacon),
                     Some(8) => Some(GamePigGuiMsg::SelectTicTacTriop),
                     Some(10) => Some(GamePigGuiMsg::SelectPigStacker),
@@ -275,6 +297,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             state.boot = None;
         }
         let Some(boot) = &mut state.boot else {
+            if let Some(Game::OverWorld(game)) = &mut state.game {
+                return game.advance(entity, world, time);
+            }
             if let Some(Game::Ping(game)) = &mut state.game {
                 let finished = game.advance(time, cursor, state.controller_active);
                 if finished {
@@ -320,6 +345,31 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             return (state, Effect::NoEffect);
         }
         match msg {
+            GamePigGuiMsg::SelectOverWorld => {
+                if world
+                    .borrow::<UniqueView<QuestInfo>>()
+                    .is_ok_and(|q| q.mini_games & (1 << 4) != 0)
+                {
+                    state.game = Some(Game::OverWorld(overworld::Adventure::default()));
+                    return (
+                        state,
+                        Effect::UpdateOverWorld {
+                            entity_id,
+                            command: crate::overworld_game::Command::Start,
+                        },
+                    );
+                }
+            }
+            GamePigGuiMsg::OverWorld(overworld::Message::Back) => {
+                state.game = None;
+                state.selection = 0;
+            }
+            GamePigGuiMsg::OverWorld(message) => {
+                if let Some(Game::OverWorld(game)) = &mut state.game {
+                    let effect = game.input(entity_id, world, *message);
+                    return (state, effect);
+                }
+            }
             GamePigGuiMsg::SelectPigStacker => {
                 if world
                     .borrow::<UniqueView<QuestInfo>>()
@@ -392,6 +442,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             GamePigGuiMsg::Restart => {
                 state.game = state.game.map(|game| match game {
+                    Game::OverWorld(game) => Game::OverWorld(game),
                     Game::Ping(game) => Game::Ping(game),
                     Game::PigStacker(game) => Game::PigStacker(game),
                     Game::KaBacon(game) => Game::KaBacon(game),
