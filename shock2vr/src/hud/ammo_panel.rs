@@ -463,7 +463,7 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
             VAlign::Middle,
         );
         if let Some(icon) = &readout.ammo_icon {
-            canvas.image(at(origin, if compact { COMPACT_ICON } else { ICON }), icon);
+            canvas.fitted_object_icon(at(origin, if compact { COMPACT_ICON } else { ICON }), icon);
         }
         if let Some(badge) = readout.gun_condition {
             canvas.image(at(origin, CONDITION), badge);
@@ -774,6 +774,26 @@ mod tests {
             build_readout_canvas(&gun(12, Some("STD_I.PCX"), Some("std"))).element_count(),
             3
         );
+    }
+
+    #[test]
+    fn ammo_art_uses_the_object_icon_namespace_in_both_layouts() {
+        for show_buttons in [false, true] {
+            let readout = AmmoReadout {
+                show_buttons,
+                ..gun(100, Some("power.pcx"), None)
+            };
+            assert!(
+                build_readout_canvas(&readout)
+                    .elements()
+                    .iter()
+                    .any(|element| {
+                        matches!(element, crate::ui::UiElement::Image {
+                    texture, kind: crate::ui::ImageKind::ObjectIconFit, ..
+                } if texture == "power.pcx")
+                    })
+            );
+        }
     }
 
     #[test]

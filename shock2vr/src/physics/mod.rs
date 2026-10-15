@@ -108,10 +108,50 @@ struct MovingTerrainContactHooks<'a> {
 
 impl PhysicsHooks for MovingTerrainContactHooks<'_> {
     fn filter_contact_pair(&self, context: &PairFilterContext) -> Option<SolverFlags> {
-        let a = context.colliders[context.collider1].user_data;
-        let b = context.colliders[context.collider2].user_data;
-        (!self.ignored_pairs.contains(&(a.min(b), a.max(b))))
-            .then_some(SolverFlags::COMPUTE_IMPULSES)
+        let a = &context.colliders[context.collider1];
+        let b = &context.colliders[context.collider2];
+        if self
+            .ignored_pairs
+            .contains(&(a.user_data.min(b.user_data), a.user_data.max(b.user_data)))
+        {
+            return None;
+        }
+        // Soft CCD predicts contacts along the closest-point normal, which
+        // can hit a corner a bolt actually clears. Confirm both collider paths.
+        for (projectile, other) in [(a, b), (b, a)] {
+            let Some(body) = projectile
+                .parent()
+                .and_then(|handle| context.bodies.get(handle))
+            else {
+                continue;
+            };
+            if body.soft_ccd_prediction() == 0.0 {
+                continue;
+            }
+            let velocity = body.velocity_at_point(&Point::from(*projectile.translation()));
+            let other_velocity = other
+                .parent()
+                .map(|handle| *context.bodies[handle].linvel())
+                .unwrap_or_default();
+            if matches!(
+                rapier3d::parry::query::cast_shapes(
+                    projectile.position(),
+                    &velocity,
+                    projectile.shape(),
+                    other.position(),
+                    &other_velocity,
+                    other.shape(),
+                    rapier3d::parry::query::ShapeCastOptions {
+                        max_time_of_impact: self.dt,
+                        ..Default::default()
+                    },
+                ),
+                Ok(None)
+            ) {
+                return None;
+            }
+        }
+        Some(SolverFlags::COMPUTE_IMPULSES)
     }
 
     fn modify_solver_contacts(&self, context: &mut ContactModificationContext) {
@@ -3909,7 +3949,7 @@ impl PhysicsWorld {
 
         collider.user_data = entity_id.inner() as u128;
         collider.set_collision_groups(InteractionGroups {
-            memberships: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            memberships: InternalCollisionGroups::WORLD.bits.into(),
             filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
             test_mode: Default::default(),
         });
@@ -5813,6 +5853,36 @@ impl PhysicsWorld {
         self.collider_set
             .insert_with_parent(collider, *handle, &mut self.rigid_body_set);
         *handle
+    }
+
+    /// Keep the authored sphere for object hits, but use a tiny sphere for
+    /// terrain. Predictive contacts keep that point from tunnelling through walls.
+    pub(crate) fn set_projectile_point_vs_terrain(&mut self, body: RigidBodyHandle) {
+        let Some(&handle) = self.rigid_body_set[body].colliders().first() else {
+            return;
+        };
+        let collider = &mut self.collider_set[handle];
+        if collider.shape().as_ball().is_none() {
+            return;
+        }
+        collider.set_active_hooks(collider.active_hooks() | ActiveHooks::FILTER_CONTACT_PAIRS);
+        let world = InternalCollisionGroups::WORLD.bits;
+        let mut point = collider.clone();
+        point.set_shape(SharedShape::ball(0.005));
+        point.set_density(0.0);
+        for (target, mask) in [(&mut *collider, !world), (&mut point, world)] {
+            let mut collision = target.collision_groups();
+            collision.filter &= Group::from_bits_retain(mask);
+            target.set_collision_groups(collision);
+            let mut solver = target.solver_groups();
+            solver.filter &= Group::from_bits_retain(mask);
+            target.set_solver_groups(solver);
+        }
+        self.collider_set
+            .insert_with_parent(point, body, &mut self.rigid_body_set);
+        // Soft CCD honors contact-pair exemptions; hard CCD bypasses their
+        // hook and can pin a shot against its own launcher or another shot.
+        self.rigid_body_set[body].set_soft_ccd_prediction(10.0);
     }
 
     pub fn add_kinematic(
@@ -8419,9 +8489,11 @@ impl PhysicsWorld {
         direction: Vector3<f32>,
         distance: f32,
         radius: f32,
+        point_vs_terrain: bool,
         can_hit: &dyn Fn(EntityId) -> bool,
     ) -> f32 {
-        self.sphere_clearance(
+        let groups = InternalCollisionGroups::ALL_COLLIDABLE & !InternalCollisionGroups::PLAYER;
+        let clearance = self.sphere_clearance(
             origin,
             direction,
             distance,
@@ -8429,7 +8501,26 @@ impl PhysicsWorld {
             can_hit,
             false,
             InternalCollisionGroups::ALL,
-        )
+            if point_vs_terrain {
+                groups & !InternalCollisionGroups::WORLD
+            } else {
+                groups
+            },
+        );
+        if point_vs_terrain {
+            clearance.min(self.sphere_clearance(
+                origin,
+                direction,
+                distance,
+                0.005,
+                can_hit,
+                false,
+                InternalCollisionGroups::ALL,
+                InternalCollisionGroups::WORLD,
+            ))
+        } else {
+            clearance
+        }
     }
 
     /// Camera clearance includes the near plane. Starting in geometry must
@@ -8449,6 +8540,7 @@ impl PhysicsWorld {
             can_hit,
             true,
             InternalCollisionGroups::PLAYER,
+            InternalCollisionGroups::ALL_COLLIDABLE & !InternalCollisionGroups::PLAYER,
         )
     }
 
@@ -8461,11 +8553,11 @@ impl PhysicsWorld {
         can_hit: &dyn Fn(EntityId) -> bool,
         stop_at_penetration: bool,
         memberships: InternalCollisionGroups,
+        groups: InternalCollisionGroups,
     ) -> f32 {
         let predicate = |_: ColliderHandle, collider: &Collider| {
             EntityId::from_inner(collider.user_data as u64).is_none_or(can_hit)
         };
-        let groups = InternalCollisionGroups::ALL_COLLIDABLE & !InternalCollisionGroups::PLAYER;
         let filter = QueryFilter::default()
             .exclude_sensors()
             .predicate(&predicate)
@@ -11104,6 +11196,104 @@ mod tests {
             end.x > -4.5 && end.y > 1.5,
             "the mantle must leave the player standing beyond the upper lip, ended {end:?}"
         );
+    }
+
+    #[test]
+    fn point_terrain_projectile_keeps_exact_object_sphere_hits() {
+        for (offset, should_hit) in [(0.7, false), (0.5, true)] {
+            let mut world = PhysicsWorld::new();
+            let shot = EntityId::from_inner(7101).unwrap();
+            let target = EntityId::from_inner(7102).unwrap();
+            let handle = world.add_dynamic(
+                shot,
+                vec3(0.0, 5.0, 0.0),
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                PhysicsShape::Sphere(0.4),
+                CollisionGroup::entity(),
+                false,
+                DynamicPhysicsOptions {
+                    gravity_scale: 0.0,
+                    ..Default::default()
+                },
+            );
+            world.set_projectile_point_vs_terrain(handle);
+            world.add_kinematic_shape(
+                target,
+                vec3(1.0, 5.0 + offset, offset),
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                PhysicsShape::Sphere(0.4),
+                CollisionGroup::entity(),
+                false,
+            );
+            world.set_velocity(shot, vec3(60.0, 0.0, 0.0));
+            let mut player =
+                world.create_player(vec3(30.0, 5.0, 0.0), EntityId::from_inner(7103).unwrap());
+            let mut hit = false;
+            for _ in 0..3 {
+                let (_, events) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+                hit |= events.iter().any(|event| {
+                    matches!(event,
+                        CollisionEvent::CollisionStarted { entity1_id, entity2_id, .. }
+                        if (*entity1_id == shot && *entity2_id == target)
+                            || (*entity1_id == target && *entity2_id == shot)
+                    )
+                });
+            }
+            assert_eq!(hit, should_hit, "diagonal sphere offset={offset}");
+        }
+    }
+
+    #[test]
+    fn point_terrain_ccd_preserves_collision_pair_exemptions() {
+        for speed in [3.0, 120.0] {
+            let mut world = PhysicsWorld::new();
+            let shot = EntityId::from_inner(7101).unwrap();
+            let shield = EntityId::from_inner(7102).unwrap();
+            let handle = world.add_dynamic(
+                shot,
+                vec3(0.0, 5.0, 0.0),
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                PhysicsShape::Sphere(0.1),
+                CollisionGroup::entity(),
+                false,
+                DynamicPhysicsOptions {
+                    gravity_scale: 0.0,
+                    restitution: 0.0,
+                    friction: 0.0,
+                },
+            );
+            world.set_projectile_point_vs_terrain(handle);
+            world.add_kinematic(
+                shield,
+                vec3(1.0, 5.0, 0.0),
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                vec3(0.2, 5.0, 5.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            world.ignore_collision_pairs(shot, &[shield]);
+            world.rigid_body_set[handle].set_linvel(vector![speed, 0.0, 0.0], true);
+            let mut player =
+                world.create_player(vec3(30.0, 5.0, 0.0), EntityId::from_inner(7103).unwrap());
+            for _ in 0..120 {
+                let (_, events) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+                assert!(
+                    !events
+                        .iter()
+                        .any(|event| matches!(event, CollisionEvent::CollisionStarted { .. })),
+                    "ignored pair emitted {events:?}"
+                );
+            }
+            let x = world.rigid_body_set[handle].translation().x;
+            assert!(
+                (x - speed * 2.0).abs() < 0.01,
+                "exempt shield slowed shot: speed={speed}, x={x}"
+            );
+        }
     }
 
     #[test]

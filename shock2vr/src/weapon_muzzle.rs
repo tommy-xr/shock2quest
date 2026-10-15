@@ -131,6 +131,7 @@ pub(crate) fn clamp_projectile_spawn(
     origin: Point3<f32>,
     requested: Point3<f32>,
     radius: f32,
+    point_vs_terrain: bool,
     can_hit: &dyn Fn(EntityId) -> bool,
 ) -> Point3<f32> {
     let delta = requested - origin;
@@ -148,6 +149,7 @@ pub(crate) fn clamp_projectile_spawn(
                 direction,
                 distance,
                 radius.max(0.0001),
+                point_vs_terrain,
                 can_hit,
             )
 }
@@ -200,6 +202,34 @@ mod tests {
     }
 
     #[test]
+    fn terrain_point_clearance_does_not_shrink_object_clearance() {
+        for terrain in [false, true] {
+            let mut physics = PhysicsWorld::new();
+            physics.add_kinematic(
+                EntityId::from_inner(20).unwrap(),
+                vec3(0.3, 0.0, 1.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, 0.0),
+                vec3(0.2, 4.0, 0.02),
+                if terrain {
+                    CollisionGroup::world_for_test()
+                } else {
+                    CollisionGroup::entity()
+                },
+                false,
+            );
+            let mut player =
+                physics.create_player(vec3(10.0, 0.0, 0.0), EntityId::from_inner(21).unwrap());
+            physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+            let start = point3(0.0, 0.0, 0.0);
+            let muzzle = point3(0.0, 0.0, 2.0);
+            let clamped = clamp_projectile_spawn(&physics, start, muzzle, 0.4, true, &|_| true);
+            assert_eq!(clamped == muzzle, terrain);
+            assert!(clamp_projectile_spawn(&physics, start, muzzle, 0.4, false, &|_| true).z < 1.0);
+        }
+    }
+
+    #[test]
     fn forward_spawn_offset_cannot_cross_a_thin_obstacle() {
         let mut physics = PhysicsWorld::new();
         let wall = EntityId::from_inner(20).unwrap();
@@ -217,27 +247,29 @@ mod tests {
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
         let start = point3(0.0, 0.0, 0.0);
         let muzzle = point3(0.0, 0.0, 2.0);
-        let clamped = clamp_projectile_spawn(&physics, start, muzzle, 0.0, &|_| true);
+        let clamped = clamp_projectile_spawn(&physics, start, muzzle, 0.0, false, &|_| true);
         assert!(
             clamped.z > 0.9 && clamped.z < 0.99,
             "must stay before wall: {clamped:?}"
         );
         assert_eq!(
-            clamp_projectile_spawn(&physics, point3(0.0, 0.0, 0.9), start, 0.2, &|_| true),
+            clamp_projectile_spawn(&physics, point3(0.0, 0.0, 0.9), start, 0.2, false, &|_| {
+                true
+            }),
             start,
             "a shot directed away from an initially overlapping wall must clear it",
         );
-        let grenade = clamp_projectile_spawn(&physics, start, muzzle, 0.2, &|_| true);
+        let grenade = clamp_projectile_spawn(&physics, start, muzzle, 0.2, false, &|_| true);
         assert!(
             grenade.z + 0.2 < 0.99,
             "grenade must fit before the wall: {grenade:?}"
         );
         assert_eq!(
-            clamp_projectile_spawn(&physics, start, muzzle, 0.0, &|id| id != wall),
+            clamp_projectile_spawn(&physics, start, muzzle, 0.0, false, &|id| id != wall),
             muzzle
         );
         assert_eq!(
-            clamp_projectile_spawn(&physics, start, start, 0.0, &|_| true),
+            clamp_projectile_spawn(&physics, start, start, 0.0, false, &|_| true),
             start
         );
     }

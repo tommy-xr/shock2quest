@@ -137,8 +137,9 @@ pub(crate) fn laser_trace(
         muzzle = mapping.0.transform_point(
             transform.transform_point(crate::weapon_muzzle::resolve(world, weapon).point),
         );
-        muzzle =
-            crate::weapon_muzzle::clamp_projectile_spawn(physics, origin, muzzle, 0.0, &can_hit);
+        muzzle = crate::weapon_muzzle::clamp_projectile_spawn(
+            physics, origin, muzzle, 0.0, false, &can_hit,
+        );
     } else {
         // Match projectile creation when a VR barrel penetrates thin cover.
         let transform = world
@@ -149,7 +150,7 @@ pub(crate) fn laser_trace(
             .0;
         let gun_origin = transform.transform_point(Point3::new(0.0, 0.0, 0.0));
         muzzle = crate::weapon_muzzle::clamp_projectile_spawn(
-            physics, gun_origin, muzzle, 0.0, &can_hit,
+            physics, gun_origin, muzzle, 0.0, false, &can_hit,
         );
         origin = muzzle;
     }
