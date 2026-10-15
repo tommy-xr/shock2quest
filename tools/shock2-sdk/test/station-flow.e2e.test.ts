@@ -4,7 +4,8 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
 import { stepPastCutscenes } from "./helpers/cutscenes.js";
-import { dismissDebrief } from "./helpers/debrief.js";
+import { DEBRIEF_CONTINUE, debriefIsUp, dismissDebrief } from "./helpers/debrief.js";
+import { vrClickCanvasPoint } from "./helpers/frontend-menu.js";
 
 // End-to-end test for the HONEST character-creation chain the player walks at
 // game start: earth.mis (pick a career) -> station.mis three training tours ->
@@ -375,5 +376,54 @@ test(
     assert.equal(osa.maxHp, STARTING_POOLS.hp, "OSA selection preserves base maximum HP");
     assert.equal(osa.psiPoints, STARTING_POOLS.psi, "OSA starts at full career psi");
     assert.equal(osa.maxPsi, STARTING_POOLS.psi, "OSA selection preserves base maximum psi");
+  },
+);
+
+// VR is where a stale HideInterface was visible: Earth starts uninstalled, and
+// unless graduation installs the interface, MedSci's menu and corpses refuse
+// with NOT_INSTALLED (flat still opens the corpse panel).
+test(
+  "station flow (VR): graduating to MedSci1 activates the cyber interface",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "earth.mis", debugFlags: ["--vr"] });
+    await game.step({ frames: 5 });
+    assert.equal(await game.quests.get("HideInterface"), "incomplete", "Earth starts without the interface");
+
+    async function trip(at: Vec3): Promise<void> {
+      await teleportTo(game, at);
+      await game.step({ frames: 15 });
+      if (await debriefIsUp(game)) await vrClickCanvasPoint(game, DEBRIEF_CONTINUE);
+      await stepPastCutscenes(game);
+    }
+
+    await trip(CAREER_DOORS.marine.trip);
+    for (let tour = 1; tour <= 3; tour++) {
+      assert.equal((await game.info()).mission.toLowerCase(), "station.mis", `tour ${tour} starts on the station`);
+      assert.equal(await game.quests.get("HideInterface"), "incomplete", `tour ${tour}: still in training`);
+      await trip(TOUR_TRIP);
+    }
+    assert.equal((await game.info()).mission.toLowerCase(), "medsci1.mis");
+    assert.equal(await game.quests.get("HideInterface"), "unknown", "final deployment installs the interface");
+
+    // The Menu button opens the full interface rather than the refusal.
+    await game.input.trigger("MenuButton");
+    await game.step({ frames: 5 });
+    let ui = await game.ui.state();
+    assert.equal(ui.mode, "use", "Menu opens the cyber interface");
+    assert.ok(ui.strip !== null, "the inventory is available");
+    assert.ok(!ui.messages.includes("Cyber Interface software not installed."));
+    await game.input.trigger("MenuButton");
+    await game.step({ frames: 5 });
+
+    const [corpse] = await game.entities.byTemplate(1177);
+    assert.ok(corpse?.position, "MedSci1 has the first wrench corpse");
+    await game.player.teleport({ x: corpse.position[0] + 1.2, y: corpse.position[1] + 0.5, z: corpse.position[2] });
+    await game.step({ frames: 5 });
+    await game.entities.sendMessage(corpse.id, { type: "Frob" });
+    await game.step({ frames: 3 });
+    ui = await game.ui.state();
+    assert.equal(ui.active_panel?.entity_id, corpse.id, "the corpse search panel opens");
+    assert.ok(!ui.messages.includes("Cyber Interface software not installed."));
   },
 );
