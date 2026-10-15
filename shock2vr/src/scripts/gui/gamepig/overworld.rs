@@ -32,6 +32,7 @@ enum Aim {
 #[derive(Clone, Debug, Default)]
 pub(super) struct Adventure {
     menu: bool,
+    direction: (i32, i32),
     selection: usize,
     aim: Option<Aim>,
     scores: bool,
@@ -127,10 +128,7 @@ impl Adventure {
                 Action::Potion
             }
             Message::Cast => {
-                if super::super::keypad::object_state(world, entity)
-                    == dark::properties::ObjectState::Hacked
-                    && game.player.spell_cooldown == 0
-                {
+                if can_cast(world, entity, &quest) {
                     self.aim = Some(Aim::Cast);
                 }
                 return Effect::NoEffect;
@@ -150,6 +148,18 @@ impl Adventure {
         control: HandheldControl,
     ) -> Effect {
         match control {
+            // Navigate supplies the shared press edge; its preceding Stick retains both axes.
+            HandheldControl::Stick { x, y } => {
+                self.direction = (
+                    if x.abs() >= 0.5 { x.signum() as i32 } else { 0 },
+                    if y.abs() >= 0.5 {
+                        -y.signum() as i32
+                    } else {
+                        0
+                    },
+                );
+                Effect::NoEffect
+            }
             HandheldControl::Navigate { x, y } if self.menu => {
                 self.selection = (self.selection as i32 + x + y).rem_euclid(5) as usize;
                 let quest = world.borrow::<UniqueView<QuestInfo>>().unwrap();
@@ -159,9 +169,11 @@ impl Adventure {
                 }
                 Effect::NoEffect
             }
-            HandheldControl::Navigate { x, y } => {
-                self.input(entity, world, Message::Tile(5 + x, 8 + y))
-            }
+            HandheldControl::Navigate { .. } => self.input(
+                entity,
+                world,
+                Message::Tile(5 + self.direction.0, 8 + self.direction.1),
+            ),
             HandheldControl::Primary => {
                 let quest = world.borrow::<UniqueView<QuestInfo>>().unwrap();
                 let finished = quest
@@ -440,4 +452,51 @@ fn can_cast(world: &World, entity: EntityId, quest: &QuestInfo) -> bool {
             .game
             .as_ref()
             .is_some_and(|g| g.player.spell_cooldown == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::{SeedableRng, rngs::StdRng};
+
+    #[test]
+    fn controller_preserves_diagonal_movement_and_missile_aim() {
+        let mut world = World::new();
+        let entity = world.add_entity(dark::properties::PropObjState(
+            dark::properties::ObjectState::Hacked,
+        ));
+        let mut quest = QuestInfo::new();
+        quest.overworld.game = Some(crate::overworld::OverWorld::new(
+            true,
+            &mut StdRng::seed_from_u64(3),
+        ));
+        world.add_unique(quest);
+        let mut adventure = Adventure::default();
+        for x in [-1, 0, 1] {
+            for y in [-1, 0, 1] {
+                if x == 0 && y == 0 {
+                    continue;
+                }
+                adventure.controller(
+                    entity,
+                    &world,
+                    HandheldControl::Stick {
+                        x: x as f32 * 0.8,
+                        y: -y as f32 * 0.8,
+                    },
+                );
+                let action =
+                    adventure.controller(entity, &world, HandheldControl::Navigate { x, y: 0 });
+                assert!(
+                    matches!(action, Effect::UpdateOverWorld { command: Command::Act(Action::Move(dx, dy)), .. } if (dx, dy) == (x, y))
+                );
+                adventure.input(entity, &world, Message::Cast);
+                let action =
+                    adventure.controller(entity, &world, HandheldControl::Navigate { x, y: 0 });
+                assert!(
+                    matches!(action, Effect::UpdateOverWorld { command: Command::Act(Action::Missile(dx, dy)), .. } if (dx, dy) == (x, y))
+                );
+            }
+        }
+    }
 }

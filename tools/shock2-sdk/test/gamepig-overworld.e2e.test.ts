@@ -76,6 +76,26 @@ for (const vr of [false, true]) {
         await reopen();
         assert.deepEqual((await snapshot()).global_data.quest_info.overworld.game.player, player, "same-build load resumes the adventure");
 
+        if (vr) {
+          await face("upper");
+          await game.input.set("left_hand.thumbstick", [1, 0]);
+          await game.step({ frames: 2 });
+          await game.input.set("left_hand.thumbstick", [0, 0]);
+          await game.step({ frames: 2 });
+          await face("lower");
+          assert.equal((await snapshot()).global_data.quest_info.overworld.game.player.turns, player.turns + 1,
+            "secondary focuses actions; stick and primary choose Heal");
+        }
+        const handheld = (await game.entities.list({ filter: "Gameboy" })).entities.find(e => e.template_id === -3864)!;
+        assert.ok(!(await game.ui.state()).active_panel!.elements.some(e => e.label === "ow-cast"));
+        await game.entities.sendMessage(handheld.id, { type: "SetObjectState", state: "Hacked" });
+        await game.step({ frames: 2 });
+        await activate("ow-cast");
+        await activate("ow-tile-6-8");
+        assert.ok((await snapshot()).global_data.quest_info.overworld.game.player.spell_cooldown > 0,
+          "hacked device can launch a missile");
+        assert.ok(!(await game.ui.state()).active_panel!.elements.some(e => e.label === "ow-cast"), "cooldown disables Cast");
+
         // Deterministic terminal fixtures verify the integration boundary, not a full adventure playthrough.
         let save = await snapshot();
         let quest = save.global_data.quest_info;
