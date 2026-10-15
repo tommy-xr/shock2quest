@@ -35,6 +35,7 @@ Save/load reconstructs the mesh from the live simulation clock and template
 ancestry; no model property or transient runtime identity is persisted. Stasis
 holds its captured simulation phase in the existing saved stasis state, just
 as it holds the skeletal pose, and rejoins the global animation phase on expiry.
-The sequence clock and cached-model selection can be reused by the Vein
-animation tracked by #2186; its rest interval and attachment are not implemented
-here.
+The same selector also handles the remaster's active Vein archetype attachment.
+Veins play models `vein0`–`vein19` at 20 Hz, then hold `vein19` through the
+remaining ten frames of their 1.5-second cycle. They share the original entity
+transform and collision while caching at most twenty frame models.
