@@ -170,6 +170,7 @@ pub struct PathFollowSteeringStrategy {
     /// Goal position the current path was computed against
     path_goal: Option<Vector3<f32>>,
     repath_cooldown: f32,
+    door_revision: u64,
     /// Stall tracking: closest we've been to the current waypoint, and how
     /// long since that improved
     stall_waypoint: usize,
@@ -233,6 +234,7 @@ impl PathFollowSteeringStrategy {
             flying: false,
             path_goal: None,
             repath_cooldown: 0.0,
+            door_revision: 0,
             stall_waypoint: usize::MAX,
             stall_best: f32::INFINITY,
             stall_seconds: 0.0,
@@ -246,6 +248,17 @@ impl PathFollowSteeringStrategy {
             stall_escalations: 0,
             path_version: 0,
             published_path_version: None,
+        }
+    }
+
+    fn refresh_doors(&mut self, revision: u64) {
+        if revision != self.door_revision {
+            self.door_revision = revision;
+            self.clear_path();
+            self.repath_cooldown = 0.0;
+            self.recovery = None;
+            self.goal_unreachable = false;
+            self.goal_unreachable_until = None;
         }
     }
 
@@ -367,6 +380,11 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         self.flying = flying;
 
         self.repath_cooldown = (self.repath_cooldown - time.elapsed.as_secs_f32()).max(0.0);
+        if time.elapsed.as_secs_f32() > 0.0 {
+            // A fixed chase goal does not ordinarily trigger a new route.
+            // A door locking/unlocking must invalidate that cached answer.
+            self.refresh_doors(service.door_revision());
+        }
 
         // Stall recovery: back out toward the previous waypoint (ground we
         // know we stood on) so the next route doesn't start from the wedged
@@ -411,7 +429,8 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // desire is discarded (the submit below re-queries).
         if advancing {
             if let Some(response) = async_pathfinding.take_result(entity_id.inner()) {
-                let goal_current = answers_goal(&self.target, response.goal, desired_goal);
+                let goal_current = response.door_revision == service.door_revision()
+                    && answers_goal(&self.target, response.goal, desired_goal);
                 match response.outcome {
                     AiPathOutcome::Failed if goal_current => {
                         self.goal_unreachable = true;
@@ -1417,6 +1436,24 @@ mod tests {
                 .moved;
             assert_eq!(moved, flying);
         }
+    }
+
+    #[test]
+    fn a_door_change_invalidates_a_cached_route_and_failed_goal() {
+        let mut follower = PathFollowSteeringStrategy::chase_player();
+        follower.path = vec![vec3(0.0, 0.0, 0.0), vec3(5.0, 0.0, 0.0)];
+        follower.path_goal = Some(vec3(5.0, 0.0, 0.0));
+        follower.repath_cooldown = 10.0;
+        follower.refresh_doors(0);
+        assert_eq!(follower.path.len(), 2, "unchanged doors preserve the route");
+        follower.goal_unreachable = true;
+        follower.goal_unreachable_until = Some(20.0);
+        follower.refresh_doors(1);
+        assert!(follower.path.is_empty());
+        assert_eq!(follower.path_goal, None);
+        assert_eq!(follower.repath_cooldown, 0.0);
+        assert!(!follower.goal_unreachable);
+        assert_eq!(follower.goal_unreachable_until, None);
     }
 
     /// Stand in one spot under `hold`; report whether the watchdog fired.
