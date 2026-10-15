@@ -43,7 +43,6 @@ In addition, code in the `engine` folder is agnostic of Shock2, so is dual-licen
 
 ## Credits
 
-- Demo assets are from [BabylonJS Assets](https://github.com/BabylonJS/Assets).
 - VR glove model adapted from Valve's [SteamVR Unity Plugin](https://github.com/ValveSoftware/steamvr_unity_plugin).
 
 ## Thanks
