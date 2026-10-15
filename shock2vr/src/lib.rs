@@ -2825,7 +2825,8 @@ impl Game {
                 // The destroyed head and the rest of the finale state reach the
                 // in-memory mission ledger through `PlayCutscene`, which saves
                 // the scene it replaces.
-                let after_ending = scenes::finale_follow_on(scenes::resolve_credits_cutscene());
+                let after_ending =
+                    scenes::credits_then_main_menu(scenes::resolve_credits_cutscene());
 
                 self.campaign_completed = true;
                 self.handle_global_effect(after_ending.after_cutscene(&resolve_ending_cutscene()));

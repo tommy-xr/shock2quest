@@ -127,7 +127,7 @@ pub struct SceneInitResult {
 // here.
 const ENDING_CUTSCENE_CANDIDATES: &[&str] = &["enhanced/cs3.ogv", "cs3.avi", "cs3.ogv"];
 const CREDITS_CUTSCENE_CANDIDATES: &[&str] =
-    &["enhanced/credits.ogv", "credits.avi", "credits.ogv"];
+    &["enhanced/credits.ogv", "credits.ogv", "credits.avi"];
 const ANNIVERSARY_CUTSCENE_LAYERS: &[&str] = &["enhanced", "original", "kex"];
 
 /// How a debug scene is built. Every entry in [`DEBUG_SCENES`] has this shape,
@@ -569,9 +569,9 @@ pub(crate) fn resolve_credits_cutscene() -> Option<String> {
     first_present_cutscene(CREDITS_CUTSCENE_CANDIDATES)
 }
 
-/// What the ending cutscene hands off to: the credits roll when the install
-/// ships one, then the main menu either way.
-pub(crate) fn finale_follow_on(credits: Option<String>) -> GlobalEffect {
+/// The credits roll when the install ships one, then the main menu either way.
+/// Follows the ending cutscene, and is what the menu's Credits button plays.
+pub(crate) fn credits_then_main_menu(credits: Option<String>) -> GlobalEffect {
     match credits {
         Some(video) => GlobalEffect::ShowMainMenu.after_cutscene(&video),
         None => GlobalEffect::ShowMainMenu,
@@ -656,7 +656,7 @@ mod tests {
     /// install has them and directly when it does not.
     #[test]
     fn the_finale_chains_through_the_credits_only_when_they_are_installed() {
-        match finale_follow_on(Some("enhanced/credits.ogv".to_string())) {
+        match credits_then_main_menu(Some("enhanced/credits.ogv".to_string())) {
             GlobalEffect::PlayCutscene { video, then } => {
                 assert_eq!(video, "enhanced/credits.ogv");
                 assert!(matches!(*then, GlobalEffect::ShowMainMenu));
@@ -664,7 +664,10 @@ mod tests {
             other => panic!("expected the credits to play, got {other:?}"),
         }
 
-        assert!(matches!(finale_follow_on(None), GlobalEffect::ShowMainMenu));
+        assert!(matches!(
+            credits_then_main_menu(None),
+            GlobalEffect::ShowMainMenu
+        ));
     }
 
     /// The launcher offers exactly what the dispatcher can build, and every
