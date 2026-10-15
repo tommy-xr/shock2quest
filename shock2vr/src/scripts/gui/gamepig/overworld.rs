@@ -395,7 +395,8 @@ impl Adventure {
             for (i, (title, message)) in ACTIONS.into_iter().enumerate() {
                 let rect = Rect::new(16.0 + i as f32 * 26.4, 274.0, 26.4, 12.0);
                 if i == 2 && !can_cast(world, entity, &quest) {
-                    out.push(PanelText::centered(title, rect).with_alpha(0.35));
+                    // Flat panels render labels opaque; show unavailability in the shared text.
+                    out.push(PanelText::centered("--", rect));
                 } else {
                     out.extend(button(
                         message,
