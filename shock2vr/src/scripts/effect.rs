@@ -318,6 +318,10 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    UnlockMiniGames {
+        games: u32,
+    },
+
     RecordMiniGameScore {
         game: u8,
         score: crate::mini_game_scores::MiniGameScore,
