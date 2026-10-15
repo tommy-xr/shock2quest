@@ -234,7 +234,7 @@ mod tests {
         let gun = world.add_entity(());
         let reserve = world.add_entity(());
         let offer = PouchClip {
-            projectile: -362,
+            projectile: Some(-362),
             reserve,
             template: -31,
             rounds: 12,
@@ -287,7 +287,7 @@ mod tests {
         let gun = world.add_entity(());
         let reserve = world.add_entity(());
         let offer = PouchClip {
-            projectile: -362,
+            projectile: Some(-362),
             reserve,
             template: -31,
             rounds: 12,

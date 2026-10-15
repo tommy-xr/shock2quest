@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
+import { drawPouchAmmo } from "./helpers/ammo-pouch.js";
 import { aimVrHandAt, aimVrHandAtCanvas, normalize, quatConjugate, quatFromTo, quatMultiply, quatRotate, sub } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
@@ -362,4 +363,32 @@ test("shared chest reserves survive saves and refill between simultaneous draws"
   assert.ok(after.wielded_entity_id != null && after.right_hand_entity_id != null, "both fresh squeezes draw despite the intervening refill");
   assert.notEqual(after.wielded_entity_id, after.right_hand_entity_id);
   assert.deepEqual((await chest()).counts, [0, 0]);
+});
+
+
+test("pouch battery draw refills chest assignments from remaining stock", { skip: !enabled, timeout: 180_000 }, async () => {
+  await using game = await launch();
+  await game.step({ frames: 30 });
+  for (const hand of ["left", "right"] as const) {
+    await game.input.set(`${hand}_hand.squeeze`, 1);
+    await game.player.spawnItem(-3641, { hand });
+  }
+  await stow(game, "right", 0);
+  await stow(game, "left", 1);
+  const original = (await game.info()).player.hand_feedback!.chest_slots!.items;
+  assert.ok(original[0] != null && original[1] != null && original[0] !== original[1]);
+  await game.input.set("right_hand.position", [.3, 1, -.5]);
+  await game.input.set("right_hand.squeeze", 1);
+  await game.player.spawnItem(-22, { hand: "right" });
+  await game.step({ frames: 5 });
+  const { entityId } = await drawPouchAmmo(game, "left");
+  const remaining = original.find(id => id !== entityId)!;
+  const chest = (await game.info()).player.hand_feedback!.chest_slots!;
+  assert.deepEqual(chest.items, [remaining, remaining]);
+  assert.deepEqual(chest.counts, [1, 1]);
+  await game.input.set("left_hand.squeeze", 0);
+  await game.step({ frames: 8 });
+  const returned = (await game.info()).player.hand_feedback!.chest_slots!;
+  assert.deepEqual(returned.items, [remaining, remaining]);
+  assert.deepEqual(returned.counts, [2, 2]);
 });

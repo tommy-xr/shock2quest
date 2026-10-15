@@ -56,12 +56,22 @@ impl PouchReadout {
         Self {
             weapon: weapon.map(|id| id.inner() as i32),
             icon: offer.map_or_else(
-                || crate::hud::get_weapon_ammo_icon(world, weapon),
-                |offer| crate::hud::get_projectile_ammo_icon(world, offer.projectile),
+                || {
+                    if weapon.is_some_and(|gun| crate::wielded_weapon::is_energy_weapon(world, gun))
+                    {
+                        Some("i_batt".to_owned())
+                    } else {
+                        crate::hud::get_weapon_ammo_icon(world, weapon)
+                    }
+                },
+                |offer| match offer.projectile {
+                    Some(projectile) => crate::hud::get_projectile_ammo_icon(world, projectile),
+                    None => crate::scripts::gui::inventory_icon(world, offer.reserve),
+                },
             ),
             count: weapon.map(|_| {
                 offer.map_or(0, |offer| {
-                    super::reload::reserve_rounds(world, offer.projectile)
+                    super::reload::reserve_count(world, offer.projectile)
                 })
             }),
             state,
@@ -172,10 +182,12 @@ pub(super) fn item_badge(
     ring.set_transparency(Some(1.0 - color.w));
     ring.set_transform(plate * Matrix4::from_scale(BADGE_DIAMETER));
     let mut objects = vec![ring];
-    if let Some(name) = icon_name {
+    if let Some(name) =
+        icon_name.and_then(|name| dark::util::resolve_object_icon_name(assets, name))
+    {
         if let Some(texture) = assets.get_ext_opt(
             &dark::importers::TEXTURE_IMPORTER,
-            name,
+            &name,
             &engine::texture::TextureOptions {
                 wrap: false,
                 transparent_index_0: true,

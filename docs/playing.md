@@ -44,6 +44,11 @@ type returns the loaded rounds to your backpack. In the amp's power selector, us
 stick up/down for tiers and left/right for purchased powers; confirm with its
 upper button or trigger. Each amp remembers its current and alternate powers.
 
+The pouch also offers carried prisms and worm beakers for compatible guns.
+With a laser pistol or EMP rifle held, it offers one portable battery at a time
+and shows the number carried. Release unused ammo or a battery over the pouch
+to return it to your backpack. Drawing an item does not use it.
+
 ## Parrying
 
 Meet a pipe hybrid's incoming pipe with your held wrench or other

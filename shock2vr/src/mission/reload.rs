@@ -260,76 +260,93 @@ pub(crate) fn clip_insert_zone_engaged(was_engaged: bool, distance: f32) -> bool
     }
 }
 
-/// The backpack's stackable items whose class descends from one of
-/// `clip_templates` - the reserve a reload draws from and an unload merges into.
+/// Positive stacks directly in the backpack, excluding held/world items.
+fn reserve_items(world: &World) -> Vec<EntityId> {
+    let Ok(player) = world.borrow::<UniqueView<crate::mission::PlayerInfo>>() else {
+        return Vec::new();
+    };
+    let Ok((links, stacks)) = world.borrow::<(View<Links>, View<PropStackCount>)>() else {
+        return Vec::new();
+    };
+    let Ok(inventory) = links.get(player.inventory_entity_id) else {
+        return Vec::new();
+    };
+    inventory
+        .to_links
+        .iter()
+        .filter(|link| matches!(link.link, Link::Contains(_)))
+        .filter_map(|link| link.to_entity_id.map(|id| id.0))
+        .filter(|item| stacks.get(*item).is_ok_and(|stack| stack.0 > 0))
+        .collect()
+}
+
+/// The backpack's positive stacks compatible with these clip archetypes.
 fn compatible_reserve_items(world: &World, clip_templates: &[i32]) -> Vec<EntityId> {
-    let Ok(inventory) = world
-        .borrow::<UniqueView<crate::mission::PlayerInfo>>()
-        .map(|player| player.inventory_entity_id)
+    let Ok(hierarchy) = world.borrow::<UniqueView<crate::mission::GlobalTemplateHierarchy>>()
     else {
         return Vec::new();
     };
-    let reserve_items: Vec<EntityId> = {
-        let Ok(links) = world.borrow::<View<Links>>() else {
-            return Vec::new();
-        };
-        let Ok(inventory_links) = links.get(inventory) else {
-            return Vec::new();
-        };
-        inventory_links
-            .to_links
-            .iter()
-            .filter(|link| matches!(link.link, Link::Contains(_)))
-            .filter_map(|link| link.to_entity_id.map(|id| id.0))
-            .collect()
-    };
-
-    let Ok((stacks, hierarchy)) = world.borrow::<(
-        View<PropStackCount>,
-        UniqueView<crate::mission::GlobalTemplateHierarchy>,
-    )>() else {
-        return Vec::new();
-    };
-    reserve_items
+    reserve_items(world)
         .into_iter()
         .filter(|item| {
-            let Some(class_template_id) =
-                crate::scripts::script_util::entity_class_template_id(world, *item)
-            else {
-                return false;
-            };
-            // A zero stack is neither a source to load from nor a target to
-            // merge into: it is destroyed on depletion, and rounds merged into
-            // one that somehow survived would go with it.
-            stacks.get(*item).is_ok_and(|stack| stack.0 > 0)
-                && clip_templates.iter().any(|clip_template| {
-                    hierarchy.is_or_descends_from(class_template_id, *clip_template)
-                })
+            crate::scripts::script_util::entity_class_template_id(world, *item).is_some_and(
+                |class| {
+                    clip_templates
+                        .iter()
+                        .any(|clip| hierarchy.is_or_descends_from(class, *clip))
+                },
+            )
         })
+        .collect()
+}
+
+pub(crate) fn is_portable_battery(world: &World, item: EntityId) -> bool {
+    crate::scripts::script_util::entity_has_script(world, item, "battery")
+}
+
+fn reserve_batteries(world: &World) -> Vec<EntityId> {
+    reserve_items(world)
+        .into_iter()
+        .filter(|item| is_portable_battery(world, *item))
         .collect()
 }
 
 /// A read-only offer shared by the pouch preview and atomic withdrawal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PouchClip {
-    pub projectile: i32,
+    /// Batteries recharge the gun rather than loading a projectile type.
+    pub projectile: Option<i32>,
     pub reserve: EntityId,
     pub template: i32,
     pub rounds: i32,
     pub stock: i32,
 }
 
-pub(crate) fn reserve_rounds(world: &World, projectile: i32) -> u32 {
-    clip_templates_for_projectile(world, projectile).map_or(0, |templates| {
-        compatible_reserve_items(world, &templates)
-            .iter()
-            .fold(0_u32, |total, item| {
-                total.saturating_add(clip_rounds(world, *item).max(0) as u32)
-            })
+pub(crate) fn reserve_count(world: &World, projectile: Option<i32>) -> u32 {
+    let items = match projectile {
+        Some(projectile) => clip_templates_for_projectile(world, projectile)
+            .map_or_else(Vec::new, |templates| {
+                compatible_reserve_items(world, &templates)
+            }),
+        None => reserve_batteries(world),
+    };
+    items.iter().fold(0_u32, |total, item| {
+        total.saturating_add(clip_rounds(world, *item).max(0) as u32)
     })
 }
 
 pub(crate) fn reserve_clip_for_pouch(world: &World, weapon: EntityId) -> Option<PouchClip> {
+    if crate::wielded_weapon::is_energy_weapon(world, weapon) {
+        let reserve = reserve_batteries(world).into_iter().next()?;
+        return Some(PouchClip {
+            projectile: None,
+            reserve,
+            template: crate::scripts::script_util::entity_class_template_id(world, reserve)?,
+            rounds: 1,
+            stock: clip_rounds(world, reserve),
+        });
+    }
+
     // Prefer the selected type, then walk the authored cycle order, skipping
     // empty/incompatible stock. This is an offer only: the loaded magazine's
     // selection changes through normal insertion, never by converting rounds.
@@ -386,7 +403,7 @@ pub(crate) fn reserve_clip_for_pouch(world: &World, weapon: EntityId) -> Option<
         }
     }
     (rounds > 0).then_some(PouchClip {
-        projectile,
+        projectile: Some(projectile),
         reserve,
         template,
         rounds,
@@ -701,6 +718,49 @@ mod tests {
     const LARGE_PRISM: i32 = -44;
 
     #[test]
+    fn energy_pouch_offers_one_real_battery_and_counts_only_positive_backpack_stock() {
+        use dark::properties::PropScripts;
+        for ammo in [0, 7, 12] {
+            let mut f = Fixture::new(ammo, 0);
+            let battery_script = || PropScripts {
+                scripts: vec!["Battery".to_owned()],
+                inherits: false,
+            };
+            let battery = f.reserve_with_canonical_template(999, -3641, 3);
+            f.world.add_component(battery, battery_script());
+            // Ordinary guns still require clips, even with batteries stocked.
+            assert_eq!(reserve_clip_for_pouch(&f.world, f.weapon), None);
+            f.world.add_component(
+                f.weapon,
+                PropScripts {
+                    scripts: vec!["EnergyWeapon".to_owned()],
+                    inherits: true,
+                },
+            );
+            let empty = f.reserve(-3641, 0);
+            f.world.add_component(empty, battery_script());
+            let second = f.reserve(-3641, 2);
+            f.world.add_component(second, battery_script());
+            f.world.add_entity((battery_script(), PropStackCount(20)));
+            f.reserve(SMALL_PRISM, 30);
+            let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
+            assert_eq!(
+                offer,
+                PouchClip {
+                    projectile: None,
+                    reserve: battery,
+                    template: -3641,
+                    rounds: 1,
+                    stock: 3
+                }
+            );
+            assert_eq!(reserve_count(&f.world, None), 5);
+            assert_eq!(f.rounds(battery), 3, "offering must not debit stock");
+            assert_eq!(f.ammo(), ammo, "offering must not recharge the gun");
+        }
+    }
+
+    #[test]
     fn pouch_uses_magazine_capacity_and_stock_regardless_of_box_size() {
         for (ammo, template, stock, expected) in [
             (7, STD_CLIP, 2, 2),
@@ -729,9 +789,9 @@ mod tests {
             let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
             assert_eq!(
                 (offer.reserve, offer.projectile, offer.rounds),
-                (reserve, projectile, 12)
+                (reserve, Some(projectile), 12)
             );
-            assert_eq!(reserve_rounds(&f.world, projectile), 20);
+            assert_eq!(reserve_count(&f.world, Some(projectile)), 20);
             assert_eq!(selected_ammo_index(&f.world, f.weapon), selected);
             assert_eq!(f.ammo(), 7);
         }

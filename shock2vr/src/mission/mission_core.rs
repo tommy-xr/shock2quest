@@ -6553,7 +6553,10 @@ impl MissionCore {
             pouch_available,
             pouch_weapons,
             held.map(|item| {
-                item.is_some_and(|item| super::reload::is_ammo_clip(&self.world, item))
+                item.is_some_and(|item| {
+                    super::reload::is_ammo_clip(&self.world, item)
+                        || super::reload::is_portable_battery(&self.world, item)
+                })
             }),
             pouch_offers,
             body_gear && !self.use_mode,
@@ -18898,6 +18901,20 @@ impl MissionCore {
             return (vec![], None);
         }
         let split = stock > amount;
+        let chest_slots = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropChestSlot>>()
+            .unwrap()
+            .get(reserve)
+            .map_or(0, |slots| slots.0);
+        let chest_refill = if !split && chest_slots != 0 {
+            super::holsters::Holsters::chest_stock(&self.world, reserve)
+                .into_iter()
+                .find(|(id, _)| *id != reserve)
+                .map(|(id, _)| id)
+        } else {
+            None
+        };
         let item = if split {
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             let position = vec3_to_point3(player.pos);
@@ -18925,6 +18942,15 @@ impl MissionCore {
             if split {
                 self.world
                     .add_component(reserve, dark::properties::PropStackCount(stock - amount));
+            }
+            // Pouch and chest draws share the same inventory: preserve quick
+            // slot assignments when either path takes the assigned stack's last item.
+            if let Some(next) = chest_refill {
+                for slot in 0..2 {
+                    if chest_slots & (1 << slot) != 0 {
+                        super::holsters::Holsters::assign_chest_slot(&mut self.world, next, slot);
+                    }
+                }
             }
             (effects, Some(item))
         } else {
@@ -18962,24 +18988,8 @@ impl MissionCore {
         else {
             return vec![];
         };
-        let stock = super::holsters::Holsters::chest_stock(&self.world, source);
-        let bits = self
-            .world
-            .borrow::<View<crate::runtime_props::RuntimePropChestSlot>>()
-            .unwrap()
-            .get(source)
-            .map_or(0, |s| s.0);
-        let (effects, drawn) = self.withdraw_inventory_stack(assets, source, template, 1, hand);
-        if drawn == Some(source) {
-            if let Some((next, _)) = stock.into_iter().find(|(id, _)| *id != source) {
-                for slot in 0..2 {
-                    if bits & (1 << slot) != 0 {
-                        super::holsters::Holsters::assign_chest_slot(&mut self.world, next, slot);
-                    }
-                }
-            }
-        }
-        effects
+        self.withdraw_inventory_stack(assets, source, template, 1, hand)
+            .0
     }
 
     /// Apply the source weapon's magazine geometry to a real ammo clip.
@@ -19057,7 +19067,9 @@ impl MissionCore {
             hand,
         );
         if let Some(clip) = clip {
-            self.prepare_magazine_model(asset_cache, weapon, clip);
+            if offer.projectile.is_some() {
+                self.prepare_magazine_model(asset_cache, weapon, clip);
+            }
             effects.push(Effect::ShowMessage {
                 text: "Ammo drawn".to_owned(),
             });
