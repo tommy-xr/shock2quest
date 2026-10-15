@@ -29,13 +29,18 @@ pub(crate) fn target(
     world: &World,
     entity: EntityId,
 ) -> Option<(dark::properties::PropHackDiff, HackOutcomeEffects)> {
-    use super::{computer, hackable_crate, replicator};
+    use super::{computer, gamepig::hacking, hackable_crate, replicator};
     let has = |name| crate::scripts::script_util::entity_has_script(world, entity, name);
     let diff = keypad::hack_diff(world, entity)?;
     let pair = if has("HackableCrate") && hackable_crate::can_hack(world, entity) {
         (
             hackable_crate::crate_hack_success as fn(EntityId, &World) -> Effect,
             hackable_crate::crate_hack_critical_failure as fn(EntityId, &World) -> Effect,
+        )
+    } else if has("MiniGameBoy") && hacking::can_hack(world, entity) {
+        (
+            hacking::success as fn(EntityId, &World) -> Effect,
+            hacking::critical_failure as fn(EntityId, &World) -> Effect,
         )
     } else if has("ReplicatorScript") && replicator::can_hack(world, entity) {
         (
