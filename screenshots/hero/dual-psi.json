@@ -1,9 +1,8 @@
 {
-  "revision": "9eeac37fb999274e18053e8ec733cf454d9c4f0a",
-  "dirty": false,
-  "capturedAt": "2026-10-15T18:22:54.190Z",
-  "mission": "medsci1.mis",
-  "difficulty": "easy",
+  "revision": "d52f48cc446058f80a450346cb5ef151c37e4c25",
+  "dirty": true,
+  "capturedAt": "2026-10-15T18:57:32.129Z",
+  "mission": "ops3.mis",
   "settings": {
     "vr": {
       "turning": "Smooth",
@@ -23,11 +22,11 @@
     }
   ],
   "player": [
-    -36.6,
+    27.5,
     -4.4,
-    18.4
+    94.8
   ],
-  "subject": "template -397",
+  "subject": "OG-Grenade",
   "loadout": {
     "left": -247,
     "right": -247
@@ -49,11 +48,11 @@
       "dual-psi.gif",
       "dual-psi.mp4"
     ],
-    "frames": 69,
+    "frames": 71,
     "fps": 15
   },
   "hp": [
-    12,
+    15,
     0
   ]
 }
