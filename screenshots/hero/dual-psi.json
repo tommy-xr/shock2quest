@@ -1,0 +1,59 @@
+{
+  "revision": "78683e545c740fdb237b62ae0b074885261cb506",
+  "dirty": false,
+  "capturedAt": "2026-10-15T18:12:07.035Z",
+  "mission": "medsci1.mis",
+  "difficulty": "easy",
+  "settings": {
+    "vr": {
+      "turning": "Smooth",
+      "vignette": "Off"
+    }
+  },
+  "lighting": [
+    {
+      "key": "ambient_light_intensity",
+      "value": 0,
+      "default": 0
+    },
+    {
+      "key": "held_light_floor",
+      "value": 0.15000000596046448,
+      "default": 0.15000000596046448
+    }
+  ],
+  "player": [
+    -36.6,
+    -4.4,
+    18.4
+  ],
+  "subject": "template -397",
+  "loadout": {
+    "left": -247,
+    "right": -247
+  },
+  "stats": {
+    "psionic_ability": 6,
+    "psi_tier": 5
+  },
+  "fovDeg": 85,
+  "still": {
+    "file": "dual-psi.png",
+    "resolution": [
+      1280,
+      720
+    ]
+  },
+  "clip": {
+    "files": [
+      "dual-psi.gif",
+      "dual-psi.mp4"
+    ],
+    "frames": 55,
+    "fps": 15
+  },
+  "hp": [
+    12,
+    0
+  ]
+}
