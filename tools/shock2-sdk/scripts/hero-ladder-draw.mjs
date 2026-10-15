@@ -199,9 +199,7 @@ async function take(game, framesDir) {
   const pistol = player.right_hand_entity_id;
   assert.ok(pistol, "the right hand must hold the pistol");
   // The real device chooser installs the laser sight and switches it on.
-  await installWeaponUpgrade(game, "Laser");
-  assert.equal(JSON.parse(property(await game.entities.detail(pistol), "WeaponUpgrades") ?? "{}").laser_enabled, true,
-    "the pistol's laser sight must be installed and on");
+  assert.equal((await installWeaponUpgrade(game, pistol, "Laser")).laser_enabled, true, "the pistol's laser sight must be on");
   ({ player } = await game.info());
   const ammo = async () => Number(property(await game.entities.detail(pistol), "Ammo"));
   const right = await viewRight(game);
@@ -312,7 +310,7 @@ async function take(game, framesDir) {
       await game.screenshot(path, 1280);
       const { player: after } = await game.info();
       const target = await game.entities.detail(assassin.id);
-      const laser = new Set((await game.scene.objects()).objects.map((o) => o.source)
+      const laser = new Set((await game.scene.objects({ entityId: pistol })).objects.map((o) => o.source)
         .filter((s) => s === "weapon_laser_core" || s === "weapon_laser_dot"));
       samples.push({ frame: tick - 1, image: path, phase, grips: after.climb.grips.map((g) => g.hand),
         beam: laser.has("weapon_laser_core"), dot: laser.has("weapon_laser_dot"),
@@ -476,8 +474,9 @@ async function take(game, framesDir) {
     "-movflags", "+faststart", resolve(out, `${clip}.mp4`)]);
   execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-framerate", String(FPS), "-i", input,
     // README width; the view never holds still, so a smaller palette keeps it
-    // near the other clips' size.
-    "-vf", "scale=400:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+    // near the other clips' size. A whole-frame palette (stats_mode=full)
+    // keeps a saturated red for the thin laser beam.
+    "-vf", "scale=400:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=full[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
     resolve(out, `${clip}.gif`)]);
   // Poster: settled on the assassin just before the first shot, whose muzzle
   // flash would hide the laser.
