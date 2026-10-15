@@ -325,13 +325,9 @@ async function captureShot(shot) {
     if (shot.spawnMonster) subject = await spawnMonster(game, shot.spawnMonster);
     if (shot.chest) await stowInChest(game, shot.chest);
     // Aim where the subject is now; it may have moved while we squared up.
-    // Without one (a psi shot spawns its own later), aim down the heading.
-    let target = shot.player.map((v, i) => v + heading[i] * 6);
-    if (subject) {
-      const points = await aimPoints(game, subject.id);
-      assert.ok(points, `${shot.name}: the subject vanished while squaring up`);
-      target = points("torso");
-    }
+    const points = await aimPoints(game, subject.id);
+    assert.ok(points, `${shot.name}: the subject vanished while squaring up`);
+    const target = points("torso");
     await aimHandsAt(game, target, shot.hands);
     await game.step({ frames: 2 });
     // Hold the grips: a VR hand releases whatever it holds when it lets go.
@@ -542,7 +538,6 @@ async function trainPsiPowers(game, templates) {
   }
   await game.devParams.set("cheat", 1);
 }
-
 
 /**
  * Aim at `point` (from `aimPoints`) for time `t`: eyes on its head (a charging
