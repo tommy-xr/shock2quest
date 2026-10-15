@@ -62,6 +62,15 @@ test("many: real defender deaths release brain protection across full save/load"
     const save = `many_brain_${remaining}_${Date.now()}`;
     assert.equal((await game.save(save)).success, true);
     assert.equal((await game.load(save)).success, true);
+    // A prior impact can leave a live shield flash in the saved checkpoint.
+    // Let its authored deletion finish before measuring this shot's flashes.
+    if ((await game.entities.list({ filter: "ball shield" })).entities.length > 0) {
+      await game.step({ frames: 60 });
+    }
+    assert.equal((await game.entities.list({ filter: "ball shield" })).entities.length, 0,
+      "the loaded checkpoint's prior flashes must expire before the shot");
+    assert.equal((await game.entities.list({ filter: "ballhaze" })).entities.length, 0,
+      "the loaded checkpoint's prior shield children must expire before the shot");
     const state = await discover();
     assert.equal(state.stars.length, remaining);
     const before = await hp(state.brain.id);

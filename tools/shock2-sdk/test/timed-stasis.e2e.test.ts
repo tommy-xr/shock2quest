@@ -102,7 +102,10 @@ for (const scenario of ["refresh", "save", "area", "death"] as const) {
       const frozenWorm = await wormWeight();
       const frozen = await game.entities.animation(target.id);
       assert.ok(frozen);
-      await game.step({ frames: 120 });
+      // Area stasis lasts three seconds; compare its pose before that deadline.
+      await game.step({ frames: scenario === "area" ? 60 : 120 });
+      assert.ok((await remaining(game, target.id) ?? 0) > 0,
+        "the pose comparison must occur while stasis is active");
       const held = await game.entities.animation(target.id);
       assert.ok(held);
       assert.equal(await wormWeight(), frozenWorm, "stasis holds the authored idle deformation");

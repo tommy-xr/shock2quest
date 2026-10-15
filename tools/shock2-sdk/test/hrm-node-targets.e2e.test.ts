@@ -4,6 +4,7 @@ import { GameServer, type UiElement } from "../src/index.js";
 import { aimMfdAt, drawPersonalCard, add, sub, quatRotate, quatFromTo } from "./helpers/vr-hand.js";
 import { canvasCenter, clickCanvasWithRay, clickUiElement } from "./helpers/ui.js";
 import { nodeOverlay } from "./helpers/hrm.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 for (const vr of [false, true]) {
   test(`HRM accepts a click just outside node artwork (${vr ? "VR oblique ray" : "flat"})`, {
@@ -13,6 +14,8 @@ for (const vr of [false, true]) {
     await game.devParams.set("vr_mfd_focus_scan", 0);
     await game.devParams.set("hrm_force_critical", 1);
     await game.step({ frames: 10 });
+    // A flat machine frob opens the cyber interface, which Earth starts without.
+    if (!vr) await installEarthCyberInterface(game);
     const [nanites] = await game.entities.byTemplate(257);
     await game.entities.sendMessage(nanites.id, { type: "Frob" });
     const [reader] = await game.entities.byTemplate(262);
@@ -30,6 +33,9 @@ for (const vr of [false, true]) {
       await game.input.set("left_hand.rotation", [0, 0, 0, 1]);
     } else await game.entities.sendMessage(reader.id, { type: "Frob" });
     await game.step({ frames: 4 });
+    const opened = await game.ui.state();
+    assert.equal(opened.mode, vr ? "device" : "use");
+    assert.equal(opened.active_panel?.entity_id, reader.id);
     for (const label of ["hack-replicator", "start-hack"]) {
       const ui = await game.ui.state();
       const button = ui.active_panel?.elements.find(e => e.label === label);

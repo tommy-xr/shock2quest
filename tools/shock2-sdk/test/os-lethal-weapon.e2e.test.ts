@@ -3,12 +3,14 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { acquireOsUpgrade } from "./helpers/os-upgrade.js";
 import { fireOnce } from "./helpers/weapon.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 test("classic Lethal Weapon acquired at a machine increases melee damage after a deck round trip", {
   skip: process.env.SHOCK2_E2E !== "1", timeout: 300_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "earth.mis" });
   await game.step({ frames: 5 });
+  await installEarthCyberInterface(game);
   await game.player.spawnItem(-928);
   await game.input.trigger("EquipWrench");
   await game.step({ frames: 5 });

@@ -213,13 +213,13 @@ test(
       [0, 11, 22],
       "Pack-Rat re-encodes the existing rows for effective Strength 2",
     );
-    // A machine MFD owns use mode without exposing the top strip. The first
-    // toggle exits that MFD; the second opens ordinary inventory use mode.
-    await game.input.trigger("ToggleUseMode");
-    await game.step({ frames: 3 });
+    // The machine opens the full cyber interface; one toggle dismisses its
+    // panel while keeping inventory open.
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 3 });
     const acquired = await game.ui.state();
+    assert.equal(acquired.mode, "use");
+    assert.equal(acquired.active_panel, null);
     assert.ok(acquired.strip);
     assert.equal(
       acquired.strip.elements.filter(isBlock).length,
