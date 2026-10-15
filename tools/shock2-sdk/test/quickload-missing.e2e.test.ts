@@ -45,7 +45,7 @@ test(
           .logs()
           .some(
             (line) =>
-              line.includes("Unable to load save") && line.includes("save1.sav"),
+              line.includes("SHOCK2QUEST_LOAD_FAILED") && line.includes("save1.sav"),
           ),
         "missing QuickLoad should be recorded in the runtime log",
       );
