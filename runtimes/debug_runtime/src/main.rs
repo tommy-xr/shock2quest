@@ -157,6 +157,10 @@ struct Args {
     #[arg(short, long)]
     save_file: Option<String>,
 
+    /// Gameplay mods (currently scp); omitted keeps base campaign data.
+    #[arg(long, value_delimiter = ',')]
+    mods: Vec<shock2vr::campaign::GameMod>,
+
     /// Enable experimental features (comma-separated)
     #[arg(long)]
     experimental: Option<String>,
@@ -657,6 +661,7 @@ fn run_game_blocking(
     info!("Presentation mode: {:?}", presentation_mode);
 
     let options = GameOptions {
+        mods: args.mods,
         build_label: env!("SHOCK2QUEST_BUILD_LABEL"),
         save_writer: shock2vr::save_load::SaveWriter::new(
             env!("SHOCK2QUEST_BUILD_VERSION"),
@@ -2646,6 +2651,8 @@ fn capture_frame_snapshot(
     );
 
     FrameSnapshot {
+        mods: game.enabled_mods().to_vec(),
+        campaign_identity: game.campaign_identity(),
         frame_index: frame_counter,
         time: TimeInfo {
             elapsed_ms: time.elapsed.as_millis() as f32,

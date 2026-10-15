@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io};
 
 /// Increment when persisted state needs an upgrade, not for every release.
-pub const SAVE_FORMAT_VERSION: u32 = 1;
+pub const SAVE_FORMAT_VERSION: u32 = 2;
 
 pub(crate) fn load_failure_message(error: io::ErrorKind) -> &'static str {
     if error == io::ErrorKind::Unsupported {
@@ -188,6 +188,7 @@ pub fn canonicalized_mission_snapshots(
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct GlobalData {
+    pub campaign: crate::campaign::Campaign,
     /// Player collider center, normalized to STANDING height: a game saved
     /// while crouched stores `center + crouch shift` (plus `is_crouched`),
     /// so load always creates the standing capsule here - never one embedded
@@ -357,6 +358,7 @@ mod tests {
 
     fn global_data(player_vitals: Option<PlayerVitals>) -> GlobalData {
         GlobalData {
+            campaign: crate::campaign::Campaign::Base,
             position: vec3(1.0, 2.0, 3.0),
             rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             quest_info: QuestInfo::new(),

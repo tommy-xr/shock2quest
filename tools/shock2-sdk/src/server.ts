@@ -5,8 +5,11 @@ import { dirname, join } from "node:path";
 
 import { HttpClient } from "./client.js";
 import { Game } from "./game.js";
+import type { GameMod } from "./mods.js";
 
 export interface LaunchOptions {
+  /** Gameplay campaign opt-ins. Omit or use [] for base; ["scp"] selects SCP. */
+  mods?: GameMod[];
   /** Mission file or debug scene, e.g. "medsci1.mis" or "debug_minimal". */
   mission: string;
   /** Fixed for this fresh campaign; loading a save retains its difficulty. */
@@ -330,6 +333,7 @@ export class GameServer extends Game implements AsyncDisposable {
         ? ["--experimental", options.experimental.join(",")]
         : []),
       ...(options.difficulty ? ["--difficulty", options.difficulty] : []),
+      ...(options.mods?.length ? ["--mods", options.mods.join(",")] : []),
       ...(options.debugFlags ?? []),
     ];
 

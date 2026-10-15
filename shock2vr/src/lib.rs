@@ -40,6 +40,7 @@ pub mod user_settings;
 pub mod vr_comfort;
 mod weapon_button_hold;
 
+pub mod campaign;
 pub mod career;
 pub mod creature;
 pub mod damage_overlay;
@@ -290,6 +291,7 @@ fn parse_saved_mission(
 ) -> io::Result<(SaveData, dark::mission::SystemShock2Level)> {
     println!("SHOCK2QUEST_LOAD path={}", path.display());
     let save = read_save_file(path)?;
+    context.campaign.validate_save(save.global_data.campaign)?;
     let name = &save.global_data.active_mission;
     if scenes::debug_scene_names().any(|scene| scene.eq_ignore_ascii_case(name)) {
         return Err(io::Error::new(
@@ -309,7 +311,7 @@ fn parse_saved_mission(
             format!("Mission '{name}' is unavailable"),
         ));
     }
-    let level = Mission::parse(assets, base_path, name, context);
+    let level = Mission::try_parse(assets, base_path, name, context)?;
     Ok((save, level))
 }
 
@@ -484,17 +486,19 @@ pub fn resource_family_paths(
 pub fn game_asset_mounts(
     bundle_storage: Arc<dyn Storage>,
 ) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
-    game_asset_mounts_with_terrain(bundle_storage, false)
+    game_asset_mounts_with_terrain(bundle_storage, false, campaign::Campaign::Base)
 }
 
 fn game_asset_mounts_with_terrain(
     bundle_storage: Arc<dyn Storage>,
     upgraded_terrain: bool,
+    campaign: campaign::Campaign,
 ) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
     if install::probe_data_root().kind == install::InstallKind::Anniversary {
         AssetPath::combine(build_25th_anniversary_mounts(
             bundle_storage.clone(),
             upgraded_terrain,
+            campaign,
         ))
     } else {
         AssetPath::combine(vec![
@@ -569,6 +573,7 @@ fn game_asset_mounts_with_terrain(
 fn build_25th_anniversary_mounts(
     bundle_storage: Arc<dyn Storage>,
     upgraded_terrain: bool,
+    campaign: campaign::Campaign,
 ) -> Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> {
     let mut mounts: Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> = Vec::new();
 
@@ -578,7 +583,10 @@ fn build_25th_anniversary_mounts(
 
     // The gamesys, missions and motiondb - shared with the CLI tools, which
     // need those files without any of the resource families above.
-    mounts.extend(data_files::data_file_mounts(paths::data_root()));
+    mounts.extend(
+        data_files::data_file_mounts_for_campaign(paths::data_root(), campaign)
+            .unwrap_or_else(|error| panic!("cannot select campaign: {error}")),
+    );
 
     mounts.push(BundleAssetPath::new("".to_owned(), bundle_storage));
     mounts.push(AssetPath::folder("".to_owned()));
@@ -630,6 +638,8 @@ pub enum PresentationMode {
 }
 
 pub struct GameOptions {
+    /// Gameplay data opt-ins; resource/art layers are selected independently.
+    pub mods: Vec<campaign::GameMod>,
     /// Supplied by the runtime so Git/version changes do not rebuild gameplay.
     pub build_label: &'static str,
     pub save_writer: save_load::SaveWriter,
@@ -660,6 +670,7 @@ impl GameOptions {
 impl Default for GameOptions {
     fn default() -> Self {
         Self {
+            mods: Vec::new(),
             build_label: "dev | unknown",
             save_writer: save_load::SaveWriter::default(),
             difficulty: dark::gamesys::Difficulty::Normal,
@@ -1366,6 +1377,18 @@ impl Game {
         self.active_game_scene.world()
     }
 
+    pub fn enabled_mods(&self) -> &[campaign::GameMod] {
+        &self.options.mods
+    }
+
+    /// Actual parsed mission fingerprints; generated scenes have no identity.
+    pub fn campaign_identity(&self) -> Option<campaign::CampaignContext> {
+        self.world()
+            .borrow::<shipyard::UniqueView<campaign::CampaignContext>>()
+            .ok()
+            .map(|context| (*context).clone())
+    }
+
     /// Whether a scene has requested to quit the game (e.g. the main menu's
     /// Quit). Runtimes should observe this and close their window.
     pub fn should_quit(&self) -> bool {
@@ -1558,7 +1581,18 @@ impl Game {
         );
         let upgraded_terrain = options.upgraded_terrain_enabled();
         println!("upgraded terrain textures: {upgraded_terrain}");
-        let asset_paths = game_asset_mounts_with_terrain(bundle_storage.clone(), upgraded_terrain);
+        let campaign = campaign::Campaign::from_mods(&options.mods);
+        // Validate opt-in requirements even on a legacy install.
+        if campaign == campaign::Campaign::Scp && install.kind != install::InstallKind::Anniversary
+        {
+            panic!("SCP requires a 25th Anniversary install with mods/scp.kpf");
+        }
+        println!(
+            "SHOCK2QUEST_CAMPAIGN campaign={campaign:?} gamesys={}",
+            campaign.gamesys()
+        );
+        let asset_paths =
+            game_asset_mounts_with_terrain(bundle_storage.clone(), upgraded_terrain, campaign);
         // Global items
         let base_path = paths::data_root().to_string_lossy().into_owned();
         let mut asset_cache = AssetCache::new(base_path, asset_paths);
@@ -1573,12 +1607,15 @@ impl Game {
 
         // Through the asset paths, like the missions and motiondb: on a 25AE
         // install the gamesys lives inside `sshock2.kpf`.
-        let game_reader = asset_cache.get_raw_reader("shock2.gam").unwrap_or_else(|| {
-            panic!(
-                "cannot load the game: shock2.gam not found in the mounted data ({})",
-                install.summary()
-            )
-        });
+        let game_reader = asset_cache
+            .get_raw_reader(campaign.gamesys())
+            .unwrap_or_else(|| {
+                panic!(
+                    "cannot load the game: {} not found in the mounted data ({})",
+                    campaign.gamesys(),
+                    install.summary()
+                )
+            });
 
         let _strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
 
@@ -1606,6 +1643,7 @@ impl Game {
         let mut audio_context = AudioContext::new();
 
         let global_context = GlobalContext {
+            campaign,
             links,
             links_with_data,
             properties,
@@ -2619,6 +2657,7 @@ impl Game {
             .clone();
 
         let global_data = GlobalData {
+            campaign: self.global_context.campaign,
             held_items,
             position,
             rotation,

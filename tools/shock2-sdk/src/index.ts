@@ -16,6 +16,7 @@ export {
   UiApi,
 } from "./game.js";
 export { findRepoRoot, GameServer, type LaunchOptions } from "./server.js";
+export { supportedModConfigurations, type GameMod } from "./mods.js";
 export * from "./anim-metrics.js";
 export * from "./ai-reachability.js";
 export type * from "./types.js";

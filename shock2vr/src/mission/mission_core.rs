@@ -3490,6 +3490,7 @@ pub struct MissionCore {
 }
 
 pub struct GlobalContext {
+    pub campaign: crate::campaign::Campaign,
     /// Typed to the asset-path layer's boxed reader rather than `BufReader<File>`,
     /// because `dark::mission::read` ties the property definitions to the reader
     /// type - and on a 25AE install the gamesys and missions come out of a KPF,

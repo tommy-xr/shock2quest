@@ -364,6 +364,11 @@ pub(crate) fn build_mission_from_save_data(
     global_context: &GlobalContext,
     game_options: &GameOptions,
 ) -> (Mission, HashMap<String, EntitySaveData>) {
+    // Startup --save-file also reaches this boundary without interactive loading.
+    global_context
+        .campaign
+        .validate_save(save_data.global_data.campaign)
+        .unwrap_or_else(|error| panic!("cannot restore save: {error}"));
     let current_mission = save_data.global_data.active_mission.clone();
     let active_healing = save_data.global_data.active_healing.clone();
     let active_radiation = save_data.global_data.active_radiation.clone();

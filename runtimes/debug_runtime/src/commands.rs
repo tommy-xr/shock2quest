@@ -801,6 +801,8 @@ pub struct SetCameraRequest {
 /// Current state of the game
 #[derive(Debug, Serialize, Clone)]
 pub struct FrameSnapshot {
+    pub mods: Vec<shock2vr::campaign::GameMod>,
+    pub campaign_identity: Option<shock2vr::campaign::CampaignContext>,
     pub frame_index: u64,
     pub time: TimeInfo,
     pub mission: String,

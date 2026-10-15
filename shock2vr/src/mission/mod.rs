@@ -78,6 +78,17 @@ impl Mission {
         mission: &str,
         global_context: &GlobalContext,
     ) -> dark::mission::SystemShock2Level {
+        Self::try_parse(asset_paths, base_path, mission, global_context)
+            .unwrap_or_else(|error| panic!("cannot load mission {mission}: {error}"))
+    }
+
+    /// Save loads can report rejected campaign data without replacing the live scene.
+    pub fn try_parse(
+        asset_paths: &dyn AbstractAssetPath,
+        base_path: &str,
+        mission: &str,
+        global_context: &GlobalContext,
+    ) -> std::io::Result<dark::mission::SystemShock2Level> {
         info!("starting level load");
         // Through the asset paths, not `File::open`: on a 25AE install the
         // missions live inside `sshock2.kpf`.
@@ -86,8 +97,17 @@ impl Mission {
                 base_path.to_owned(),
                 earth_horde::asset_mission(mission).to_ascii_lowercase(),
             )
-            .unwrap_or_else(|| panic!("mission {mission} not found in the mounted data"));
-        dark::mission::read(
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("mission {mission} not found in the mounted data"),
+                )
+            })?;
+        let identity = global_context.campaign.read_identity(
+            &earth_horde::asset_mission(mission).to_ascii_lowercase(),
+            &mut *reader.borrow_mut(),
+        )?;
+        let mut level = dark::mission::read(
             asset_paths,
             base_path,
             &mut *reader.borrow_mut(),
@@ -95,7 +115,9 @@ impl Mission {
             &global_context.links,
             &global_context.links_with_data,
             &global_context.properties,
-        )
+        );
+        level.identity = identity;
+        Ok(level)
     }
 
     /// The main-thread second phase: GPU upload (`to_scene`) + physics/spatial build +
@@ -114,6 +136,11 @@ impl Mission {
         game_options: &GameOptions,
     ) -> Mission {
         engine::platform::service_events();
+        let campaign_context = crate::campaign::CampaignContext {
+            campaign: global_context.campaign,
+            loaded_gamesys: global_context.campaign.gamesys().to_owned(),
+            mission: level.identity.clone(),
+        };
         let mission_scene = dark::mission::to_scene(&level, asset_cache);
         engine::platform::service_events();
         let song_params = level.song_params.clone();
@@ -154,6 +181,7 @@ impl Mission {
             held_item_save_data,
             game_options,
         );
+        mission_core.world.add_unique(campaign_context);
         if fresh_horde.load(std::sync::atomic::Ordering::Relaxed) {
             earth_horde::provision(&mut mission_core, asset_cache);
         }
