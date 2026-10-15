@@ -14,8 +14,8 @@ for (const vr of [false, true]) {
     await game.devParams.set("vr_mfd_focus_scan", 0);
     await game.devParams.set("hrm_force_critical", 1);
     await game.step({ frames: 10 });
-    // A flat machine frob opens the cyber interface, which Earth starts without.
-    if (!vr) await installEarthCyberInterface(game);
+    // Hacking needs the cyber interface (flat) or the belt MFD (VR), which Earth starts without.
+    await installEarthCyberInterface(game);
     const [nanites] = await game.entities.byTemplate(257);
     await game.entities.sendMessage(nanites.id, { type: "Frob" });
     const [reader] = await game.entities.byTemplate(262);
