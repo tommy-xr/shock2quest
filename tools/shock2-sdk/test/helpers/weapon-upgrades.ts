@@ -57,11 +57,17 @@ export async function unlockWeaponAlternateFire(game: GameServer): Promise<void>
     await game.entities.sendMessage(gun, { type: "SetObjectState", state: "Normal" });
     await game.step({ frames: 2 });
   }
+  await installWeaponUpgrade(game, "AlternateFire");
+}
+
+/** Install `choice` on the held gun through the real French-Epstein device
+ * chooser, then close the interface and restore the hands' poses. */
+export async function installWeaponUpgrade(game: GameServer, choice: string): Promise<void> {
   const input = await game.input.state();
   const device = await game.player.spawnItem(-1488);
   await game.entities.sendMessage(device.entity_id, { type: "Frob" });
   await game.step({ frames: 20 });
-  await clickUpgradeControl(game, "upgrade_AlternateFire");
+  await clickUpgradeControl(game, `upgrade_${choice}`);
   await clickUpgradeControl(game, "upgrade_confirm");
   for (let n = 0; n < 3 && (await game.ui.state()).mode === "use"; n++) {
     await game.input.trigger("ToggleUseMode");
