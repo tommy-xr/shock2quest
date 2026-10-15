@@ -12794,6 +12794,38 @@ impl MissionCore {
                     }
                 }
 
+                Effect::UpdateOverWorld { entity_id, command } => {
+                    use crate::scripts::gui::PanelText;
+                    let state = crate::scripts::gui::object_state(&self.world, entity_id);
+                    if matches!(
+                        state,
+                        dark::properties::ObjectState::Broken
+                            | dark::properties::ObjectState::Destroyed
+                    ) {
+                        continue;
+                    }
+                    let lose = PanelText::string(
+                        &self.world,
+                        "minigame",
+                        "ow_score_lose",
+                        "level %d, %d turns",
+                    );
+                    let win = PanelText::string(
+                        &self.world,
+                        "minigame",
+                        "ow_score_win",
+                        "won turn %d L%d",
+                    );
+                    let mut quest = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                    crate::overworld_game::apply(
+                        &mut quest,
+                        command,
+                        state == dark::properties::ObjectState::Hacked,
+                        [&lose, &win],
+                        &mut rand::thread_rng(),
+                    );
+                }
+
                 Effect::RecordMiniGameScore { game, score } => {
                     self.world
                         .borrow::<UniqueViewMut<QuestInfo>>()

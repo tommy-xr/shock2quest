@@ -318,6 +318,11 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    UpdateOverWorld {
+        entity_id: EntityId,
+        command: crate::overworld_game::Command,
+    },
+
     RecordMiniGameScore {
         game: u8,
         score: crate::mini_game_scores::MiniGameScore,

@@ -78,6 +78,7 @@ pub use physics::player_collision_shape;
 pub mod item_tools;
 pub mod mini_game_scores;
 pub mod overworld;
+pub mod overworld_game;
 pub mod player_stats;
 mod psi;
 mod psi_defenses;
