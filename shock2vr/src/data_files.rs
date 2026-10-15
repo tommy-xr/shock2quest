@@ -18,6 +18,7 @@ use std::sync::OnceLock;
 
 use engine::assets::asset_paths::{AbstractAssetPath, AssetPath, ReadableAndSeekable};
 
+use crate::campaign::Campaign;
 use crate::zip_asset_path::ZipAssetPath;
 
 /// Where that archive keeps the gamesys and the missions.
@@ -35,20 +36,44 @@ pub fn is_25th_anniversary_install(data_root: &Path) -> bool {
 /// Empty for a classic install, where those files are loose at the data root and
 /// the folder mount finds them.
 pub fn data_file_mounts(data_root: &Path) -> Vec<Box<dyn AbstractAssetPath>> {
+    data_file_mounts_for_campaign(data_root, Campaign::Base).expect("base data mounts")
+}
+
+/// Select gameplay data as a pair; callers must validate each mission's identity.
+pub fn data_file_mounts_for_campaign(
+    data_root: &Path,
+    campaign: Campaign,
+) -> std::io::Result<Vec<Box<dyn AbstractAssetPath>>> {
+    let mut mounts: Vec<Box<dyn AbstractAssetPath>> = Vec::new();
+    if campaign == Campaign::Scp {
+        let scp = data_root.join("mods/scp.kpf");
+        if !is_25th_anniversary_install(data_root) || !scp.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "SCP requires a 25th Anniversary install with mods/scp.kpf",
+            ));
+        }
+        mounts.push(ZipAssetPath::new2(
+            scp.to_string_lossy().into_owned(),
+            false,
+        ));
+    }
     if !is_25th_anniversary_install(data_root) {
-        return Vec::new();
+        return Ok(mounts);
     }
 
     let archive = data_root
         .join(crate::install::ANNIVERSARY_SENTINEL)
         .to_string_lossy()
         .into_owned();
-    vec![
+    mounts.extend(vec![
         // `motiondb.bin` moved from the data root to `res/mschema/`, and the
         // missions + gamesys live under `data/`.
-        ZipAssetPath::with_prefix(archive.clone(), "data/res/mschema/"),
+        ZipAssetPath::with_prefix(archive.clone(), "data/res/mschema/")
+            as Box<dyn AbstractAssetPath>,
         ZipAssetPath::with_prefix(archive, ARCHIVE_DATA_PREFIX),
-    ]
+    ]);
+    Ok(mounts)
 }
 
 /// Every mission file available in `data_root`, sorted, with the spelling that
@@ -112,9 +137,17 @@ fn archived_mission_names(data_root: &Path) -> BTreeMap<String, String> {
 /// Pass `data_root` as the `base_path` argument of `exists`/`get_reader`: that
 /// is what the loose-file mount resolves names against.
 pub fn asset_paths(data_root: &Path) -> Box<dyn AbstractAssetPath> {
-    let mut mounts = data_file_mounts(data_root);
+    asset_paths_for_campaign(data_root, Campaign::Base).expect("base data mounts")
+}
+
+/// Explicit campaign selection for inspection tools; existing helpers use Base.
+pub fn asset_paths_for_campaign(
+    data_root: &Path,
+    campaign: Campaign,
+) -> std::io::Result<Box<dyn AbstractAssetPath>> {
+    let mut mounts = data_file_mounts_for_campaign(data_root, campaign)?;
     mounts.push(AssetPath::folder(String::new()));
-    AssetPath::combine(mounts)
+    Ok(AssetPath::combine(mounts))
 }
 
 /// Open a raw data file by name (`shock2.gam`, `medsci1.mis`, `motiondb.bin`)
@@ -144,6 +177,74 @@ mod tests {
 
     use super::*;
     use crate::test_support::TempDir;
+
+    #[test]
+    fn scp_data_mounts_select_a_paired_campaign_and_require_the_archive() {
+        let dir = TempDir::new("scp-data");
+        write_archive(
+            dir.path(),
+            &[
+                ("data/shock2.gam", b"base gam"),
+                ("data/medsci1.mis", b"base mission"),
+            ],
+        );
+        assert!(asset_paths_for_campaign(dir.path(), Campaign::Scp).is_err());
+        std::fs::create_dir(dir.path().join("mods")).unwrap();
+        crate::test_support::write_archive(
+            &dir.path().join("mods/scp.kpf"),
+            &[
+                ("shockscp.gam", b"scp gam"),
+                ("medsci1.mis", b"scp mission"),
+            ],
+        );
+        let paths = asset_paths_for_campaign(dir.path(), Campaign::Scp).unwrap();
+        for (name, expected) in [
+            ("shockscp.gam", &b"scp gam"[..]),
+            ("medsci1.mis", &b"scp mission"[..]),
+        ] {
+            let reader = paths
+                .get_reader(dir.path().to_string_lossy().into_owned(), name.to_owned())
+                .unwrap();
+            let mut bytes = Vec::new();
+            reader.borrow_mut().read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, expected);
+        }
+        assert_eq!(read(dir.path(), "medsci1.mis").unwrap(), b"base mission");
+    }
+
+    #[test]
+    #[ignore = "requires DARK_ASSET_PATH explicitly pointing to a 25AE install"]
+    fn installed_campaigns_have_matching_identities() {
+        let root =
+            std::path::PathBuf::from(std::env::var("DARK_ASSET_PATH").expect("explicit 25AE root"));
+        assert!(root.join("sshock2.kpf").is_file());
+        assert!(root.join("mods/scp.kpf").is_file());
+        assert!(root.join("mods/sshock2ee.kpf").is_file());
+        let names = mission_names(&root);
+        assert_eq!(names.len(), 23);
+        for campaign in [Campaign::Base, Campaign::Scp] {
+            let paths = asset_paths_for_campaign(&root, campaign).unwrap();
+            assert!(paths.exists(
+                root.to_string_lossy().into_owned(),
+                campaign.gamesys().to_owned()
+            ));
+            for name in &names {
+                let reader = paths
+                    .get_reader(root.to_string_lossy().into_owned(), name.clone())
+                    .unwrap();
+                let mut reader = reader.borrow_mut();
+                let toc = dark::ss2_chunk_file_reader::read_table_of_contents(&mut *reader);
+                let identity =
+                    dark::mission::identity::MissionIdentity::read(name, &toc, &mut *reader)
+                        .unwrap();
+                campaign.validate_mission(&identity).unwrap();
+                assert_eq!(
+                    identity.matches_scp_patch(name, campaign.gamesys()),
+                    campaign == Campaign::Scp
+                );
+            }
+        }
+    }
 
     /// Write a stand-in for the 25AE archive holding `entries`.
     fn write_archive(root: &Path, entries: &[(&str, &[u8])]) {

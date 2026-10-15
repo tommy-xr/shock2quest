@@ -964,6 +964,13 @@ export interface SoftwareVersions {
 }
 
 export interface FrameSnapshot {
+  mods: import("./mods.js").GameMod[];
+  /** Parsed source identity, null for menus and generated debug scenes. */
+  campaign_identity: {
+    campaign: "base" | "scp";
+    loaded_gamesys: string;
+    mission: { mission: string; gamesys: string | null; quest_variables: Record<string, number> };
+  } | null;
   frame_index: number;
   /** Clock supplied to the last advanced runtime frame, held while idle. */
   time: { total_ms: number; elapsed_ms: number };

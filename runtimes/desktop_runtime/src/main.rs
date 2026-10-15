@@ -95,6 +95,10 @@ impl HandContext {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// Gameplay mods (currently scp); omitted keeps base campaign data.
+    #[arg(long, value_delimiter = ',')]
+    mods: Vec<shock2vr::campaign::GameMod>,
+
     /// Mission or debug scene to load. If omitted, boots the main menu in flat
     /// mode, or earth.mis in --vr mode.
     #[arg(short, long)]
@@ -365,6 +369,7 @@ pub fn main() {
     let (mission, spawn_location) = parse_mission(&mission_arg);
 
     let options = GameOptions {
+        mods: args.mods,
         build_label: env!("SHOCK2QUEST_BUILD_LABEL"),
         save_writer: shock2vr::save_load::SaveWriter::new(
             env!("SHOCK2QUEST_BUILD_VERSION"),

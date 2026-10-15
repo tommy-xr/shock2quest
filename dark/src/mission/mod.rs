@@ -102,6 +102,7 @@ impl WaterRenderInfo {
 }
 
 pub struct SystemShock2Level {
+    pub identity: identity::MissionIdentity,
     pub all_geometry: Vec<SystemShock2Geometry>,
 
     pub textures: TextureList,
@@ -186,6 +187,9 @@ pub fn read<T: io::Read + io::Seek>(
 ) -> SystemShock2Level {
     engine::platform::service_events();
     let table_of_contents = ss2_chunk_file_reader::read_table_of_contents(reader);
+    // The caller supplies the effective filename after parsing the raw file.
+    let identity = identity::MissionIdentity::read("", &table_of_contents, reader)
+        .expect("invalid mission campaign fingerprints");
 
     let wr_ext = table_of_contents.has_chunk("WREXT".to_string()); // Extended representation
     let wr_rgb = table_of_contents.has_chunk("WRRGB".to_string()); // RGB representation
@@ -321,6 +325,7 @@ pub fn read<T: io::Read + io::Seek>(
     }
 
     SystemShock2Level {
+        identity,
         bsp_tree,
         all_geometry,
         textures,
