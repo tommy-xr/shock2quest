@@ -308,20 +308,35 @@ test("MFD screen ignores a gun hand while its trigger and face button still work
 });
 
 
-// The device stows on the belt, so like the belt it needs the cyber interface.
-test("MFD device stays off the belt until the cyber interface is installed", {
-  skip: !enabled, timeout: 180_000,
-}, async () => {
-  await using game = await GameServer.launch({ mission: "earth.mis", port: 0,
-    debugFlags: ["--vr", "--experimental", "mfd_device"] });
-  await game.step({ frames: 30 });
-  assert.equal((await game.scene.fromSource("mfd_body")).length, 0, "no device before the interface");
-  assert.equal((await game.scene.fromSource("mfd_stowed_ui")).length, 0, "no belt screen before the interface");
-  await installEarthCyberInterface(game);
-  await game.step({ frames: 30 });
-  assert.ok((await game.scene.fromSource("mfd_body")).length > 0, "installing stows the device on the belt");
-  assert.ok((await game.scene.fromSource("mfd_stowed_ui")).length > 0, "with its passive belt screen");
-});
+// The access card (MFD device or plain card) rides the belt, so like the belt it
+// needs the cyber interface: absent before install, stowed when a script hides it.
+for (const device of [true, false]) {
+  test(`belt ${device ? "MFD device" : "access card"} needs the cyber interface`, {
+    skip: !enabled, timeout: 180_000,
+  }, async () => {
+    await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
+    await game.devParams.set("vr_mfd_device", device ? 1 : 0);
+    await game.step({ frames: 30 });
+    const visible = async () => {
+      const { objects } = await game.scene.objects();
+      return objects.filter((o) => o.material_name?.toLowerCase().startsWith("nd-scipass")).length
+        + (await game.scene.fromSource("mfd_body")).length
+        + (await game.scene.fromSource("mfd_stowed_ui")).length;
+    };
+    assert.equal(await visible(), 0, "nothing on the belt before the interface");
+
+    await installEarthCyberInterface(game);
+    await game.step({ frames: 30 });
+    assert.ok(await visible() > 0, "installing puts it on the belt");
+
+    await drawPersonalCard(game, "left");
+    await game.quests.set("HideInterface", "incomplete");
+    await game.step({ frames: 5 });
+    assert.equal((await game.info()).player.hand_feedback?.body_gear?.personal_card.hand ?? null, null,
+      "hiding the interface stows the held card");
+    assert.equal(await visible(), 0, "and hides it with the belt");
+  });
+}
 
 test("loot uses the cyber interface or held device without a world quad", {
   skip: !enabled, timeout: 180_000,

@@ -5994,8 +5994,9 @@ impl MissionCore {
         });
         let psi_projected =
             psi_session.is_some() && game_options.presentation_mode == crate::PresentationMode::Vr;
-        let device_enabled =
-            super::mfd_device::enabled(&self.world, &game_options.experimental_features);
+        // The device rides the belt, so it needs the cyber interface like the belt.
+        let device_enabled = super::mfd_device::enabled(&game_options.experimental_features)
+            && crate::cyber_interface::installed(&self.world);
         self.interaction.set_body_tool_device(device_enabled);
         let device_hand = self.personal_card.hand.filter(|i| {
             device_enabled
@@ -6516,10 +6517,13 @@ impl MissionCore {
                     && chest_actions[i].is_none()
                     && !self.shoulder_backpack.near[i]
             }),
+            // The card rides the belt, so it needs the cyber interface too;
+            // hiding the interface stows a held card or device.
             game_options.presentation_mode == crate::PresentationMode::Vr
                 && !self.use_mode
                 && self.player_is_alive()
-                && self.player_controls_enabled,
+                && self.player_controls_enabled
+                && crate::cyber_interface::installed(&self.world),
         );
         if returned_to_belt {
             effects.push(crate::scripts::script_util::announce(
@@ -7137,7 +7141,10 @@ impl MissionCore {
             }
         }
         rewrite_inventory_release(&mut interaction_msgs, &store, &collect);
-        if game_options.presentation_mode == crate::PresentationMode::Vr {
+        // Without the interface there is no card to scan, so readers take a plain frob.
+        if game_options.presentation_mode == crate::PresentationMode::Vr
+            && crate::cyber_interface::installed(&self.world)
+        {
             let mut scan_required = false;
             interaction_msgs.retain(|effect| {
                 let blocked = matches!(effect,
@@ -17936,7 +17943,9 @@ impl MissionCore {
         ));
 
         if options.presentation_mode == crate::PresentationMode::Vr {
-            if super::mfd_device::enabled(&self.world, &options.experimental_features) {
+            // The card rides the belt, so like the belt it needs the cyber interface.
+            let belt_card = crate::cyber_interface::installed(&self.world);
+            if belt_card && super::mfd_device::enabled(&options.experimental_features) {
                 if self.personal_card.hand.is_none() {
                     if let Some(panel) = self
                         .personal_card
@@ -17967,7 +17976,7 @@ impl MissionCore {
                         scene.extend(screen);
                     }
                 }
-            } else {
+            } else if belt_card {
                 scene.extend(
                     self.personal_card
                         .render(asset_cache, player.pos, player.rotation),
