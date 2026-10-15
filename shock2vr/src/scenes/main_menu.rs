@@ -4,8 +4,8 @@
 //! six mouse-clickable menu entries, described on the shared [`UiCanvas`]. It
 //! reads `InputContext::pointer` (normalized screen coords) and emits a
 //! `GlobalEffect` on click. New Game and Survive open the shared difficulty selection page; New Game then
-//! starts a fresh campaign; Quit emits `Quit`. Unimplemented entries are drawn
-//! dimmed and ignore clicks.
+//! starts a fresh campaign; Credits plays the credits roll and returns here;
+//! Quit emits `Quit`.
 //!
 //! Developer mode uses `NETMAIN.PCX` and its extra bottom-left button.
 //! Each backdrop uses its matching authored layout; labels use `NETMAIN.STR`.
@@ -108,6 +108,7 @@ enum MenuAction {
     Survive,
     Back,
     LoadGame,
+    Credits,
     Developer,
     BuildInfo,
     Quit,
@@ -200,7 +201,7 @@ const MENU_ITEMS: &[FrontendMenuItem<MenuAction>] = &[
     FrontendMenuItem {
         string_key: "credits",
         fallback_label: "Credits",
-        action: None,
+        action: Some(MenuAction::Credits),
         label_override: None,
     },
     FrontendMenuItem {
@@ -475,6 +476,9 @@ impl MainMenuScene {
             Some(MenuAction::LoadGame) => {
                 vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
             }
+            Some(MenuAction::Credits) => vec![Effect::GlobalEffect(super::credits_then_main_menu(
+                super::resolve_credits_cutscene(),
+            ))],
             Some(MenuAction::Developer) => {
                 vec![Effect::GlobalEffect(GlobalEffect::ShowDeveloper)]
             }
@@ -1072,12 +1076,23 @@ mod tests {
     }
 
     #[test]
-    fn click_over_an_unimplemented_item_does_nothing() {
-        // Rect 3 is "Credits", still unimplemented: canvas y 248..308.
+    fn credits_plays_the_credits_roll_then_returns_to_the_menu() {
+        // Rect 3 is "Credits": canvas y 248..308.
         let rects = menu_rects(None);
         assert!(rects[3].contains(vec2(512.0, 278.0)));
         let (action, _, _) = resolve_click(pointer_at(0.8, 0.5792, true), false, SCREEN, &rects);
-        assert_eq!(action, None);
+        assert_eq!(action, Some(MenuAction::Credits));
+
+        // Without the video installed (as on CI) it lands straight on the menu.
+        let effects = MainMenuScene::new().handle_action(action);
+        match effects.as_slice() {
+            [Effect::GlobalEffect(GlobalEffect::PlayCutscene { video, then })] => {
+                assert!(video.contains("credits"), "unexpected video {video}");
+                assert!(matches!(**then, GlobalEffect::ShowMainMenu));
+            }
+            [Effect::GlobalEffect(GlobalEffect::ShowMainMenu)] => {}
+            other => panic!("expected the credits roll, got {other:?}"),
+        }
     }
 
     #[test]
