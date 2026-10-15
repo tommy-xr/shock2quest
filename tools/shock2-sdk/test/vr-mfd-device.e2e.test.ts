@@ -6,6 +6,7 @@ import { aimMfdAt, aimVrHandAt, aimVrHandAtCanvas, drawPersonalCard, equipRightH
 
 import { ammoOf, fireOnce } from "./helpers/weapon.js";
 import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
+import { standNear } from "./helpers/os-upgrade.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 for (const hand of ["left", "right"] as const) {
@@ -335,8 +336,31 @@ for (const device of [true, false]) {
     assert.equal((await game.info()).player.hand_feedback?.body_gear?.personal_card.hand ?? null, null,
       "hiding the interface stows the held card");
     assert.equal(await visible(), 0, "and hides it with the belt");
+
+    await game.quests.set("HideInterface", "unknown");
+    await game.step({ frames: 5 });
+    assert.ok(await visible() > 0, "restoring the interface returns it to the belt");
   });
 }
+
+// With no card to scan before the interface, card readers take a plain frob (as retail).
+test("Earth's Recharging Station takes a plain VR frob before the cyber interface", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
+  await game.step({ frames: 5 });
+  const [station] = await game.entities.byTemplate(258);
+  assert.ok(station, "expected Earth Recharging Station object 258");
+  await standNear(game, station.id);
+  const aim = await game.player.aimAt(station.id, { hitbox: "center", visibility: "required" });
+  assert.ok(aim.target_confirmed, JSON.stringify(aim));
+  await aimVrHandAt(game, aim.world_point);
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 3 });
+  const { messages } = await game.ui.state();
+  await game.input.set("right_hand.trigger", 0);
+  assert.ok(!messages.includes("Scan your personal access card"), "no card is asked for");
+});
 
 test("loot uses the cyber interface or held device without a world quad", {
   skip: !enabled, timeout: 180_000,
