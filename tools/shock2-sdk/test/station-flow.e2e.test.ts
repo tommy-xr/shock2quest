@@ -4,8 +4,9 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
 import { stepPastCutscenes } from "./helpers/cutscenes.js";
-import { DEBRIEF_CONTINUE, debriefIsUp, dismissDebrief } from "./helpers/debrief.js";
-import { vrClickCanvasPoint } from "./helpers/frontend-menu.js";
+import { dismissDebrief } from "./helpers/debrief.js";
+import { clickCanvasPoint, vrClickCanvasPoint } from "./helpers/frontend-menu.js";
+import { teleportVerified } from "./helpers/teleport.js";
 
 // End-to-end test for the HONEST character-creation chain the player walks at
 // game start: earth.mis (pick a career) -> station.mis three training tours ->
@@ -115,13 +116,30 @@ async function teleportTo(game: GameServer, [x, y, z]: Vec3): Promise<void> {
  * for the mapping), so the destination is only on screen once those finish;
  * this test is about what survives the chain, not about the movies.
  */
-async function tripAndArrive(game: GameServer, at: Vec3, frames: number): Promise<string[]> {
+async function tripAndArrive(
+  game: GameServer,
+  at: Vec3,
+  frames: number,
+  click = clickCanvasPoint,
+): Promise<string[]> {
   await teleportTo(game, at);
   await game.step({ frames });
   // A tour ends on its debrief page, which waits for the player before the
   // departure runs; a career door has none to dismiss.
-  await dismissDebrief(game);
+  await dismissDebrief(game, click);
   return stepPastCutscenes(game);
+}
+
+/** Frob MedSci1's first wrench corpse and assert its search panel opens. */
+async function assertWrenchCorpseSearchable(game: GameServer): Promise<void> {
+  const [corpse] = await game.entities.byTemplate(1177);
+  assert.ok(corpse?.position, "MedSci1 has the first wrench corpse");
+  await teleportVerified(game, { x: corpse.position[0] + 1.0, y: corpse.position[1] + 0.5, z: corpse.position[2] + 1.0 });
+  await game.entities.sendMessage(corpse.id, { type: "Frob" });
+  await game.step({ frames: 5 });
+  const ui = await game.ui.state();
+  assert.equal(ui.active_panel?.entity_id, corpse.id, "the corpse search panel opens");
+  assert.ok(!ui.messages.includes("Cyber Interface software not installed."));
 }
 
 /** The set of `training_year_N` bits currently COMPLETE, sorted ascending. */
@@ -310,15 +328,7 @@ test(
 
     // The first wrench corpse must be searchable after carrying Earth's state
     // through training, including the mid-training save/load above.
-    const [corpse] = await game.entities.byTemplate(1177);
-    assert.ok(corpse?.position, "MedSci1 has the first wrench corpse");
-    await game.player.teleport({ x: corpse.position[0] + 1.2, y: corpse.position[1] + 0.5, z: corpse.position[2] });
-    await game.step({ frames: 5 });
-    await game.entities.sendMessage(corpse.id, { type: "Frob" });
-    await game.step({ frames: 3 });
-    const ui = await game.ui.state();
-    assert.equal(ui.active_panel?.entity_id, corpse.id, "the corpse search panel opens");
-    assert.ok(!ui.messages.includes("Cyber Interface software not installed."));
+    await assertWrenchCorpseSearchable(game);
   },
 );
 
@@ -390,18 +400,11 @@ test(
     await game.step({ frames: 5 });
     assert.equal(await game.quests.get("HideInterface"), "incomplete", "Earth starts without the interface");
 
-    async function trip(at: Vec3): Promise<void> {
-      await teleportTo(game, at);
-      await game.step({ frames: 15 });
-      if (await debriefIsUp(game)) await vrClickCanvasPoint(game, DEBRIEF_CONTINUE);
-      await stepPastCutscenes(game);
-    }
-
-    await trip(CAREER_DOORS.marine.trip);
+    await tripAndArrive(game, CAREER_DOORS.marine.trip, 15, vrClickCanvasPoint);
     for (let tour = 1; tour <= 3; tour++) {
       assert.equal((await game.info()).mission.toLowerCase(), "station.mis", `tour ${tour} starts on the station`);
       assert.equal(await game.quests.get("HideInterface"), "incomplete", `tour ${tour}: still in training`);
-      await trip(TOUR_TRIP);
+      await tripAndArrive(game, TOUR_TRIP, 15, vrClickCanvasPoint);
     }
     assert.equal((await game.info()).mission.toLowerCase(), "medsci1.mis");
     assert.equal(await game.quests.get("HideInterface"), "unknown", "final deployment installs the interface");
@@ -409,21 +412,13 @@ test(
     // The Menu button opens the full interface rather than the refusal.
     await game.input.trigger("MenuButton");
     await game.step({ frames: 5 });
-    let ui = await game.ui.state();
+    const ui = await game.ui.state();
     assert.equal(ui.mode, "use", "Menu opens the cyber interface");
     assert.ok(ui.strip !== null, "the inventory is available");
     assert.ok(!ui.messages.includes("Cyber Interface software not installed."));
     await game.input.trigger("MenuButton");
     await game.step({ frames: 5 });
 
-    const [corpse] = await game.entities.byTemplate(1177);
-    assert.ok(corpse?.position, "MedSci1 has the first wrench corpse");
-    await game.player.teleport({ x: corpse.position[0] + 1.2, y: corpse.position[1] + 0.5, z: corpse.position[2] });
-    await game.step({ frames: 5 });
-    await game.entities.sendMessage(corpse.id, { type: "Frob" });
-    await game.step({ frames: 3 });
-    ui = await game.ui.state();
-    assert.equal(ui.active_panel?.entity_id, corpse.id, "the corpse search panel opens");
-    assert.ok(!ui.messages.includes("Cyber Interface software not installed."));
+    await assertWrenchCorpseSearchable(game);
   },
 );
