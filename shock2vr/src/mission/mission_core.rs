@@ -5994,8 +5994,8 @@ impl MissionCore {
         });
         let psi_projected =
             psi_session.is_some() && game_options.presentation_mode == crate::PresentationMode::Vr;
-        let device_enabled = game_options.experimental_features.contains("mfd_device")
-            || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE);
+        let device_enabled =
+            super::mfd_device::enabled(&self.world, &game_options.experimental_features);
         self.interaction.set_body_tool_device(device_enabled);
         let device_hand = self.personal_card.hand.filter(|i| {
             device_enabled
@@ -17936,9 +17936,7 @@ impl MissionCore {
         ));
 
         if options.presentation_mode == crate::PresentationMode::Vr {
-            if options.experimental_features.contains("mfd_device")
-                || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE)
-            {
+            if super::mfd_device::enabled(&self.world, &options.experimental_features) {
                 if self.personal_card.hand.is_none() {
                     if let Some(panel) = self
                         .personal_card

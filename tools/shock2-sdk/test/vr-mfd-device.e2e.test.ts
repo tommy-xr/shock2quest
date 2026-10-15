@@ -5,6 +5,7 @@ import { GameServer } from "../src/index.js";
 import { aimMfdAt, aimVrHandAt, aimVrHandAtCanvas, drawPersonalCard, equipRightHand, add, sub, scale, quatRotate } from "./helpers/vr-hand.js";
 
 import { ammoOf, fireOnce } from "./helpers/weapon.js";
+import { installEarthCyberInterface } from "./helpers/cyber-interface.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 for (const hand of ["left", "right"] as const) {
@@ -14,6 +15,7 @@ for (const hand of ["left", "right"] as const) {
     await using game = await GameServer.launch({ mission: "earth.mis", port: 0,
       debugFlags: hand === "left" ? ["--vr", "--experimental", "mfd_device"] : ["--vr"] });
     // The right hand exercises the default launch; left keeps explicit-flag coverage.
+    await installEarthCyberInterface(game);
     await game.devParams.set("vr_mfd_focus_scan", 0);
     await game.step({ frames: 30 });
     const [reader] = await game.entities.byTemplate(262);
@@ -306,11 +308,27 @@ test("MFD screen ignores a gun hand while its trigger and face button still work
 });
 
 
+// The device stows on the belt, so like the belt it needs the cyber interface.
+test("MFD device stays off the belt until the cyber interface is installed", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "earth.mis", port: 0,
+    debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.step({ frames: 30 });
+  assert.equal((await game.scene.fromSource("mfd_body")).length, 0, "no device before the interface");
+  assert.equal((await game.scene.fromSource("mfd_stowed_ui")).length, 0, "no belt screen before the interface");
+  await installEarthCyberInterface(game);
+  await game.step({ frames: 30 });
+  assert.ok((await game.scene.fromSource("mfd_body")).length > 0, "installing stows the device on the belt");
+  assert.ok((await game.scene.fromSource("mfd_stowed_ui")).length > 0, "with its passive belt screen");
+});
+
 test("loot uses the cyber interface or held device without a world quad", {
   skip: !enabled, timeout: 180_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "earth.mis", port: 0,
     debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await installEarthCyberInterface(game);
   await game.devParams.set("vr_mfd_focus_scan", 0);
   await game.step({ frames: 30 });
   const [crate] = await game.entities.byTemplate(307);
