@@ -97,10 +97,10 @@ export const HERO = "../screenshots/hero/";
 export const SHOTS = [
   ["rec1", "Recreation · dual pistols"],
   ["toolbelt", "Recreation · tricorder hack"],
-  ["hydro1", "Hydroponics · assault rifle"],
+  ["hydro1", "Hydroponics · assault rifle + flashlight"],
   ["ops2", "Operations · psi amp + laser"],
   ["medsci1-melee", "MedSci · pistol + wrench"],
-  ["rick1", "Rickenbacker · ladder, holster draw"],
+  ["rick1", "Rickenbacker · ladder, holster draw, laser sight"],
   ["command1", "Command · pump shotgun"],
   ["ops3", "Operations · pouch reload"],
 ];

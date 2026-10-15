@@ -1,6 +1,6 @@
 // Capture a first-person VR clip for the README/website: up rick1's opening
 // ladder hand over hand, hang one-handed at the first deck, draw the pistol
-// from the hip holster and drop the assassin standing there.
+// (laser sight on) from the hip holster and drop the assassin standing there.
 // Run from tools/shock2-sdk after npm run build:
 // DARK_ASSET_PATH=/path/to/25AE node scripts/hero-ladder-draw.mjs
 import assert from "node:assert/strict";
@@ -14,6 +14,7 @@ import {
   GameServer, handPoseAimedAt, ladderHoldPoints, lookQuat, pawnYawError, quatMultiply, quatRotate,
   recordClipInputs, sway, turnPawnToward, viewRight, vrReach,
 } from "../dist/src/index.js";
+import { installWeaponUpgrade } from "../dist/test/helpers/weapon-upgrades.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const out = resolve(root, "screenshots/hero");
@@ -36,8 +37,9 @@ const PRE_WOUND = 45;
 const STATS = { skills: { standard_weapons: 3 } };
 // The README/website clips' field of view (hero-shots.mjs).
 const FOV_DEG = 85;
-// Engine lighting controls only; geometry and materials stay production.
-const LIGHTING = { ambient_light_intensity: 1.6, level_light_intensity: 2.0, held_light_floor: 1.0 };
+// Level lighting stays production - a brighter deck washes out the laser
+// beam - but held items are lit evenly so the pistol reads.
+const LIGHTING = { held_light_floor: 1.0 };
 // Horizontal distance from the ladder's centre line to the climber's pawn.
 const CLIMB_STANDOFF = 0.68;
 // Climbing, the tracked head leans this far toward the ladder (pawn-local
@@ -78,8 +80,9 @@ const SETTLE_FRAMES = 8;
 const LOOK_RIGHT = 0.4;
 // Frames held on the death crumple before the clip ends.
 const DEATH_HOLD_FRAMES = 110;
-// Pistol at aim, from the eye: x right, y up, -z toward the target.
-const AIM_RIGHT = [0.2, -0.27, -0.5];
+// Pistol at aim, from the eye: x right, y up, -z toward the target. Low and
+// wide of the eye, so the laser beam crosses the view rather than along it.
+const AIM_RIGHT = [0.26, -0.36, -0.45];
 // Trigger pulls after the pistol settles on target (seconds); irregular, as
 // a person fires, but past the pistol's refire delay (~0.5 s; a pull sooner
 // does nothing). The clip stops pulling once the assassin is down.
@@ -195,6 +198,9 @@ async function take(game, framesDir) {
   let { player } = await game.info();
   const pistol = player.right_hand_entity_id;
   assert.ok(pistol, "the right hand must hold the pistol");
+  // The real device chooser installs the laser sight and switches it on.
+  assert.equal((await installWeaponUpgrade(game, pistol, "Laser")).laser_enabled, true, "the pistol's laser sight must be on");
+  ({ player } = await game.info());
   const ammo = async () => Number(property(await game.entities.detail(pistol), "Ammo"));
   const right = await viewRight(game);
   const holsterSide = (i) => sub(player.hand_feedback.holsters.centers[i], player.position)
@@ -304,7 +310,10 @@ async function take(game, framesDir) {
       await game.screenshot(path, 1280);
       const { player: after } = await game.info();
       const target = await game.entities.detail(assassin.id);
+      const laser = new Set((await game.scene.objects({ entityId: pistol })).objects.map((o) => o.source)
+        .filter((s) => s === "weapon_laser_core" || s === "weapon_laser_dot"));
       samples.push({ frame: tick - 1, image: path, phase, grips: after.climb.grips.map((g) => g.hand),
+        beam: laser.has("weapon_laser_core"), dot: laser.has("weapon_laser_dot"),
         holding: after.right_hand_entity_id, health: after.hit_points,
         assassin: target && { y: target.position[1], hp: Number(property(target, "HitPoints")) } });
     }
@@ -443,6 +452,9 @@ async function take(game, framesDir) {
   assert.equal(roundsBefore - roundsAfter, pulls, "every trigger pull must fire a round");
   assert.ok(samples.filter((s) => s.phase !== "climb").every((s) => s.grips.includes("left")), "the left hand must hold the ladder throughout");
   assert.ok(samples.every((s) => s.health === samples[0].health), "no damage during the clip");
+  // From the settled aim (the poster) through the death hold.
+  const firstFire = samples.findIndex((s) => s.phase === "fire");
+  assert.ok(samples.slice(firstFire - 1).every((s) => s.beam && s.dot), "the laser beam and dot must show while firing");
   // AI varies: a take where the assassin leaves its deck (it can drop into
   // the shaft) frames the fight at the player's feet.
   assert.ok(samples.every((s) => !s.assassin || s.assassin.hp <= 0 || Math.abs(s.assassin.y - deckY) < 0.6),
@@ -462,17 +474,19 @@ async function take(game, framesDir) {
     "-movflags", "+faststart", resolve(out, `${clip}.mp4`)]);
   execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-framerate", String(FPS), "-i", input,
     // README width; the view never holds still, so a smaller palette keeps it
-    // near the other clips' size.
-    "-vf", "scale=400:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+    // near the other clips' size. A whole-frame palette (stats_mode=full)
+    // keeps a saturated red for the thin laser beam.
+    "-vf", "scale=400:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=full[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
     resolve(out, `${clip}.gif`)]);
-  // Poster: the first shot, muzzle flash on the assassin.
-  const poster = samples.find((s) => s.phase === "fire");
+  // Poster: settled on the assassin just before the first shot, whose muzzle
+  // flash would hide the laser.
+  const poster = samples[firstFire - 1];
   await copyFile(poster.image, resolve(out, `${clip}.png`));
   await writeFile(resolve(out, `${clip}.json`), JSON.stringify({
     mission: MISSION, presentation: "Vr", revision: git("rev-parse", "HEAD"),
     runtimeSha256, assetRoot,
     devParams: { cheat: 1, fov_override_deg: FOV_DEG, ...LIGHTING }, stats: STATS, settings: { vr: { turning: "Smooth", vignette: "Off" } },
-    assassin: { object: ASSASSIN, preWound: PRE_WOUND, hp: [firstHp, aim.hp] }, pistol: { holsterSlot: slot, pulls, rounds: [roundsBefore, roundsAfter] },
+    assassin: { object: ASSASSIN, preWound: PRE_WOUND, hp: [firstHp, aim.hp] }, pistol: { holsterSlot: slot, accessory: "Laser", pulls, rounds: [roundsBefore, roundsAfter] },
     ladder: { segments: ladders.map((l) => l.model), strokes: STROKES, startEye, endEye },
     video: { file: `${clip}.mp4`, fps: FPS, frames: samples.length }, inputs: `${clip}.inputs.json`, gif: `${clip}.gif`,
     samples: samples.map(({ image, ...sample }) => sample),

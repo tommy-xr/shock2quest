@@ -26,6 +26,7 @@ import {
   setHandWorldPose,
   sway,
 } from "../dist/src/index.js";
+import { installWeaponUpgrade } from "../dist/test/helpers/weapon-upgrades.js";
 
 // Hand offsets from the eye: x right, y up, -z toward the target.
 const AIM_RIGHT = [0.1, -0.18, -0.55];
@@ -51,6 +52,8 @@ const SHOTS = [
     subject: "Floor Pod",
     loadout: { right: -18 },
     hands: { right: RIFLE_RIGHT },
+    // Installed, and so switched on, before the still.
+    accessory: "Flashlight",
     twoHanded: "right",
     stats: { strength: 5, skills: { standard_weapons: 6 } },
     // Shots burst the pod; the clip ends before its gas reaches the player.
@@ -304,10 +307,15 @@ async function captureShot(shot) {
     for (const hand of Object.keys(shot.loadout)) {
       if (held[hand] == null) throw new Error(`${shot.name}: ${hand} hand holds nothing`);
     }
+    if (shot.accessory) await installAccessory(game, held.right, shot.accessory);
     if (shot.twoHanded) await attachSupportHand(game, shot.twoHanded);
 
     await game.devParams.set("fov_override_deg", Number(values.fov));
     await game.step({ frames: 2 });
+    if (shot.accessory === "Flashlight") {
+      const { carried_lights: lights = [] } = await game.scene.objects({ limit: 0 });
+      assert.ok(lights.some((l) => l.kind === "spot"), `${shot.name}: the flashlight must light the scene`);
+    }
     const path = resolve(out, `${shot.name}.png`);
     const result = await game.screenshot(path, Number(values["max-width"]));
     console.log(`${shot.name}: ${result.full_path} ${result.resolution.join("x")}`);
@@ -321,6 +329,7 @@ async function captureShot(shot) {
       player: shot.player,
       subject: shot.subject ?? `template ${shot.spawnMonster}`,
       loadout: shot.loadout,
+      accessory: shot.accessory,
       stats: shot.stats,
       fovDeg: Number(values.fov),
       still: { file: `${shot.name}.png`, resolution: result.resolution },
@@ -400,6 +409,13 @@ async function recordClip(game, shot, subjectId, held) {
   } finally {
     await sink.dispose();
   }
+}
+
+/** Install `accessory` on gun `id` through the real device chooser, which
+ * switches it on, and let its "Installed ..." HUD line (5 s) expire. */
+async function installAccessory(game, id, accessory) {
+  await installWeaponUpgrade(game, id, accessory);
+  await game.step({ frames: 310 });
 }
 
 /** Rounds loaded in gun `id`. A gun without ammo is a broken setup, not a bad take. */

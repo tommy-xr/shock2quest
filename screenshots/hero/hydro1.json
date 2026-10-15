@@ -1,7 +1,7 @@
 {
-  "revision": "13512633c7ac0ec424d206fa588abadfbce882a9",
-  "dirty": false,
-  "capturedAt": "2026-10-12T13:52:53.789Z",
+  "revision": "42d3e41eec2e3df52d7587dcc747ac422860532f",
+  "dirty": true,
+  "capturedAt": "2026-10-15T17:25:39.852Z",
   "mission": "hydro1.mis",
   "settings": {
     "vr": {
@@ -30,6 +30,7 @@
   "loadout": {
     "right": -18
   },
+  "accessory": "Flashlight",
   "stats": {
     "strength": 5,
     "skills": {

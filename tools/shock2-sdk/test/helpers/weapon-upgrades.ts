@@ -57,11 +57,19 @@ export async function unlockWeaponAlternateFire(game: GameServer): Promise<void>
     await game.entities.sendMessage(gun, { type: "SetObjectState", state: "Normal" });
     await game.step({ frames: 2 });
   }
+  await installWeaponUpgrade(game, gun, "AlternateFire");
+}
+
+/** Install `choice` on held gun `gun` through the real French-Epstein device
+ * chooser, then close the interface and restore the hands' poses. Returns the
+ * gun's saved upgrade state; an installed light or laser starts switched on. */
+export async function installWeaponUpgrade(game: GameServer, gun: number, choice: string):
+  Promise<{ choices: string[]; flashlight_enabled: boolean; laser_enabled: boolean }> {
   const input = await game.input.state();
   const device = await game.player.spawnItem(-1488);
   await game.entities.sendMessage(device.entity_id, { type: "Frob" });
   await game.step({ frames: 20 });
-  await clickUpgradeControl(game, "upgrade_AlternateFire");
+  await clickUpgradeControl(game, `upgrade_${choice}`);
   await clickUpgradeControl(game, "upgrade_confirm");
   for (let n = 0; n < 3 && (await game.ui.state()).mode === "use"; n++) {
     await game.input.trigger("ToggleUseMode");
@@ -77,4 +85,9 @@ export async function unlockWeaponAlternateFire(game: GameServer): Promise<void>
     await game.input.set(`${hand}_hand.trigger`, pose.trigger_value);
   }
   await game.step({ frames: 20 });
+  const saved = (await game.entities.detail(gun)).properties.find(p => p.name === "WeaponUpgrades");
+  assert.ok(saved, `gun ${gun} has no WeaponUpgrades after installing ${choice}`);
+  const state = JSON.parse(saved.value);
+  assert.ok(state.choices.includes(choice), `gun ${gun} did not install ${choice}`);
+  return state;
 }
