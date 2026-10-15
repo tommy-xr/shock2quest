@@ -20,7 +20,7 @@ The APK does not include retail game data. See the [installation guide](INSTALL.
 <img src="screenshots/hero/medsci1-melee.gif" alt="Med/Sci: pistol in one hand, a wrench swing with the other" width="400"/> <img src="screenshots/hero/ops2.gif" alt="Operations: casting cryokinesis from the psi amp, then firing the laser pistol" width="400"/>
 <img src="screenshots/hero/rec1.gif" alt="Recreation: raising two pistols and firing them in turn at a charging monkey" width="400"/> <img src="screenshots/hero/hydro1.gif" alt="Hydroponics: two-handed assault rifle, flashlight on, bursting an egg pod" width="400"/>
 <img src="screenshots/hero/rick1.gif" alt="Rickenbacker: climbing a ladder hand over hand, hanging one-handed, drawing the laser-sighted pistol from the hip holster and shooting an assassin" width="400"/> <img src="screenshots/hero/command1.gif" alt="Command: firing a shotgun at a midwife, racking the pump by hand between shots" width="400"/>
-<img src="screenshots/hero/ops3.gif" alt="Operations: shooting a pistol dry, drawing a clip from the belt pouch, seating it in the grip and firing again" width="400"/> <img src="screenshots/hero/dual-psi.gif" alt="Med/Sci: a psi amp in each hand, browsing the left's power carousel to hypnogenesis and swapping the right's to pyrokinesis, then stunning a hybrid and burning it" width="400"/>
+<img src="screenshots/hero/ops3.gif" alt="Operations: shooting a pistol dry, drawing a clip from the belt pouch, seating it in the grip and firing again" width="400"/> <img src="screenshots/hero/dual-psi.gif" alt="Operations: a psi amp in each hand, browsing the left's power carousel to hypnogenesis and swapping the right's to pyrokinesis, then stunning a grenade hybrid and burning it" width="400"/>
 
 ## Installation
 

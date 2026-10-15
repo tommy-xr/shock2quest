@@ -99,7 +99,7 @@ export const SHOTS = [
   ["toolbelt", "Recreation · tricorder hack"],
   ["hydro1", "Hydroponics · assault rifle + flashlight"],
   ["ops2", "Operations · psi amp + laser"],
-  ["dual-psi", "MedSci · dual psi amps"],
+  ["dual-psi", "Operations · dual psi amps"],
   ["medsci1-melee", "MedSci · pistol + wrench"],
   ["rick1", "Rickenbacker · ladder, holster draw, laser sight"],
   ["command1", "Command · pump shotgun"],
