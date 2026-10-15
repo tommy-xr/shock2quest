@@ -1,4 +1,5 @@
 mod boot;
+pub(super) mod hacking;
 mod kabacon;
 mod pig_stacker;
 mod ping;
@@ -24,6 +25,7 @@ pub struct GamePigGuiState {
     boot: Option<boot::Boot>,
     selection: usize,
     controller_active: bool,
+    hack: Option<super::keypad::HackState>,
 }
 
 #[derive(Clone, Debug)]
@@ -37,6 +39,9 @@ enum Game {
 
 #[derive(Clone)]
 pub enum GamePigGuiMsg {
+    OpenHack,
+    Hack(super::keypad::KeyPadMsg),
+    Back,
     SelectPing,
     SelectPigStacker,
     StackerPrimary,
@@ -54,10 +59,24 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
     fn get_components(
         &self,
         _cursor: &Option<GuiCursor>,
-        _entity_id: EntityId,
+        entity_id: EntityId,
         world: &World,
         state: &GamePigGuiState,
     ) -> Vec<GuiComponent<GamePigGuiMsg>> {
+        if let Some(hack) = &state.hack {
+            let mut components = hacking::components(world, entity_id, hack);
+            if state.controller_active {
+                let rect = components
+                    .iter()
+                    .filter(|c| c.click_event().is_some())
+                    .nth(state.selection)
+                    .map(GuiComponent::rect);
+                if let Some(rect) = rect {
+                    highlight(&mut components, rect);
+                }
+            }
+            return components;
+        }
         // The index leaves locked rows empty and keeps
         // each game's authored index, rather than packing unlocked titles.
         let games = world
@@ -69,6 +88,13 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 .with_position(vec2(0.0, 0.0))
                 .with_size(vec2(188.0, 296.0)),
         ];
+        if super::hackable_crate::is_ruined(world, entity_id) {
+            components.push(PanelText::centered(
+                "GamePig damaged",
+                Rect::new(16.0, 110.0, 135.0, 30.0),
+            ));
+            return components;
+        }
         if let Some(boot) = &state.boot {
             components.extend(boot.components());
             return components;
@@ -134,6 +160,18 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 Rect::new(16.0, 14.0 + (index - 1) as f32 * 15.0, 135.0, 15.0),
             ));
         }
+        if hacking::can_hack(world, entity_id) {
+            let rect = Rect::new(16.0, 230.0, 135.0, 22.0);
+            components.extend(hacking::button(
+                GamePigGuiMsg::OpenHack,
+                "hack-gamepig",
+                "HACK",
+                rect,
+            ));
+            if state.controller_active && state.selection == installed.len() {
+                highlight(&mut components, rect);
+            }
+        }
         components
     }
 
@@ -144,7 +182,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         state: &mut GamePigGuiState,
         position: cgmath::Point2<f32>,
     ) -> Effect {
-        if state.boot.is_some() {
+        if state.boot.is_some() || state.hack.is_some() {
             return Effect::NoEffect;
         }
         if let Some(Game::PigStacker(game)) = &mut state.game {
@@ -181,6 +219,32 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         if state.boot.is_some() {
             return Effect::NoEffect;
         }
+        if let Some(hack) = &state.hack {
+            let components = hacking::components(world, entity, hack);
+            let buttons: Vec<_> = components
+                .iter()
+                .filter(|c| c.click_event().is_some())
+                .collect();
+            state.selection = state.selection.min(buttons.len().saturating_sub(1));
+            let message = match control {
+                HandheldControl::Navigate { x, y } => {
+                    state.selection = hacking::navigate(&buttons, state.selection, x, y);
+                    None
+                }
+                HandheldControl::Primary => buttons
+                    .get(state.selection)
+                    .and_then(|c| c.click_event())
+                    .cloned(),
+                HandheldControl::Back | HandheldControl::Secondary => Some(GamePigGuiMsg::Back),
+                _ => None,
+            };
+            if let Some(message) = message {
+                let (next, effect) = self.handle_msg(entity, world, state, &message);
+                *state = next;
+                return effect;
+            }
+            return Effect::NoEffect;
+        }
         let message = match control {
             HandheldControl::Focus => return Effect::NoEffect,
             HandheldControl::Stick { x, .. } => {
@@ -207,7 +271,12 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     }
                     Some(Game::TicTacTriop(_)) => (3, 3),
                     Some(Game::Swinekeeper(_)) => (6, 10),
-                    None => (1, installed_games(world).len().max(1)),
+                    None => (
+                        1,
+                        (installed_games(world).len()
+                            + usize::from(hacking::can_hack(world, entity)))
+                        .max(1),
+                    ),
                 };
                 let column = (state.selection % width) as i32;
                 let row = (state.selection / width) as i32;
@@ -229,6 +298,11 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 } else {
                     GamePigGuiMsg::SwineCell(state.selection)
                 }),
+                None if state.selection == installed_games(world).len()
+                    && hacking::can_hack(world, entity) =>
+                {
+                    Some(GamePigGuiMsg::OpenHack)
+                }
                 None => match installed_games(world).get(state.selection) {
                     Some(2) => Some(GamePigGuiMsg::SelectPing),
                     Some(3) => Some(GamePigGuiMsg::SelectSwinekeeper),
@@ -271,6 +345,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         time: &crate::time::Time,
         cursor: Option<&GuiCursor>,
     ) -> Effect {
+        if state.hack.is_some() || super::hackable_crate::is_ruined(world, entity) {
+            return Effect::NoEffect;
+        }
         if !crate::dev_params::get_bool(crate::dev_params::GAMEPIG_INTRO) {
             state.boot = None;
         }
@@ -319,7 +396,69 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         if state.boot.is_some() {
             return (state, Effect::NoEffect);
         }
+        if let GamePigGuiMsg::Back = msg {
+            state.hack = None;
+            state.game = None;
+            state.selection = 0;
+            return (state, Effect::NoEffect);
+        }
+        if super::hackable_crate::is_ruined(world, entity_id) {
+            return (state, Effect::NoEffect);
+        }
+        if state.hack.is_some() && !matches!(msg, GamePigGuiMsg::Hack(_)) {
+            return (state, Effect::NoEffect);
+        }
         match msg {
+            GamePigGuiMsg::Back => unreachable!(),
+            GamePigGuiMsg::OpenHack => {
+                if state.game.is_none() && hacking::can_hack(world, entity_id) {
+                    let hack = super::keypad::HackState::default();
+                    state.selection = hacking::components(world, entity_id, &hack)
+                        .iter()
+                        .filter(|c| c.click_event().is_some())
+                        .position(|c| {
+                            matches!(
+                                c.click_event(),
+                                Some(GamePigGuiMsg::Hack(super::keypad::KeyPadMsg::StartHack))
+                            )
+                        })
+                        .unwrap_or(0);
+                    state.hack = Some(hack);
+                }
+            }
+            GamePigGuiMsg::Hack(message) => {
+                if !hacking::can_hack(world, entity_id) {
+                    return (state, Effect::NoEffect);
+                }
+                if let (Some(hack), Some(diff)) =
+                    (&state.hack, super::keypad::hack_diff(world, entity_id))
+                {
+                    let (next, effect) = super::keypad::handle_hack_msg(
+                        entity_id,
+                        world,
+                        hack,
+                        message,
+                        diff,
+                        false,
+                        super::keypad::HackOutcomeEffects {
+                            success: hacking::success,
+                            critical_failure: hacking::critical_failure,
+                        },
+                    );
+                    if matches!(
+                        next.phase,
+                        super::keypad::HackPhase::Won | super::keypad::HackPhase::Lost
+                    ) {
+                        state.selection = hacking::components(world, entity_id, &next)
+                            .iter()
+                            .filter(|c| c.click_event().is_some())
+                            .count()
+                            .saturating_sub(1);
+                    }
+                    state.hack = Some(next);
+                    return (state, effect);
+                }
+            }
             GamePigGuiMsg::SelectPigStacker => {
                 if world
                     .borrow::<UniqueView<QuestInfo>>()
