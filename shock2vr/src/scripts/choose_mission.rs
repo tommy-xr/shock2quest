@@ -223,6 +223,11 @@ impl Script for ChooseMissionScript {
                     Effect::Multiple(vec![
                         set_year_effect,
                         grant_effect,
+                        // Graduation installs the interface before campaign state leaves training.
+                        Effect::SetQuestBit {
+                            quest_bit_name: crate::cyber_interface::QUEST_NAME.into(),
+                            quest_bit_value: QuestBitValue::UNKNOWN,
+                        },
                         Effect::GlobalEffect(transition),
                     ])
                 }
@@ -282,6 +287,40 @@ mod tests {
             ChooseMissionScript::behind_debrief(transition, None),
             GlobalEffect::TransitionLevel { .. }
         ));
+    }
+
+    /// Graduating installs the interface; earlier tours leave Earth's flag alone.
+    #[test]
+    fn only_the_final_tour_installs_the_cyber_interface() {
+        let installs = |completed: &[u32]| {
+            let mut quests = QuestInfo::new();
+            for year in completed {
+                quests
+                    .set_quest_bit_value(&format!("training_year_{year}"), QuestBitValue::COMPLETE);
+            }
+            let world = World::new();
+            world.add_unique(quests);
+            let marker = world
+                .borrow::<shipyard::EntitiesViewMut>()
+                .unwrap()
+                .add_entity((), ());
+            let Effect::Multiple(effects) = ChooseMissionScript::new().handle_message(
+                marker,
+                &world,
+                &PhysicsWorld::new(),
+                &MessagePayload::TurnOn { from: marker },
+            ) else {
+                panic!("a tour returns its effects together");
+            };
+            effects.iter().any(|effect| {
+                matches!(effect, Effect::SetQuestBit { quest_bit_name, quest_bit_value }
+                    if quest_bit_name == crate::cyber_interface::QUEST_NAME
+                        && *quest_bit_value == QuestBitValue::UNKNOWN)
+            })
+        };
+        assert!(!installs(&[]));
+        assert!(!installs(&[2]));
+        assert!(installs(&[2, 3]));
     }
 
     /// The clips wrap the transition in the order they are shown, and a year

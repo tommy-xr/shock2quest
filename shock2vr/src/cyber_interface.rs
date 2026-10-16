@@ -15,7 +15,8 @@ pub fn installed(world: &World) -> bool {
 }
 
 /// Retail new-game setup starts Earth without the HUD. Direct launches of other
-/// missions retain their normal interface; saved/scripted values take priority.
+/// missions retain their normal interface; saved/scripted values take priority,
+/// except that MedSci1 always loads installed.
 pub fn initialize(quests: &mut QuestInfo, mission: &str) {
     if mission.eq_ignore_ascii_case("earth.mis")
         && !quests
@@ -24,6 +25,13 @@ pub fn initialize(quests: &mut QuestInfo, mission: &str) {
             .any(|(name, _)| name.eq_ignore_ascii_case(QUEST_NAME))
     {
         quests.set_quest_bit_value(QUEST_NAME, QuestBitValue::INCOMPLETE);
+    }
+    // Graduation installs the interface, but saves from builds that skipped it
+    // carry Earth's flag into MedSci1, where the player can't progress without it.
+    if mission.eq_ignore_ascii_case("medsci1.mis")
+        && quests.read_quest_bit_value(QUEST_NAME).bits() != 0
+    {
+        quests.set_quest_bit_value(QUEST_NAME, QuestBitValue::UNKNOWN);
     }
 }
 
@@ -45,5 +53,15 @@ mod tests {
         let world = World::new();
         world.add_unique(restored);
         assert!(installed(&world));
+    }
+
+    #[test]
+    fn medsci1_loads_installed_but_training_stays_hidden() {
+        let mut quests = QuestInfo::new();
+        quests.set_quest_bit_value(QUEST_NAME, QuestBitValue::INCOMPLETE);
+        initialize(&mut quests, "station.mis");
+        assert_eq!(quests.read_quest_bit_value(QUEST_NAME).bits(), 1);
+        initialize(&mut quests, "MedSci1.mis");
+        assert_eq!(quests.read_quest_bit_value(QUEST_NAME).bits(), 0);
     }
 }

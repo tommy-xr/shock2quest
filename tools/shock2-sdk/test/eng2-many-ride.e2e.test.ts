@@ -41,6 +41,7 @@ test(
       mission: "eng2.mis",
     });
     await game.step({ frames: 2 });
+    assert.equal(await game.quests.get("HideInterface"), "unknown", "Engineering starts with the interface enabled");
 
     const [tripwire, seat, cageBefore] = await Promise.all([
       only(game, TRIPWIRE),
@@ -59,6 +60,7 @@ test(
     // WhiteOut 1 uses the authored two-second DelayTime before it seats the
     // player and starts the continuous cage elevator.
     await game.step({ frames: 180 });
+    assert.equal(await game.quests.get("HideInterface"), "incomplete", "WhiteOut's inverter hides the interface during the ride");
 
     const [playerAfter, cageAfter] = await Promise.all([
       game.player.position(),
@@ -113,6 +115,7 @@ test(
     const covered = await game.screenshot("eng2-many-ride-whiteout2.png");
     await game.step({ frames: 180 });
     const revealed = await game.screenshot("eng2-many-ride-finished.png");
+    assert.equal(await game.quests.get("HideInterface"), "unknown", "the authored delay restores the interface after the ride");
     assert.deepEqual(covered.resolution, [800, 600]);
     assert.deepEqual(revealed.resolution, [800, 600]);
     assert.ok(
@@ -212,6 +215,7 @@ test(
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 2 });
+    assert.equal(await game.quests.get("HideInterface"), "unknown", "Engineering starts with the VR interface enabled");
 
     const tripwire = await only(game, TRIPWIRE);
     const [tx, ty, tz] = tripwire.position;
@@ -222,7 +226,10 @@ test(
 
     // Advance past the 80-second second-whiteout branch, its two-second
     // fade-in, the 200 ms StandUp delay, and the final fade reveal.
-    await game.step({ frames: 5_100 });
+    await game.step({ frames: 180 });
+    assert.equal(await game.quests.get("HideInterface"), "incomplete", "the ride hides the VR interface");
+    await game.step({ frames: 4_920 });
+    assert.equal(await game.quests.get("HideInterface"), "unknown", "the ride restores the VR interface");
     const returned = await game.player.position();
     assert.ok(
       distance(returned, preSeatPosition) < 2,

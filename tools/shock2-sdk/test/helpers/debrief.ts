@@ -15,10 +15,10 @@ export async function debriefIsUp(game: GameServer): Promise<boolean> {
 
 /**
  * Click Continue on the debrief page if it is up, as a real rising edge, and
- * report whether there was one to dismiss.
+ * report whether there was one to dismiss. VR callers pass `vrClickCanvasPoint`.
  */
-export async function dismissDebrief(game: GameServer): Promise<boolean> {
+export async function dismissDebrief(game: GameServer, click = clickCanvasPoint): Promise<boolean> {
   if (!(await debriefIsUp(game))) return false;
-  await clickCanvasPoint(game, DEBRIEF_CONTINUE);
+  await click(game, DEBRIEF_CONTINUE);
   return true;
 }
