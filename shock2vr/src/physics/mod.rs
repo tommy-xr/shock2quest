@@ -5663,6 +5663,7 @@ impl PhysicsWorld {
             return Some(self.player_velocity);
         }
         self.body_velocity_at_point(drive.target, point)
+            .map(|velocity| self.world_to_player_velocity(velocity))
     }
 
     /// Controller-target velocity at the held melee body's head origin.
@@ -7202,6 +7203,13 @@ impl PhysicsWorld {
     /// `world_time_scale`.
     pub fn world_step_dt(&self) -> f32 {
         self.integration_parameters.dt * self.world_time_scale
+    }
+
+    /// Converts a solver velocity (per world second) into player time, the
+    /// frame [`player_velocity`](Self::player_velocity) and melee swings are
+    /// read in.
+    pub fn world_to_player_velocity(&self, velocity: Vector3<f32>) -> Vector3<f32> {
+        velocity * self.world_time_scale
     }
 
     /// Step the simulation and resolve one frame of player movement.

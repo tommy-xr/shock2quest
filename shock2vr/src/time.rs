@@ -8,6 +8,11 @@ pub struct Time {
     pub total: Duration,
 }
 
+/// The player's unscaled tick, published beside the world [`Time`] for
+/// player UI and held-item code that reads time from the ECS.
+#[derive(Unique, Clone, Debug, Default)]
+pub struct PlayerTime(pub Time);
+
 /// Derives world time from the player's gameplay tick, so the world can run
 /// slower than the player (`world_time_scale`). Accumulates the time the world
 /// skipped rather than multiplying totals, so changing the scale never moves
@@ -26,7 +31,7 @@ impl WorldClock {
             };
         }
         let elapsed = tick.elapsed.mul_f32(scale.max(0.0));
-        self.lost += tick.elapsed - elapsed;
+        self.lost += tick.elapsed.saturating_sub(elapsed);
         Time {
             elapsed,
             total: tick.total.saturating_sub(self.lost),
