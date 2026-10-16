@@ -1,16 +1,18 @@
 //! Fading streaks behind projectiles. Samples age on the world clock, so a
 //! slowed world keeps them on screen longer, and outlive their projectile so
 //! a shot that hits still leaves its line.
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use cgmath::{InnerSpace, Vector3, vec3};
-use engine::scene::SceneObject;
+use engine::scene::{SceneObject, SceneObjectDebugTag};
 use shipyard::EntityId;
 
 /// World seconds a trail sample lasts.
 pub(crate) const TRAIL_LIFETIME: f32 = 0.3;
 /// Samples kept per trail; older ones are dropped first.
 const MAX_SAMPLES: usize = 10;
+/// World units per world second a projectile must move to extend its trail.
+const MIN_TRAIL_SPEED: f32 = 1.0;
 /// Projectiles trailed at once; further ones go untrailed (Quest budget).
 const MAX_TRAILS: usize = 24;
 
@@ -21,23 +23,26 @@ struct Sample {
 
 struct Trail {
     entity: EntityId,
-    /// Whether `entity` was sampled this tick; once it is not, the trail only
-    /// fades.
-    live: bool,
     samples: VecDeque<Sample>,
 }
 
 #[derive(Default)]
 pub(crate) struct ProjectileTrails {
     trails: Vec<Trail>,
+    /// Every projectile's position last tick, to tell flight from rest.
+    last_seen: HashMap<EntityId, Vector3<f32>>,
+    seen: HashMap<EntityId, Vector3<f32>>,
 }
 
 impl ProjectileTrails {
-    /// Ages every sample by the world `dt` and records each live projectile's
-    /// current position.
+    /// Ages every sample by the world `dt` and extends the trail of each
+    /// projectile in `live` that is in flight; one resting, jittering or
+    /// creeping adds nothing.
     pub fn update(&mut self, dt: f32, live: impl IntoIterator<Item = (EntityId, Vector3<f32>)>) {
+        if dt <= 0.0 {
+            return;
+        }
         for trail in &mut self.trails {
-            trail.live = false;
             for sample in &mut trail.samples {
                 sample.age += dt;
             }
@@ -49,60 +54,69 @@ impl ProjectileTrails {
                 trail.samples.pop_front();
             }
         }
+        self.trails.retain(|trail| !trail.samples.is_empty());
+
+        let min_step = MIN_TRAIL_SPEED * dt;
+        self.seen.clear();
         for (entity, position) in live {
-            let index = match self.trails.iter().position(|trail| trail.entity == entity) {
-                Some(index) => index,
+            self.seen.insert(entity, position);
+            let Some(&previous) = self.last_seen.get(&entity) else {
+                continue;
+            };
+            if (position - previous).magnitude2() < min_step * min_step {
+                continue;
+            }
+            let trail = match self.trails.iter().position(|trail| trail.entity == entity) {
+                Some(index) => &mut self.trails[index],
                 None if self.trails.len() < MAX_TRAILS => {
-                    self.trails.push(Trail {
-                        entity,
-                        live: false,
-                        samples: VecDeque::with_capacity(MAX_SAMPLES),
+                    let mut samples = VecDeque::with_capacity(MAX_SAMPLES);
+                    samples.push_back(Sample {
+                        position: previous,
+                        age: dt,
                     });
-                    self.trails.len() - 1
+                    self.trails.push(Trail { entity, samples });
+                    self.trails.last_mut().unwrap()
                 }
                 None => continue,
             };
-            let trail = &mut self.trails[index];
-            trail.live = true;
-            // A paused world or a resting projectile adds nothing new.
-            if trail
-                .samples
-                .back()
-                .is_some_and(|last| (last.position - position).magnitude2() < 1.0e-8)
-            {
-                continue;
-            }
             if trail.samples.len() == MAX_SAMPLES {
                 trail.samples.pop_front();
             }
             trail.samples.push_back(Sample { position, age: 0.0 });
         }
-        self.trails
-            .retain(|trail| trail.live || !trail.samples.is_empty());
+        std::mem::swap(&mut self.last_seen, &mut self.seen);
     }
 
-    /// One thin beam per pair of consecutive samples, thinning and fading
-    /// with the age of its older end.
+    /// One thin beam per trail, drawn from the newest sample back to the
+    /// oldest so the beam's far-end falloff tapers the tail; the whole trail
+    /// fades with the age of its newest sample once the projectile stops.
     pub fn render(&self) -> Vec<SceneObject> {
         let mut objects = Vec::new();
         for trail in &self.trails {
-            for (older, newer) in trail.samples.iter().zip(trail.samples.iter().skip(1)) {
-                let reach = newer.position - older.position;
-                if reach.magnitude2() < 1.0e-8 {
-                    continue;
-                }
-                let fade = (older.age / TRAIL_LIFETIME).clamp(0.0, 1.0);
-                let width = 1.0 - 0.7 * fade;
-                for mut object in engine::scene::laser_material::beam(
-                    older.position,
-                    reach,
-                    (0.02 * width, vec3(1.0, 0.7, 0.35)),
-                    (0.004 * width, vec3(1.0, 0.92, 0.75)),
-                    0.0,
-                ) {
-                    object.set_transparency(Some(fade));
-                    objects.push(object);
-                }
+            let (Some(tail), Some(head)) = (trail.samples.front(), trail.samples.back()) else {
+                continue;
+            };
+            let reach = tail.position - head.position;
+            if reach.magnitude2() < 1.0e-8 {
+                continue;
+            }
+            let fade = (head.age / TRAIL_LIFETIME).clamp(0.0, 1.0);
+            // Lets `/v1/scene` attribute the beam to its projectile.
+            let tag = std::rc::Rc::new(SceneObjectDebugTag {
+                entity_id: Some(trail.entity.inner()),
+                source: Some("projectile_trail".into()),
+                ..Default::default()
+            });
+            for mut object in engine::scene::laser_material::beam(
+                head.position,
+                reach,
+                (0.025, vec3(1.0, 0.7, 0.35)),
+                (0.005, vec3(1.0, 0.92, 0.75)),
+                0.0,
+            ) {
+                object.set_transparency(Some(fade));
+                object.set_debug_tag(Some(tag.clone()));
+                objects.push(object);
             }
         }
         objects
@@ -163,20 +177,31 @@ mod tests {
     fn a_paused_world_neither_ages_nor_extends_a_trail() {
         let mut trails = ProjectileTrails::default();
         trails.update(DT, [(id(1), vec3(0.0, 0.0, 0.0))]);
+        trails.update(DT, [(id(1), vec3(0.0, 0.0, 1.0))]);
         for _ in 0..1000 {
-            trails.update(0.0, [(id(1), vec3(0.0, 0.0, 0.0))]);
+            trails.update(0.0, [(id(1), vec3(0.0, 0.0, 1.0))]);
         }
-        assert_eq!(trails.sample_counts(), vec![(id(1), 1)]);
-        assert_eq!(trails.trails[0].samples[0].age, 0.0);
+        assert_eq!(trails.sample_counts(), vec![(id(1), 2)]);
+        assert_eq!(trails.trails[0].samples[1].age, 0.0);
+    }
+
+    #[test]
+    fn a_creeping_projectile_does_not_grow_a_trail() {
+        let mut trails = ProjectileTrails::default();
+        // Half of MIN_TRAIL_SPEED.
+        for i in 0..30 {
+            let x = i as f32 * 0.5 * MIN_TRAIL_SPEED * DT;
+            trails.update(DT, [(id(1), vec3(x, 0.0, 0.0))]);
+        }
+        assert!(trails.sample_counts().is_empty());
     }
 
     #[test]
     fn trails_are_capped() {
         let mut trails = ProjectileTrails::default();
-        trails.update(
-            DT,
-            (1..=(MAX_TRAILS as u64 + 4)).map(|n| (id(n), vec3(0.0, 0.0, 0.0))),
-        );
+        let ids = || 1..=(MAX_TRAILS as u64 + 4);
+        trails.update(DT, ids().map(|n| (id(n), vec3(0.0, 0.0, 0.0))));
+        trails.update(DT, ids().map(|n| (id(n), vec3(0.0, 0.0, 1.0))));
         assert_eq!(trails.trails.len(), MAX_TRAILS);
     }
 }

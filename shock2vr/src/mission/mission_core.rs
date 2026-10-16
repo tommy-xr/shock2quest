@@ -10333,7 +10333,8 @@ impl MissionCore {
         }
     }
 
-    /// Samples every launched or player-fired projectile into its trail.
+    /// Samples every launched or player-fired projectile into its trail,
+    /// except cosmetic launches (ejected brass, muzzle effects).
     fn update_projectile_trails(&mut self, world_dt: f32) {
         let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let launched = self
@@ -10344,10 +10345,15 @@ impl MissionCore {
             .world
             .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
             .unwrap();
+        let cosmetic = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropTransientFx>>()
+            .unwrap();
         let live = launched
             .iter()
             .ids()
             .chain(player_fired.iter().ids())
+            .filter(|entity| !cosmetic.contains(*entity))
             .filter_map(|entity| {
                 let transform = transforms.get(entity).ok()?;
                 Some((entity, transform.0.w.truncate()))
