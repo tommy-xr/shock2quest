@@ -218,7 +218,7 @@ mod tests {
             held_entity_id: None,
             pressed: true,
         };
-        let time = |n| Time {
+        let time = |n: u64| Time {
             total: Duration::from_millis(n * 50),
             elapsed: Duration::from_millis(50),
         };
