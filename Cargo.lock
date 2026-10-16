@@ -5101,6 +5101,7 @@ dependencies = [
  "once_cell",
  "ordered-float 3.9.1",
  "pathfinding",
+ "pcx",
  "rand",
  "rapier3d",
  "serde",
