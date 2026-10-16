@@ -5,7 +5,7 @@ pub const WIDTH: usize = 140;
 pub const HEIGHT: usize = 252;
 pub const PAR: [u8; 9] = [4, 5, 4, 3, 4, 4, 4, 5, 3];
 const STEP: Duration = Duration::from_millis(10);
-const METERS: f32 = 2.2;
+pub(crate) const METERS: f32 = 2.2;
 const MAX_METER: f32 = 122.0 / 104.0;
 const MIN_METER: f32 = -18.0 / 104.0;
 
@@ -182,7 +182,8 @@ impl Game {
     }
     pub fn aim(&mut self, target: [f32; 2]) {
         if self.mode == Mode::Aim && target.iter().all(|v| v.is_finite()) {
-            self.target = [target[0].clamp(0.0, 139.0), target[1].clamp(0.0, 251.0)];
+            // Targets express direction and may lie beyond the course; only ball lookups need bounds.
+            self.target = target;
         }
     }
     pub fn primary(&mut self, rng: &mut impl Rng) {
@@ -444,6 +445,17 @@ mod tests {
         Arc::new(std::array::from_fn(|_| {
             Course::from_pixels(pixels.clone()).unwrap()
         }))
+    }
+    #[test]
+    fn aiming_beyond_course_edge_preserves_diagonal_direction() {
+        let mut rng = StdRng::seed_from_u64(11);
+        let mut game = Game::new(courses(), &mut rng);
+        game.ball = [139.0, 250.0, 0.0];
+        game.aim([149.0, 240.0]);
+        game.power = 1.0;
+        game.launch(&mut rng);
+        assert!(game.velocity[0] > 0.0);
+        assert!((game.velocity[0] + game.velocity[1]).abs() < 0.001);
     }
     #[test]
     fn metadata_requires_a_complete_course_with_tee_and_hole() {
