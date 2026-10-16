@@ -47,7 +47,10 @@ fn barrel_axis(name: &str) -> Option<Vector3<f32>> {
     }
 }
 
-fn barrel_end(triangles: &[[Point3<f32>; 3]], axis: Vector3<f32>) -> Option<Point3<f32>> {
+pub(crate) fn barrel_end(
+    triangles: &[[Point3<f32>; 3]],
+    axis: Vector3<f32>,
+) -> Option<Point3<f32>> {
     let points = triangles
         .iter()
         .flatten()
