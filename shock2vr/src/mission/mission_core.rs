@@ -5994,8 +5994,11 @@ impl MissionCore {
         });
         let psi_projected =
             psi_session.is_some() && game_options.presentation_mode == crate::PresentationMode::Vr;
-        let device_enabled = game_options.experimental_features.contains("mfd_device")
-            || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE);
+        // The access card (device or plain card) rides the belt, so like the belt
+        // it needs the cyber interface; hiding the interface stows a held one.
+        let interface = crate::cyber_interface::installed(&self.world);
+        let device_opted_in = super::mfd_device::enabled(&game_options.experimental_features);
+        let device_enabled = device_opted_in && interface;
         self.interaction.set_body_tool_device(device_enabled);
         let device_hand = self.personal_card.hand.filter(|i| {
             device_enabled
@@ -6505,7 +6508,7 @@ impl MissionCore {
         self.personal_card
             .advance_downloads(time.elapsed.as_secs_f32());
         self.personal_card.load_pose(asset_cache);
-        self.personal_card.device_mode = device_enabled;
+        self.personal_card.device_mode = device_opted_in;
         let returned_to_belt = self.personal_card.update(
             &body_input,
             self.holsters.body_pose,
@@ -6519,7 +6522,8 @@ impl MissionCore {
             game_options.presentation_mode == crate::PresentationMode::Vr
                 && !self.use_mode
                 && self.player_is_alive()
-                && self.player_controls_enabled,
+                && self.player_controls_enabled
+                && interface,
         );
         if returned_to_belt {
             effects.push(crate::scripts::script_util::announce(
@@ -7140,7 +7144,8 @@ impl MissionCore {
         if game_options.presentation_mode == crate::PresentationMode::Vr {
             let mut scan_required = false;
             interaction_msgs.retain(|effect| {
-                let blocked = matches!(effect,
+                // Without the interface there is no card to scan, so readers take a plain frob.
+                let blocked = interface && matches!(effect,
                     VirtualHandEffect::OutMessage { message: Message { to, payload: MessagePayload::Frob } }
                         if super::personal_card::requires_scan(&self.world, *to));
                 scan_required |= blocked;
@@ -17968,44 +17973,46 @@ impl MissionCore {
         ));
 
         if options.presentation_mode == crate::PresentationMode::Vr {
-            if options.experimental_features.contains("mfd_device")
-                || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE)
-            {
-                if self.personal_card.hand.is_none() {
-                    if let Some(panel) = self
-                        .personal_card
-                        .stowed_device_panel(player.pos, player.rotation)
-                    {
-                        scene.extend(super::mfd_device::body(
-                            asset_cache,
-                            super::mfd_device::body_frame(panel),
-                            None,
-                        ));
-                        let mut screen = self
-                            .stowed_device_ui
-                            .render_world_space(asset_cache, &panel);
-                        for object in &mut screen {
-                            object.set_debug_tag(Some(std::rc::Rc::new(
-                                engine::scene::SceneObjectDebugTag {
-                                    source: Some("mfd_stowed_ui".into()),
-                                    model: Some("tricorder".into()),
-                                    entity_id: self
-                                        .stowed_device_ui
-                                        .utilities
-                                        .query_entity()
-                                        .map(|e| e.inner()),
-                                    name: None,
-                                },
-                            )));
+            // The card rides the belt, so like the belt it needs the cyber interface.
+            if crate::cyber_interface::installed(&self.world) {
+                if super::mfd_device::enabled(&options.experimental_features) {
+                    if self.personal_card.hand.is_none() {
+                        if let Some(panel) = self
+                            .personal_card
+                            .stowed_device_panel(player.pos, player.rotation)
+                        {
+                            scene.extend(super::mfd_device::body(
+                                asset_cache,
+                                super::mfd_device::body_frame(panel),
+                                None,
+                            ));
+                            let mut screen = self
+                                .stowed_device_ui
+                                .render_world_space(asset_cache, &panel);
+                            for object in &mut screen {
+                                object.set_debug_tag(Some(std::rc::Rc::new(
+                                    engine::scene::SceneObjectDebugTag {
+                                        source: Some("mfd_stowed_ui".into()),
+                                        model: Some("tricorder".into()),
+                                        entity_id: self
+                                            .stowed_device_ui
+                                            .utilities
+                                            .query_entity()
+                                            .map(|e| e.inner()),
+                                        name: None,
+                                    },
+                                )));
+                            }
+                            scene.extend(screen);
                         }
-                        scene.extend(screen);
                     }
+                } else {
+                    scene.extend(self.personal_card.render(
+                        asset_cache,
+                        player.pos,
+                        player.rotation,
+                    ));
                 }
-            } else {
-                scene.extend(
-                    self.personal_card
-                        .render(asset_cache, player.pos, player.rotation),
-                );
             }
             let socket_frames = self.interaction.implant_socket_frames(&self.world);
             if !self.use_mode {

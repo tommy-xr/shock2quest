@@ -266,6 +266,12 @@ pub(crate) fn screen_active(world: &shipyard::World) -> bool {
         .is_ok_and(|v| v.0)
 }
 
+/// Whether the belt's access card is the MFD device (opt-in) rather than the plain card.
+pub(crate) fn enabled(experimental_features: &std::collections::HashSet<String>) -> bool {
+    experimental_features.contains("mfd_device")
+        || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE)
+}
+
 pub fn to_native(point: Vector2<f32>, screen: Option<Rect>) -> Option<Vector2<f32>> {
     target_to_canvas(&viewports(screen), point)
 }
