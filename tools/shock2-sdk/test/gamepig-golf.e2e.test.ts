@@ -12,7 +12,7 @@ for(const vr of [false,true]){
     await click(game,await control("game-12"));
     const field=await control("golf-course");
     assert.ok((await elements()).some(e=>e.texture==="gfhol001.pcx"),"authored first course loaded");
-    const status=async()=>(await elements()).find(e=>/^Hole 1\n/.test(e.text??""))!.text!;
+    const status=async()=>(await elements()).find(e=>/^Shot /.test(e.text??""))!.text!;
     assert.match(await status(),/Shot 1/);
     const golfer=async()=>(await elements()).find(e=>e.texture==="gfgolf2.pcx")!.rect;
     const tee=await golfer();

@@ -221,15 +221,17 @@ impl Golf {
                 self.game.mode,
                 Mode::Aim | Mode::Windup | Mode::Return
             ));
+        let completed = self.game.hole + usize::from(self.game.mode == Mode::HoleDone);
         let relative =
-            self.game.total() as i32 - PAR[..self.game.hole].iter().map(|p| *p as i32).sum::<i32>();
+            self.game.total() as i32 - PAR[..completed].iter().map(|p| *p as i32).sum::<i32>();
         let [sx, sy] = course.score_marker;
         let status = if course.three_lines {
             format!("Hole {}\nShot {strokes}\n{relative:+}", self.game.hole + 1)
         } else {
             format!("H{} S{strokes} {relative:+}", self.game.hole + 1)
         };
-        result.push(PanelText::text(
+        result.extend(PanelText::paragraph(
+            world,
             &status,
             Rect::new(
                 13.0 + sx,
@@ -438,6 +440,29 @@ mod tests {
         assert_eq!(golf.game.mode, Mode::Aim);
         assert!(!golf.recorded);
         assert_eq!(golf.game.total(), 0);
+    }
+    #[test]
+    fn sunk_hole_status_has_separate_lines_and_includes_its_par() {
+        let world = world();
+        let mut golf = Golf::new(&world).unwrap();
+        Arc::make_mut(&mut golf.game.courses)[0].three_lines = true;
+        golf.game.mode = Mode::HoleDone;
+        golf.game.strokes = 3;
+        golf.game.card[0] = 3;
+        let components = golf.components(&world, false);
+        let lines: Vec<_> = components
+            .iter()
+            .filter_map(|c| match c {
+                GuiComponent::Text { text, position, .. }
+                    if ["Hole 1", "Shot 3", "-1"].contains(&text.as_str()) =>
+                {
+                    Some(position.y)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines.windows(2).all(|ys| ys[1] > ys[0]));
     }
     #[test]
     fn hacked_retry_is_visible_and_spent_once() {
