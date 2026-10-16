@@ -12,6 +12,7 @@ pub mod hand_pose_library;
 pub mod handheld_input;
 pub mod haptics;
 pub mod hit_feedback;
+pub mod hog_wallow_game;
 pub mod horde_stats;
 pub mod implants;
 pub mod input;
