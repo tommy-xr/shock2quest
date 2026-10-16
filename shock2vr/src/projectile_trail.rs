@@ -40,7 +40,8 @@ const BULLET_EMISSIVITY: f32 = 0.25;
 const BULLET_SPECULAR: f32 = 3.0;
 
 /// A bullet's surfaces: brass body, copper nose, and a brass-tinted
-/// highlight with no view-angle sheen of its own (a black ramp).
+/// highlight. The black ramp drops the authored-sheen layer; the room's
+/// reflection capture, when lighting supplies one, still tints its rim.
 struct BulletArt {
     body: Rc<dyn TextureTrait>,
     nose: Rc<dyn TextureTrait>,
@@ -266,12 +267,9 @@ impl ProjectileTrails {
                 let head_tag = tag(entity, "projectile_head");
                 // Lit by the room like any prop, with its highlight boosted
                 // so the brass reads as polished metal.
-                let lights = lights_at(position).map(|lights| {
-                    Rc::new(
-                        (*lights)
-                            .clone()
-                            .with_specular(lights.specular * BULLET_SPECULAR),
-                    )
+                let lights = lights_at(position).map(|mut lights| {
+                    Rc::make_mut(&mut lights).specular *= BULLET_SPECULAR;
+                    lights
                 });
                 let [body, nose] = bullet_frames(position, heading);
                 let parts: [(Box<dyn Geometry>, &Rc<dyn TextureTrait>, Matrix4<f32>); 2] = [
