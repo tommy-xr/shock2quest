@@ -52,7 +52,7 @@ pub const PSI_OVERLOAD_READY: HapticPulse = HapticPulse {
     duration_ms: 40,
 };
 pub const PSI_CAST: HapticPulse = HapticPulse {
-    amplitude: 0.55,
+    amplitude: 0.7,
     duration_ms: 50,
 };
 pub const PSI_OVERLOAD_CAST: HapticPulse = HapticPulse {
@@ -63,10 +63,11 @@ pub const PSI_BURNOUT: HapticPulse = HapticPulse {
     amplitude: 1.0,
     duration_ms: 350,
 };
-/// A cast that went nowhere: soft and dull, unlike a cast's sharp kick.
+/// A cast that went nowhere: a long dull buzz, unlike a cast's sharp kick.
+/// Still louder than the charge, which the mixer would otherwise let mask it.
 pub const PSI_FIZZLE: HapticPulse = HapticPulse {
-    amplitude: 0.2,
-    duration_ms: 90,
+    amplitude: 0.5,
+    duration_ms: 150,
 };
 
 pub const GUN_RECOIL: HapticPulse = HapticPulse {
@@ -83,8 +84,9 @@ pub struct HapticFeedback {
     pub pending: [Option<HapticPulse>; 2],
     /// Monotonic request counters for headless/device diagnostics, left/right.
     pub sequence: [u64; 2],
-    /// The latest request per hand, never consumed: the debug runtime's idle
-    /// zero-dt frames `take` a pulse before a headless client can read it.
+    /// The latest winning request per hand, never consumed (read with
+    /// `sequence` to tell new from stale): the debug runtime's idle zero-dt
+    /// frames `take` a pulse before a headless client can read it.
     pub last: [Option<HapticPulse>; 2],
 }
 
@@ -99,7 +101,6 @@ impl HapticFeedback {
             duration_ms: pulse.duration_ms,
         };
         self.sequence[hand] += 1;
-        self.last[hand] = Some(pulse);
         // Same-frame effects resolve deterministically: the stronger pulse
         // wins, then the longer one. A ready tick cannot overwrite an impact.
         if self.pending[hand].is_none_or(|current| {
@@ -108,6 +109,7 @@ impl HapticFeedback {
         }) {
             self.pending[hand] = Some(pulse);
         }
+        self.last[hand] = self.pending[hand];
     }
 }
 
@@ -183,6 +185,22 @@ mod tests {
         let held = psi_charge_pulse(zone, zone + 0.01);
         assert_ne!(held, PSI_OVERLOAD_READY);
         assert!(held.amplitude > late.amplitude && held.amplitude < PSI_OVERLOAD_READY.amplitude);
+    }
+
+    #[test]
+    fn psi_outcomes_cut_through_a_charge_still_playing() {
+        let zone = crate::psi::OVERLOAD_ZONE_START;
+        for outcome in [PSI_CAST, PSI_OVERLOAD_CAST, PSI_BURNOUT, PSI_FIZZLE] {
+            let mut mixer = HapticMixer::default();
+            let buzz = psi_charge_pulse(zone, 1.0);
+            mixer.select(std::time::Duration::ZERO, [None, Some(buzz)]);
+            // One 72 Hz frame later the 20 ms buzz is still active.
+            let next = mixer.select(
+                std::time::Duration::from_micros(13_900),
+                [None, Some(outcome)],
+            );
+            assert_eq!(next, [None, Some(outcome)]);
+        }
     }
 
     #[test]

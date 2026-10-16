@@ -247,6 +247,7 @@ impl Script for PsiAmpScript {
                 power_template_id,
             }) => {
                 let power_template_id = *power_template_id;
+                let previous = *elapsed / *duration;
                 *elapsed += dt;
                 let fraction = *elapsed / *duration;
                 if crate::psi_amp_selection::selected_power(world, entity_id).map(|p| p.template_id)
@@ -276,7 +277,6 @@ impl Script for PsiAmpScript {
                     if dt <= 0.0 {
                         return meter;
                     }
-                    let previous = (*elapsed - dt) / *duration;
                     Effect::Multiple(vec![
                         meter,
                         amp_haptic(
@@ -1146,8 +1146,8 @@ mod tests {
                     | Effect::GlobalEffect(super::super::GlobalEffect::PsiBurnout)
                     | Effect::KickHeldGun { .. }
                     | Effect::PlaySound { .. }
-                    | Effect::Multiple(_)
-            )));
+            ) || matches!(e, Effect::Multiple(v)
+                if v.iter().all(|e| matches!(e, Effect::HandHaptic { .. })))));
         }
     }
 
