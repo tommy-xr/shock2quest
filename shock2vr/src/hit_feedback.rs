@@ -167,9 +167,9 @@ pub fn hurt_schema(damage: f32) -> &'static str {
     }
 }
 
-/// A psi burnout's flash: a white rim, briefer and softer than a hard hit so
-/// it reads as a jolt to the head rather than a blinding.
-const BURNOUT_SECS: f32 = 0.6;
+/// A psi burnout's flash: a white rim, softer than a hard hit so it reads as
+/// a jolt to the head rather than a blinding. As long as the meter's burnout.
+const BURNOUT_SECS: f32 = crate::psi::CHARGE_RESULT_FLASH_SECS;
 const BURNOUT_PEAK: f32 = 0.5;
 const BURNOUT_TINT: Vector3<f32> = Vector3 {
     x: 0.95,
@@ -221,8 +221,12 @@ impl HitFeedback {
         self.radiation = true;
     }
 
-    /// A psi burnout: a white flash at the rim, drawn alongside any hurt tint.
+    /// A psi burnout: a white flash at the rim. It replaces the hurt tint its
+    /// own damage raised moments before (white over red reads pink); a hit
+    /// landing after it still competes - see [`HitFeedback::render`].
     pub fn trigger_burnout(&mut self) {
+        self.remaining = 0.0;
+        self.peak = 0.0;
         self.burnout_remaining = BURNOUT_SECS;
     }
 
@@ -243,27 +247,6 @@ impl HitFeedback {
     /// Current burnout flash opacity, decaying linearly like the hurt tint.
     pub fn burnout_intensity(&self) -> f32 {
         BURNOUT_PEAK * self.burnout_remaining / BURNOUT_SECS
-    }
-
-    /// The burnout flash layer to draw this frame, if one is showing. Same
-    /// view-locked rim as the hurt tint (see [`HitFeedback::render`]).
-    pub fn render_burnout(
-        &self,
-        view_extents: (f32, f32),
-        eye_position: Vector3<f32>,
-        eye_forward: Vector3<f32>,
-    ) -> Option<SceneObject> {
-        let intensity = self.burnout_intensity();
-        (intensity > 0.0).then(|| {
-            vignette_layer(
-                view_extents,
-                eye_position,
-                eye_forward,
-                BURNOUT_TINT,
-                intensity,
-                crate::util::render_source::PSI_BURNOUT,
-            )
-        })
     }
 
     /// Current rim opacity, 0 when nothing is showing. Linear decay: it
@@ -288,10 +271,20 @@ impl HitFeedback {
         eye_position: Vector3<f32>,
         eye_forward: Vector3<f32>,
     ) -> Option<SceneObject> {
+        // One layer only, the stronger: drawing both would tint either pink.
+        let burnout = self.burnout_intensity();
         let intensity = self.intensity();
-        // A burnout's own damage would tint its white flash pink: the flash
-        // takes over unless a harder hit is showing.
-        if intensity <= 0.0 || self.burnout_intensity() >= intensity {
+        if burnout > 0.0 && burnout >= intensity {
+            return Some(vignette_layer(
+                view_extents,
+                eye_position,
+                eye_forward,
+                BURNOUT_TINT,
+                burnout,
+                crate::util::render_source::PSI_BURNOUT,
+            ));
+        }
+        if intensity <= 0.0 {
             return None;
         }
         if self.radiation {
@@ -432,39 +425,37 @@ mod tests {
     use cgmath::{Deg, InnerSpace, Rotation3, Zero};
 
     #[test]
-    fn a_burnout_flashes_white_beside_the_hurt_tint_then_fades() {
+    fn a_burnout_flashes_white_over_its_own_hit_then_fades() {
+        let source = |feedback: &HitFeedback| {
+            feedback
+                .render(
+                    DEFAULT_VIEW_EXTENTS,
+                    vec3(0.0, 0.0, 0.0),
+                    vec3(0.0, 0.0, 1.0),
+                )
+                .and_then(|layer| layer.debug_tag().and_then(|tag| tag.source.clone()))
+        };
         let mut feedback = HitFeedback::new();
-        let eye = (vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0));
-        feedback.trigger(3.0);
+        // A tier-5 burnout's own 15 damage would out-tint the flash.
+        feedback.trigger(15.0);
         feedback.trigger_burnout();
-        assert!(feedback.intensity() > 0.0);
-        assert!(
-            feedback
-                .render(DEFAULT_VIEW_EXTENTS, eye.0, eye.1)
-                .is_none(),
-            "its own small hit doesn't tint the flash pink"
-        );
-        feedback.trigger(DAMAGE_FOR_FULL_STRENGTH);
-        assert!(
-            feedback
-                .render(DEFAULT_VIEW_EXTENTS, eye.0, eye.1)
-                .is_some(),
-            "a harder hit still shows"
+        assert_eq!(
+            source(&feedback).as_deref(),
+            Some(crate::util::render_source::PSI_BURNOUT)
         );
         assert!((feedback.burnout_intensity() - BURNOUT_PEAK).abs() < 1e-6);
+        // A harder hit landing after it draws red alone, not over white.
+        feedback.trigger(DAMAGE_FOR_FULL_STRENGTH);
+        assert_eq!(
+            source(&feedback).as_deref(),
+            Some(crate::util::render_source::HIT_FEEDBACK)
+        );
+        feedback.update(10.0);
+        feedback.trigger_burnout();
         feedback.update(BURNOUT_SECS / 2.0);
         assert!((feedback.burnout_intensity() - BURNOUT_PEAK / 2.0).abs() < 1e-6);
         feedback.update(BURNOUT_SECS);
-        assert_eq!(feedback.burnout_intensity(), 0.0);
-        assert!(
-            feedback
-                .render_burnout(
-                    DEFAULT_VIEW_EXTENTS,
-                    vec3(0.0, 0.0, 0.0),
-                    vec3(0.0, 0.0, 1.0)
-                )
-                .is_none()
-        );
+        assert_eq!(source(&feedback), None);
     }
 
     #[test]
