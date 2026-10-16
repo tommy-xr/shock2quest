@@ -623,6 +623,10 @@ dev_params! {
     /// Multiplies a traveling shot's speed (fired while the world is slowed):
     /// a real bullet at half world speed is still too fast to dodge.
     SLOW_TIME_SHOT_SPEED = Root::float("slow_time_shot_speed", "Slow-time shot speed", 1.0, 0.05, 1.0, 0.05),
+    /// World seconds a projectile's smoke puffs take to fade out.
+    PROJECTILE_SMOKE_SECONDS = Root::float("projectile_smoke_seconds", "Projectile smoke seconds", 1.5, 0.2, 5.0, 0.1),
+    /// Draw a glowing head on traveling shots, which have no model.
+    SLOW_TIME_BULLET_HEAD = Root::bool("slow_time_bullet_head", "Slow-time bullet head", true),
     /// Lowest rate world sounds play at while the world is slowed: audio runs
     /// at `max(world_time_scale, floor)`, pitch dropping with speed. A plain
     /// resampler turns muddy below about half rate, so at 0.25 world audio

@@ -104,6 +104,9 @@ pub struct ParticleSystem {
     size_velocity: f32,
     fade_in_time: f32,
     world_space: bool,
+    /// Whether a continuous emitter launches new particles; existing ones
+    /// live out their lifetimes either way.
+    emitting: bool,
 }
 
 fn randf(a: f32, b: f32) -> f32 {
@@ -198,6 +201,7 @@ impl ParticleSystem {
             size_velocity: 0.0,
             fade_in_time: 0.0,
             world_space: false,
+            emitting: true,
         }
     }
 
@@ -386,6 +390,15 @@ impl ParticleSystem {
         }
     }
 
+    /// Start or stop launching particles (continuous emitters).
+    pub fn set_emitting(&mut self, emitting: bool) {
+        self.emitting = emitting;
+    }
+
+    pub fn particle_count(&self) -> usize {
+        self.particles.len()
+    }
+
     pub fn update(&mut self, dt: Duration, transform: Matrix4<f32>) {
         let delta_time = dt.as_secs_f32();
         let (acceleration, size_velocity) = (self.acceleration, self.size_velocity);
@@ -406,6 +419,9 @@ impl ParticleSystem {
                     self.particles.push(create_random_particle(self, transform));
                 }
             }
+        } else if !self.emitting {
+            // Paused: don't bank time, or resuming would launch a backlog.
+            self.launch_time_remaining = self.launch_time_remaining.max(0.0);
         } else if self.launch_time <= 0.0 {
             // No period: one launch per frame while there is room.
             if self.particles.len() < self.max_particles {

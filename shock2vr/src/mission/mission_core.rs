@@ -4372,7 +4372,9 @@ impl MissionCore {
             spatial_data: abstract_mission.spatial_data,
             debug_lines: Vec::new(),
             psi_drain_trails: Vec::new(),
-            projectile_trails: Default::default(),
+            projectile_trails: crate::projectile_trail::ProjectileTrails::new(
+                crate::particle_effects::particle_frames(asset_cache, "NDsmk"),
+            ),
             psi_pull: None,
             healing_pulses: HashMap::new(),
             gui: GuiManager::new(),
@@ -10333,7 +10335,7 @@ impl MissionCore {
         }
     }
 
-    /// Samples every launched or player-fired projectile into its trail,
+    /// Samples every launched or player-fired projectile into its smoke trail,
     /// except cosmetic launches (ejected brass, muzzle effects).
     fn update_projectile_trails(&mut self, world_dt: f32) {
         let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
@@ -10361,9 +10363,15 @@ impl MissionCore {
             .filter(|entity| !cosmetic.contains(*entity))
             .filter_map(|entity| {
                 let transform = transforms.get(entity).ok()?;
-                Some((entity, transform.0.w.truncate()))
+                // Fast shots fly without a physics body.
+                let shot = !self.id_to_physics.contains_key(&entity);
+                Some((entity, transform.0.w.truncate(), shot))
             });
-        self.projectile_trails.update(world_dt, live);
+        self.projectile_trails.update(
+            world_dt,
+            crate::dev_params::get(crate::dev_params::PROJECTILE_SMOKE_SECONDS),
+            live,
+        );
     }
 
     /// Launch speed (Dark units/s) above which a projectile is resolved by
@@ -18001,7 +18009,9 @@ impl MissionCore {
         for trail in &self.psi_drain_trails {
             scene.extend(trail.render());
         }
-        scene.extend(self.projectile_trails.render());
+        scene.extend(self.projectile_trails.render(crate::dev_params::get_bool(
+            crate::dev_params::SLOW_TIME_BULLET_HEAD,
+        )));
         // Render particle systems
         if options.render_particles {
             for (particle_entity_id, particle_system) in &self.id_to_particle_system {
