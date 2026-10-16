@@ -230,14 +230,16 @@ impl Golf {
         } else {
             format!("H{} S{strokes} {relative:+}", self.game.hole + 1)
         };
+        let status_height =
+            PanelText::line_height(world) * if course.three_lines { 3.0 } else { 1.0 };
         result.extend(PanelText::paragraph(
             world,
             &status,
             Rect::new(
                 13.0 + sx,
-                11.0 + sy,
+                (11.0 + sy).min(239.0 - status_height),
                 140.0 - sx,
-                if course.three_lines { 42.0 } else { 14.0 },
+                status_height,
             ),
         ));
         let msg = match self.game.notice {
@@ -322,24 +324,26 @@ impl Golf {
                     .with_alpha(0.0),
             );
         }
-        if hacked
-            && !self.game.mulligan_used
-            && !matches!(self.game.mode, Mode::HoleDone | Mode::Scores)
-        {
+        if hacked && !self.game.mulligan_used && self.game.mode == Mode::Aim {
+            // Share the swing row so Retry never covers the course's status or result notice.
             result.push(GuiComponent::Fill {
-                position: vec2(114.0, 242.0),
-                size: vec2(38.0, 19.0),
+                position: vec2(13.0, 263.0),
+                size: vec2(140.0, 12.0),
                 color: [0, 0, 0],
                 alpha: 1.0,
             });
-            result.push(PanelText::text(
+            result.push(PanelText::centered(
+                "Swing",
+                Rect::new(14.0, 264.0, 98.0, 10.0),
+            ));
+            result.push(PanelText::centered(
                 "Retry",
-                Rect::new(115.0, 244.0, 36.0, 14.0),
+                Rect::new(115.0, 264.0, 36.0, 10.0),
             ));
             result.push(
                 gui::button(GamePigGuiMsg::GolfRetry)
-                    .with_position(vec2(114.0, 242.0))
-                    .with_size(vec2(38.0, 19.0))
+                    .with_position(vec2(114.0, 263.0))
+                    .with_size(vec2(38.0, 12.0))
                     .with_label("golf-retry")
                     .with_alpha(0.0),
             );
@@ -445,7 +449,9 @@ mod tests {
     fn sunk_hole_status_has_separate_lines_and_includes_its_par() {
         let world = world();
         let mut golf = Golf::new(&world).unwrap();
-        Arc::make_mut(&mut golf.game.courses)[0].three_lines = true;
+        let course = &mut Arc::make_mut(&mut golf.game.courses)[0];
+        course.three_lines = true;
+        course.score_marker = [92.0, 211.0];
         golf.game.mode = Mode::HoleDone;
         golf.game.strokes = 3;
         golf.game.card[0] = 3;
@@ -463,6 +469,7 @@ mod tests {
             .collect();
         assert_eq!(lines.len(), 3);
         assert!(lines.windows(2).all(|ys| ys[1] > ys[0]));
+        assert!(lines[2] + PanelText::line_height(&world) <= 239.0);
     }
     #[test]
     fn hacked_retry_is_visible_and_spent_once() {
@@ -481,6 +488,14 @@ mod tests {
         };
         assert!(!retry(&golf, false));
         assert!(retry(&golf, true));
+        let components = golf.components(&world, true);
+        assert!(components.iter().any(|c| matches!(c,
+            GuiComponent::Button { on_click: Some(GamePigGuiMsg::GolfRetry), position, .. }
+                if position.y == 263.0
+        )));
+        golf.game.mode = Mode::Flight;
+        assert!(!retry(&golf, true));
+        golf.game.mode = Mode::Aim;
         golf.mulligan(true);
         assert!(!retry(&golf, true));
     }
