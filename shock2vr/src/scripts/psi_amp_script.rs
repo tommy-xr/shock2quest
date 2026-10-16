@@ -21,6 +21,8 @@ use engine::{audio::AudioHandle, game_log};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
+    Handedness,
+    haptics::{self, HapticPulse},
     mission::PlayerInfo,
     physics::{InternalCollisionGroups, PhysicsWorld},
     psi::{self, PsiPowerInfo, charge_duration_secs},
@@ -112,13 +114,16 @@ impl Script for PsiAmpScript {
                 // voice cue. Refuse once on the trigger edge, before either a
                 // charge or an immediate cast can begin.
                 if player_psi_points(world) < power.power.psi_cost {
-                    return play_environmental_sound(
-                        world,
-                        entity_id,
-                        "outofammo",
-                        vec![],
-                        AudioHandle::new(),
-                    );
+                    return Effect::Multiple(vec![
+                        play_environmental_sound(
+                            world,
+                            entity_id,
+                            "outofammo",
+                            vec![],
+                            AudioHandle::new(),
+                        ),
+                        amp_haptic(world, entity_id, haptics::PSI_FIZZLE),
+                    ]);
                 }
                 // Both presentations show the per-amp charge on their shared
                 // ammo readout, so the same trigger timing applies in VR.
@@ -136,7 +141,7 @@ impl Script for PsiAmpScript {
                         player_psi_stat(world),
                     ) {
                         game_log!(INFO, "{} would do nothing right now", power.name);
-                        return Effect::NoEffect;
+                        return amp_haptic(world, entity_id, haptics::PSI_FIZZLE);
                     }
                     // Cast happens on release; start the meter.
                     let duration = charge_duration_secs(power.power.psi_cost);
@@ -151,7 +156,10 @@ impl Script for PsiAmpScript {
                         phase: PsiChargePhase::Charging,
                     }
                 } else {
-                    cast_selected_power(world, physics, entity_id, player_psi_stat(world))
+                    let cast =
+                        cast_selected_power(world, physics, entity_id, player_psi_stat(world));
+                    let pulse = cast_pulse(&cast, haptics::PSI_CAST);
+                    Effect::Multiple(vec![cast, amp_haptic(world, entity_id, pulse)])
                 }
             }
             MessagePayload::TriggerRelease => {
@@ -173,7 +181,10 @@ impl Script for PsiAmpScript {
                     != Some(power_template_id)
                 {
                     self.charge = None;
-                    return Effect::ClearPsiCharge { entity_id };
+                    return Effect::Multiple(vec![
+                        Effect::ClearPsiCharge { entity_id },
+                        amp_haptic(world, entity_id, haptics::PSI_FIZZLE),
+                    ]);
                 }
                 let fraction = elapsed / duration;
                 let overload = fraction >= psi::OVERLOAD_ZONE_START;
@@ -182,6 +193,14 @@ impl Script for PsiAmpScript {
                 // A successful overload flashes the success art briefly; a
                 // normal cast - or a fizzle (no psi / power not implemented)
                 // - just drops the meter.
+                let pulse = cast_pulse(
+                    &cast,
+                    if overload {
+                        haptics::PSI_OVERLOAD_CAST
+                    } else {
+                        haptics::PSI_CAST
+                    },
+                );
                 let meter = if overload && !matches!(cast, Effect::NoEffect) {
                     self.charge = Some(ChargeState::ResultFlash {
                         remaining: psi::CHARGE_RESULT_FLASH_SECS,
@@ -195,7 +214,7 @@ impl Script for PsiAmpScript {
                     self.charge = None;
                     Effect::ClearPsiCharge { entity_id }
                 };
-                Effect::Multiple(vec![meter, cast])
+                Effect::Multiple(vec![meter, cast, amp_haptic(world, entity_id, pulse)])
             }
             // Losing the amp mid-charge (weapon swap, drop, holster) cancels
             // the charge - otherwise the holstered amp would keep charging
@@ -235,7 +254,10 @@ impl Script for PsiAmpScript {
                 {
                     // Selection changed mid-hold: the charge fizzles.
                     self.charge = None;
-                    Effect::ClearPsiCharge { entity_id }
+                    Effect::Multiple(vec![
+                        Effect::ClearPsiCharge { entity_id },
+                        amp_haptic(world, entity_id, haptics::PSI_FIZZLE),
+                    ])
                 } else if fraction > 1.0 {
                     // Held past a full bar: psi burnout. The cast fails, the
                     // points are spent anyway, and the player takes damage.
@@ -244,11 +266,25 @@ impl Script for PsiAmpScript {
                     });
                     burnout(world, entity_id)
                 } else {
-                    Effect::SetPsiCharge {
+                    let meter = Effect::SetPsiCharge {
                         entity_id,
                         fraction,
                         phase: PsiChargePhase::Charging,
+                    };
+                    // A frame with no elapsed time (a paused/idle tick) has
+                    // nothing new to feel, and would repeat the last pulse.
+                    if dt <= 0.0 {
+                        return meter;
                     }
+                    let previous = (*elapsed - dt) / *duration;
+                    Effect::Multiple(vec![
+                        meter,
+                        amp_haptic(
+                            world,
+                            entity_id,
+                            haptics::psi_charge_pulse(previous, fraction),
+                        ),
+                    ])
                 }
             }
             Some(ChargeState::ResultFlash { remaining }) => {
@@ -332,6 +368,7 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
             source: Some(player_entity),
             spatial: false,
         },
+        amp_haptic(world, amp_entity, haptics::PSI_BURNOUT),
     ])
 }
 
@@ -365,6 +402,26 @@ fn burnout_kick(world: &World, amp_entity: EntityId) -> Effect {
             ..impulse
         },
     }
+}
+
+/// A cast that resolved to nothing (no psi, no target, unimplemented) fizzles.
+fn cast_pulse(cast: &Effect, success: HapticPulse) -> HapticPulse {
+    if matches!(cast, Effect::NoEffect) {
+        haptics::PSI_FIZZLE
+    } else {
+        success
+    }
+}
+
+/// Feedback on whichever hand holds this amp; with dual amps only that hand.
+fn amp_haptic(world: &World, amp: EntityId, pulse: HapticPulse) -> Effect {
+    Effect::Multiple(
+        [Handedness::Left, Handedness::Right]
+            .into_iter()
+            .filter(|&hand| crate::wielded_weapon::held_by_hand(world, hand) == Some(amp))
+            .map(|hand| Effect::HandHaptic { hand, pulse })
+            .collect(),
+    )
 }
 
 /// Whether the player has been trained in the power. Selection gating
@@ -1073,6 +1130,14 @@ mod tests {
             assert!(effects.iter().any(
                 |e| matches!(e, Effect::KickHeldGun { entity_id, impulse, .. } if *entity_id == amp && impulse.pitch > 0.0 && impulse.back < 0.0 && impulse.lift > 0.0)
             ));
+            assert!(effects.iter().any(|e| matches!(
+                e,
+                Effect::Multiple(haptic) if matches!(
+                    haptic.as_slice(),
+                    [Effect::HandHaptic { hand: Handedness::Left, pulse }]
+                        if *pulse == haptics::PSI_BURNOUT
+                )
+            )));
             assert!(effects.iter().all(|e| matches!(
                 e,
                 Effect::AdjustHitPoints { .. }
@@ -1081,6 +1146,7 @@ mod tests {
                     | Effect::GlobalEffect(super::super::GlobalEffect::PsiBurnout)
                     | Effect::KickHeldGun { .. }
                     | Effect::PlaySound { .. }
+                    | Effect::Multiple(_)
             )));
         }
     }

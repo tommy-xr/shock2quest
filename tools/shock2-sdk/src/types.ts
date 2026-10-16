@@ -858,7 +858,7 @@ export interface PlayerSnapshot {
     };
     rapiers?: { entity_id: number; extension: number; held: boolean; hum_handle: number | null }[];
     /** Per-hand transient haptic requests and monotonic diagnostic counters. */
-    haptics?: { pending: [{ amplitude: number; duration_ms: number } | null, { amplitude: number; duration_ms: number } | null]; sequence: [number, number] };
+    haptics?: { pending: [{ amplitude: number; duration_ms: number } | null, { amplitude: number; duration_ms: number } | null]; sequence: [number, number]; last: [{ amplitude: number; duration_ms: number } | null, { amplitude: number; duration_ms: number } | null] };
     glove_contacts?: { centers: [Vec3 | null, Vec3 | null]; radius: number };
     /** Shoulder stow targets in world space; absent on older runtimes. */
     shoulder_backpack?: {
