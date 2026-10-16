@@ -395,6 +395,13 @@ impl ParticleSystem {
         self.emitting = emitting;
     }
 
+    /// Change a continuous emitter's launch period, e.g. to keep spacing
+    /// even along a path flown at a varying speed.
+    pub fn set_launch_time(&mut self, launch_time: Duration) {
+        self.launch_time = launch_time.as_secs_f32();
+        self.launch_time_remaining = self.launch_time_remaining.min(self.launch_time);
+    }
+
     pub fn particle_count(&self) -> usize {
         self.particles.len()
     }

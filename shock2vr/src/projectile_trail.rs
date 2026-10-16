@@ -12,14 +12,14 @@ use engine::{
 use shipyard::EntityId;
 
 /// World units between smoke puffs along a path.
-const SMOKE_SPACING: f32 = 0.4;
+const SMOKE_SPACING: f32 = 0.18;
 /// Puffs alive per trail; a trail this long stops adding until old ones fade.
-const MAX_PUFFS: usize = 48;
+const MAX_PUFFS: usize = 80;
 /// World units per world second a projectile must move to emit smoke.
 const MIN_TRAIL_SPEED: f32 = 1.0;
 /// Projectiles trailed at once; further ones go untrailed (Quest overdraw:
 /// at most `MAX_TRAILS * MAX_PUFFS` puffs).
-const MAX_TRAILS: usize = 12;
+const MAX_TRAILS: usize = 8;
 /// World length of a traveling shot's glowing head.
 const HEAD_LENGTH: f32 = 0.35;
 
@@ -88,8 +88,7 @@ impl ProjectileTrails {
                 None if moving && self.trails.len() < MAX_TRAILS => {
                     let travel = travel.unwrap();
                     let start = position - travel;
-                    let mut smoke =
-                        smoke_puffs(&self.smoke_frames, smoke_seconds, travel.magnitude() / dt);
+                    let mut smoke = smoke_puffs(&self.smoke_frames, smoke_seconds);
                     // Prime the emitter where the projectile was, so the
                     // first puffs fill the path from there.
                     smoke.update(Duration::ZERO, Matrix4::from_translation(start));
@@ -109,6 +108,13 @@ impl ProjectileTrails {
             trail.live = true;
             trail.heading = travel.filter(|_| moving).map(|travel| travel.normalize());
             trail.smoke.set_emitting(moving);
+            if let Some(travel) = travel.filter(|_| moving) {
+                // One puff per SMOKE_SPACING at this tick's speed.
+                let interval = SMOKE_SPACING * dt / travel.magnitude();
+                trail
+                    .smoke
+                    .set_launch_time(Duration::from_secs_f32(interval.max(1.0e-4)));
+            }
             trail
                 .smoke
                 .update(step, Matrix4::from_translation(position));
@@ -184,20 +190,19 @@ impl ProjectileTrails {
     }
 }
 
-/// Grey smoke puffs launched every `SMOKE_SPACING` along a path flown at
-/// `speed`, drifting and swelling a little and fading over their whole life.
-fn smoke_puffs(frames: &[Rc<dyn TextureTrait>], seconds: f32, speed: f32) -> ParticleSystem {
+/// Grey smoke puffs (the caller sets the launch period each tick), drifting
+/// and swelling a little and fading over their whole life.
+fn smoke_puffs(frames: &[Rc<dyn TextureTrait>], seconds: f32) -> ParticleSystem {
     let smoke = ParticleSystem::new()
         .with_world_space(true)
         .with_num_particles(MAX_PUFFS)
-        .with_launch_time(Duration::from_secs_f32((SMOKE_SPACING / speed).max(1.0e-4)))
         .with_launch_bounding_box(vec3(-0.01, -0.01, -0.01), vec3(0.01, 0.01, 0.01))
-        .with_velocity(vec3(-0.04, -0.01, -0.04), vec3(0.04, 0.05, 0.04))
+        .with_velocity(vec3(-0.08, -0.02, -0.08), vec3(0.08, 0.1, 0.08))
         .with_lifetime(seconds * 0.8, seconds)
-        .with_particle_size(0.06, 0.1)
-        .with_size_velocity(0.12)
-        .with_color(vec3(0.6, 0.6, 0.6))
-        .with_alpha(0.45)
+        .with_particle_size(0.3, 0.4)
+        .with_size_velocity(0.4)
+        .with_color(vec3(0.8, 0.8, 0.8))
+        .with_alpha(0.5)
         .with_fade_in_time(0.03)
         .with_fade_time(seconds);
     if frames.is_empty() {
@@ -234,10 +239,27 @@ mod tests {
     #[test]
     fn smoke_fills_the_path_from_the_first_position() {
         let mut trails = trails();
-        // 6 world units at 0.4 spacing.
+        // 6 world units at 0.18 spacing.
         fly(&mut trails, 36.0, 10);
         let puffs = trails.puff_counts()[0].1;
-        assert!((14..=16).contains(&puffs), "{puffs}");
+        assert!((32..=35).contains(&puffs), "{puffs}");
+    }
+
+    #[test]
+    fn spacing_follows_the_speed_of_each_tick() {
+        let mut trails = trails();
+        // A short first step (a shot leaving the muzzle), then full speed:
+        // 0.06 + 10 * 0.6 = 6.06 world units.
+        let mut x = 0.0;
+        trails.update(DT, SMOKE, [(id(1), vec3(x, 0.0, 0.0), true)]);
+        x += 0.06;
+        trails.update(DT, SMOKE, [(id(1), vec3(x, 0.0, 0.0), true)]);
+        for _ in 0..10 {
+            x += 0.6;
+            trails.update(DT, SMOKE, [(id(1), vec3(x, 0.0, 0.0), true)]);
+        }
+        let puffs = trails.puff_counts()[0].1;
+        assert!((31..=35).contains(&puffs), "{puffs}");
     }
 
     #[test]
