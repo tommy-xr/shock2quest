@@ -5852,7 +5852,7 @@ impl MissionCore {
         });
         self.overload_glows.retain(|_, age| {
             *age += time.elapsed.as_secs_f32();
-            *age < crate::psi_overload_glow::SECS
+            *age < crate::psi_overload_glow::ATTACK_SECS
         });
         self.psi_drain_trails
             .retain_mut(|trail| trail.advance(time.elapsed));

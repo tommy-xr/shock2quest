@@ -1,15 +1,16 @@
 //! The amp heats in the overload zone, in both presentations: its device
 //! parts glow its own psi teal on entering the zone and shift to red as the
-//! charge nears burnout; an overload cast flares white-hot and cools over
-//! the meter's result flash. The baked hand that shares the model stays skin.
+//! charge nears burnout. While the meter shows its result, an overload cast
+//! stays white-hot and a burnout red. The baked hand that shares the model
+//! stays skin.
 use cgmath::{Vector3, Vector4, VectorSpace, vec3};
 use engine::scene::Glow;
 
 use crate::psi::OVERLOAD_ZONE_START;
 use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
 
-pub const SECS: f32 = crate::psi::CHARGE_RESULT_FLASH_SECS;
-const ATTACK_SECS: f32 = 0.05;
+/// The overload burst's rise; past it the release time is no longer needed.
+pub const ATTACK_SECS: f32 = 0.05;
 /// The hue of the amp's status strip, saturated so it still reads on the
 /// dark metal: entering the zone looks like the amp's own energy building.
 const TEAL: Vector3<f32> = vec3(0.1, 0.8, 1.0);
@@ -20,7 +21,7 @@ const RED: Vector3<f32> = vec3(1.0, 0.25, 0.04);
 /// Held glow across the zone: it fades in from the zone's edge rather than
 /// switching on, and the haptic detent already marks the crossing.
 const HOLD: [f32; 2] = [0.1, 0.85];
-/// The release burst added over the held colour: the hold is already near
+/// The overload burst added over the held colour: the hold is already near
 /// saturation, so the flare whitens rather than only brightening.
 const WHITE_HOT: Vector3<f32> = vec3(0.6, 0.5, 0.35);
 
@@ -35,7 +36,7 @@ fn zone_progress(fraction: f32) -> Option<f32> {
 }
 
 /// The amp's heat for its meter state; `flash_age` is seconds since an
-/// overload release. A burnout or a charge below the zone has none.
+/// overload release. A charge below the zone has none.
 pub(crate) fn color(
     charge: Option<&RuntimePropPsiCharge>,
     flash_age: Option<f32>,
@@ -48,21 +49,14 @@ pub(crate) fn color(
         VIOLET.lerp(RED, progress * 2.0 - 1.0)
     } * (HOLD[0] + (HOLD[1] - HOLD[0]) * progress);
     match charge.phase {
-        PsiChargePhase::Charging => Some(held),
+        // A burnout's bar is full: it holds the hottest red.
+        PsiChargePhase::Charging | PsiChargePhase::Burnout => Some(held),
+        // The burst rises from nothing, so the release frame continues the
+        // hold; it then lasts as long as the meter's result.
         PsiChargePhase::Overloaded => {
-            let age = flash_age.filter(|age| (0.0..SECS).contains(age))?;
-            // The burst rises from nothing, so the release frame continues the
-            // hold; then burst and held colour cool together.
-            let (burst, fade) = if age < ATTACK_SECS {
-                (age / ATTACK_SECS, 1.0)
-            } else {
-                let cooled = (age - ATTACK_SECS) / (SECS - ATTACK_SECS);
-                let fade = (1.0 - cooled) * (1.0 - cooled);
-                (fade, fade)
-            };
-            Some(held * fade + WHITE_HOT * burst)
+            let burst = flash_age.map_or(1.0, |age| (age / ATTACK_SECS).clamp(0.0, 1.0));
+            Some(held + WHITE_HOT * burst)
         }
-        PsiChargePhase::Burnout => None,
     }
 }
 
@@ -115,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn a_release_flares_its_colour_then_cools() {
+    fn a_release_holds_white_hot_and_a_burnout_red() {
         let held = charging(0.9).unwrap();
         assert_eq!(
             flash(0.9, 0.0),
@@ -127,12 +121,16 @@ mod tests {
             peak.x > held.x && peak.y > 2.0 * held.y,
             "white-hot: {peak:?}"
         );
-        assert!(flash(0.9, 0.5).unwrap().x < flash(0.9, 0.3).unwrap().x);
-        assert_eq!(flash(0.9, SECS), None);
-        assert_eq!(flash(0.9, -0.1), None);
+        assert_eq!(flash(0.9, 0.5), Some(peak), "held while the meter shows it");
         assert_eq!(
-            color(Some(&charge(1.0, PsiChargePhase::Burnout)), Some(0.1)),
-            None
+            color(Some(&charge(0.9, PsiChargePhase::Overloaded)), None),
+            Some(peak)
+        );
+        let burnout = color(Some(&charge(1.0, PsiChargePhase::Burnout)), None).unwrap();
+        assert_eq!(
+            Some(burnout),
+            charging(1.0),
+            "burnout holds the hottest red"
         );
         assert_eq!(color(None, Some(0.1)), None);
     }

@@ -5,8 +5,9 @@ import { GameServer } from "../src/index.js";
 import { equipRightHand } from "./helpers/vr-hand.js";
 
 // The amp's device parts heat in the overload zone - teal entering it, red
-// toward burnout - and an overload release flares that colour over the
-// meter's 0.6s result flash; never the baked hand sharing their atlas.
+// toward burnout - and hold white-hot after an overload, red after a burnout,
+// for as long as the meter shows the result (0.6s); never the baked hand
+// sharing their atlas.
 // Cryokinesis (the default) is tier 1: a 120-frame bar with the overload zone
 // from 85% (frame 102).
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
@@ -59,7 +60,21 @@ for (const vr of [false, true]) test(
       red(flare) > 1.1 * red(late) && green(flare) > 2 * green(late),
       `the release flares white-hot: ${JSON.stringify(late)} -> ${JSON.stringify(flare)}`,
     );
-    await game.step({ frames: 40 });
-    assert.ok((await glows()).every((g) => g === null), "the flash fades out");
+    await game.step({ frames: 27 });
+    assert.deepEqual((await glows())[0], flare, "white-hot while the meter shows the result");
+    await game.step({ frames: 13 });
+    assert.ok((await glows()).every((g) => g === null), "the glow ends with the meter's result");
+
+    // Held past a full bar (120 frames): a burnout holds the hottest red.
+    await game.step({ frames: 60 });
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 125 });
+    assert.equal((await game.info()).player.psi_charge_phase, "burnout");
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 20 });
+    const burnt = (await glows())[0];
+    assert.ok(red(burnt) > 4 * blue(burnt), `red after a burnout: ${JSON.stringify(burnt)}`);
+    await game.step({ frames: 20 });
+    assert.ok((await glows()).every((g) => g === null), "the glow ends with the meter's result");
   },
 );
