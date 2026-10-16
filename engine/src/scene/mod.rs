@@ -94,6 +94,7 @@ pub mod self_depth;
 
 pub mod pass_focus;
 pub mod render_target;
+pub mod sphere;
 
 pub mod world_wave;
 
