@@ -204,6 +204,7 @@ impl StreetHog {
         // Opaque keyed sprites retain the same brightness in flat and mounted views.
         let mut components = vec![
             gui::image("hogback.pcx")
+                .with_alpha(1.0)
                 .with_position(vec2(13.0, 11.0))
                 .with_size(vec2(140.0, 276.0)),
         ];
