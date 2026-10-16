@@ -84,6 +84,7 @@ pub mod mini_game_scores;
 pub mod overworld;
 pub mod overworld_game;
 pub mod player_stats;
+mod projectile_ripple;
 mod projectile_trail;
 mod psi;
 mod psi_defenses;

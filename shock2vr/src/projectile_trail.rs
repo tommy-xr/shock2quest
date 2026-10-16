@@ -1,7 +1,8 @@
-//! Smoke left hanging along projectiles' paths, plus a small bullet drawn at
-//! each traveling shot (which has no model). Puffs age on the world clock, so a
-//! slowed world leaves a shot's whole flight in the air, and outlive their
-//! projectile, fading out gradually.
+//! Trails left hanging along projectiles' paths - a rippling sleeve of air
+//! or smoke puffs - plus a small bullet drawn at each traveling shot (which
+//! has no model). Trails age on the world clock, so a slowed world leaves a
+//! shot's whole flight in the air, and outlive their projectile, fading out
+//! gradually.
 use std::{cell::OnceCell, collections::HashMap, rc::Rc, time::Duration};
 
 use cgmath::{InnerSpace, Matrix4, Vector3, vec3};
@@ -17,6 +18,8 @@ use engine::{
     texture_format::{PixelFormat, RawTextureData},
 };
 use shipyard::EntityId;
+
+use crate::projectile_ripple::RippleTube;
 
 /// World units between smoke puffs along a path.
 const SMOKE_SPACING: f32 = 0.18;
@@ -78,6 +81,8 @@ impl BulletArt {
 struct Trail {
     entity: EntityId,
     smoke: ParticleSystem,
+    /// The rippling-sleeve style; `None` leaves smoke puffs.
+    ripple: Option<RippleTube>,
     /// The projectile's last sampled position, where the emitter rests once
     /// it is gone.
     position: Vector3<f32>,
@@ -102,6 +107,8 @@ pub(crate) struct ProjectileTrails {
     smoke_frames: Vec<Rc<dyn TextureTrait>>,
     /// Made on the first bullet drawn, which has a GL context.
     bullet_art: OnceCell<BulletArt>,
+    /// Made on the first ripple drawn.
+    ripple_texture: OnceCell<Rc<dyn TextureTrait>>,
 }
 
 impl ProjectileTrails {
@@ -113,6 +120,7 @@ impl ProjectileTrails {
             heads: Vec::new(),
             smoke_frames,
             bullet_art: OnceCell::new(),
+            ripple_texture: OnceCell::new(),
         }
     }
 
@@ -124,6 +132,7 @@ impl ProjectileTrails {
         &mut self,
         dt: f32,
         smoke_seconds: f32,
+        ripple: bool,
         live: impl IntoIterator<Item = (EntityId, Vector3<f32>, bool)>,
     ) {
         if dt <= 0.0 {
@@ -168,6 +177,7 @@ impl ProjectileTrails {
                     self.trails.push(Trail {
                         entity,
                         smoke,
+                        ripple: ripple.then(|| RippleTube::new(start, smoke_seconds)),
                         position: start,
                         live: true,
                         emitting: true,
@@ -177,6 +187,14 @@ impl ProjectileTrails {
                 }
                 None => continue,
             };
+            trail.position = position;
+            if let Some(tube) = &mut trail.ripple {
+                if travel.is_some() {
+                    tube.extend_to(position);
+                }
+                tube.advance(dt);
+                continue;
+            }
             trail.smoke.set_emitting(travel.is_some());
             if let Some(travel) = travel {
                 // One puff per SMOKE_SPACING at this tick's speed.
@@ -188,11 +206,17 @@ impl ProjectileTrails {
             trail
                 .smoke
                 .update(step, Matrix4::from_translation(position));
-            trail.position = position;
         }
         for trail in self.trails.iter_mut().filter(|trail| !trail.live) {
             // Gone: draw the last stretch to the impact, then only fade.
             let end = trail.end.take();
+            if let Some(tube) = &mut trail.ripple {
+                if let Some(end) = end {
+                    tube.extend_to(end);
+                }
+                tube.advance(dt);
+                continue;
+            }
             if let Some(end) = end {
                 let interval = SMOKE_SPACING * dt / (end - trail.position).magnitude().max(1.0e-4);
                 trail
@@ -206,8 +230,11 @@ impl ProjectileTrails {
                 .update(step, Matrix4::from_translation(trail.position));
             trail.smoke.set_emitting(false);
         }
-        self.trails
-            .retain(|trail| trail.emitting || trail.smoke.particle_count() > 0);
+        self.trails.retain(|trail| {
+            trail.emitting
+                || trail.smoke.particle_count() > 0
+                || trail.ripple.as_ref().is_some_and(|tube| !tube.is_empty())
+        });
         self.last_seen.clear();
         self.last_seen.extend(
             self.frame
@@ -255,6 +282,20 @@ impl ProjectileTrails {
         };
         let mut objects = Vec::new();
         for trail in &self.trails {
+            if let Some(tube) = &trail.ripple {
+                let (vertices, indices) = tube.mesh();
+                if !vertices.is_empty() {
+                    let texture = self.ripple_texture.get_or_init(ripple_texture).clone();
+                    let mut object = SceneObject::new(
+                        basic_material::create_unlit(texture, RIPPLE_TRANSPARENCY),
+                        Box::new(engine::scene::indexed_mesh::create(vertices, indices)),
+                    );
+                    object.set_depth_write(false);
+                    object.set_debug_tag(tag(trail.entity, "projectile_ripple"));
+                    objects.push(object);
+                }
+                continue;
+            }
             let smoke_tag = tag(trail.entity, "projectile_smoke");
             for mut puff in trail.smoke.render() {
                 puff.set_debug_tag(smoke_tag.clone());
@@ -325,6 +366,31 @@ fn bullet_frames(tip: Vector3<f32>, heading: Vector3<f32>) -> [Matrix4<f32>; 2] 
     ]
 }
 
+/// The ripple sleeve's opacity on top of its texture.
+const RIPPLE_TRANSPARENCY: f32 = 0.55;
+
+/// Pale grey air, `u` fading it out with age and `v` banding it brighter at
+/// each ripple crest, so the sleeve reads as stacked rings.
+fn ripple_texture() -> Rc<dyn TextureTrait> {
+    const AGES: usize = 32;
+    const PHASES: usize = 16;
+    let mut bytes = Vec::with_capacity(AGES * PHASES * 4);
+    for phase in 0..PHASES {
+        let crest = 0.5 + 0.5 * (phase as f32 / PHASES as f32 * std::f32::consts::TAU).sin();
+        for age in 0..AGES {
+            let fade = (1.0 - age as f32 / (AGES - 1) as f32).powf(1.5);
+            let alpha = fade * (0.35 + 0.65 * crest * crest);
+            bytes.extend([215, 222, 230, (alpha * 255.0) as u8]);
+        }
+    }
+    Rc::new(engine::texture::init_from_memory(RawTextureData {
+        bytes,
+        width: AGES as u32,
+        height: PHASES as u32,
+        format: PixelFormat::RGBA,
+    }))
+}
+
 /// Grey smoke puffs (the caller sets the launch period each tick), drifting
 /// and swelling a little and fading over their whole life.
 fn smoke_puffs(frames: &[Rc<dyn TextureTrait>], seconds: f32) -> ParticleSystem {
@@ -367,7 +433,7 @@ mod tests {
     fn fly(trails: &mut ProjectileTrails, speed: f32, ticks: usize) {
         for i in 0..=ticks {
             let x = i as f32 * speed * DT;
-            trails.update(DT, SMOKE, [(id(1), vec3(x, 0.0, 0.0), true)]);
+            trails.update(DT, SMOKE, false, [(id(1), vec3(x, 0.0, 0.0), true)]);
         }
     }
 
@@ -386,12 +452,12 @@ mod tests {
         // A short first step (a shot leaving the muzzle), then full speed:
         // 0.06 + 10 * 0.6 = 6.06 world units.
         let mut x = 0.0;
-        trails.update(DT, SMOKE, [(id(1), vec3(x, 0.0, 0.0), true)]);
+        trails.update(DT, SMOKE, false, [(id(1), vec3(x, 0.0, 0.0), true)]);
         x += 0.06;
-        trails.update(DT, SMOKE, [(id(1), vec3(x, 0.0, 0.0), true)]);
+        trails.update(DT, SMOKE, false, [(id(1), vec3(x, 0.0, 0.0), true)]);
         for _ in 0..10 {
             x += 0.6;
-            trails.update(DT, SMOKE, [(id(1), vec3(x, 0.0, 0.0), true)]);
+            trails.update(DT, SMOKE, false, [(id(1), vec3(x, 0.0, 0.0), true)]);
         }
         let puffs = trails.puff_counts()[0].1;
         assert!((31..=35).contains(&puffs), "{puffs}");
@@ -410,10 +476,10 @@ mod tests {
         fly(&mut trails, 36.0, 10);
         let puffs = trails.puff_counts()[0].1;
         // Gone: no new puffs, and every puff fades within SMOKE seconds.
-        trails.update(DT, SMOKE, []);
+        trails.update(DT, SMOKE, false, []);
         assert_eq!(trails.puff_counts(), vec![(id(1), puffs)]);
         for _ in 0..(SMOKE / DT) as usize + 2 {
-            trails.update(DT, SMOKE, []);
+            trails.update(DT, SMOKE, false, []);
         }
         assert!(trails.puff_counts().is_empty());
     }
@@ -425,11 +491,11 @@ mod tests {
         let before = trails.puff_counts()[0].1;
         // Struck one step past its last sampled point.
         trails.end(id(1), vec3(6.6, 0.0, 0.0));
-        trails.update(DT, SMOKE, []);
+        trails.update(DT, SMOKE, false, []);
         let after = trails.puff_counts()[0].1;
         assert!(after > before, "{before} -> {after}");
         // Without an impact, a vanished projectile adds nothing.
-        trails.update(DT, SMOKE, []);
+        trails.update(DT, SMOKE, false, []);
         assert_eq!(trails.puff_counts()[0].1, after);
     }
 
@@ -438,7 +504,7 @@ mod tests {
         let mut trails = trails();
         for i in 0..30 {
             let x = i as f32 * 0.5 * MIN_TRAIL_SPEED * DT;
-            trails.update(DT, SMOKE, [(id(1), vec3(x, 0.0, 0.0), false)]);
+            trails.update(DT, SMOKE, false, [(id(1), vec3(x, 0.0, 0.0), false)]);
         }
         assert!(trails.puff_counts().is_empty());
     }
@@ -449,7 +515,7 @@ mod tests {
         fly(&mut trails, 36.0, 5);
         let puffs = trails.puff_counts();
         for _ in 0..100 {
-            trails.update(0.0, SMOKE, [(id(1), vec3(50.0, 0.0, 0.0), true)]);
+            trails.update(0.0, SMOKE, false, [(id(1), vec3(50.0, 0.0, 0.0), true)]);
         }
         assert_eq!(trails.puff_counts(), puffs);
     }
@@ -458,12 +524,22 @@ mod tests {
     fn a_new_shot_replaces_trails_whose_projectiles_just_vanished() {
         let mut trails = trails();
         let ids = || 1..=(MAX_TRAILS as u64);
-        trails.update(DT, SMOKE, ids().map(|n| (id(n), vec3(0.0, 0.0, 0.0), true)));
-        trails.update(DT, SMOKE, ids().map(|n| (id(n), vec3(0.0, 0.0, 1.0), true)));
+        trails.update(
+            DT,
+            SMOKE,
+            false,
+            ids().map(|n| (id(n), vec3(0.0, 0.0, 0.0), true)),
+        );
+        trails.update(
+            DT,
+            SMOKE,
+            false,
+            ids().map(|n| (id(n), vec3(0.0, 0.0, 1.0), true)),
+        );
         // The same tick they all vanish, a new shot appears and moves.
         let late = id(MAX_TRAILS as u64 + 1);
-        trails.update(DT, SMOKE, [(late, vec3(0.0, 0.0, 0.0), true)]);
-        trails.update(DT, SMOKE, [(late, vec3(0.0, 0.0, 1.0), true)]);
+        trails.update(DT, SMOKE, false, [(late, vec3(0.0, 0.0, 0.0), true)]);
+        trails.update(DT, SMOKE, false, [(late, vec3(0.0, 0.0, 1.0), true)]);
         assert!(trails.trails.iter().any(|trail| trail.entity == late));
         assert_eq!(trails.trails.len(), MAX_TRAILS);
     }
@@ -473,14 +549,15 @@ mod tests {
         let mut trails = trails();
         let ids = || 1..=(MAX_TRAILS as u64);
         let at = |z: f32| ids().map(move |n| (id(n), vec3(n as f32, 0.0, z), true));
-        trails.update(DT, SMOKE, at(0.0));
-        trails.update(DT, SMOKE, at(1.0));
+        trails.update(DT, SMOKE, false, at(0.0));
+        trails.update(DT, SMOKE, false, at(1.0));
         // All pause for a tick, then resume; a new shot is listed first.
-        trails.update(DT, SMOKE, at(1.0));
+        trails.update(DT, SMOKE, false, at(1.0));
         let late = id(MAX_TRAILS as u64 + 1);
         trails.update(
             DT,
             SMOKE,
+            false,
             [(late, vec3(0.0, 9.0, 0.0), true)]
                 .into_iter()
                 .chain(at(1.0)),
@@ -488,6 +565,7 @@ mod tests {
         trails.update(
             DT,
             SMOKE,
+            false,
             [(late, vec3(0.0, 9.0, 1.0), true)]
                 .into_iter()
                 .chain(at(2.0)),
@@ -497,11 +575,37 @@ mod tests {
     }
 
     #[test]
+    fn a_ripple_trail_outlives_its_projectile_then_clears() {
+        let mut trails = trails();
+        for i in 0..=10 {
+            let x = i as f32 * 0.6;
+            trails.update(DT, SMOKE, true, [(id(1), vec3(x, 0.0, 0.0), true)]);
+        }
+        let trail = &trails.trails[0];
+        assert!(trail.ripple.as_ref().is_some_and(|tube| !tube.is_empty()));
+        assert_eq!(trail.smoke.particle_count(), 0, "no puffs in ripple style");
+        for _ in 0..(SMOKE / DT) as usize + 2 {
+            trails.update(DT, SMOKE, true, []);
+        }
+        assert!(trails.trails.is_empty());
+    }
+
+    #[test]
     fn trails_are_capped() {
         let mut trails = trails();
         let ids = || 1..=(MAX_TRAILS as u64 + 4);
-        trails.update(DT, SMOKE, ids().map(|n| (id(n), vec3(0.0, 0.0, 0.0), true)));
-        trails.update(DT, SMOKE, ids().map(|n| (id(n), vec3(0.0, 0.0, 1.0), true)));
+        trails.update(
+            DT,
+            SMOKE,
+            false,
+            ids().map(|n| (id(n), vec3(0.0, 0.0, 0.0), true)),
+        );
+        trails.update(
+            DT,
+            SMOKE,
+            false,
+            ids().map(|n| (id(n), vec3(0.0, 0.0, 1.0), true)),
+        );
         assert_eq!(trails.trails.len(), MAX_TRAILS);
     }
 
@@ -511,6 +615,7 @@ mod tests {
         trails.update(
             DT,
             SMOKE,
+            false,
             [
                 (id(1), vec3(0.0, 0.0, 0.0), true),
                 (id(2), vec3(0.0, 0.0, 0.0), false),
@@ -519,6 +624,7 @@ mod tests {
         trails.update(
             DT,
             SMOKE,
+            false,
             [
                 (id(1), vec3(0.0, 0.0, 1.0), true),
                 (id(2), vec3(0.0, 0.0, 1.0), false),
@@ -528,7 +634,7 @@ mod tests {
             trails.heads,
             vec![(id(1), vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, 1.0))]
         );
-        trails.update(DT, SMOKE, []);
+        trails.update(DT, SMOKE, false, []);
         assert!(trails.heads.is_empty());
     }
 
@@ -554,8 +660,18 @@ mod tests {
     fn the_smoke_cap_does_not_hide_a_shot() {
         let mut trails = trails();
         let ids = || 1..=(MAX_TRAILS as u64 + 1);
-        trails.update(DT, SMOKE, ids().map(|n| (id(n), vec3(0.0, 0.0, 0.0), true)));
-        trails.update(DT, SMOKE, ids().map(|n| (id(n), vec3(0.0, 0.0, 1.0), true)));
+        trails.update(
+            DT,
+            SMOKE,
+            false,
+            ids().map(|n| (id(n), vec3(0.0, 0.0, 0.0), true)),
+        );
+        trails.update(
+            DT,
+            SMOKE,
+            false,
+            ids().map(|n| (id(n), vec3(0.0, 0.0, 1.0), true)),
+        );
         assert_eq!(trails.trails.len(), MAX_TRAILS);
         assert_eq!(trails.heads.len(), MAX_TRAILS + 1);
     }
@@ -566,7 +682,7 @@ mod tests {
         fly(&mut trails, 36.0, 3);
         // It lands and stays put, alive, until its smoke is gone.
         for _ in 0..(SMOKE / DT) as usize + 2 {
-            trails.update(DT, SMOKE, [(id(1), vec3(1.8, 0.0, 0.0), true)]);
+            trails.update(DT, SMOKE, false, [(id(1), vec3(1.8, 0.0, 0.0), true)]);
         }
         assert!(trails.trails.is_empty());
     }
