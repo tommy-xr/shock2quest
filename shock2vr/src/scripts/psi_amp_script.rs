@@ -344,10 +344,11 @@ fn burnout_kick(world: &World, amp_entity: EntityId) -> Effect {
         heading: 0.0,
         // Negative is back along the barrel, as authored gun kick.
         back: -0.1,
-        lift: 0.35,
+        // World units (~10 cm at Strength 1), unlike the model-frame back.
+        lift: 0.1,
         pitch_limit: 35.0,
         back_limit: 0.15,
-        lift_limit: 0.5,
+        lift_limit: 0.2,
         heading_limit: 0.0,
         angular_rate: 1.0,
         back_rate: 1.5,

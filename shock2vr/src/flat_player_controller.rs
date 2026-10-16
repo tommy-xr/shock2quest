@@ -405,6 +405,7 @@ impl FlatPlayerController {
                     (rotation, position)
                 }
             };
+            let position = position + vec3(0.0, self.recoil.lift(), 0.0);
             // Apply only after recoil has resolved the gameplay ray and the
             // clip has posed the weapon. This camera-space parent layer cannot
             // bend aim, and rotates the complete viewmodel around the eye.

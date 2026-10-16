@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
-import { dot, sub } from "../src/vec.js";
+import { dot } from "../src/vec.js";
 import { equipRightHand } from "./helpers/vr-hand.js";
 import { muzzleFrameOf } from "./helpers/weapon.js";
 
@@ -54,7 +54,7 @@ for (const vr of [false, true]) test(
     await game.step({ frames: 6 });
     const kicked = await pitch(rest);
     assert.ok(kicked > 8, `the amp kicks up: ${kicked} degrees`);
-    const rose = dot(sub(await origin(), restOrigin), rest.up);
+    const rose = (await origin())[1] - restOrigin[1];
     assert.ok(rose > 0.05, `the amp rises toward the eyes: ${rose}`);
     await game.input.set("right_hand.trigger", 0);
     await game.step({ frames: 34 });

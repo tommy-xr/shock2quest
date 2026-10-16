@@ -6219,6 +6219,11 @@ impl PhysicsWorld {
                 let (extra_offset, extra_rotation) =
                     drive.one_hand_recoil.step(self.integration_parameters.dt);
                 desired.translation.vector += desired.rotation * vec_to_nvec(offset + extra_offset);
+                desired.translation.vector += vec_to_nvec(vec3(
+                    0.0,
+                    drive.recoil.lift() + drive.one_hand_recoil.lift(),
+                    0.0,
+                ));
                 desired.rotation *= quat_to_nquat(rotation * extra_rotation);
             }
             let Some(body) = self.rigid_body_set.get(weapon) else {

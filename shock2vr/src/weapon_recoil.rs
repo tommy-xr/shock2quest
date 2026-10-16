@@ -13,7 +13,8 @@ pub struct RecoilImpulse {
     pub one_hand_pitch_falloff: f32,
     pub heading: f32,
     pub back: f32,
-    /// Upward slide, along the held model's up: raises the hand toward the eyes.
+    /// Upward slide in WORLD up (see [`RecoilState::lift`]): raises the hand
+    /// toward the eyes however the grip rolls the model.
     pub lift: f32,
     pub pitch_limit: f32,
     pub back_limit: f32,
@@ -40,7 +41,8 @@ pub fn vr_impulses(
             * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE),
         heading: impulse.heading * scale * crate::dev_params::get(crate::dev_params::GUN_YAW_SCALE),
         back: impulse.back * scale * crate::dev_params::get(crate::dev_params::GUN_KICKBACK_SCALE),
-        lift: impulse.lift * scale * crate::dev_params::get(crate::dev_params::GUN_KICKBACK_SCALE),
+        // Guns never lift, so no gun knob scales it.
+        lift: impulse.lift * scale,
         ..impulse
     };
     (
@@ -490,7 +492,12 @@ impl RecoilState {
         self.lift.kick(impulse.lift, impulse.back_rate);
         self.impulse = Some(impulse);
     }
+    /// The current lift, in world units along world up.
+    pub fn lift(&self) -> f32 {
+        self.lift.position
+    }
     /// Translation and local rotation axes/angles, in the held model's frame.
+    /// Lift is left out: read it from [`Self::lift`] after stepping.
     pub fn step(&mut self, dt: f32) -> (Vector3<f32>, cgmath::Quaternion<f32>) {
         use cgmath::{Deg, Quaternion, Rotation3};
         let Some(i) = self.impulse else {
@@ -503,7 +510,7 @@ impl RecoilState {
         let forward = i.forward.normalize();
         let right = Vector3::unit_y().cross(forward).normalize();
         (
-            forward * self.back.position + forward.cross(right) * self.lift.position,
+            forward * self.back.position,
             Quaternion::from_axis_angle(Vector3::unit_y(), Deg(self.heading.position))
                 * Quaternion::from_axis_angle(right, Deg(-self.pitch.position)),
         )
@@ -859,7 +866,7 @@ mod tests {
     }
 
     #[test]
-    fn lift_raises_along_the_model_up_then_settles() {
+    fn lift_rises_then_settles() {
         let mut state = RecoilState::default();
         state.kick(RecoilImpulse {
             pitch: 0.0,
@@ -875,12 +882,17 @@ mod tests {
             one_hand_pitch_falloff: 0.0,
             forward: -Vector3::unit_x(),
         });
-        let peak = state.step((2.5_f32).ln() / 6.0).0;
-        assert!((peak - vec3(0.0, 0.1, 0.0)).magnitude() < 1e-4, "{peak:?}");
+        let (offset, _) = state.step((2.5_f32).ln() / 6.0);
+        assert_eq!(
+            offset,
+            vec3(0.0, 0.0, 0.0),
+            "lift is not a model-frame offset"
+        );
+        assert!((state.lift() - 0.1).abs() < 1e-4, "{}", state.lift());
         for _ in 0..240 {
             state.step(1.0 / 60.0);
         }
-        assert!(state.step(0.0).0.magnitude() < 1e-3);
+        assert!(state.lift().abs() < 1e-3);
     }
 
     #[test]
