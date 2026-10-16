@@ -18,17 +18,18 @@ pub(super) struct BurroHog {
     anchor: Option<Point2<f32>>,
     stick: Option<[f32; 2]>,
     moving: bool,
+    jump_pending: bool,
 }
 impl BurroHog {
     pub fn controller(&mut self, control: HandheldControl) {
         match control {
             HandheldControl::Stick { x, y } => self.stick = Some([x, -y]),
-            HandheldControl::Primary => self.game.jump(),
+            HandheldControl::Primary => self.jump(),
             _ => {}
         }
     }
     pub fn jump(&mut self) {
-        self.game.jump();
+        self.jump_pending = true;
     }
     pub fn advance(
         &mut self,
@@ -70,6 +71,10 @@ impl BurroHog {
         };
         self.moving = direction != [0, 0];
         self.game.steer(direction[0], direction[1]);
+        // Jump snapshots horizontal speed, so consume the edge after this frame's steering.
+        if std::mem::take(&mut self.jump_pending) {
+            self.game.jump();
+        }
         self.game
             .advance(time.elapsed, hacked, &mut rand::thread_rng());
     }
@@ -184,6 +189,27 @@ impl BurroHog {
 mod tests {
     use super::*;
     use cgmath::point2;
+    #[test]
+    fn simultaneous_direction_and_jump_use_current_steering() {
+        let mut game = BurroHog::default();
+        game.game
+            .advance(Duration::from_millis(200), true, &mut rand::thread_rng());
+        game.game.steer(-1, 0);
+        let x = game.game.x;
+        game.controller(HandheldControl::Primary);
+        game.controller(HandheldControl::Stick { x: 1.0, y: 0.0 });
+        game.advance(
+            &Time {
+                total: Duration::from_secs(1),
+                elapsed: Duration::from_millis(50),
+            },
+            None,
+            true,
+            true,
+        );
+        assert_eq!(game.game.motion, Motion::Jumping);
+        assert_eq!(game.game.x, x + 2);
+    }
     #[test]
     fn pointer_drag_moves_and_release_stops() {
         let mut game = BurroHog::default();

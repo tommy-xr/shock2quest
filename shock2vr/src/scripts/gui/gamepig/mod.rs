@@ -110,7 +110,8 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 Game::Swinekeeper(game) => game.components(world),
             });
             let board = match game {
-                Game::HogWallow(_)
+                Game::BurroHog(_)
+                | Game::HogWallow(_)
                 | Game::StreetHog(_)
                 | Game::OverWorld(_)
                 | Game::Ping(_)
