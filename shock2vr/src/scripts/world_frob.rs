@@ -9,7 +9,13 @@ use super::{Effect, script_util::localized_property_text};
 pub fn use_message_text(world: &World, entity_id: EntityId) -> Option<String> {
     let v_use_msg = world.borrow::<View<PropUseMsg>>().ok()?;
     let raw = v_use_msg.get(entity_id).ok()?;
-    localized_property_text(world, &raw.0, "usemsg.str")
+    resolve_use_message(world, &raw.0)
+}
+
+/// A raw `P$UseMsg` value resolved against USEMSG.STR, with the table's escaped
+/// `\n` line breaks made real (station's postings put the gain there).
+fn resolve_use_message(world: &World, raw: &str) -> Option<String> {
+    localized_property_text(world, raw, "usemsg.str").map(|text| text.replace("\\n", "\n"))
 }
 
 /// What the player sees and hears for frobbing `entity_id` in the world,
@@ -42,7 +48,7 @@ pub fn world_frob_feedback(world: &World, entity_id: EntityId) -> Vec<Effect> {
                 .trim()
                 .eq_ignore_ascii_case("traininglog"))
         })
-        .and_then(|raw| localized_property_text(world, &raw, "usemsg.str"));
+        .and_then(|raw| resolve_use_message(world, &raw));
     if (frob_sound.is_none() && use_message.is_none())
         || super::script_util::player_carried_items(world).contains(&entity_id)
     {

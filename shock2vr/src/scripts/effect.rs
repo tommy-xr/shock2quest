@@ -1298,6 +1298,13 @@ pub enum Effect {
         locked: bool,
     },
 
+    /// Set `P$UseMsg` on one live object. `ChooseMission` uses it to give the
+    /// station's posting traps this year's posting text.
+    SetUseMessage {
+        entity_id: EntityId,
+        message: String,
+    },
+
     /// Persistently set Dark's `P$TransDoor` motion fields (`state` and
     /// `base_location`) on one live object - emitted by `scripts::std_door` so
     /// door motion survives saves.
@@ -1452,6 +1459,13 @@ pub enum Effect {
     /// original's five-second message time.
     ShowMessage {
         text: String,
+    },
+
+    /// [`Effect::ShowMessage`] for an authored time instead of the default
+    /// (a `TrapMessage`'s `P$MsgTime`).
+    ShowMessageFor {
+        text: String,
+        duration: Duration,
     },
 
     /// Show a centered interstitial banner - the black title card the original
