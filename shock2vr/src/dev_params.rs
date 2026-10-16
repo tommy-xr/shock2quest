@@ -617,8 +617,12 @@ dev_params! {
     /// How fast the world runs relative to the player: AI, scripts,
     /// animations, particles, doors and loose physics advance at this rate
     /// while locomotion, tracked hands, held items and weapon cadence stay at
-    /// full speed. 0.5 halves the world's speed. Hitscan shots stay instant.
+    /// full speed. 0.5 halves the world's speed. Below 1.0, shots fired from
+    /// then on travel visibly instead of hitting instantly.
     WORLD_TIME_SCALE = Root::float("world_time_scale", "World time scale", 1.0, 0.1, 1.0, 0.05),
+    /// Multiplies a traveling shot's speed (fired while the world is slowed):
+    /// a real bullet at half world speed is still too fast to dodge.
+    SLOW_TIME_SHOT_SPEED = Root::float("slow_time_shot_speed", "Slow-time shot speed", 1.0, 0.05, 1.0, 0.05),
     /// The player loses no hit points from any source, so never shows the hit
     /// tint or dies - keeps deterministic captures from being spoiled by damage.
     CHEAT = Root::bool("cheat", "Cheat: invulnerable", false),

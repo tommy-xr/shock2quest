@@ -10415,11 +10415,28 @@ impl MissionCore {
             let mag = initial_velocity.magnitude();
             let x_velocity = root_transform.transform_vector(vec3(0.0, 0.0, mag * modifiers.speed));
             if mag > Self::FAST_PROJECTILE_SPEED {
-                // Use raycast strategy for fast moving objects
-                script_world.add_entity2(
-                    created_entity.entity_id,
-                    Box::new(InternalFastProjectileScript::new(x_velocity)),
+                // Use raycast strategy for fast moving objects: one ray at
+                // full world speed, a swept traveling shot while it is slowed.
+                let script = InternalFastProjectileScript::for_launch(
+                    x_velocity,
+                    crate::dev_params::get(crate::dev_params::WORLD_TIME_SCALE),
+                    crate::dev_params::get(crate::dev_params::SLOW_TIME_SHOT_SPEED),
                 );
+                if script.is_traveling() {
+                    // Its flight lives only in the script, so a save cannot
+                    // restore it: drop it from saves rather than reload a shot
+                    // that would re-pick its mode.
+                    world.run(
+                        |entities: EntitiesView, mut skip: ViewMut<RuntimePropDoNotSerialize>| {
+                            entities.add_component(
+                                created_entity.entity_id,
+                                &mut skip,
+                                RuntimePropDoNotSerialize {},
+                            );
+                        },
+                    );
+                }
+                script_world.add_entity2(created_entity.entity_id, Box::new(script));
                 // HACK: Don't use physics for these entities...
                 physics.remove(created_entity.entity_id);
             } else {

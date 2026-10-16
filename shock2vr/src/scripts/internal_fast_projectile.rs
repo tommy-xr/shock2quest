@@ -1,9 +1,9 @@
 use cgmath::{
-    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3,
-    vec3, vec4,
+    Deg, EuclideanSpace, InnerSpace, Matrix4, One, Point3, Quaternion, Rotation3, SquareMatrix,
+    Vector3, vec3, vec4,
 };
 use collision::Contains;
-use dark::SCALE_FACTOR;
+use dark::{SCALE_FACTOR, properties::PropPosition};
 
 use shipyard::{EntityId, Get, View, World};
 
@@ -13,7 +13,7 @@ use crate::{
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::{
         RuntimePropPlayerFiredProjectile, RuntimePropProjectileLauncher,
-        RuntimePropProjectileRayOrigin, RuntimePropTransform,
+        RuntimePropProjectileRayOrigin,
     },
     scripts::script_util::{choose_impact_spang, play_impact_sound, projectile_contact_effects},
     time::Time,
@@ -32,10 +32,64 @@ const SPANG_SURFACE_BACKUP: f32 = 0.01 / SCALE_FACTOR;
 
 pub struct InternalFastProjectileScript {
     velocity: Vector3<f32>,
+    /// `Some` for a shot that travels, decided once when it was fired; `None`
+    /// resolves its whole range in one raycast on its first update.
+    flight: Option<Flight>,
 }
+
+/// A traveling shot's progress along its line of fire.
+struct Flight {
+    /// World units per world second.
+    speed: f32,
+    /// Where the line starts; fixed on the first step.
+    origin: Option<Point3<f32>>,
+    traveled: f32,
+    age: f32,
+}
+
+/// World seconds a traveling shot may fly before it is dropped.
+const MAX_FLIGHT_SECONDS: f32 = 10.0;
+
 impl InternalFastProjectileScript {
     pub fn new(velocity: Vector3<f32>) -> InternalFastProjectileScript {
-        InternalFastProjectileScript { velocity }
+        InternalFastProjectileScript {
+            velocity,
+            flight: None,
+        }
+    }
+
+    /// A shot that advances `speed` world units per world second, sweeping
+    /// each step for hits, instead of resolving its range at once.
+    pub fn traveling(velocity: Vector3<f32>, speed: f32) -> InternalFastProjectileScript {
+        InternalFastProjectileScript {
+            velocity,
+            flight: Some(Flight {
+                speed,
+                origin: None,
+                traveled: 0.0,
+                age: 0.0,
+            }),
+        }
+    }
+
+    /// Picks the mode at launch: while the world is slowed a shot travels at
+    /// its launch speed (Dark units/s in `velocity`) times `shot_speed`, so it
+    /// can be seen and dodged; at full speed it stays hitscan. A shot in
+    /// flight keeps its mode when the scale changes.
+    pub fn for_launch(
+        velocity: Vector3<f32>,
+        world_time_scale: f32,
+        shot_speed: f32,
+    ) -> InternalFastProjectileScript {
+        if world_time_scale < 1.0 {
+            Self::traveling(velocity, velocity.magnitude() / SCALE_FACTOR * shot_speed)
+        } else {
+            Self::new(velocity)
+        }
+    }
+
+    pub fn is_traveling(&self) -> bool {
+        self.flight.is_some()
     }
 }
 
@@ -45,25 +99,18 @@ impl Script for InternalFastProjectileScript {
         entity_id: EntityId,
         world: &World,
         physics: &PhysicsWorld,
-        _time: &Time,
+        time: &Time,
     ) -> Effect {
-        //let speed = 100.0;
-        let distance = 1000.0;
-        //let distance = speed * time.elapsed.as_secs_f32();
-
-        let v_runtime_prop_hitbox = world.borrow::<View<RuntimePropHitBox>>().unwrap();
-        let v_runtime_prop_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
-        let _xform = v_runtime_prop_transform.get(entity_id).unwrap().0;
-
-        let current_position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
-        // let forward = xform.transform_vector(vec3(0.0, 0.0, -1.0));
         let forward = self.velocity.normalize();
-        let maybe_camera_origin = world
-            .borrow::<View<RuntimePropProjectileRayOrigin>>()
-            .ok()
-            .and_then(|origins| origins.get(entity_id).ok().map(|origin| origin.0));
-        let start_point =
-            maybe_camera_origin.unwrap_or(current_position - forward * SCALE_FACTOR * 0.25);
+        let launch_point = || {
+            let current_position =
+                get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
+            world
+                .borrow::<View<RuntimePropProjectileRayOrigin>>()
+                .ok()
+                .and_then(|origins| origins.get(entity_id).ok().map(|origin| origin.0))
+                .unwrap_or(current_position - forward * SCALE_FACTOR * 0.25)
+        };
         // A player-fired shot must never hit the player. Rapier's solid raycast
         // reports a shape containing the ray origin as a hit at distance 0, and
         // the ray starts inside the player's own capsule in both presentations:
@@ -77,111 +124,75 @@ impl Script for InternalFastProjectileScript {
             .borrow::<View<RuntimePropProjectileLauncher>>()
             .ok()
             .and_then(|launchers| launchers.get(entity_id).ok().map(|launcher| launcher.0));
-        let maybe_hit_spot = projectile_ray_cast(
-            start_point,
-            forward,
-            physics,
-            distance,
-            world,
-            can_hit_player,
-            launcher,
-        );
+        let cast = |start: Point3<f32>, distance: f32| {
+            projectile_ray_cast(
+                start,
+                forward,
+                physics,
+                distance,
+                world,
+                can_hit_player,
+                launcher,
+            )
+        };
 
-        if let Some(RayCastResult {
-            hit_point,
-            maybe_entity_id: Some(hit_entity_id),
-            hit_normal,
-            maybe_rigid_body_handle: _,
-            is_sensor: _,
-            surface_material,
-        }) = maybe_hit_spot
-        {
-            // Effect::SetPosition {
-            //     entity_id,
-            //     position: hit_result.hit_point.to_vec(),
-            // }
-            let did_hit_hitbox = v_runtime_prop_hitbox.get(hit_entity_id).is_ok();
-            let color = if did_hit_hitbox {
-                vec4(1.0, 0.0, 0.0, 1.0)
-            } else {
-                vec4(0.0, 1.0, 0.0, 1.0)
+        let Some(flight) = &mut self.flight else {
+            let distance = 1000.0;
+            let start_point = launch_point();
+            return match cast(start_point, distance) {
+                Some(hit) if hit.maybe_entity_id.is_some() => {
+                    hit_effects(world, physics, entity_id, start_point, hit)
+                }
+                _ => Effect::combine(vec![
+                    Effect::DrawDebugLines {
+                        lines: vec![(
+                            start_point,
+                            start_point + forward * distance,
+                            vec4(0.0, 1.0, 0.0, 1.0),
+                        )],
+                    },
+                    Effect::DestroyEntity { entity_id },
+                ]),
             };
+        };
 
-            let mut effects = vec![
-                projectile_contact_effects(world, entity_id, hit_entity_id, {
-                    let travel = hit_point - start_point;
-                    (travel.magnitude2() > 1.0e-12).then(|| crate::scripts::DamageImpact {
-                        direction: travel.normalize(),
-                        point: hit_point.to_vec(),
-                        bone: None,
-                    })
-                }),
-                // Ray projectiles bypass Rapier's collision-message dispatch.
-                // Notify the owning victim even when its receptrons absorb all
-                // damage: collision-driven shield feedback still needs the hit.
-                Effect::Send {
-                    msg: Message {
-                        to: crate::util::resolve_proxy_entity(world, hit_entity_id),
-                        payload: MessagePayload::Collided {
-                            with: entity_id,
-                            contact: Some(crate::physics::CollisionContact {
-                                point: hit_point.to_vec(),
-                                normal: hit_normal,
-                                closing_speed: None,
-                                surface_material,
-                            }),
-                        },
-                    },
-                },
-                Effect::DrawDebugLines {
-                    lines: vec![(start_point, hit_point, color)],
-                },
-                Effect::DestroyEntity { entity_id },
-                // Impact sound: the projectile's collision schema, tagged with
-                // the material of what was hit (flesh thud vs metal clang).
-                play_impact_sound(
-                    world,
-                    entity_id,
-                    hit_entity_id,
-                    hit_point.to_vec(),
-                    surface_material.and_then(|material| physics.surface_material_name(material)),
-                ),
-            ];
-
-            // Impact effect, from the projectile's authored spang links
-            // (HitSpang matched by victim class, MissSpang fallback).
-            if let Some(template_id) = choose_impact_spang(world, entity_id, hit_entity_id) {
-                effects.push(Effect::CreateEntity {
-                    template_id,
-                    position: hit_point + hit_normal * SPANG_SURFACE_BACKUP,
-                    orientation: get_rotation_from_forward_vector(hit_normal)
-                        * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0)),
-                    root_transform: Matrix4::identity(),
-                    options: CreateEntityOptions {
-                        transient_fx: true,
-                        impact_appearance: super::script_util::ballistic_impact_appearance(
-                            world,
-                            entity_id,
-                            hit_entity_id,
-                            surface_material.and_then(|id| physics.surface_material_name(id)),
-                        ),
-                        ..CreateEntityOptions::default()
-                    },
-                });
+        // Traveling: sweep only this world step's segment of the line. The
+        // first segment starts where a hitscan shot would (the eye in flat),
+        // so point-blank hits land the same.
+        let dt = time.elapsed.as_secs_f32();
+        if dt <= 0.0 {
+            return Effect::NoEffect;
+        }
+        let origin = *flight.origin.get_or_insert_with(launch_point);
+        let start = origin + forward * flight.traveled;
+        let step = (flight.speed * dt).min(MAX_RANGE - flight.traveled);
+        flight.age += dt;
+        match cast(start, step) {
+            Some(hit) if hit.maybe_entity_id.is_some() => {
+                hit_effects(world, physics, entity_id, origin, hit)
             }
-
-            Effect::combine(effects)
-        } else {
-            Effect::combine(vec![
-                Effect::DrawDebugLines {
-                    lines: vec![(
-                        start_point,
-                        start_point + forward * distance,
-                        vec4(0.0, 1.0, 0.0, 1.0),
-                    )],
-                },
-                Effect::DestroyEntity { entity_id },
-            ])
+            _ => {
+                flight.traveled += step;
+                let end = start + forward * step;
+                if flight.traveled >= MAX_RANGE || flight.age >= MAX_FLIGHT_SECONDS {
+                    return Effect::DestroyEntity { entity_id };
+                }
+                let rotation = world
+                    .borrow::<View<PropPosition>>()
+                    .ok()
+                    .and_then(|positions| positions.get(entity_id).ok().map(|p| p.rotation))
+                    .unwrap_or_else(Quaternion::one);
+                Effect::combine(vec![
+                    Effect::DrawDebugLines {
+                        lines: vec![(start, end, vec4(0.0, 1.0, 0.0, 1.0))],
+                    },
+                    Effect::SetPositionRotation {
+                        entity_id,
+                        position: end.to_vec(),
+                        rotation,
+                    },
+                ])
+            }
         }
     }
     fn handle_message(
@@ -193,6 +204,102 @@ impl Script for InternalFastProjectileScript {
     ) -> Effect {
         Effect::NoEffect
     }
+}
+
+/// Everything a shot does when it strikes `hit` (which names an entity),
+/// fired along a line from `start_point`: damage, the victim's collision
+/// notice, impact sound and spang, and the shot's own removal.
+fn hit_effects(
+    world: &World,
+    physics: &PhysicsWorld,
+    entity_id: EntityId,
+    start_point: Point3<f32>,
+    hit: RayCastResult,
+) -> Effect {
+    let RayCastResult {
+        hit_point,
+        maybe_entity_id: Some(hit_entity_id),
+        hit_normal,
+        maybe_rigid_body_handle: _,
+        is_sensor: _,
+        surface_material,
+    } = hit
+    else {
+        return Effect::DestroyEntity { entity_id };
+    };
+    let did_hit_hitbox = world
+        .borrow::<View<RuntimePropHitBox>>()
+        .is_ok_and(|hit_boxes| hit_boxes.get(hit_entity_id).is_ok());
+    let color = if did_hit_hitbox {
+        vec4(1.0, 0.0, 0.0, 1.0)
+    } else {
+        vec4(0.0, 1.0, 0.0, 1.0)
+    };
+
+    let mut effects = vec![
+        projectile_contact_effects(world, entity_id, hit_entity_id, {
+            let travel = hit_point - start_point;
+            (travel.magnitude2() > 1.0e-12).then(|| crate::scripts::DamageImpact {
+                direction: travel.normalize(),
+                point: hit_point.to_vec(),
+                bone: None,
+            })
+        }),
+        // Ray projectiles bypass Rapier's collision-message dispatch.
+        // Notify the owning victim even when its receptrons absorb all
+        // damage: collision-driven shield feedback still needs the hit.
+        Effect::Send {
+            msg: Message {
+                to: crate::util::resolve_proxy_entity(world, hit_entity_id),
+                payload: MessagePayload::Collided {
+                    with: entity_id,
+                    contact: Some(crate::physics::CollisionContact {
+                        point: hit_point.to_vec(),
+                        normal: hit_normal,
+                        closing_speed: None,
+                        surface_material,
+                    }),
+                },
+            },
+        },
+        Effect::DrawDebugLines {
+            lines: vec![(start_point, hit_point, color)],
+        },
+        Effect::DestroyEntity { entity_id },
+        // Impact sound: the projectile's collision schema, tagged with
+        // the material of what was hit (flesh thud vs metal clang).
+        play_impact_sound(
+            world,
+            entity_id,
+            hit_entity_id,
+            hit_point.to_vec(),
+            surface_material.and_then(|material| physics.surface_material_name(material)),
+        ),
+    ];
+
+    // Impact effect, from the projectile's authored spang links
+    // (HitSpang matched by victim class, MissSpang fallback).
+    if let Some(template_id) = choose_impact_spang(world, entity_id, hit_entity_id) {
+        effects.push(Effect::CreateEntity {
+            template_id,
+            position: hit_point + hit_normal * SPANG_SURFACE_BACKUP,
+            orientation: get_rotation_from_forward_vector(hit_normal)
+                * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0)),
+            root_transform: Matrix4::identity(),
+            options: CreateEntityOptions {
+                transient_fx: true,
+                impact_appearance: super::script_util::ballistic_impact_appearance(
+                    world,
+                    entity_id,
+                    hit_entity_id,
+                    surface_material.and_then(|id| physics.surface_material_name(id)),
+                ),
+                ..CreateEntityOptions::default()
+            },
+        });
+    }
+
+    Effect::combine(effects)
 }
 
 /// Whether this projectile came out of a weapon the player fired (every
@@ -421,6 +528,128 @@ mod tests {
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Send { msg } if matches!(msg.payload, MessagePayload::Damage { .. }))));
         assert!(effects.iter().any(|effect| matches!(effect, Effect::DestroyEntity { entity_id } if *entity_id == projectile)));
         assert!(effects.iter().any(|effect| matches!(effect, Effect::Send { msg } if msg.to == victim && matches!(msg.payload, MessagePayload::Collided { with, contact: Some(_) } if with == projectile))), "absorbed hits must still reach collision-driven feedback scripts");
+    }
+
+    /// A traveling shot fired along +Z from the origin at a wall thinner than
+    /// one step, stepped at `speed` world units/s in 60 Hz world ticks.
+    /// Returns, per tick, the effects it emitted.
+    fn fly_at_thin_wall(
+        speed: f32,
+        wall_z: f32,
+        ticks: usize,
+    ) -> (Vec<Vec<super::Effect>>, EntityId) {
+        use crate::runtime_props::RuntimePropProjectileRayOrigin;
+        use crate::scripts::{Effect, Script};
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let player_id = world.add_entity(());
+        let mut player = physics.create_player(vec3(0.0, 0.0, -20.0), player_id);
+        let wall = world.add_entity(());
+        physics.add_kinematic(
+            wall,
+            vec3(0.0, 0.0, wall_z),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 4.0, 0.05),
+            crate::physics::CollisionGroup::selectable(),
+            false,
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let projectile = world.add_entity((
+            RuntimePropProjectileRayOrigin(point3(0.0, 0.0, 0.0)),
+            RuntimePropPlayerFiredProjectile,
+        ));
+        let mut script = super::InternalFastProjectileScript::traveling(vec3(0.0, 0.0, 1.0), speed);
+        let tick = crate::time::Time {
+            elapsed: std::time::Duration::from_secs_f32(1.0 / 60.0),
+            total: std::time::Duration::ZERO,
+        };
+        let mut per_tick = Vec::new();
+        for _ in 0..ticks {
+            let effects = Effect::flatten(vec![script.update(projectile, &world, &physics, &tick)]);
+            let done = effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::DestroyEntity { .. }));
+            per_tick.push(effects);
+            if done {
+                break;
+            }
+        }
+        (per_tick, wall)
+    }
+
+    fn set_position_z(effects: &[super::Effect]) -> Option<f32> {
+        effects.iter().find_map(|effect| match effect {
+            super::Effect::SetPositionRotation { position, .. } => Some(position.z),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_traveling_shot_advances_speed_times_dt_each_world_tick() {
+        // 30 wu/s at 60 Hz: 0.5 wu per tick, wall far away.
+        let (per_tick, _) = fly_at_thin_wall(30.0, 50.0, 4);
+        let zs: Vec<f32> = per_tick.iter().filter_map(|e| set_position_z(e)).collect();
+        assert_eq!(zs.len(), 4, "no hit yet, so every tick moves the shot");
+        for (i, z) in zs.iter().enumerate() {
+            assert!((z - 0.5 * (i + 1) as f32).abs() < 1e-4, "tick {i}: z = {z}");
+        }
+    }
+
+    #[test]
+    fn a_traveling_shot_hits_a_thin_wall_on_the_tick_it_crosses_it_once() {
+        use crate::scripts::{Effect, MessagePayload};
+        // 60 wu/s: 1 wu per tick against a 0.1 wu wall whose near face is at
+        // z = 3.45: segments [0,1] [1,2] [2,3] miss, [3,4] hits.
+        let (per_tick, wall) = fly_at_thin_wall(60.0, 3.5, 20);
+        assert_eq!(
+            per_tick.len(),
+            4,
+            "the shot is destroyed on the fourth tick"
+        );
+        for (i, effects) in per_tick.iter().take(3).enumerate() {
+            assert_eq!(set_position_z(effects), Some((i + 1) as f32));
+        }
+        let hits: usize = per_tick
+            .iter()
+            .flatten()
+            .filter(|effect| matches!(effect, Effect::Send { msg } if msg.to == wall && matches!(msg.payload, MessagePayload::Collided { .. })))
+            .count();
+        assert_eq!(hits, 1, "the wall is notified exactly once");
+        assert!(
+            set_position_z(&per_tick[3]).is_none(),
+            "a hit does not move the shot on"
+        );
+    }
+
+    #[test]
+    fn a_traveling_shot_does_not_move_on_a_zero_dt_tick() {
+        use crate::scripts::{Effect, Script};
+        let world = World::new();
+        let physics = PhysicsWorld::new();
+        let mut script = super::InternalFastProjectileScript::traveling(vec3(0.0, 0.0, 1.0), 60.0);
+        let effect = script.update(
+            EntityId::from_inner(3).unwrap(),
+            &world,
+            &physics,
+            &crate::time::Time::default(),
+        );
+        assert!(matches!(effect, Effect::NoEffect));
+    }
+
+    #[test]
+    fn the_shot_mode_is_chosen_from_the_world_scale_at_launch() {
+        use super::InternalFastProjectileScript;
+        let velocity = vec3(0.0, 0.0, 250.0);
+        assert!(!InternalFastProjectileScript::for_launch(velocity, 1.0, 1.0).is_traveling());
+        let slowed = InternalFastProjectileScript::for_launch(velocity, 0.5, 0.2);
+        assert!(slowed.is_traveling());
+        // 250 Dark units/s is 100 world units/s, times the readability speed.
+        let speed = slowed.flight.as_ref().map(|flight| flight.speed);
+        assert!(
+            speed.is_some_and(|speed| (speed - 20.0).abs() < 1e-4),
+            "{speed:?}"
+        );
     }
 
     #[test]
