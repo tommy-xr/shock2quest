@@ -1,7 +1,26 @@
 use crate::engine::EngineRenderContext;
 use crate::scene::light::LightArray;
-use cgmath::{Matrix, Matrix3, Matrix4, SquareMatrix};
+use cgmath::{Matrix, Matrix3, Matrix4, SquareMatrix, Vector3, Vector4};
 use std::any::Any;
+
+/// A colour added over lighting for one draw, limited to a texture-space rect
+/// (min u, min v, max u, max v) so one part of a shared atlas can glow alone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Glow {
+    pub color: Vector3<f32>,
+    pub uv_rect: Vector4<f32>,
+}
+
+impl Glow {
+    pub const NONE: Glow = Glow::everywhere(Vector3::new(0.0, 0.0, 0.0));
+
+    pub const fn everywhere(color: Vector3<f32>) -> Glow {
+        Glow {
+            color,
+            uv_rect: Vector4::new(-1.0e9, -1.0e9, 1.0e9, 1.0e9),
+        }
+    }
+}
 
 pub trait Material: Any {
     fn as_any(&self) -> &dyn Any;
@@ -58,6 +77,10 @@ pub trait Material: Any {
     /// Multiply the authored emissivity for the next draw (1.0 = authored).
     /// Materials are shared across entities, so callers reset it afterwards.
     fn set_emissivity_scale(&mut self, _scale: f32) {}
+
+    /// Add a glow over lighting for the next draw (`Glow::NONE` = none).
+    /// Shared like the emissivity scale, so callers reset it afterwards.
+    fn set_glow(&mut self, _glow: Glow) {}
 
     /// Replace diffuse only after a complete material plan has loaded.
     fn set_diffuse_texture(&mut self, _texture: std::rc::Rc<dyn crate::texture::TextureTrait>) {}

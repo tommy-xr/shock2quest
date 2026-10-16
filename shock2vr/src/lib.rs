@@ -88,6 +88,7 @@ mod psi;
 mod psi_defenses;
 mod psi_heal_visual;
 mod psi_invisibility;
+mod psi_overload_glow;
 pub mod psi_pull;
 pub mod psi_radar;
 pub mod psi_seekersense;

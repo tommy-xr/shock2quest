@@ -3229,6 +3229,8 @@ pub struct MissionCore {
     psi_drain_trails: Vec<crate::psi_visuals::DrainTrail>,
     psi_pull: Option<crate::psi_pull::Flight>,
     healing_pulses: HashMap<EntityId, f32>,
+    /// Seconds since each amp's overload cast, while its red flash lasts.
+    overload_glows: HashMap<EntityId, f32>,
     pub entity_info: Arc<SystemShock2EntityInfo>,
     pub physics: PhysicsWorld,
     pub script_world: ScriptWorld,
@@ -4369,6 +4371,7 @@ impl MissionCore {
             psi_drain_trails: Vec::new(),
             psi_pull: None,
             healing_pulses: HashMap::new(),
+            overload_glows: HashMap::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
             rag_doll_manager: RagDollManager::new(),
@@ -5846,6 +5849,10 @@ impl MissionCore {
         self.healing_pulses.retain(|_, age| {
             *age += time.elapsed.as_secs_f32();
             *age < 1.0
+        });
+        self.overload_glows.retain(|_, age| {
+            *age += time.elapsed.as_secs_f32();
+            *age < crate::psi_overload_glow::SECS
         });
         self.psi_drain_trails
             .retain_mut(|trail| trail.advance(time.elapsed));
@@ -9686,6 +9693,18 @@ impl MissionCore {
 
     /// Fly the loose body toward the visible amp; catching remains an ordinary
     /// hand interaction. Arrival or cancellation simply restores gravity.
+    /// The overload glow for one of `entity`'s draws, keyed by its material.
+    fn overload_glow(
+        &self,
+        entity: EntityId,
+        obj: &engine::scene::SceneObject,
+    ) -> Option<engine::scene::Glow> {
+        crate::psi_overload_glow::glow(
+            *self.overload_glows.get(&entity)?,
+            obj.material_name.as_deref(),
+        )
+    }
+
     fn update_psi_pull(&mut self, elapsed: std::time::Duration) -> Vec<Effect> {
         if elapsed.is_zero() {
             return vec![];
@@ -12641,6 +12660,9 @@ impl MissionCore {
                     fraction,
                     phase,
                 } => {
+                    if phase == crate::runtime_props::PsiChargePhase::Overloaded {
+                        self.overload_glows.insert(entity_id, 0.0);
+                    }
                     self.world.add_component(
                         entity_id,
                         crate::runtime_props::RuntimePropPsiCharge { fraction, phase },
@@ -17074,6 +17096,7 @@ impl MissionCore {
                         o.set_lights(weapon_lights.clone());
                         o.set_debug_tag(Some(weapon_tag.clone()));
                         o.set_emissivity_scale(emissivity_scale);
+                        o.set_glow(self.overload_glow(weapon, &o));
                         crate::psi_invisibility::apply(&mut o, invisibility);
                         ret.push(o);
                     }
@@ -17826,6 +17849,7 @@ impl MissionCore {
                     xformed_obj.set_lights(entity_lights.clone());
                     xformed_obj.self_depth_group = self_depth_group;
                     xformed_obj.set_emissivity_scale(emissivity_scale);
+                    xformed_obj.set_glow(self.overload_glow(*entity_id, &xformed_obj));
                     if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);
                         xformed_obj.set_skinned_transparency(Some(0.35));

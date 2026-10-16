@@ -1325,6 +1325,10 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
                 ],
                 transparency: obj.effective_transparency(),
                 depth_write: obj.depth_write,
+                glow: obj.glow().map(|g| commands::GlowSummary {
+                    color: g.color.into(),
+                    uv_rect: g.uv_rect.into(),
+                }),
                 morph_names: obj.geometry.morph_names().to_vec(),
                 morph_weights: obj
                     .geometry

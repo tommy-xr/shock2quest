@@ -160,6 +160,8 @@ pub struct SceneObject {
     /// Per-object emissivity multiplier, scoped to this draw like
     /// `transparency_override` (e.g. a psi amp's glow tracking psi points).
     emissivity_scale: Option<f32>,
+    /// Glow added over lighting (e.g. an overloaded psi amp).
+    glow: Option<super::material::Glow>,
     /// Authored SRC_COLOR/ONE light accumulation, scoped to this draw.
     pub blend_mode: BlendMode,
     /// Front-face winding used to cull backfaces for this object. Most engine
@@ -428,6 +430,7 @@ impl SceneObject {
             projection_override: None,
             transparency_override: None,
             emissivity_scale: None,
+            glow: None,
             blend_mode: BlendMode::Alpha,
             debug_tag: None,
             backface_culling: None,
@@ -520,6 +523,9 @@ impl SceneObject {
         if let Some(scale) = self.emissivity_scale {
             self.material.borrow_mut().set_emissivity_scale(scale);
         }
+        if let Some(glow) = self.glow {
+            self.material.borrow_mut().set_glow(glow);
+        }
         if self.material.borrow().draw_opaque(
             &render_context,
             view,
@@ -541,6 +547,11 @@ impl SceneObject {
         }
         if self.emissivity_scale.is_some() {
             self.material.borrow_mut().set_emissivity_scale(1.0);
+        }
+        if self.glow.is_some() {
+            self.material
+                .borrow_mut()
+                .set_glow(super::material::Glow::NONE);
         }
 
         if !self.depth_write {
@@ -580,6 +591,9 @@ impl SceneObject {
         if let Some(scale) = self.emissivity_scale {
             self.material.borrow_mut().set_emissivity_scale(scale);
         }
+        if let Some(glow) = self.glow {
+            self.material.borrow_mut().set_glow(glow);
+        }
         let prepared = self.material.borrow().draw_transparent(
             &render_context,
             view,
@@ -602,6 +616,11 @@ impl SceneObject {
         }
         if self.emissivity_scale.is_some() {
             self.material.borrow_mut().set_emissivity_scale(1.0);
+        }
+        if self.glow.is_some() {
+            self.material
+                .borrow_mut()
+                .set_glow(super::material::Glow::NONE);
         }
     }
 
@@ -626,6 +645,7 @@ impl SceneObject {
             }
             material.set_transparency_override(transparency);
             material.set_emissivity_scale(self.emissivity_scale.unwrap_or(1.0));
+            material.set_glow(self.glow.unwrap_or(super::material::Glow::NONE));
             let xform = self.transform * self.local_transform;
             let prepared = material.draw_opaque(context, view, &xform, &self.skinning_data, lights)
                 || material.draw_transparent(context, view, &xform, &self.skinning_data, lights);
@@ -641,6 +661,7 @@ impl SceneObject {
             }
             material.set_transparency_override(None);
             material.set_emissivity_scale(1.0);
+            material.set_glow(super::material::Glow::NONE);
         }
         unsafe {
             // Restore the renderer's phase state, not this object's override.
@@ -710,6 +731,7 @@ impl SceneObject {
             projection_override: None,
             transparency_override: None,
             emissivity_scale: None,
+            glow: None,
             blend_mode: BlendMode::Alpha,
             debug_tag: None,
             backface_culling: None,
@@ -736,6 +758,7 @@ impl SceneObject {
             projection_override: self.projection_override,
             transparency_override: self.transparency_override,
             emissivity_scale: self.emissivity_scale,
+            glow: self.glow,
             blend_mode: self.blend_mode,
             debug_tag: self.debug_tag.clone(),
             backface_culling: self.backface_culling,
@@ -905,6 +928,15 @@ impl SceneObject {
     /// Scale this object's authored emissivity, or restore it with `None`.
     pub fn set_emissivity_scale(&mut self, scale: Option<f32>) {
         self.emissivity_scale = scale;
+    }
+
+    /// Add a glow over lighting, or remove it with `None`.
+    pub fn set_glow(&mut self, glow: Option<super::material::Glow>) {
+        self.glow = glow;
+    }
+
+    pub fn glow(&self) -> Option<super::material::Glow> {
+        self.glow
     }
 }
 
