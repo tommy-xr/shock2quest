@@ -299,6 +299,10 @@ impl GameScene for DebugScene {
         true
     }
 
+    fn world_time(&self) -> Option<std::time::Duration> {
+        self.core.world_time()
+    }
+
     fn update(
         &mut self,
         time: &Time,
@@ -523,6 +527,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn is_pausable(&self) -> bool {
         true
+    }
+
+    fn world_time(&self) -> Option<std::time::Duration> {
+        self.core.world_time()
     }
 
     fn update(

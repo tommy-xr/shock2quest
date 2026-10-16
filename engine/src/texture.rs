@@ -129,6 +129,21 @@ mod animation_tests {
         assert_eq!(PlaybackMode::PingPong.frame_index(1.0, 0.0, 8), 0);
         assert!(PlaybackMode::PingPong.frame_index(f32::MAX, 0.25, 8) < 8);
     }
+    #[test]
+    fn half_speed_clock_shows_half_the_frames() {
+        // 120 ticks of 1/60 s; the slowed clock is world time at scale 0.5.
+        let frames = |scale: f32| -> Vec<usize> {
+            (0..120)
+                .map(|tick| PlaybackMode::Loop.frame_index(tick as f32 / 60.0 * scale, 0.25, 8))
+                .collect()
+        };
+        let (full, half) = (frames(1.0), frames(0.5));
+        assert_eq!(full[119], 7);
+        assert_eq!(half[119], 3);
+        // Each frame holds twice as many ticks.
+        assert_eq!(full.iter().filter(|&&f| f == 1).count(), 15);
+        assert_eq!(half.iter().filter(|&&f| f == 1).count(), 30);
+    }
 }
 
 impl Texture {
