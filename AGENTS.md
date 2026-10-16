@@ -69,8 +69,7 @@ subagent when the active agent supports delegation; otherwise run it inline.
 
 **A save written by any release since v0.0.3, or by the `main` a change is
 based on, must load and restore its state in the changed build.** "This breaks
-older saves" is a valid, blocking review finding. Release saves are tested
-(below); saves from `main` rely on review.
+older saves" is a valid, blocking review finding. Both are tested (below).
 
 - **Adding** a serialized field: give it `#[serde(default)]` (or make it an
   `Option`) so saves that predate it still decode.
@@ -79,6 +78,8 @@ older saves" is a valid, blocking review finding. Release saves are tested
   `MIGRATIONS` in `shock2vr/src/save_load/save_data.rs`. It rewrites the save's
   JSON from the previous format version before decoding (property values
   included), and bumps `SAVE_FORMAT_VERSION`. Never edit a shipped migration.
+  The tests below cannot see a renamed field that has a default or is an
+  `Option`: it decodes as the default and the old value is silently lost.
   `SaveMetadata` is the exception: the Load menu reads it unmigrated, so it
   only ever gains defaulted fields.
 - **Newly parsed authored data** needs a `restore_missing_component!` backfill
@@ -93,6 +94,14 @@ and checks mission, position, quests and inventory against the fixture's
 `manifest.json`. When tagging a release, write its fixtures with
 `tools/shock2-sdk/scripts/gen-save-fixtures.ts` (usage in its header) and commit
 them.
+
+Before landing a change to anything serialized (save structs, script state,
+parsed properties), run `npm run check:save-compat` in `tools/shock2-sdk` (needs
+`DARK_ASSET_PATH`; the e2e suite's assets). It builds the merge-base with
+`origin/main` in its own worktree and target dir (`target/save-compat-base` in
+the clone, shared by its worktrees: ~2.4 GB, kept warm between runs), writes the
+same checkpoint saves with it, and runs both tests above on them. Pass a ref to
+compare against another base.
 
 ### 6. Token-Efficient Tool Output
 

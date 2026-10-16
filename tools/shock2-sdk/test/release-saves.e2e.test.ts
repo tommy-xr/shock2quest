@@ -18,7 +18,8 @@ interface ManifestEntry {
 }
 
 const repoRoot = findRepoRoot(process.cwd()) ?? process.cwd();
-const fixtureRoot = join(repoRoot, "shock2vr", "tests", "fixtures", "saves");
+const fixtureRoot =
+  process.env.SHOCK2_SAVE_FIXTURES ?? join(repoRoot, "shock2vr", "tests", "fixtures", "saves");
 
 // Only registered when enabled: the unit run imports every test file.
 const releases = e2eEnabled

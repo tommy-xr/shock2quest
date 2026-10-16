@@ -2,10 +2,10 @@
 // test and release-saves.e2e.test.ts. Build the tag's runtime in its own
 // worktree, then:
 //
-//   node dist/scripts/gen-save-fixtures.js v0.0.3 <worktree>/target/debug/debug_runtime
+//   node dist/scripts/gen-save-fixtures.js v0.0.3 <worktree>/target/debug/debug_runtime [out dir]
 //
-// Each checkpoint is saved by that build and gzipped into
-// shock2vr/tests/fixtures/saves/<tag>/<name>.sav.gz; manifest.json records
+// Each checkpoint is saved by that build and gzipped into <name>.sav.gz under
+// the out dir (default shock2vr/tests/fixtures/saves/<tag>); manifest.json records
 // what the build itself reported for it (position, quests, inventory).
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -50,7 +50,7 @@ const CHECKPOINTS: Checkpoint[] = [
   { name: "command1-start", mission: "command1.mis", setup: async () => {} },
 ];
 
-const [tag, binary] = process.argv.slice(2);
+const [tag, binary, outArg] = process.argv.slice(2);
 if (!tag || !binary) {
   console.error("usage: gen-save-fixtures <tag> <debug_runtime binary>");
   process.exit(2);
@@ -60,7 +60,7 @@ if (!assetRoot) throw new Error("DARK_ASSET_PATH must point at the game data");
 
 const repoRoot = findRepoRoot(dirname(fileURLToPath(import.meta.url)));
 if (!repoRoot) throw new Error("run from inside the shock2quest checkout");
-const outDir = join(repoRoot, "shock2vr", "tests", "fixtures", "saves", tag);
+const outDir = outArg ?? join(repoRoot, "shock2vr", "tests", "fixtures", "saves", tag);
 mkdirSync(outDir, { recursive: true });
 
 const manifest: Record<string, unknown> = {};
@@ -74,7 +74,8 @@ for (const { name, mission, vr, setup } of CHECKPOINTS) {
   await setup(game);
   await game.step({ frames: 30 });
 
-  const saveName = `compat-fixture-${tag}-${name}`;
+  // Unique: concurrent runs share the player's save folder.
+  const saveName = `compat-fixture-${tag}-${name}-${process.pid}-${Date.now()}`;
   const savePath = join(assetRoot, "saves", `${saveName}.sav`);
   try {
     const saved = await game.save(saveName);

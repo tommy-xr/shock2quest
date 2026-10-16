@@ -23,6 +23,8 @@
     "test:e2e:reliability": "npm run build && node scripts/reliability.mjs",
     "preanim-smoothness": "node scripts/check-deps.mjs",
     "anim-smoothness": "npm run build && node dist/scripts/anim-smoothness.js",
+    "precheck:save-compat": "node scripts/check-deps.mjs && node scripts/check-e2e-assets.mjs",
+    "check:save-compat": "npm run build && node scripts/check-save-compat.mjs",
     "preai-reachability": "node scripts/check-deps.mjs",
     "ai-reachability": "npm run build && node dist/scripts/ai-reachability.js",
     "clean:saves": "npm run build && node scripts/clean-test-saves.mjs",

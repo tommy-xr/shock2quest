@@ -5,9 +5,10 @@ import { join } from "node:path";
 
 /** Build once, then copy the executable out of Cargo's mutable target tree.
  * Another checkout may rebuild that tree while this suite is still running. */
-export function buildRuntime(repoRoot) {
+export function buildRuntime(repoRoot, env = process.env) {
   const build = spawnSync("cargo", ["build", "-p", "debug_runtime", "--message-format=json-render-diagnostics"], {
     cwd: repoRoot,
+    env,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
     maxBuffer: 64 * 1024 * 1024,
