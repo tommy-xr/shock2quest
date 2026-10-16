@@ -7,10 +7,14 @@
 //! experimental flag until its Quest cost is measured.
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
-use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, vec3};
+use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Rad, Rotation, Vector3, vec3};
 use engine::scene::{
-    Material, OffscreenPass, RenderLayer, SceneObject, pass_focus::PassFocus, portal_material,
-    render_target::RenderTarget, sphere::Sphere,
+    Material, OffscreenPass, RenderLayer, SceneObject,
+    material::eye_position,
+    pass_focus::{PassFocus, cull_camera},
+    portal_material,
+    render_target::RenderTarget,
+    sphere::Sphere,
 };
 use shipyard::EntityId;
 
@@ -27,6 +31,10 @@ const DISTORTION: f32 = 0.12;
 /// Fresnel exponent for the rim glow.
 const RIM_POWER: f32 = 2.5;
 const RIM_COLOR: Vector3<f32> = vec3(0.35, 0.75, 1.0);
+/// Angular slack for the on-screen test and the pass cull, which see last
+/// frame's culling view (on Quest the right eye's, narrower than the left
+/// eye's and the head-centre pass on their outer side).
+const VIEW_SLACK: Deg<f32> = Deg(10.0);
 pub const RENDER_SOURCE: &str = "psi_portal";
 
 pub struct PsiPortal {
@@ -99,7 +107,7 @@ impl PortalView {
     }
 
     /// `remote_eye(..) - player_eye`: constant, so it is `remote_eye` of an eye
-    /// at the origin. Applied to the main camera, it keeps every VR eye's own
+    /// at the origin. Applied to the rendering camera, it keeps the tracked
     /// head pose.
     pub fn camera_translation(&self) -> Vector3<f32> {
         remote_eye(self.anchor_eye, self.sphere_center, vec3(0.0, 0.0, 0.0))
@@ -118,6 +126,23 @@ impl PortalView {
             radius: RADIUS,
             margin: portal_material::sample_margin(DISTORTION),
         }
+    }
+
+    /// The pass's culling view and projection from a camera `view`/
+    /// `projection`, narrowed to the sphere grown by `VIEW_SLACK` so a head
+    /// turn or the other eye never misses what the pass draws; `None` while
+    /// even that is off-screen.
+    pub fn cull(
+        &self,
+        view: Matrix4<f32>,
+        projection: Matrix4<f32>,
+    ) -> Option<(Matrix4<f32>, Matrix4<f32>)> {
+        let distance = (eye_position(&view) - self.sphere_center).magnitude();
+        let focus = PassFocus {
+            radius: RADIUS + distance * Rad::from(VIEW_SLACK).0.tan(),
+            ..self.focus()
+        };
+        cull_camera(view, projection, self.camera_translation(), focus)
     }
 }
 
@@ -202,7 +227,7 @@ impl PsiPortal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::{Deg, Rotation3};
+    use cgmath::{EuclideanSpace, Rotation3};
 
     const IDENTITY: Quaternion<f32> = Quaternion::new(1.0, 0.0, 0.0, 0.0);
 
@@ -254,6 +279,34 @@ mod tests {
         assert!(!view.clear_of(view.sphere_center));
         assert!(!view.clear_of(view.sphere_center + vec3(RADIUS, 0.0, 0.0)));
         assert!(view.clear_of(view.sphere_center + vec3(0.0, 0.0, 3.0)));
+    }
+
+    #[test]
+    fn off_screen_only_when_clearly_outside_the_view() {
+        let view = PortalView::at_marker(vec3(0.0, 0.0, 0.0), IDENTITY, 0.0);
+        let projection = cgmath::perspective(Deg(90.0), 1.0, 0.1, 100.0);
+        // Camera 6 units from the sphere: looking at it, then away from it.
+        let eye = view.sphere_center + vec3(0.0, 0.0, 6.0);
+        let toward = Matrix4::look_to_rh(
+            cgmath::Point3::from_vec(eye),
+            vec3(0.0, 0.0, -1.0),
+            Vector3::unit_y(),
+        );
+        let away = Matrix4::look_to_rh(
+            cgmath::Point3::from_vec(eye),
+            vec3(0.0, 0.0, 1.0),
+            Vector3::unit_y(),
+        );
+        assert!(view.cull(toward, projection).is_some());
+        assert!(view.cull(away, projection).is_none());
+        // Just past the 45 degree edge: the slack keeps it.
+        let side = Matrix4::look_to_rh(
+            cgmath::Point3::from_vec(eye),
+            Quaternion::from_angle_y(Deg(-60.0)).rotate_vector(vec3(0.0, 0.0, -1.0)),
+            Vector3::unit_y(),
+        );
+        assert!(view.focus().rect(side, projection).is_none());
+        assert!(view.cull(side, projection).is_some());
     }
 
     #[test]

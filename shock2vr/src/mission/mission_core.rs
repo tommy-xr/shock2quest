@@ -3322,6 +3322,9 @@ pub struct MissionCore {
     offscreen_passes: Vec<std::rc::Rc<engine::scene::OffscreenPass>>,
     /// The open portal's view, culled again in `finish_render`.
     portal_view: Option<crate::psi_portal::PortalView>,
+    /// Last `finish_render`'s view and projection, for `render`'s portal
+    /// on-screen test (the same test as its cull).
+    last_cull_view: Option<(Matrix4<f32>, Matrix4<f32>)>,
 
     /// First-person animation for the flat melee viewmodel: the wielded melee
     /// entity and its motion player (loops the player-melee idle; a swing is
@@ -4399,6 +4402,7 @@ impl MissionCore {
             psi_portal: Default::default(),
             offscreen_passes: Vec::new(),
             portal_view: None,
+            last_cull_view: None,
             flat_melee_anim: None,
             thrown_items: Default::default(),
             use_mode: false,
@@ -17436,24 +17440,23 @@ impl MissionCore {
             projection,
             screen_size,
         };
+        self.last_cull_view = Some((view, projection));
         profile!(
             scope: "render", level: DEBUG, "visibility_engine.prepare",
             self.visibility_engine
                 .prepare(self.spatial_data.as_deref(), &self.world, &culling_info)
         );
-        // The portal's remote camera: the same view, translated to its eye.
-        // With no translation the main cull already is the remote one.
-        let portal = self
-            .portal_view
-            .filter(|portal| portal.camera_translation() != Vector3::new(0.0, 0.0, 0.0))
-            .map(|portal| {
-                let info = CullingInfo {
-                    view: view * Matrix4::from_translation(-portal.camera_translation()),
-                    projection,
-                    screen_size,
-                };
-                (info, portal.anchor_eye)
-            });
+        // The portal's remote camera: the same view, translated to its eye
+        // and narrowed to the sphere (grown by the gate's slack).
+        let portal = self.portal_view.and_then(|portal| {
+            let (view, projection) = portal.cull(view, projection)?;
+            let info = CullingInfo {
+                view,
+                projection,
+                screen_size,
+            };
+            Some((info, portal.anchor_eye))
+        });
         profile!(
             scope: "render", level: DEBUG, "visibility_engine.prepare_secondary",
             self.visibility_engine.prepare_secondary(
@@ -17698,8 +17701,9 @@ impl MissionCore {
 
         // The psi portal's remote camera is culled separately (`finish_render`);
         // the entity loops below build objects for either view in one pass.
-        // Only while the marker's cell is in view, and never with the player's
-        // eye inside the sphere (right after casting it stands at the eye).
+        // Only while the marker's cell and the sphere are in view, and never
+        // with the player's eye inside the sphere (right after casting it
+        // stands at the eye).
         let player_eye = crate::psi_portal::eye_point(
             self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos,
         );
@@ -17719,7 +17723,11 @@ impl MissionCore {
                     crate::dev_params::get(crate::dev_params::PSI_PORTAL_REMOTE_OFFSET),
                 )
             })
-            .filter(|view| view.clear_of(player_eye));
+            .filter(|view| view.clear_of(player_eye))
+            .filter(|view| {
+                self.last_cull_view
+                    .is_none_or(|(camera, projection)| view.cull(camera, projection).is_some())
+            });
         let mut portal_cull = crate::psi_portal::PortalCull::new(self.portal_view.is_some());
 
         // Render models
