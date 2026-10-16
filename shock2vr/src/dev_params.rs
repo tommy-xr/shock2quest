@@ -628,7 +628,6 @@ dev_params! {
     /// resampler turns muddy below about half rate, so at 0.25 world audio
     /// still plays at 0.5. Music, UI, HUD, logs and emails stay at full rate.
     SLOW_TIME_AUDIO_FLOOR = Root::float("slow_time_audio_floor", "Slow-time audio floor", 0.5, 0.1, 1.0, 0.05),
-
     /// The player loses no hit points from any source, so never shows the hit
     /// tint or dies - keeps deterministic captures from being spoiled by damage.
     CHEAT = Root::bool("cheat", "Cheat: invulnerable", false),

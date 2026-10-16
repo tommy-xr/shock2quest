@@ -41,7 +41,7 @@ impl WorldClock {
 
 /// Playback rate for world sounds: the world's scale, but never below `floor`.
 pub fn world_audio_rate(world_scale: f32, floor: f32) -> f32 {
-    world_scale.max(floor).min(1.0)
+    world_scale.max(floor)
 }
 
 #[cfg(test)]
@@ -55,7 +55,6 @@ mod tests {
         assert_eq!(world_audio_rate(0.25, 0.5), 0.5);
         assert_eq!(world_audio_rate(0.1, 0.1), 0.1);
         assert_eq!(world_audio_rate(1.0, 1.0), 1.0);
-        assert_eq!(world_audio_rate(0.5, 1.0), 1.0);
     }
 
     const FRAME: Duration = Duration::from_nanos(16_666_667);

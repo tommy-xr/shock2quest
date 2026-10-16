@@ -1268,7 +1268,6 @@ mod tests {
         let clip = AudioClip::from_raw(1, 48_000, vec![8192; 48_000]);
         let (sink, mut output) = rodio::Sink::new_idle();
         let adapter = super::SinkAdapter::<()>::fixed(sink, true, false);
-
         adapter.set_scene_paused(true);
         if let super::SinkAdapter::StaticSink { sink, .. } = &adapter {
             clip.add_to_sink(sink);
@@ -1527,6 +1526,23 @@ mod tests {
     fn wav_duration_reads_avg_bytes_per_sec_and_data_size() {
         let duration = wav_duration(&riff(22050, 11025)).expect("duration");
         assert_eq!(duration.as_secs_f64(), 0.5);
+    }
+
+    /// The mixer re-reads a source's rate once per frame. Decoded clips come
+    /// in packet-sized frames, so a live world-rate change lands within one
+    /// packet (~50 ms at 22 kHz) rather than at the end of the clip.
+    #[test]
+    fn a_live_rate_change_reaches_a_decoded_clip_within_a_packet() {
+        let clip = AudioClip::from_bytes(riff(22050, 22050 * 3));
+        let (sink, mut output) = rodio::Sink::new_idle();
+        clip.add_to_sink(&sink);
+        output.by_ref().take(5000).for_each(drop);
+        sink.set_speed(0.5);
+        let frame = output.current_frame_len().unwrap();
+        assert!(frame <= 2048, "frame of {frame} samples");
+        output.by_ref().take(frame).for_each(drop);
+        assert_eq!(output.sample_rate(), 11_025);
+        sink.stop();
     }
 
     #[test]

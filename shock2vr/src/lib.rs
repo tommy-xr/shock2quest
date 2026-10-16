@@ -2021,19 +2021,26 @@ impl Game {
         );
 
         let audio_profile = perf::scope(perf::Phase::Audio);
-        // World sounds slow with the world clock (`MissionCore::update`).
-        self.audio_context.set_world_rate(time::world_audio_rate(
+        // `time` is the player's clock; `MissionCore::update` derives the
+        // slowed world clock from the same dev param. World sounds follow it.
+        let audio_rate = time::world_audio_rate(
             dev_params::get(dev_params::WORLD_TIME_SCALE),
             dev_params::get(dev_params::SLOW_TIME_AUDIO_FLOOR),
-        ));
+        );
+        self.audio_context.set_world_rate(audio_rate);
         // Handle ambient audio
-
         let ambient_state = self.active_game_scene.ambient_audio_state();
         self.environmental_aux.update(
             ambient_state
                 .as_ref()
                 .and_then(|state| state.environmental_cue.as_ref()),
-            time.elapsed,
+            // Aux layers play at the world rate, so schedule them on audio
+            // time or a slowed sample is cut off by the next one.
+            if audio_rate < 1.0 {
+                time.elapsed.mul_f32(audio_rate)
+            } else {
+                time.elapsed
+            },
             &self.global_context.gamesys.sound_schema,
             &mut self.asset_cache,
             &mut self.audio_context,
