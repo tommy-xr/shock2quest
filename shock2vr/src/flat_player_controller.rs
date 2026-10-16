@@ -839,6 +839,8 @@ mod tests {
             back: -0.2,
             pitch_limit: 12.0,
             back_limit: 0.4,
+            lift: 0.0,
+            lift_limit: 0.0,
             heading_limit: f32::MAX,
             angular_rate: 1.0,
             back_rate: 1.0,

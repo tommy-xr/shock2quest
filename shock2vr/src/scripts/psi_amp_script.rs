@@ -335,8 +335,8 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
     ])
 }
 
-/// The amp jumps back and up out of the hand: VR kicks the held body, flat
-/// the viewmodel, through the guns' recoil springs.
+/// The amp jumps up toward the eyes and back out of the hand: VR kicks the
+/// held body, flat the viewmodel, through the guns' recoil springs.
 fn burnout_kick(world: &World, amp_entity: EntityId) -> Effect {
     let impulse = crate::weapon_recoil::RecoilImpulse {
         pitch: 25.0,
@@ -344,8 +344,10 @@ fn burnout_kick(world: &World, amp_entity: EntityId) -> Effect {
         heading: 0.0,
         // Negative is back along the barrel, as authored gun kick.
         back: -0.1,
+        lift: 0.35,
         pitch_limit: 35.0,
         back_limit: 0.15,
+        lift_limit: 0.5,
         heading_limit: 0.0,
         angular_rate: 1.0,
         back_rate: 1.5,
@@ -358,6 +360,7 @@ fn burnout_kick(world: &World, amp_entity: EntityId) -> Effect {
         one_hand: crate::weapon_recoil::RecoilImpulse {
             pitch: 0.0,
             back: 0.0,
+            lift: 0.0,
             ..impulse
         },
     }
@@ -1066,7 +1069,7 @@ mod tests {
                 .sum();
             assert_eq!(damage, if owned { 0 } else { -3 });
             assert!(effects.iter().any(
-                |e| matches!(e, Effect::KickHeldGun { entity_id, impulse, .. } if *entity_id == amp && impulse.pitch > 0.0 && impulse.back < 0.0)
+                |e| matches!(e, Effect::KickHeldGun { entity_id, impulse, .. } if *entity_id == amp && impulse.pitch > 0.0 && impulse.back < 0.0 && impulse.lift > 0.0)
             ));
             assert!(effects.iter().all(|e| matches!(
                 e,
