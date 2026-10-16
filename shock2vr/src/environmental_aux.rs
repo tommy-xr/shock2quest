@@ -97,6 +97,7 @@ impl EnvironmentalAuxAudio {
             let handle = AudioHandle::new();
             let settings = AudioPlaybackSettings {
                 looping: resolved.looping,
+                follows_world: true,
                 ..AudioPlaybackSettings::listener_relative(
                     resolved.linear_gain(),
                     resolved.channel_gains(),

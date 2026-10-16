@@ -2021,7 +2021,13 @@ impl Game {
         );
 
         let audio_profile = perf::scope(perf::Phase::Audio);
+        // World sounds slow with the world clock (`MissionCore::update`).
+        self.audio_context.set_world_rate(time::world_audio_rate(
+            dev_params::get(dev_params::WORLD_TIME_SCALE),
+            dev_params::get(dev_params::SLOW_TIME_AUDIO_FLOOR),
+        ));
         // Handle ambient audio
+
         let ambient_state = self.active_game_scene.ambient_audio_state();
         self.environmental_aux.update(
             ambient_state
