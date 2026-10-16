@@ -10,15 +10,22 @@ for (const vr of [false, true]) {
     skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000,
   }, async () => {
     await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: vr ? ["--vr"] : [] });
-    const { handheld, click } = await openGamePig(game, vr, "Hogger Cart");
+    const { click } = await openGamePig(game, vr, "Hogger Cart");
     const elements = async () => (await game.ui.state()).active_panel!.elements;
     const control = async (label: string) => {
       const found = (await elements()).find(e => e.label === label);
       assert.ok(found, `missing playable ${label}`);
       return found;
     };
-    const pig = async () => (await elements()).find(e => /^hog2?\.pcx$/.test(e.texture ?? "") && e.rect[1] < 267)!;
-    const lives = async () => (await elements()).filter(e => /^hog2?\.pcx$/.test(e.texture ?? "") && e.rect[1] >= 267).length;
+    const field = async () => (await elements()).find(e => e.texture === "hogback.pcx")!.rect;
+    const pig = async () => {
+      const y = (await field())[1] + 256;
+      return (await elements()).find(e => /^hog2?\.pcx$/.test(e.texture ?? "") && e.rect[1] < y - 1)!;
+    };
+    const lives = async () => {
+      const y = (await field())[1] + 256;
+      return (await elements()).filter(e => /^hog2?\.pcx$/.test(e.texture ?? "") && e.rect[1] >= y - 1).length;
+    };
     await click(game, await control("game-7"));
     assert.equal(await lives(), 2);
     const initial = (await pig()).rect;
@@ -42,7 +49,11 @@ for (const vr of [false, true]) {
       assert.notDeepEqual((await game.info()).player.rotation, rotation, "free hand still turns");
     }
     for (let death = 0; death < 3; death++) {
-      await click(game, await control("hog-1-7"));
+      const row = Math.round(((await pig()).rect[1] - (await field())[1]) / 16);
+      const target = await control(`hog-1-${row}`);
+      await click(game, target);
+      const entered = (await elements()).find(e => /^(hog2?|hogsp2?)\.pcx$/.test(e.texture ?? "") && e.rect[1] < target.rect[1] + 1)!;
+      assert.equal(Math.round(entered.rect[0]), Math.round(target.rect[0]), "hop enters first traffic lane");
       await game.step({ frames: 900 });
       if (death < 2) assert.equal(await lives(), 1 - death);
     }
