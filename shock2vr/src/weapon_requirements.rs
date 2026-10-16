@@ -69,8 +69,9 @@ pub fn active_weapon_skill_notice(
     let notices = world.borrow::<View<WeaponSkillNotice>>().ok()?;
     let notice = notices.get(weapon).ok()?;
     let now = world
-        .borrow::<shipyard::UniqueView<crate::time::Time>>()
+        .borrow::<shipyard::UniqueView<crate::time::PlayerTime>>()
         .ok()?
+        .0
         .total;
     (notice.expires > now && unmet_weapon_skill(world, weapon) == Some(notice.requirement))
         .then_some(notice.requirement)
@@ -170,7 +171,7 @@ mod tests {
     #[test]
     fn notices_expire_and_disappear_when_the_requirement_is_met() {
         let mut world = World::new();
-        world.add_unique(crate::time::Time::default());
+        world.add_unique(crate::time::PlayerTime::default());
         world.add_unique(QuestInfo::new());
         let weapon = world.add_entity(PropBaseWeaponDesc([6, 0, 0, 0]));
         let other_weapon = world.add_entity(PropBaseWeaponDesc([6, 0, 0, 0]));
@@ -188,13 +189,15 @@ mod tests {
         );
         assert!(active_weapon_skill_notice(&world, other_weapon).is_none());
         world
-            .borrow::<shipyard::UniqueViewMut<crate::time::Time>>()
+            .borrow::<shipyard::UniqueViewMut<crate::time::PlayerTime>>()
             .unwrap()
+            .0
             .total = Duration::from_secs(3);
         assert!(active_weapon_skill_notice(&world, weapon).is_none());
         world
-            .borrow::<shipyard::UniqueViewMut<crate::time::Time>>()
+            .borrow::<shipyard::UniqueViewMut<crate::time::PlayerTime>>()
             .unwrap()
+            .0
             .total = Duration::ZERO;
         world
             .borrow::<shipyard::UniqueViewMut<QuestInfo>>()

@@ -185,8 +185,8 @@ pub(crate) fn render_lasers(
     use engine::scene::{SceneObject, SceneObjectDebugTag};
     let mut objects = Vec::new();
     let seconds = world
-        .borrow::<shipyard::UniqueView<crate::time::Time>>()
-        .map(|time| time.total.as_secs_f32())
+        .borrow::<shipyard::UniqueView<crate::time::PlayerTime>>()
+        .map(|time| time.0.total.as_secs_f32())
         .unwrap_or(0.0);
     for weapon in [Handedness::Left, Handedness::Right]
         .into_iter()

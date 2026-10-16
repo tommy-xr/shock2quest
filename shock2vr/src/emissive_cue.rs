@@ -8,7 +8,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     dev_params, mission::mission_core::GlobalTemplateHierarchy, runtime_props::RuntimePropSearched,
-    time::Time,
+    time::PlayerTime,
 };
 
 /// Crates and lockers, whose glow reports their contents. Desks run the same
@@ -31,7 +31,12 @@ pub(crate) fn held_scale(world: &World, item: EntityId) -> Option<f32> {
         return None;
     }
     let fraction = charge_fraction(world, item)?;
-    let secs = world.borrow::<UniqueView<Time>>().ok()?.total.as_secs_f32();
+    let secs = world
+        .borrow::<UniqueView<PlayerTime>>()
+        .ok()?
+        .0
+        .total
+        .as_secs_f32();
     let flicker = dev_params::get_bool(dev_params::EMISSIVE_CUE_FLICKER);
     Some(glow(fraction, secs, flicker))
 }

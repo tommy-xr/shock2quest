@@ -3639,6 +3639,7 @@ impl MissionCore {
 
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
         world.add_unique(Time::default());
+        world.add_unique(crate::time::PlayerTime::default());
         world.add_unique(crate::alcohol::AlcoholVital::default());
         world.add_unique(crate::melee_swing::MeleeSwings::default());
         world.add_unique(speech_registry);
@@ -4789,6 +4790,8 @@ impl MissionCore {
         crate::perf::scene_update(tick.elapsed);
         let _ = self.world.remove_unique::<Time>();
         self.world.add_unique(time.clone());
+        let _ = self.world.remove_unique::<crate::time::PlayerTime>();
+        self.world.add_unique(crate::time::PlayerTime(tick.clone()));
         if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
             quests.advance_security_hack(time.elapsed.as_secs_f32());
         }
@@ -5137,7 +5140,7 @@ impl MissionCore {
         // frame. Hanging compression deliberately leaves tracking unchanged.
         let mut tracked_input = input_context.clone();
         if tracked_input.tracking.is_some() {
-            if !time.elapsed.is_zero()
+            if !tick.elapsed.is_zero()
                 && !self.player_is_gripping()
                 && !self.player_handle.is_hanging_crouched()
             {
@@ -5243,7 +5246,7 @@ impl MissionCore {
             self.personal_card.hand == Some(0),
             self.personal_card.hand == Some(1),
         ]);
-        let hand_climb = (!time.elapsed.is_zero() && !self.player_handle.is_topping_out())
+        let hand_climb = (!tick.elapsed.is_zero() && !self.player_handle.is_topping_out())
             .then(|| {
                 let pawn_pos = self
                     .physics
@@ -5314,11 +5317,11 @@ impl MissionCore {
         // so a teleport - which writes the body directly - is reflected in
         // PlayerInfo/introspection even before the next real step.
         self.thrown_items
-            .prepare(&self.physics, tick.elapsed.as_secs_f32());
+            .prepare(&self.physics, time.elapsed.as_secs_f32());
         // The hold a hand vault starts from this frame, for the player trail.
         let mut vault_hold = None;
         let mut comfort_displacement = vec3(0.0, 0.0, 0.0);
-        let (new_character_pos, collision_events) = if time.elapsed.is_zero() {
+        let (new_character_pos, collision_events) = if tick.elapsed.is_zero() {
             (
                 self.physics.get_player_translation(&self.player_handle),
                 Vec::new(),
@@ -5530,7 +5533,7 @@ impl MissionCore {
             ),
         );
 
-        if !time.elapsed.is_zero() {
+        if !tick.elapsed.is_zero() {
             // Player footsteps, paced by the distance the player just walked
             // under their own power (platform carry already removed). Only on
             // a frame that actually ran the movement pass: a paused frame
@@ -5597,7 +5600,7 @@ impl MissionCore {
         // clearing there would silently erase forces queued between frames
         // (e.g. a killing-blow impulse on a multibody link, which is applied
         // as a one-step force) before they ever acted.
-        if !time.elapsed.is_zero() {
+        if !tick.elapsed.is_zero() {
             self.physics.clear_forces();
         }
         // A poisoned (transform-diverged) rig is despawned by the manager;
@@ -5618,7 +5621,7 @@ impl MissionCore {
 
         // Sample the attachment that drove this physics step. Input is resolved
         // later below; a same-frame release can still downgrade before dispatch.
-        if game_options.presentation_mode == crate::PresentationMode::Vr && !time.elapsed.is_zero()
+        if game_options.presentation_mode == crate::PresentationMode::Vr && !tick.elapsed.is_zero()
         {
             let mut swings = self
                 .world
@@ -5860,7 +5863,7 @@ impl MissionCore {
         self.psi_drain_trails
             .retain_mut(|trail| trail.advance(time.elapsed));
         self.held_recovery_particles.retain_mut(|particles| {
-            particles.update(time.elapsed, Matrix4::identity());
+            particles.update(tick.elapsed, Matrix4::identity());
             !particles.is_done()
         });
         self.barrel_smoke.retain_mut(|(_, particles)| {
@@ -7689,7 +7692,7 @@ impl MissionCore {
         // pickup/drop this frame must not retarget a click on the previously drawn gun.
         // Double-click windows are counted in simulation frames, so the debug
         // runtime's zero-time administrative updates do not consume them.
-        if !time.elapsed.is_zero() {
+        if !tick.elapsed.is_zero() {
             self.flat_ui.advance_simulation_frame();
         }
         let (ui_messages, ui_drag_actions) = match game_options.presentation_mode {
@@ -15102,7 +15105,7 @@ impl MissionCore {
                         }
                         _ => unreachable!(),
                     };
-                    let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                    let now = self.player_now();
                     self.world
                         .borrow::<UniqueViewMut<crate::hud::HudMessages>>()
                         .unwrap()
@@ -15125,7 +15128,7 @@ impl MissionCore {
                 }
 
                 Effect::ShowBanner { text, duration } => {
-                    let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                    let now = self.player_now();
                     self.world
                         .borrow::<UniqueViewMut<crate::hud::HudBanner>>()
                         .unwrap()
@@ -15148,7 +15151,7 @@ impl MissionCore {
                     requirement,
                 } => {
                     use crate::weapon_requirements::WeaponSkillNotice;
-                    let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                    let now = self.player_now();
                     let repeated = self
                         .world
                         .borrow::<View<WeaponSkillNotice>>()
@@ -17237,11 +17240,7 @@ impl MissionCore {
     /// lines are dropped here (the `DamageFlash` pattern), so they clear
     /// whether or not the message block is being drawn.
     fn hud_messages(&self) -> Vec<String> {
-        let now = self
-            .world
-            .borrow::<UniqueView<Time>>()
-            .map(|time| time.total)
-            .unwrap_or_default();
+        let now = self.player_now();
         let mut messages = self
             .world
             .borrow::<UniqueViewMut<crate::hud::HudMessages>>()
@@ -17274,15 +17273,20 @@ impl MissionCore {
         messages
     }
 
+    /// The player's unscaled clock. Player UI deadlines and animations run on
+    /// it so slowed world time does not stretch them.
+    fn player_now(&self) -> std::time::Duration {
+        self.world
+            .borrow::<UniqueView<crate::time::PlayerTime>>()
+            .map(|time| time.0.total)
+            .unwrap_or_default()
+    }
+
     /// The interstitial banner showing this frame, if any. Expired banners are
     /// dropped here (the `hud_messages` pattern), so one clears itself whether
     /// or not it is being drawn.
     fn hud_banner(&self) -> Option<crate::hud::ActiveBanner> {
-        let now = self
-            .world
-            .borrow::<UniqueView<Time>>()
-            .map(|time| time.total)
-            .unwrap_or_default();
+        let now = self.player_now();
         self.world
             .borrow::<UniqueViewMut<crate::hud::HudBanner>>()
             .ok()
@@ -17407,11 +17411,7 @@ impl MissionCore {
         let panel_layers = crate::ui::canvas_layers(&canvas, &panel);
         objects.extend(canvas);
         if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
-            let seconds = self
-                .world
-                .borrow::<UniqueView<Time>>()
-                .map(|time| time.total.as_secs_f32())
-                .unwrap_or_default();
+            let seconds = self.player_now().as_secs_f32();
             objects.extend(crate::ui::pointer_beams(
                 pass,
                 crate::mission::flat_ui_host::CANVAS_SIZE,
@@ -18527,11 +18527,7 @@ impl MissionCore {
                     self.personal_card.hand,
                 )
             };
-            let seconds = self
-                .world
-                .borrow::<UniqueView<Time>>()
-                .map(|time| time.total.as_secs_f32())
-                .unwrap_or_default();
+            let seconds = self.player_now().as_secs_f32();
             if let Some(model) = self
                 .flat_ui
                 .utilities
