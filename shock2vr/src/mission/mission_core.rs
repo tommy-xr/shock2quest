@@ -3229,6 +3229,7 @@ pub struct MissionCore {
     pub rag_doll_manager: RagDollManager,
     pub debug_lines: Vec<DebugLine>,
     psi_drain_trails: Vec<crate::psi_visuals::DrainTrail>,
+    projectile_trails: crate::projectile_trail::ProjectileTrails,
     psi_pull: Option<crate::psi_pull::Flight>,
     healing_pulses: HashMap<EntityId, f32>,
     pub entity_info: Arc<SystemShock2EntityInfo>,
@@ -4371,6 +4372,7 @@ impl MissionCore {
             spatial_data: abstract_mission.spatial_data,
             debug_lines: Vec::new(),
             psi_drain_trails: Vec::new(),
+            projectile_trails: Default::default(),
             psi_pull: None,
             healing_pulses: HashMap::new(),
             gui: GuiManager::new(),
@@ -5862,6 +5864,7 @@ impl MissionCore {
         });
         self.psi_drain_trails
             .retain_mut(|trail| trail.advance(time.elapsed));
+        self.update_projectile_trails(time.elapsed.as_secs_f32());
         self.held_recovery_particles.retain_mut(|particles| {
             particles.update(tick.elapsed, Matrix4::identity());
             !particles.is_done()
@@ -10328,6 +10331,28 @@ impl MissionCore {
             self.world
                 .add_component(rider.entity_id, RuntimePropDoNotSerialize {});
         }
+    }
+
+    /// Samples every launched or player-fired projectile into its trail.
+    fn update_projectile_trails(&mut self, world_dt: f32) {
+        let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+        let launched = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropLaunchedProjectile>>()
+            .unwrap();
+        let player_fired = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
+            .unwrap();
+        let live = launched
+            .iter()
+            .ids()
+            .chain(player_fired.iter().ids())
+            .filter_map(|entity| {
+                let transform = transforms.get(entity).ok()?;
+                Some((entity, transform.0.w.truncate()))
+            });
+        self.projectile_trails.update(world_dt, live);
     }
 
     /// Launch speed (Dark units/s) above which a projectile is resolved by
@@ -17962,6 +17987,7 @@ impl MissionCore {
         for trail in &self.psi_drain_trails {
             scene.extend(trail.render());
         }
+        scene.extend(self.projectile_trails.render());
         // Render particle systems
         if options.render_particles {
             for (particle_entity_id, particle_system) in &self.id_to_particle_system {
