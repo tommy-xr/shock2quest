@@ -17,7 +17,7 @@ use crate::{
 /// surface vertices near the ball. The model also carries a cable, a baked
 /// hand and a forearm, so its bounds do not locate the ball. The 25AE and
 /// classic meshes fit within 0.02 of these.
-const AMP_SPHERE_CENTER: Point3<f32> = Point3::new(-0.42, 0.094, -0.04);
+pub(crate) const AMP_SPHERE_CENTER: Point3<f32> = Point3::new(-0.42, 0.094, -0.04);
 const AMP_SPHERE_RADIUS: f32 = 0.155;
 /// Reference anchor on the baked forearm, in model space (+x toward the elbow).
 /// `wrist` tunes along this axis to seat the bracelet beside the cable inlet;
@@ -187,15 +187,27 @@ fn wrist_frame(transform: Matrix4<f32>) -> Matrix4<f32> {
 /// The amp's model-to-world transform, as its mesh is drawn (charge offset,
 /// pose, fit scale, left-hand mirror).
 fn drawn_transform(world: &World, amp: EntityId, hand: Handedness) -> Option<Matrix4<f32>> {
+    Some(
+        crate::melee_charge_visual::transform(world, Some(amp))
+            * model_transform(world, amp, Some(hand))?,
+    )
+}
+
+/// Physical amp model frame shared by attachments. Flat uses the authored
+/// right-hand mesh; VR adds its live fit and the holding hand's reflection.
+pub(crate) fn model_transform(
+    world: &World,
+    amp: EntityId,
+    hand: Option<Handedness>,
+) -> Option<Matrix4<f32>> {
     let transforms = world
         .borrow::<View<crate::runtime_props::RuntimePropTransform>>()
         .ok()?;
-    Some(
-        crate::melee_charge_visual::transform(world, Some(amp))
-            * transforms.get(amp).ok()?.0
-            * crate::vr_config::psi_amp_fit_scale()
-            * hand.gun_mirror(),
-    )
+    let transform = transforms.get(amp).ok()?.0;
+    Some(match hand {
+        Some(hand) => transform * crate::vr_config::psi_amp_fit_scale() * hand.gun_mirror(),
+        None => transform,
+    })
 }
 
 fn ring_radius(sphere_radius: f32) -> f32 {
