@@ -3754,6 +3754,9 @@ pub struct PhysicsWorld {
     ignored_collision_pairs: HashSet<(u128, u128)>,
     gravity: Vector<Real>,
     integration_parameters: IntegrationParameters,
+    /// `world_time_scale` for the current tick: the solver steps the world at
+    /// `dt * world_time_scale` while the player integrates at the full `dt`.
+    world_time_scale: f32,
     physics_pipeline: PhysicsPipeline,
     #[cfg(feature = "physics-profiling")]
     profile: profiling::PhysicsProfile,
@@ -6759,6 +6762,7 @@ impl PhysicsWorld {
             ignored_collision_pairs: HashSet::new(),
             gravity,
             integration_parameters,
+            world_time_scale: 1.0,
             collider_set,
             physics_pipeline,
             #[cfg(feature = "physics-profiling")]
@@ -7189,6 +7193,17 @@ impl PhysicsWorld {
         self.integration_parameters.dt
     }
 
+    /// Sets how fast the world solver runs relative to the player this tick.
+    pub fn set_world_time_scale(&mut self, scale: f32) {
+        self.world_time_scale = scale;
+    }
+
+    /// The solver timestep for world bodies: the player's step scaled by
+    /// `world_time_scale`.
+    pub fn world_step_dt(&self) -> f32 {
+        self.integration_parameters.dt * self.world_time_scale
+    }
+
     /// Step the simulation and resolve one frame of player movement.
     ///
     /// How far the player actually got is
@@ -7222,11 +7237,16 @@ impl PhysicsWorld {
         #[cfg(feature = "physics-profiling")]
         let prepared = std::time::Instant::now();
 
+        // World bodies advance in world time. Kinematic held items still reach
+        // their unscaled hand targets, so in world terms they move faster.
+        let mut world_parameters = self.integration_parameters;
+        world_parameters.dt = self.world_step_dt();
+
         /* Run the game loop, stepping the simulation once per frame. */
         profile!(scope: "physics", level: TRACE, "physics.step", {
             self.physics_pipeline.step(
                 &self.gravity,
-                &self.integration_parameters,
+                &world_parameters,
                 &mut self.island_manager,
                 &mut self.broad_phase,
                 &mut self.narrow_phase,
@@ -7237,13 +7257,13 @@ impl PhysicsWorld {
                 &mut self.ccd_solver,
                 &MovingTerrainContactHooks {
                     ignored_pairs: &self.ignored_collision_pairs,
-                    dt: self.integration_parameters.dt,
+                    dt: world_parameters.dt,
                 },
                 &self.events,
             )
         });
         drop(solver_profile);
-        crate::perf::physics_step(self.integration_parameters.dt);
+        crate::perf::physics_step(world_parameters.dt);
         self.has_stepped = true;
         #[cfg(feature = "lazy-hitboxes")]
         self.query_hitboxes.commit();
@@ -8905,7 +8925,7 @@ impl PhysicsWorld {
                     let support_translation = recovery
                         .map(|state| {
                             state.support_translation
-                                + support_velocity.unwrap() * self.integration_parameters.dt
+                                + support_velocity.unwrap() * self.world_step_dt()
                         })
                         .unwrap_or_else(|| vec_to_nvec(position));
                     let sweep_direction = horizontal_sweep.unwrap().0;
@@ -9260,7 +9280,7 @@ impl PhysicsWorld {
         impulse: Vector3<f32>,
     ) -> bool {
         let is_multibody_link = self.multibody_joint_set.rigid_body_link(handle).is_some();
-        let dt = self.integration_parameters.dt;
+        let dt = self.world_step_dt();
         if let Some(body) = self.rigid_body_set.get_mut(handle) {
             if body.body_type() == RigidBodyType::Dynamic {
                 body.wake_up(true);
@@ -17830,5 +17850,73 @@ mod tests {
             end.y - start.y,
             end
         );
+    }
+
+    /// Steps a loose sphere launched sideways from high above the floor and
+    /// returns its translation and velocity.
+    fn loose_body_after(scale: f32, frames: usize) -> (Vector3<f32>, Vector3<f32>) {
+        let (mut world, mut player) = world_with_floor();
+        let body = EntityId::from_inner(2400).unwrap();
+        let handle = world.add_dynamic(
+            body,
+            vec3(0.0, 50.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Sphere(0.2),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        world.set_velocity(body, vec3(3.0, 0.0, 0.0));
+        world.set_world_time_scale(scale);
+        step(&mut world, &mut player, frames);
+        let translation = world.rigid_body_set[handle].translation();
+        (
+            vec3(translation.x, translation.y, translation.z),
+            world.get_velocity(body).unwrap(),
+        )
+    }
+
+    /// At half world speed, twice the ticks give the same world progression.
+    /// Positions under gravity differ by the discretization of the halved
+    /// step, so the fall height gets a coarser tolerance than x and velocity.
+    #[test]
+    fn half_world_time_scale_slows_loose_bodies() {
+        let (base_pos, base_vel) = loose_body_after(1.0, 60);
+        let (slow_pos, slow_vel) = loose_body_after(0.5, 120);
+        assert!(
+            (slow_pos.x - base_pos.x).abs() < 1e-3,
+            "{slow_pos:?} vs {base_pos:?}"
+        );
+        assert!(
+            (slow_vel - base_vel).magnitude() < 1e-3,
+            "{slow_vel:?} vs {base_vel:?}"
+        );
+        assert!(
+            (slow_pos.y - base_pos.y).abs() < 0.05,
+            "{slow_pos:?} vs {base_pos:?}"
+        );
+    }
+
+    /// The player is outside world time: the same walk request covers the
+    /// same ground at any world time scale.
+    #[test]
+    fn world_time_scale_leaves_player_walking_unchanged() {
+        fn walked(scale: f32) -> f32 {
+            let (mut world, mut player) = world_with_floor();
+            world.set_player_translation(vec3(0.0, 1.2, 0.0), &mut player);
+            step(&mut world, &mut player, 30);
+            world.set_world_time_scale(scale);
+            let start = world.get_player_translation(&player);
+            for _ in 0..60 {
+                world.update(vec3(0.0, 0.0, 25.0 / 60.0 / SCALE_FACTOR), &mut player);
+            }
+            let end = world.get_player_translation(&player);
+            vec3(end.x - start.x, 0.0, end.z - start.z).magnitude()
+        }
+        let base = walked(1.0);
+        let slow = walked(0.5);
+        assert!(base > 3.0, "walk must make progress (got {base})");
+        assert!((slow - base).abs() < 1e-3, "{slow} vs {base}");
     }
 }
