@@ -106,8 +106,9 @@ const SHOTS = [
     // the right's over to Pyrokinesis, then stun an assassin and burn it.
     name: "dual-psi",
     mission: "command2.mis",
-    // Behind an assassin idling in a conference room.
-    player: [-18.2, 18.8, -2],
+    // 4.5 units behind an assassin idling in a conference room: from 6, the
+    // hypnogenesis bolt did not stun it.
+    player: [-18.2, 18.8, 0],
     heading: [0, 0, 1],
     subject: "Assassin",
     // Creatures move slower on easy, so the assassin stays in frame.
@@ -137,7 +138,7 @@ const SHOTS = [
       browse: [-0.12, -0.14, -0.52],
       // A casting amp is raised forward, beside the line of sight; the other
       // drops out of the way.
-      cast: [0.16, -0.2, -0.52],
+      cast: [0.1, -0.1, -0.55],
       lowered: [0.24, -0.45, -0.3],
       // Hit points taken before the training save, so one Pyrokinesis (9)
       // kills it (60 HP).
@@ -948,6 +949,8 @@ async function recordPsi(game, shot, held, target, offstage) {
   assert.deepEqual(await pair("right"), { current: start, alternate: psi.pyro });
 
   await teleport(shot.player);
+  // One that has noticed the player rushes into the camera: a bad take.
+  assert.equal(await prop(target, "AIAlertness"), "Lowest", `${shot.name}: the subject must start unaware`);
 
   const sink = await frameSink(game, shot.name);
   let t = 0;
