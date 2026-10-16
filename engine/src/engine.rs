@@ -33,5 +33,10 @@ use std::sync::Arc;
 pub trait Engine {
     fn render(&self, render_context: &EngineRenderContext, scene: &Scene);
 
+    /// Only `scene`'s offscreen passes, from `render_context`'s eye. A stereo
+    /// runtime renders them once from the head centre, then each eye's
+    /// `render` without them.
+    fn render_offscreen_passes(&self, render_context: &EngineRenderContext, scene: &Scene);
+
     fn get_storage(&self) -> Arc<dyn Storage>;
 }

@@ -18,6 +18,7 @@ ndk-sys = "0.4.0"
 [dependencies]
 c_string = "0.7.2"
 cgmath = "0.18.0"
+collision = { version = "0.20.1", git = "https://github.com/rustgd/collision-rs" }
 fbxcel-dom = "0.0.10"
 gl = "0.14.0"
 image = "0.24.3"
