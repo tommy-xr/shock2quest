@@ -23,17 +23,18 @@ for (const vr of [false, true]) test(
     const [amp] = await game.entities.byTemplate(-247);
     await equipRightHand(game, vr, amp.id, "EquipPsiAmp");
     const flash = async () => (await game.scene.fromSource("psi_burnout"))[0];
-    const muzzle = async () => {
+    type Frame = { forward: number[]; up: number[] };
+    const muzzle = async (): Promise<Frame> => {
       const detail = await game.entities.detail(amp.id);
       const frame = detail.properties.find((p) => p.name === "WeaponMuzzle");
       assert.ok(frame, "the held amp exposes its muzzle frame");
-      return (JSON.parse(frame.value) as { forward: number[] }).forward;
+      return JSON.parse(frame.value) as Frame;
     };
-    // Degrees the muzzle has turned from its resting direction.
-    const turned = async (rest: number[]) => {
-      const now = await muzzle();
-      const cos = now.reduce((sum, v, i) => sum + v * rest[i], 0);
-      return (Math.acos(Math.min(1, cos)) * 180) / Math.PI;
+    const dot = (a: number[], b: number[]) => a.reduce((sum, v, i) => sum + v * b[i], 0);
+    // Degrees the muzzle has pitched toward the amp's resting up.
+    const pitch = async (rest: Frame) => {
+      const { forward } = await muzzle();
+      return (Math.asin(Math.max(-1, Math.min(1, dot(forward, rest.up)))) * 180) / Math.PI;
     };
     const before = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
 
@@ -50,13 +51,13 @@ for (const vr of [false, true]) test(
       `burnout sound: ${JSON.stringify(sounds.map((s) => s.sample))}`,
     );
     await game.step({ frames: 6 });
-    const kicked = await turned(rest);
-    assert.ok(kicked > 8, `the amp kicks: ${kicked} degrees`);
+    const kicked = await pitch(rest);
+    assert.ok(kicked > 8, `the amp kicks up: ${kicked} degrees`);
     await game.input.set("right_hand.trigger", 0);
     await game.step({ frames: 30 });
     assert.equal(await flash(), undefined, "the flash fades");
     await game.step({ frames: 120 });
-    const settled = await turned(rest);
-    assert.ok(settled < 1, `the amp settles: ${settled} degrees`);
+    const settled = await pitch(rest);
+    assert.ok(Math.abs(settled) < 1, `the amp settles: ${settled} degrees`);
   },
 );

@@ -1066,7 +1066,7 @@ mod tests {
                 .sum();
             assert_eq!(damage, if owned { 0 } else { -3 });
             assert!(effects.iter().any(
-                |e| matches!(e, Effect::KickHeldGun { entity_id, impulse, .. } if *entity_id == amp && impulse.pitch > 0.0)
+                |e| matches!(e, Effect::KickHeldGun { entity_id, impulse, .. } if *entity_id == amp && impulse.pitch > 0.0 && impulse.back < 0.0)
             ));
             assert!(effects.iter().all(|e| matches!(
                 e,
