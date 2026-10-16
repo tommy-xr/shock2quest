@@ -10335,8 +10335,8 @@ impl MissionCore {
         }
     }
 
-    /// Samples every launched or player-fired projectile into its smoke trail,
-    /// except cosmetic launches (ejected brass, muzzle effects).
+    /// Samples every projectile created in slow time into its trail, except
+    /// cosmetic launches (ejected brass, muzzle effects).
     fn update_projectile_trails(&mut self, world_dt: f32) {
         let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let launched = self
@@ -10351,6 +10351,10 @@ impl MissionCore {
             .world
             .borrow::<View<crate::runtime_props::RuntimePropTransientFx>>()
             .unwrap();
+        let slow_time = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropSlowTimeProjectile>>()
+            .unwrap();
         let live = launched
             .iter()
             .ids()
@@ -10363,9 +10367,12 @@ impl MissionCore {
             .filter(|entity| !cosmetic.contains(*entity))
             .filter_map(|entity| {
                 let transform = transforms.get(entity).ok()?;
-                // Fast shots fly without a physics body.
+                // Fast shots fly without a physics body. Only a traveling one
+                // moves, and it always came from slow time, so it trails even
+                // when loaded from a save above the threshold.
                 let shot = !self.id_to_physics.contains_key(&entity);
-                Some((entity, transform.0.w.truncate(), shot))
+                (shot || slow_time.contains(entity))
+                    .then(|| (entity, transform.0.w.truncate(), shot))
             });
         self.projectile_trails.update(
             world_dt,
@@ -10392,6 +10399,27 @@ impl MissionCore {
         authored_velocity_frame: Option<Matrix4<f32>>,
     ) -> EntityCreationInfo {
         let ret = created_entity.clone();
+        // Decided once at creation from the world scale then; a projectile in
+        // flight keeps it.
+        let slow_time = crate::scripts::internal_fast_projectile::launched_in_slow_time(
+            crate::dev_params::get(crate::dev_params::WORLD_TIME_SCALE),
+            crate::dev_params::get(crate::dev_params::SLOW_TIME_SHOT_THRESHOLD),
+        );
+        if slow_time
+            && (world
+                .borrow::<View<crate::runtime_props::RuntimePropLaunchedProjectile>>()
+                .unwrap()
+                .contains(created_entity.entity_id)
+                || world
+                    .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
+                    .unwrap()
+                    .contains(created_entity.entity_id))
+        {
+            world.add_component(
+                created_entity.entity_id,
+                crate::runtime_props::RuntimePropSlowTimeProjectile,
+            );
+        }
 
         if let Some((model, maybe_animation_player)) = created_entity.model {
             id_to_model.insert(created_entity.entity_id, model);
@@ -10459,11 +10487,11 @@ impl MissionCore {
             let mag = initial_velocity.magnitude();
             let x_velocity = root_transform.transform_vector(vec3(0.0, 0.0, mag * modifiers.speed));
             if mag > Self::FAST_PROJECTILE_SPEED {
-                // Use raycast strategy for fast moving objects: one ray at
-                // full world speed, a swept traveling shot while it is slowed.
+                // Use raycast strategy for fast moving objects: one ray in
+                // normal play, a swept traveling shot in slow time.
                 let script = InternalFastProjectileScript::for_launch(
                     x_velocity,
-                    crate::dev_params::get(crate::dev_params::WORLD_TIME_SCALE),
+                    slow_time,
                     crate::dev_params::get(crate::dev_params::SLOW_TIME_SHOT_SPEED),
                 );
                 // A saved traveling shot is created here as whatever the

@@ -451,6 +451,11 @@ pub struct RuntimePropProjectileLauncher(pub shipyard::EntityId);
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropLaunchedProjectile;
 
+/// A projectile created while the world ran at or below
+/// `slow_time_shot_threshold`: it leaves a trail. Runtime-only.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropSlowTimeProjectile;
+
 /// Current world-space projectile velocity, synchronized from physics and saved
 /// so a steered or ricocheting shot resumes its flight instead of relaunching.
 #[derive(Component, Clone, Copy)]

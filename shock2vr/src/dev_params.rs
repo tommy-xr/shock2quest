@@ -617,10 +617,14 @@ dev_params! {
     /// How fast the world runs relative to the player: AI, scripts,
     /// animations, particles, doors and loose physics advance at this rate
     /// while locomotion, tracked hands, held items and weapon cadence stay at
-    /// full speed. 0.5 halves the world's speed. Below 1.0, shots fired from
-    /// then on travel visibly instead of hitting instantly.
+    /// full speed. 0.5 halves the world's speed. At or below
+    /// `slow_time_shot_threshold`, shots fired from then on travel visibly.
     WORLD_TIME_SCALE = Root::float("world_time_scale", "World time scale", 1.0, 0.1, 1.0, 0.05),
-    /// Multiplies a traveling shot's speed (fired while the world is slowed):
+    /// `world_time_scale` at or below which a projectile created then is in
+    /// slow time: fast shots travel with a bullet drawn and every projectile
+    /// trails. Above it, projectiles behave as in normal play.
+    SLOW_TIME_SHOT_THRESHOLD = Root::float("slow_time_shot_threshold", "Slow-time shot threshold", 0.5, 0.1, 1.0, 0.05),
+    /// Multiplies a traveling shot's speed (fired in slow time):
     /// a real bullet at half world speed is still too fast to dodge.
     SLOW_TIME_SHOT_SPEED = Root::float("slow_time_shot_speed", "Slow-time shot speed", 1.0, 0.05, 1.0, 0.05),
     /// World seconds a projectile's smoke puffs take to fade out.

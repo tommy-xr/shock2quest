@@ -53,6 +53,13 @@ struct Flight {
     age: f32,
 }
 
+/// Whether a projectile created at `world_time_scale` is in slow time: at or
+/// below `threshold`, fast shots travel with a bullet drawn and every
+/// projectile trails; above it, nothing changes from normal play.
+pub fn launched_in_slow_time(world_time_scale: f32, threshold: f32) -> bool {
+    world_time_scale <= threshold
+}
+
 const SCRIPT_STATE_KEY: &str = "shock2vr.internal_fast_projectile";
 
 /// Saved so a shot in flight resumes mid-air after a load.
@@ -88,16 +95,16 @@ impl InternalFastProjectileScript {
         }
     }
 
-    /// Picks the mode at launch: while the world is slowed a shot travels at
-    /// its launch speed (world units/s in `velocity`) times `shot_speed`, so it
-    /// can be seen and dodged; at full speed it stays hitscan. A shot in
-    /// flight keeps its mode when the scale changes.
+    /// Picks the mode at launch: a shot fired in slow time (see
+    /// [`launched_in_slow_time`]) travels at its launch speed (world units/s
+    /// in `velocity`) times `shot_speed`, so it can be seen and dodged;
+    /// otherwise it stays hitscan. A shot in flight keeps its mode.
     pub fn for_launch(
         velocity: Vector3<f32>,
-        world_time_scale: f32,
+        slow_time: bool,
         shot_speed: f32,
     ) -> InternalFastProjectileScript {
-        if world_time_scale < 1.0 {
+        if slow_time {
             Self::traveling(velocity, velocity.magnitude() * shot_speed)
         } else {
             Self::new(velocity)
@@ -799,11 +806,24 @@ mod tests {
     }
 
     #[test]
+    fn slow_time_starts_at_the_threshold() {
+        use super::launched_in_slow_time;
+        assert!(launched_in_slow_time(0.25, 0.5), "below");
+        assert!(launched_in_slow_time(0.5, 0.5), "at");
+        assert!(!launched_in_slow_time(0.55, 0.5), "above");
+        assert!(!launched_in_slow_time(1.0, 0.5), "normal play");
+        assert!(
+            launched_in_slow_time(1.0, 1.0),
+            "a threshold of 1 slows every shot"
+        );
+    }
+
+    #[test]
     fn the_shot_mode_is_chosen_from_the_world_scale_at_launch() {
         use super::InternalFastProjectileScript;
         let velocity = vec3(0.0, 0.0, 100.0);
-        assert!(!InternalFastProjectileScript::for_launch(velocity, 1.0, 1.0).is_traveling());
-        let slowed = InternalFastProjectileScript::for_launch(velocity, 0.5, 0.2);
+        assert!(!InternalFastProjectileScript::for_launch(velocity, false, 1.0).is_traveling());
+        let slowed = InternalFastProjectileScript::for_launch(velocity, true, 0.2);
         assert!(slowed.is_traveling());
         // The launch speed, times the readability speed.
         let speed = slowed.flight.as_ref().map(|flight| flight.speed);
