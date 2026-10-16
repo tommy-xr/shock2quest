@@ -793,10 +793,12 @@ The project supports experimental flags for gating in-progress features during d
   `high-detail (PMNM) meshes: true|false`.
 
 - **`psi_portal`**: draw the Quantum Relocation marker as a refracting rift
-  sphere that samples a live offscreen world pass (256x256, per eye). The pass
+  sphere that samples a live offscreen world pass (256x256). The pass is
+  skipped while the sphere is off-screen, renders once per frame from the head
+  centre on Quest (`psi_portal_stereo` dev param: per eye), and covers only the
+  sphere's screen rect, with the remote cull narrowed to match. The pass
   camera uses porthole parallax from the anchor; since the sphere sits at the
-  anchor, it currently refracts what is behind it. Render-only; off until its
-  Quest cost is measured.
+  anchor, it currently refracts what is behind it. Render-only; off by default.
 
 #### Adding New Experimental Features
 
