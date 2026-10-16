@@ -7,7 +7,10 @@ use shipyard::{EntityId, Get, View, World};
 use std::{fs::File, io::Read, path::PathBuf};
 
 fn fixture_paths() -> Vec<PathBuf> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/saves");
+    // check-save-compat.mjs points this at saves written by the base commit.
+    let root = std::env::var_os("SHOCK2_SAVE_FIXTURES")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/saves"));
     let mut paths: Vec<_> = std::fs::read_dir(&root)
         .unwrap_or_else(|e| panic!("{}: {e}", root.display()))
         .map(|release| release.unwrap().path())
