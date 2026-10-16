@@ -40,10 +40,12 @@ for (const vr of [false, true]) {
     assert.ok(before.length > 100, "projected tunnel is present");
     if (vr) {
       const rotation = (await game.info()).player.rotation;
+      await game.input.set("left_hand.thumbstick", [0,-1]); await game.step({ frames: 2 });
+      const opposite = await geometry();
       await game.input.set("left_hand.thumbstick", [0,1]); await game.step({ frames: 2 });
       await game.input.set("left_hand.thumbstick", [0,0]); await game.step({ frames: 2 });
       assert.deepEqual((await game.info()).player.rotation, rotation, "holding hand aims without turning the player");
-      assert.notDeepEqual(await geometry(), before, "aiming moves the ship around the rim");
+      assert.notDeepEqual(await geometry(), opposite, "opposite stick directions move the ship around the rim");
       await button("LeftHandLowerButton");
     } else {
       const field = await control("wallow-fire");
