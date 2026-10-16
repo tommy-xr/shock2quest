@@ -10352,7 +10352,12 @@ impl MissionCore {
         let live = launched
             .iter()
             .ids()
-            .chain(player_fired.iter().ids())
+            .chain(
+                player_fired
+                    .iter()
+                    .ids()
+                    .filter(|entity| !launched.contains(*entity)),
+            )
             .filter(|entity| !cosmetic.contains(*entity))
             .filter_map(|entity| {
                 let transform = transforms.get(entity).ok()?;
@@ -13282,6 +13287,9 @@ impl MissionCore {
                     ));
                 }
 
+                Effect::ProjectileTrailEnd { entity_id, point } => {
+                    self.projectile_trails.end(entity_id, point);
+                }
                 Effect::PsiDrainVisual { from, to } => {
                     if self.psi_drain_trails.len() < 8 {
                         self.psi_drain_trails

@@ -43,6 +43,8 @@ struct Flight {
     speed: f32,
     /// Where the line starts; fixed on the first step.
     origin: Option<Point3<f32>>,
+    /// Where the shot entity was created, which a VR line starts behind.
+    spawn: Point3<f32>,
     traveled: f32,
     age: f32,
 }
@@ -66,6 +68,7 @@ impl InternalFastProjectileScript {
             flight: Some(Flight {
                 speed,
                 origin: None,
+                spawn: Point3::origin(),
                 traveled: 0.0,
                 age: 0.0,
             }),
@@ -73,7 +76,7 @@ impl InternalFastProjectileScript {
     }
 
     /// Picks the mode at launch: while the world is slowed a shot travels at
-    /// its launch speed (Dark units/s in `velocity`) times `shot_speed`, so it
+    /// its launch speed (world units/s in `velocity`) times `shot_speed`, so it
     /// can be seen and dodged; at full speed it stays hitscan. A shot in
     /// flight keeps its mode when the scale changes.
     pub fn for_launch(
@@ -82,7 +85,7 @@ impl InternalFastProjectileScript {
         shot_speed: f32,
     ) -> InternalFastProjectileScript {
         if world_time_scale < 1.0 {
-            Self::traveling(velocity, velocity.magnitude() / SCALE_FACTOR * shot_speed)
+            Self::traveling(velocity, velocity.magnitude() * shot_speed)
         } else {
             Self::new(velocity)
         }
@@ -102,9 +105,8 @@ impl Script for InternalFastProjectileScript {
         time: &Time,
     ) -> Effect {
         let forward = self.velocity.normalize();
+        let current_position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
         let launch_point = || {
-            let current_position =
-                get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
             world
                 .borrow::<View<RuntimePropProjectileRayOrigin>>()
                 .ok()
@@ -124,9 +126,10 @@ impl Script for InternalFastProjectileScript {
             .borrow::<View<RuntimePropProjectileLauncher>>()
             .ok()
             .and_then(|launchers| launchers.get(entity_id).ok().map(|launcher| launcher.0));
-        let cast = |start: Point3<f32>, distance: f32| {
-            projectile_ray_cast(
+        let cast = |start: Point3<f32>, muzzle: Point3<f32>, distance: f32| {
+            projectile_segment_cast(
                 start,
+                muzzle,
                 forward,
                 physics,
                 distance,
@@ -139,7 +142,7 @@ impl Script for InternalFastProjectileScript {
         let Some(flight) = &mut self.flight else {
             let distance = 1000.0;
             let start_point = launch_point();
-            return match cast(start_point, distance) {
+            return match cast(start_point, start_point, distance) {
                 Some(hit) if hit.maybe_entity_id.is_some() => {
                     hit_effects(world, physics, entity_id, start_point, hit)
                 }
@@ -163,18 +166,35 @@ impl Script for InternalFastProjectileScript {
         if dt <= 0.0 {
             return Effect::NoEffect;
         }
-        let origin = *flight.origin.get_or_insert_with(launch_point);
+        let origin = *flight.origin.get_or_insert_with(|| {
+            flight.spawn = current_position;
+            launch_point()
+        });
         let start = origin + forward * flight.traveled;
         let step = (flight.speed * dt).min(MAX_RANGE - flight.traveled);
         flight.age += dt;
-        match cast(start, step) {
+        match cast(start, origin, step) {
             // Anything struck stops the shot, even a collider with no entity.
-            Some(hit) => hit_effects(world, physics, entity_id, origin, hit),
+            Some(hit) => Effect::combine(vec![
+                Effect::ProjectileTrailEnd {
+                    entity_id,
+                    point: hit.hit_point.to_vec(),
+                },
+                hit_effects(world, physics, entity_id, origin, hit),
+            ]),
             None => {
                 flight.traveled += step;
                 let end = start + forward * step;
                 if flight.traveled >= MAX_RANGE || flight.age >= MAX_FLIGHT_SECONDS {
                     return Effect::DestroyEntity { entity_id };
+                }
+                let debug_line = Effect::DrawDebugLines {
+                    lines: vec![(start, end, vec4(0.0, 1.0, 0.0, 1.0))],
+                };
+                // A VR line starts behind the muzzle; stay put until it passes
+                // the spawn point rather than jump back into the gun.
+                if (end - flight.spawn).dot(forward) <= 0.0 {
+                    return debug_line;
                 }
                 let rotation = world
                     .borrow::<View<PropPosition>>()
@@ -182,9 +202,7 @@ impl Script for InternalFastProjectileScript {
                     .and_then(|positions| positions.get(entity_id).ok().map(|p| p.rotation))
                     .unwrap_or_else(Quaternion::one);
                 Effect::combine(vec![
-                    Effect::DrawDebugLines {
-                        lines: vec![(start, end, vec4(0.0, 1.0, 0.0, 1.0))],
-                    },
+                    debug_line,
                     Effect::SetPositionRotation {
                         entity_id,
                         position: end.to_vec(),
@@ -350,8 +368,37 @@ const MAX_PASS_THROUGH: usize = 4;
 /// always been rather than becoming ten times longer by accident.
 const MAX_RANGE: f32 = 100.0;
 
+/// A whole shot fired from `start_point`, for tests.
+#[cfg(test)]
 fn projectile_ray_cast(
     start_point: Point3<f32>,
+    forward: cgmath::Vector3<f32>,
+    physics: &PhysicsWorld,
+    distance: f32,
+    world: &World,
+    can_hit_player: bool,
+    launcher: Option<EntityId>,
+) -> Option<RayCastResult> {
+    projectile_segment_cast(
+        start_point,
+        start_point,
+        forward,
+        physics,
+        distance,
+        world,
+        can_hit_player,
+        launcher,
+    )
+}
+
+/// [`projectile_ray_cast`] over one segment of a shot's line. `muzzle` is
+/// where the shot was fired from, which decides a point-blank hit: a later
+/// segment starting inside a creature it entered through a gap has not been
+/// fired from inside it.
+#[allow(clippy::too_many_arguments)]
+fn projectile_segment_cast(
+    start_point: Point3<f32>,
+    muzzle: Point3<f32>,
     forward: cgmath::Vector3<f32>,
     physics: &PhysicsWorld,
     distance: f32,
@@ -444,7 +491,7 @@ fn projectile_ray_cast(
             // it join the rule above.
             return maybe_hit_spot;
         }
-        if fired_from_inside(physics, start_point, hit_entity_id) {
+        if fired_from_inside(physics, muzzle, hit_entity_id) {
             // Point blank, with the capsule around the muzzle: the proxies may
             // all be behind the origin, and a shot pressed into a creature
             // must not become a terrain impact past it. Keep the coarse hit.
@@ -616,9 +663,43 @@ mod tests {
             .count();
         assert_eq!(hits, 1, "the wall is notified exactly once");
         assert!(
+            per_tick[3]
+                .iter()
+                .any(|effect| matches!(effect, Effect::ProjectileTrailEnd { point, .. } if (point.z - 3.5).abs() < 0.1)),
+            "the trail is extended to the wall"
+        );
+        assert!(
             set_position_z(&per_tick[3]).is_none(),
             "a hit does not move the shot on"
         );
+    }
+
+    /// A VR shot has no ray origin, so its line starts a little behind the
+    /// muzzle; the shot must not be drawn back into the gun.
+    #[test]
+    fn a_vr_shot_stays_at_the_muzzle_until_its_line_passes_it() {
+        use crate::scripts::{Effect, Script};
+        use cgmath::{Matrix4, SquareMatrix};
+        let mut world = World::new();
+        let projectile = world.add_entity(crate::runtime_props::RuntimePropTransform(
+            Matrix4::identity(),
+        ));
+        let physics = PhysicsWorld::new();
+        // 0.1 world units a tick.
+        let mut script = super::InternalFastProjectileScript::traveling(vec3(0.0, 0.0, 1.0), 6.0);
+        let tick = crate::time::Time {
+            elapsed: std::time::Duration::from_secs_f32(1.0 / 60.0),
+            total: std::time::Duration::ZERO,
+        };
+        let zs: Vec<Option<f32>> = (0..10)
+            .map(|_| {
+                set_position_z(&Effect::flatten(vec![
+                    script.update(projectile, &world, &physics, &tick),
+                ]))
+            })
+            .collect();
+        assert!(zs.iter().flatten().all(|z| *z > 0.0), "{zs:?}");
+        assert!(zs[0].is_none() && zs[9].is_some(), "{zs:?}");
     }
 
     #[test]
@@ -639,11 +720,11 @@ mod tests {
     #[test]
     fn the_shot_mode_is_chosen_from_the_world_scale_at_launch() {
         use super::InternalFastProjectileScript;
-        let velocity = vec3(0.0, 0.0, 250.0);
+        let velocity = vec3(0.0, 0.0, 100.0);
         assert!(!InternalFastProjectileScript::for_launch(velocity, 1.0, 1.0).is_traveling());
         let slowed = InternalFastProjectileScript::for_launch(velocity, 0.5, 0.2);
         assert!(slowed.is_traveling());
-        // 250 Dark units/s is 100 world units/s, times the readability speed.
+        // The launch speed, times the readability speed.
         let speed = slowed.flight.as_ref().map(|flight| flight.speed);
         assert!(
             speed.is_some_and(|speed| (speed - 20.0).abs() < 1e-4),
@@ -835,6 +916,28 @@ mod tests {
     /// that passed beside it, with no joint to show for it.
     #[test]
     fn a_shot_through_the_gap_beside_a_limb_passes_the_creature_by() {
+        let (physics, world, wall) = gap_beside_limb_fixture();
+
+        let hit = projectile_ray_cast(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            &physics,
+            20.0,
+            &world,
+            false,
+            None,
+        );
+
+        assert_eq!(
+            hit.and_then(|result| result.maybe_entity_id),
+            Some(wall),
+            "a shot that crossed the capsule but no limb should reach the wall behind",
+        );
+    }
+
+    /// A human creature whose capsule spans the line of fire along +Z from
+    /// the origin, its one hitbox off to the side, and a wall behind it.
+    fn gap_beside_limb_fixture() -> (PhysicsWorld, World, EntityId) {
         let mut physics = PhysicsWorld::new();
         let mut world = World::new();
 
@@ -892,22 +995,25 @@ mod tests {
                 .map_or(entity, |hitbox| hitbox.parent_entity_id)
         });
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        (physics, world, wall)
+    }
 
-        let hit = projectile_ray_cast(
+    /// A traveling shot's later segment can start inside a capsule it entered
+    /// through a gap; that is not a point-blank shot, so it carries on.
+    #[test]
+    fn a_segment_starting_inside_a_capsule_still_passes_it_by() {
+        let (physics, world, wall) = gap_beside_limb_fixture();
+        let hit = super::projectile_segment_cast(
+            point3(0.0, 0.0, 5.0),
             point3(0.0, 0.0, 0.0),
             vec3(0.0, 0.0, 1.0),
             &physics,
-            20.0,
+            15.0,
             &world,
             false,
             None,
         );
-
-        assert_eq!(
-            hit.and_then(|result| result.maybe_entity_id),
-            Some(wall),
-            "a shot that crossed the capsule but no limb should reach the wall behind",
-        );
+        assert_eq!(hit.and_then(|result| result.maybe_entity_id), Some(wall));
     }
 
     /// ...unless the muzzle is inside the creature. Its limbs can all lie

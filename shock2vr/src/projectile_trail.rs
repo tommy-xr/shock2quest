@@ -9,7 +9,8 @@ use shipyard::EntityId;
 
 /// World seconds a trail sample lasts.
 pub(crate) const TRAIL_LIFETIME: f32 = 0.3;
-/// Samples kept per trail; older ones are dropped first.
+/// Samples kept per trail, older ones dropped first. In flight this, not
+/// `TRAIL_LIFETIME`, sets a trail's length.
 const MAX_SAMPLES: usize = 10;
 /// World units per world second a projectile must move to extend its trail.
 const MIN_TRAIL_SPEED: f32 = 1.0;
@@ -87,8 +88,21 @@ impl ProjectileTrails {
         std::mem::swap(&mut self.last_seen, &mut self.seen);
     }
 
+    /// Extends `entity`'s trail to where it struck, if it has one.
+    pub fn end(&mut self, entity: EntityId, point: Vector3<f32>) {
+        if let Some(trail) = self.trails.iter_mut().find(|trail| trail.entity == entity) {
+            if trail.samples.len() == MAX_SAMPLES {
+                trail.samples.pop_front();
+            }
+            trail.samples.push_back(Sample {
+                position: point,
+                age: 0.0,
+            });
+        }
+    }
+
     /// One thin beam per trail, drawn from the newest sample back to the
-    /// oldest so the beam's far-end falloff tapers the tail; the whole trail
+    /// oldest so the beam's far-end falloff fades the tail; the whole trail
     /// fades with the age of its newest sample once the projectile stops.
     pub fn render(&self) -> Vec<SceneObject> {
         let mut objects = Vec::new();
@@ -194,6 +208,20 @@ mod tests {
             trails.update(DT, [(id(1), vec3(x, 0.0, 0.0))]);
         }
         assert!(trails.sample_counts().is_empty());
+    }
+
+    #[test]
+    fn an_impact_extends_the_trail_to_the_hit_point() {
+        let mut trails = ProjectileTrails::default();
+        trails.update(DT, [(id(1), vec3(0.0, 0.0, 0.0))]);
+        trails.update(DT, [(id(1), vec3(0.0, 0.0, 1.0))]);
+        trails.end(id(1), vec3(0.0, 0.0, 1.5));
+        trails.end(id(2), vec3(0.0, 0.0, 9.0));
+        assert_eq!(trails.sample_counts(), vec![(id(1), 3)]);
+        assert_eq!(
+            trails.trails[0].samples.back().map(|s| s.position.z),
+            Some(1.5)
+        );
     }
 
     #[test]
