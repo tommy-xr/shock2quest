@@ -19,6 +19,7 @@ pub(super) struct HogWallow {
     last_frame: Option<Duration>,
     recorded: bool,
     rank: Option<usize>,
+    pointer_primary: bool,
 }
 
 impl Default for HogWallow {
@@ -28,6 +29,7 @@ impl Default for HogWallow {
             last_frame: None,
             recorded: false,
             rank: None,
+            pointer_primary: false,
         }
     }
 }
@@ -72,6 +74,10 @@ impl HogWallow {
         self.game.bomb(hacked);
     }
 
+    pub fn pointer_primary(&mut self) {
+        self.pointer_primary = true;
+    }
+
     pub fn advance(
         &mut self,
         time: &Time,
@@ -92,6 +98,10 @@ impl HogWallow {
                     (cursor.position.y - 149.0) / 68.0,
                 );
             }
+        }
+        // Hover messages arrive before this frame's cursor; aim before firing.
+        if std::mem::take(&mut self.pointer_primary) {
+            self.primary();
         }
         self.game.advance(time.elapsed, &mut rand::thread_rng());
         if self.game.mode == Mode::Scores && !self.recorded {
@@ -502,6 +512,30 @@ mod tests {
             game.primary();
             assert_eq!(game.game.shots.last().unwrap().lane, lane);
         }
+    }
+    #[test]
+    fn same_frame_pointer_move_and_press_fires_into_new_lane() {
+        let world = World::new();
+        let mut game = HogWallow::default();
+        game.aim(-1.0, 0.0);
+        let old_lane = game.game.lane;
+        game.pointer_primary();
+        let cursor = GuiCursor {
+            position: cgmath::point2(145.0, 149.0),
+            held_entity_id: None,
+        };
+        game.advance(
+            &Time {
+                total: Duration::from_secs(1),
+                elapsed: Duration::ZERO,
+            },
+            Some(&cursor),
+            false,
+            &world,
+        );
+        assert_ne!(game.game.lane, old_lane);
+        assert_eq!(game.game.shots.len(), 1);
+        assert_eq!(game.game.shots[0].lane, game.game.lane);
     }
     #[test]
     fn score_is_recorded_once_and_only_delayed_restart_clears_latch() {

@@ -409,7 +409,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             GamePigGuiMsg::WallowFire => {
                 if let Some(Game::HogWallow(game)) = &mut state.game {
-                    game.primary();
+                    game.pointer_primary();
                 }
             }
             GamePigGuiMsg::SelectStreetHog => {
