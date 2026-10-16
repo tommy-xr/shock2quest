@@ -3,6 +3,7 @@ mod kabacon;
 mod overworld;
 mod pig_stacker;
 mod ping;
+mod street_hog;
 mod swinekeeper;
 mod tictactriop;
 
@@ -29,6 +30,7 @@ pub struct GamePigGuiState {
 
 #[derive(Clone, Debug)]
 enum Game {
+    StreetHog(street_hog::StreetHog),
     OverWorld(overworld::Adventure),
     Ping(ping::Ping),
     PigStacker(pig_stacker::PigStacker),
@@ -39,6 +41,9 @@ enum Game {
 
 #[derive(Clone)]
 pub enum GamePigGuiMsg {
+    SelectStreetHog,
+    HogCell { column: i32, row: i32 },
+    HogRestart,
     SelectOverWorld,
     OverWorld(overworld::Message),
     SelectPing,
@@ -79,6 +84,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         }
         if let Some(game) = &state.game {
             components.extend(match game {
+                Game::StreetHog(game) => game.components(world),
                 Game::OverWorld(game) => game.components(world, entity_id),
                 Game::Ping(game) => game.components(world),
                 Game::PigStacker(game) => game.components(world),
@@ -87,7 +93,11 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 Game::Swinekeeper(game) => game.components(world),
             });
             let board = match game {
-                Game::OverWorld(_) | Game::Ping(_) | Game::KaBacon(_) | Game::PigStacker(_) => None,
+                Game::StreetHog(_)
+                | Game::OverWorld(_)
+                | Game::Ping(_)
+                | Game::KaBacon(_)
+                | Game::PigStacker(_) => None,
                 Game::TicTacTriop(_) => Some((22.0, 91.0, 40.0, 3)),
                 Game::Swinekeeper(_) => Some((14.0, 52.0, 23.0, 6)),
             };
@@ -122,6 +132,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 3 => Some(GamePigGuiMsg::SelectSwinekeeper),
                 4 => Some(GamePigGuiMsg::SelectOverWorld),
                 5 => Some(GamePigGuiMsg::SelectKaBacon),
+                7 => Some(GamePigGuiMsg::SelectStreetHog),
                 8 => Some(GamePigGuiMsg::SelectTicTacTriop),
                 10 => Some(GamePigGuiMsg::SelectPigStacker),
                 _ => None,
@@ -220,9 +231,17 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 return Effect::NoEffect;
             }
             HandheldControl::Navigate { x, y } => {
+                if let Some(Game::StreetHog(game)) = &mut state.game {
+                    game.navigate(x, y);
+                    return Effect::NoEffect;
+                }
                 let (width, height) = match &state.game {
                     Some(
-                        Game::OverWorld(_) | Game::Ping(_) | Game::KaBacon(_) | Game::PigStacker(_),
+                        Game::StreetHog(_)
+                        | Game::OverWorld(_)
+                        | Game::Ping(_)
+                        | Game::KaBacon(_)
+                        | Game::PigStacker(_),
                     ) => {
                         return Effect::NoEffect;
                     }
@@ -237,6 +256,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 return Effect::NoEffect;
             }
             HandheldControl::Primary => match &state.game {
+                Some(Game::StreetHog(_)) => Some(GamePigGuiMsg::HogRestart),
                 Some(Game::OverWorld(_) | Game::Ping(_)) => None,
                 Some(Game::PigStacker(_)) => Some(GamePigGuiMsg::StackerPrimary),
                 Some(Game::KaBacon(_)) => Some(GamePigGuiMsg::BaconActivate),
@@ -255,6 +275,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     Some(3) => Some(GamePigGuiMsg::SelectSwinekeeper),
                     Some(4) => Some(GamePigGuiMsg::SelectOverWorld),
                     Some(5) => Some(GamePigGuiMsg::SelectKaBacon),
+                    Some(7) => Some(GamePigGuiMsg::SelectStreetHog),
                     Some(8) => Some(GamePigGuiMsg::SelectTicTacTriop),
                     Some(10) => Some(GamePigGuiMsg::SelectPigStacker),
                     _ => None,
@@ -297,6 +318,9 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             state.boot = None;
         }
         let Some(boot) = &mut state.boot else {
+            if let Some(Game::StreetHog(game)) = &mut state.game {
+                return game.advance(time, world);
+            }
             if let Some(Game::OverWorld(game)) = &mut state.game {
                 return game.advance(entity, world, time);
             }
@@ -345,6 +369,24 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             return (state, Effect::NoEffect);
         }
         match msg {
+            GamePigGuiMsg::SelectStreetHog => {
+                if installed_games(world).contains(&7) {
+                    state.game = Some(Game::StreetHog(street_hog::StreetHog::new(
+                        super::keypad::object_state(world, entity_id)
+                            == dark::properties::ObjectState::Hacked,
+                    )));
+                }
+            }
+            GamePigGuiMsg::HogCell { column, row } => {
+                if let Some(Game::StreetHog(game)) = &mut state.game {
+                    game.click(*column, *row);
+                }
+            }
+            GamePigGuiMsg::HogRestart => {
+                if let Some(Game::StreetHog(game)) = &mut state.game {
+                    game.restart();
+                }
+            }
             GamePigGuiMsg::SelectOverWorld => {
                 if world
                     .borrow::<UniqueView<QuestInfo>>()
@@ -442,6 +484,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             GamePigGuiMsg::Restart => {
                 state.game = state.game.map(|game| match game {
+                    Game::StreetHog(game) => Game::StreetHog(game),
                     Game::OverWorld(game) => Game::OverWorld(game),
                     Game::Ping(game) => Game::Ping(game),
                     Game::PigStacker(game) => Game::PigStacker(game),
