@@ -10367,11 +10367,10 @@ impl MissionCore {
             .filter(|entity| !cosmetic.contains(*entity))
             .filter_map(|entity| {
                 let transform = transforms.get(entity).ok()?;
-                // Fast shots fly without a physics body. Only a traveling one
-                // moves, and it always came from slow time, so it trails even
-                // when loaded from a save above the threshold.
+                // Fast shots fly without a physics body.
                 let shot = !self.id_to_physics.contains_key(&entity);
-                (shot || slow_time.contains(entity))
+                slow_time
+                    .contains(entity)
                     .then(|| (entity, transform.0.w.truncate(), shot))
             });
         self.projectile_trails.update(
@@ -10401,21 +10400,24 @@ impl MissionCore {
     ) -> EntityCreationInfo {
         let ret = created_entity.clone();
         // Decided once at creation from the world scale then; a projectile in
-        // flight keeps it.
+        // flight keeps it, across a load too (its marker is saved).
         let slow_time = crate::scripts::internal_fast_projectile::launched_in_slow_time(
             crate::dev_params::get(crate::dev_params::WORLD_TIME_SCALE),
             crate::dev_params::get(crate::dev_params::SLOW_TIME_SHOT_THRESHOLD),
         );
-        if slow_time
-            && (world
-                .borrow::<View<crate::runtime_props::RuntimePropLaunchedProjectile>>()
+        let is_projectile = world
+            .borrow::<View<crate::runtime_props::RuntimePropLaunchedProjectile>>()
+            .unwrap()
+            .contains(created_entity.entity_id)
+            || world
+                .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
                 .unwrap()
-                .contains(created_entity.entity_id)
-                || world
-                    .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
-                    .unwrap()
-                    .contains(created_entity.entity_id))
-        {
+                .contains(created_entity.entity_id);
+        let restored = world
+            .borrow::<View<crate::runtime_props::RuntimePropRestoredPosition>>()
+            .unwrap()
+            .contains(created_entity.entity_id);
+        if slow_time && !restored && is_projectile {
             world.add_component(
                 created_entity.entity_id,
                 crate::runtime_props::RuntimePropSlowTimeProjectile,
@@ -10511,15 +10513,7 @@ impl MissionCore {
         // Saved world-space flight velocity takes precedence over launch-time
         // defaults before the first physics step of a restored mission.
         drop(v_initial_velocity);
-        if world
-            .borrow::<View<crate::runtime_props::RuntimePropLaunchedProjectile>>()
-            .unwrap()
-            .contains(created_entity.entity_id)
-            || world
-                .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
-                .unwrap()
-                .contains(created_entity.entity_id)
-        {
+        if is_projectile {
             let restored = world
                 .borrow::<View<crate::runtime_props::RuntimePropProjectileVelocity>>()
                 .unwrap()

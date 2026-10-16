@@ -23,6 +23,9 @@ pub(crate) const RIPPLE_AMPLITUDE: f32 = 0.3;
 pub(crate) const RIPPLE_WAVELENGTH: f32 = 0.18;
 /// Ripples drift along the tube at this many wavelengths per world second.
 const RIPPLE_DRIFT: f32 = 0.5;
+/// Texels across the fade texture's age axis: `u` lands on texel centres
+/// so linear filtering never wraps the gone end into the new one.
+pub(crate) const AGE_TEXELS: usize = 32;
 /// Radius gained per world second of age, as a share of the base.
 pub(crate) const GROWTH: f32 = 0.6;
 
@@ -116,7 +119,7 @@ impl RippleTube {
     }
 
     /// The tube as an indexed triangle list. Texture `u` is the ring's age
-    /// over its lifetime (0 new, 1 gone) and `v` its ripple phase in
+    /// over its lifetime (first texel new, last gone) and `v` its ripple phase in
     /// wavelengths, so a texture can fade the wake and band its rings.
     /// Empty with fewer than two rings.
     pub fn mesh(&self) -> (Vec<VertexPositionTextureNormal>, Vec<u32>) {
@@ -125,11 +128,17 @@ impl RippleTube {
             return (Vec::new(), Vec::new());
         }
         let mut vertices = Vec::with_capacity(count * SIDES);
+        // A path that doubles back can put two neighbours on one point: keep
+        // the last good heading there.
+        let mut tangent = vec3(0.0, 0.0, 1.0);
         for (index, ring) in self.rings.iter().enumerate() {
             // Local heading from the neighbouring rings.
             let before = &self.rings[index.saturating_sub(1)];
             let after = &self.rings[(index + 1).min(count - 1)];
-            let tangent = (after.center - before.center).normalize();
+            let span = after.center - before.center;
+            if span.magnitude2() > 1.0e-12 {
+                tangent = span.normalize();
+            }
             let reference = if tangent.y.abs() < 0.9 {
                 vec3(0.0, 1.0, 0.0)
             } else {
@@ -138,7 +147,8 @@ impl RippleTube {
             let right = reference.cross(tangent).normalize();
             let up = tangent.cross(right);
             let radius = self.radius(ring.distance, ring.age);
-            let u = (ring.age / self.lifetime).clamp(0.0, 1.0);
+            let fraction = (ring.age / self.lifetime).clamp(0.0, 1.0);
+            let u = (0.5 + fraction * (AGE_TEXELS - 1) as f32) / AGE_TEXELS as f32;
             let v = ring.distance / RIPPLE_WAVELENGTH - self.clock * RIPPLE_DRIFT;
             for side in 0..SIDES {
                 let angle = side as f32 / SIDES as f32 * std::f32::consts::TAU;
@@ -215,10 +225,25 @@ mod tests {
         let mut tube = straight(1.0);
         tube.advance(0.5);
         let (vertices, _) = tube.mesh();
-        assert!(vertices.iter().all(|v| (v.uv.x - 0.5).abs() < 1e-5));
+        let half_way = (0.5 + 0.5 * (AGE_TEXELS - 1) as f32) / AGE_TEXELS as f32;
+        assert!(vertices.iter().all(|v| (v.uv.x - half_way).abs() < 1e-5));
         tube.advance(0.5);
         assert!(tube.is_empty());
         assert!(tube.mesh().0.is_empty());
+    }
+
+    #[test]
+    fn a_path_that_doubles_back_stays_finite() {
+        let mut tube = RippleTube::new(vec3(0.0, 0.0, 0.0), 1.0);
+        tube.extend_to(vec3(0.06, 0.0, 0.0));
+        tube.extend_to(vec3(0.0, 0.0, 0.0));
+        let (vertices, _) = tube.mesh();
+        assert!(!vertices.is_empty());
+        assert!(
+            vertices
+                .iter()
+                .all(|v| v.position.x.is_finite() && v.normal.x.is_finite())
+        );
     }
 
     #[test]

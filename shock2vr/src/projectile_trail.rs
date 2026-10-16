@@ -366,20 +366,28 @@ fn bullet_frames(tip: Vector3<f32>, heading: Vector3<f32>) -> [Matrix4<f32>; 2] 
     ]
 }
 
-/// The ripple sleeve's opacity on top of its texture.
+/// The ripple sleeve's transparency on top of its texture (0.55 leaves 45%
+/// of the texel alpha).
 const RIPPLE_TRANSPARENCY: f32 = 0.55;
 
 /// Pale grey air, `u` fading it out with age and `v` banding it brighter at
 /// each ripple crest, so the sleeve reads as stacked rings.
 fn ripple_texture() -> Rc<dyn TextureTrait> {
-    const AGES: usize = 32;
+    const AGES: usize = crate::projectile_ripple::AGE_TEXELS;
     const PHASES: usize = 16;
     let mut bytes = Vec::with_capacity(AGES * PHASES * 4);
     for phase in 0..PHASES {
         let crest = 0.5 + 0.5 * (phase as f32 / PHASES as f32 * std::f32::consts::TAU).sin();
         for age in 0..AGES {
             let fade = (1.0 - age as f32 / (AGES - 1) as f32).powf(1.5);
-            let alpha = fade * (0.35 + 0.65 * crest * crest);
+            // Kept above the material's 0.1 alpha cutoff until the last
+            // texel, so troughs fade with the crests instead of dropping out
+            // early and leaving beads.
+            let alpha = if age == AGES - 1 {
+                0.0
+            } else {
+                0.1 + 0.9 * fade * (0.35 + 0.65 * crest * crest)
+            };
             bytes.extend([215, 222, 230, (alpha * 255.0) as u8]);
         }
     }
