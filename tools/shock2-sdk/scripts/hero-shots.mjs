@@ -102,6 +102,52 @@ const SHOTS = [
     },
   },
   {
+    // Two psi amps: browse the left's carousel to Psionic Hypnogenesis, tap
+    // the right's over to Pyrokinesis, then stun an assassin and burn it.
+    name: "dual-psi",
+    mission: "command2.mis",
+    // 4.5 units behind an assassin idling in a conference room: from 6, the
+    // hypnogenesis bolt did not stun it.
+    player: [-19.6, 18.8, 0.3],
+    heading: [0, 0, 1],
+    subject: "Assassin",
+    // Creatures move slower on easy, slower still with `aiSpeed` (default
+    // 0.15), so a noticed assassin cannot close in before it is stunned.
+    difficulty: "easy",
+    aiSpeed: 0.35,
+    // Hit points taken before the training save, so one Pyrokinesis (9) kills
+    // it (60 HP).
+    preWound: 55,
+    stats: { psionic_ability: 6, psi_tier: 5 },
+    // Every power through tier 5, so the carousel shows full rows.
+    powers: [
+      -963, -1107, -1022, -1138, -1117, -1143, -3154, // tier 1
+      -3148, -3155, -1114, -1017, -1162, -3150, -3152, // tier 2
+      -3149, -3151, -3153, -1113, -1134, -1144, -3156, // tier 3
+      -3157, -3158, -1020, -1159, -1147, -3159, -1119, // tier 4
+      -1139, -3160, -1018, -3161, -3162, -3163, -1019, // tier 5
+    ],
+    loadout: { left: -247, right: -247 },
+    hands: { left: [-0.18, -0.22, -0.5], right: [0.18, -0.22, -0.5] },
+    psi: {
+      terror: -3156,
+      pyro: -1144,
+      // The Stun Cloud a stunned creature wears.
+      stunCloud: -608,
+      // Carousel flicks from Cryokinesis, the amps' starting power: up two
+      // tiers to tier 3's first power, then left, wrapping to its last -
+      // Hypnogenesis, then Pyrokinesis.
+      leftFlicks: [[0, 1], [0, 1], [-1, 0]],
+      rightFlicks: [[0, 1], [0, 1], [-1, 0], [-1, 0]],
+      // The left amp raised while browsing, so its carousel is in view.
+      browse: [-0.12, -0.14, -0.52],
+      // A casting amp is pushed forward and up, beside the line of sight;
+      // the other dips to a lower corner, still in view.
+      cast: [0.16, -0.13, -0.6],
+      lowered: [0.2, -0.26, -0.5],
+    },
+  },
+  {
     // Weapon + melee in motion: pistol held, one wrench swing.
     name: "medsci1-melee",
     mission: "medsci1.mis",
@@ -271,13 +317,25 @@ async function captureShot(shot) {
     await game.step({ frames: 1 });
     // Invulnerable, so a hit's red vignette never lands in the footage.
     await game.devParams.set("cheat", 1);
+    if (shot.aiSpeed != null) await game.devParams.set("ai_difficulty_speed", shot.aiSpeed);
     if (shot.stats) await game.player.setStats(shot.stats);
+    // Wounding alerts the subject; a training save round trip keeps the
+    // wound but drops the alert, so it carries on calmly.
+    if (shot.preWound) {
+      const { id } = await nearest(game, shot.subject, shot.player);
+      await game.entities.sendMessage(id, { type: "Damage", amount: shot.preWound });
+      await game.step({ frames: 2 });
+    }
+    if (shot.powers) await trainPsiPowers(game, shot.powers);
     let subject;
     if (shot.subject) {
-      const { entities } = await game.entities.list({ filter: shot.subject, limit: 50 });
-      const dist = (e) => Math.hypot(...e.position.map((v, i) => v - shot.player[i]));
-      subject = entities.sort((a, b) => dist(a) - dist(b))[0];
+      subject = await nearest(game, shot.subject, shot.player);
       if (!subject) throw new Error(`${shot.name}: no '${shot.subject}' in ${shot.mission}`);
+      const props = (await game.entities.detail(subject.id)).properties;
+      const [hp, max] = ["HitPoints", "MaxHitPoints"].map((n) => Number(props.find((p) => p.name === n)?.value));
+      if (shot.preWound && hp !== max - shot.preWound) {
+        throw new Error(`${shot.name}: '${shot.subject}' is not the wounded one (${hp}/${max} hp)`);
+      }
     }
     const heading = shot.heading ?? subject.position.map((v, i) => v - shot.player[i]);
 
@@ -316,9 +374,6 @@ async function captureShot(shot) {
       const { carried_lights: lights = [] } = await game.scene.objects({ limit: 0 });
       assert.ok(lights.some((l) => l.kind === "spot"), `${shot.name}: the flashlight must light the scene`);
     }
-    const path = resolve(out, `${shot.name}.png`);
-    const result = await game.screenshot(path, Number(values["max-width"]));
-    console.log(`${shot.name}: ${result.full_path} ${result.resolution.join("x")}`);
     const provenance = {
       mission: shot.mission,
       difficulty: shot.difficulty,
@@ -331,9 +386,13 @@ async function captureShot(shot) {
       loadout: shot.loadout,
       accessory: shot.accessory,
       stats: shot.stats,
+      aiSpeed: shot.aiSpeed,
+      preWound: shot.preWound,
       fovDeg: Number(values.fov),
-      still: { file: `${shot.name}.png`, resolution: result.resolution },
     };
+    // A psi shot takes its still mid-clip, with the carousel open.
+    if (shot.psi) Object.assign(provenance, await recordPsi(game, shot, held, subject.id, spawn));
+    else provenance.still = await takeStill(game, shot.name);
     if (shot.clip) provenance.clip = await recordClip(game, shot, subject.id, held);
     if (shot.melee) provenance.melee = await recordMelee(game, shot, subject.id, held);
     if (shot.reload) provenance.reload = await recordReload(game, shot, subject.id, held);
@@ -341,6 +400,13 @@ async function captureShot(shot) {
   } finally {
     await game.shutdown();
   }
+}
+
+/** Write `<out>/<name>.png` from the current frame. */
+async function takeStill(game, name) {
+  const result = await game.screenshot(resolve(out, `${name}.png`), Number(values["max-width"]));
+  console.log(`${name}: ${result.full_path} ${result.resolution.join("x")}`);
+  return { file: `${name}.png`, resolution: result.resolution };
 }
 
 /** Look up the subject's live aim points by class, falling back to the torso,
@@ -475,6 +541,35 @@ async function spawnMonster(game, template) {
   const spawned = (await game.entities.byTemplate(template)).find((e) => !before.has(e.id));
   if (!spawned) throw new Error(`SpawnDebugMonster did not spawn template ${template}`);
   return spawned;
+}
+
+/** The `filter` match nearest `point`, or undefined. */
+async function nearest(game, filter, point) {
+  const { entities } = await game.entities.list({ filter, limit: 50 });
+  const dist = (e) => Math.hypot(...e.position.map((v, i) => v - point[i]));
+  return entities.sort((a, b) => dist(a) - dist(b))[0];
+}
+
+/** Train psi powers `templates`, as a save records purchases: a save round
+ * trip that also fills the psi pool. */
+async function trainPsiPowers(game, templates) {
+  assert.ok(process.env.DARK_ASSET_PATH, "set DARK_ASSET_PATH: the save is edited on disk");
+  const name = `hero_psi_${process.pid}`;
+  await game.save(name);
+  const path = resolve(process.env.DARK_ASSET_PATH, "saves", `${name}.sav`);
+  try {
+    const save = JSON.parse(await readFile(path, "utf8"));
+    save.global_data.quest_info.player_stats.purchased_psi_powers = templates;
+    const psi = save.global_data.player_vitals.psi_points;
+    psi.current = psi.maximum;
+    await writeFile(path, JSON.stringify(save));
+    await game.load(name);
+    // As at launch, turning arms after a neutral stick frame.
+    await game.step({ frames: 1 });
+  } finally {
+    await rm(path, { force: true });
+  }
+  await game.devParams.set("cheat", 1);
 }
 
 /**
@@ -798,6 +893,140 @@ async function recordReload(game, shot, subjectId, held) {
     await engage(1.0, reload.shots.map((at) => resumed + at));
     assert.equal(await rounds(), loaded - reload.shots.length, `${shot.name}: every shot after the reload must fire`);
     return { ...sink.finish(), loaded };
+  } finally {
+    await sink.dispose();
+  }
+}
+
+/**
+ * Two amps. Offstage at `offstage` (out of the subject's sight), the right
+ * amp's carousel picks Pyrokinesis and a tap swaps back, leaving it the
+ * alternate. On camera: hold the left amp's upper button to open its
+ * carousel, browse to Hypnogenesis and confirm; tap the right's to swap to
+ * Pyrokinesis; stun the subject with the left, burn it with the right. Each
+ * step is asserted. Takes the still with the carousel open.
+ */
+async function recordPsi(game, shot, held, target, offstage) {
+  const { psi } = shot;
+  const props = async (id) => (await game.entities.detail(id))?.properties ?? [];
+  const prop = async (id, name) => (await props(id)).find((p) => p.name === name)?.value;
+  const pair = async (hand) => JSON.parse(await prop(held[hand], "PsiAmpSelection"));
+  // A slain creature is removed: no hit points.
+  const hp = async (id) => Number((await prop(id, "HitPoints")) ?? 0);
+  const psiPoints = async () => (await game.info()).player.psi_points;
+  const button = (hand) => (hand === "left" ? "LeftHandUpperButton" : "RightHandUpperButton");
+  // Hold the upper button past 0.5 s to open the carousel, then flick its stick.
+  const browse = async (hand, flicks, step) => {
+    await game.input.hold(button(hand));
+    await step(36);
+    await game.input.release(button(hand));
+    await step(4);
+    assert.ok(await prop(held[hand], "PsiCarousel"), `${shot.name}: holding ${hand} upper must open the carousel`);
+    for (const stick of flicks) {
+      await game.input.set(`${hand}_hand.thumbstick`, stick);
+      await step(3);
+      await game.input.set(`${hand}_hand.thumbstick`, [0, 0]);
+      await step(11);
+    }
+  };
+  const tap = async (hand, step) => {
+    await game.input.trigger(button(hand));
+    await step(3);
+  };
+  // Press and release, as a cast fires on release.
+  const cast = async (hand, step) => {
+    const before = await psiPoints();
+    await game.input.set(`${hand}_hand.trigger`, 1);
+    await step(6);
+    await game.input.set(`${hand}_hand.trigger`, 0);
+    await step(4);
+    return before - (await psiPoints());
+  };
+
+  // Offstage: the right amp's pair becomes Cryokinesis / Pyrokinesis.
+  const offCamera = (frames) => game.step({ frames });
+  const teleport = async ([x, y, z]) => {
+    await game.player.teleport({ x, y, z });
+    await game.step({ frames: 3 });
+  };
+  await teleport(offstage);
+  const start = (await pair("right")).current;
+  await browse("right", psi.rightFlicks, offCamera);
+  await tap("right", offCamera);
+  assert.deepEqual(await pair("right"), { current: psi.pyro, alternate: start });
+  await tap("right", offCamera);
+  assert.deepEqual(await pair("right"), { current: start, alternate: psi.pyro });
+
+  await teleport(shot.player);
+  // One that has noticed the player rushes into the camera: a bad take.
+  const unaware = async () => assert.equal(await prop(target, "AIAlertness"), "Lowest", `${shot.name}: the subject must be unaware`);
+  await unaware();
+
+  const sink = await frameSink(game, shot.name);
+  let t = 0;
+  // Each hand eases from where it is to the offset `move` last gave it.
+  const mirror = (v, hand) => (hand === "left" ? [-v[0], v[1], v[2]] : v);
+  const moves = {
+    left: { from: shot.hands.left, to: shot.hands.left, at: 0, seconds: 1 },
+    right: { from: shot.hands.right, to: shot.hands.right, at: 0, seconds: 1 },
+  };
+  const handAt = (hand) => {
+    const m = moves[hand];
+    return sampleTrack([{ t: m.at, value: m.from }, { t: m.at + m.seconds, value: m.to }], t);
+  };
+  const move = (hand, to, seconds) => {
+    moves[hand] = { from: handAt(hand), to, at: t, seconds };
+  };
+  let point;
+  const onCamera = async (frames) => {
+    for (let f = 0; f < frames; f++, t += 1 / 60) {
+      point = (await aimPoints(game, target)) ?? point;
+      await trackSubject(game, point, t, { left: handAt("left"), right: handAt("right") });
+      await sink.step();
+    }
+  };
+  // Raise `hand` to cast and drop the other out of the way, then cast.
+  const raise = async (hand) => {
+    move(hand, mirror(psi.cast, hand), 0.3);
+    const other = hand === "left" ? "right" : "left";
+    move(other, mirror(psi.lowered, other), 0.3);
+    await onCamera(20);
+    return cast(hand, onCamera);
+  };
+  try {
+    // 1. The left amp up, its carousel open, browsed to Hypnogenesis.
+    move("left", psi.browse, 0.35);
+    await browse("left", psi.leftFlicks, onCamera);
+    const still = await takeStill(game, shot.name);
+    await tap("left", onCamera);
+    move("left", shot.hands.left, 0.25);
+    assert.deepEqual(await pair("left"), { current: psi.terror, alternate: start }, `${shot.name}: left amp must select Hypnogenesis`);
+
+    // 2. Tap the right amp over to Pyrokinesis.
+    await onCamera(6);
+    await tap("right", onCamera);
+    assert.deepEqual(await pair("right"), { current: psi.pyro, alternate: start }, `${shot.name}: right amp must swap to Pyrokinesis`);
+    await onCamera(6);
+
+    // 3. Stun it from the raised left amp: its stun motion and authored stun cloud.
+    await unaware();
+    assert.equal(await raise("left"), 3, `${shot.name}: hypnogenesis must cast`);
+    for (let f = 0; f < 60 && (await prop(target, "AIBehavior")) !== "Stunned"; f++) await onCamera(1);
+    assert.equal(await prop(target, "AIBehavior"), "Stunned", `${shot.name}: the subject must be stunned`);
+    assert.equal((await game.entities.byTemplate(psi.stunCloud)).length, 1, `${shot.name}: the stun cloud must show`);
+    // Hold on it, stunned and reeling, the left amp back down out of the way.
+    move("left", shot.hands.left, 0.3);
+    await onCamera(40);
+
+    // 4. Burn it from the raised right amp, killing it.
+    const before = await hp(target);
+    assert.equal(await raise("right"), 3, `${shot.name}: pyrokinesis must cast`);
+    for (let f = 0; f < 60 && (await hp(target)) > 0; f++) await onCamera(1);
+    const after = await hp(target);
+    assert.equal(after, 0, `${shot.name}: pyrokinesis must kill the subject (${before} -> ${after})`);
+    // Hold through its death.
+    await onCamera(80);
+    return { still, clip: sink.finish(), hp: [before, after] };
   } finally {
     await sink.dispose();
   }
