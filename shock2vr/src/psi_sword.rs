@@ -27,10 +27,14 @@ pub fn frame(world: &World, amp: EntityId) -> Option<Matrix4<f32>> {
         None
     };
     let model = crate::psi_amp_readout::model_transform(world, amp, hand)?;
-    // Grow from inside the ball along its palm-to-ball axis. Normalize the
-    // axes so amp fitting moves the socket without changing melee reach.
+    // VR uses the top-of-fist axis, like the other melee grips, rather than
+    // across the palm. Flat keeps its upright blade. Fitting never scales reach.
     let right = model.x.truncate().normalize();
-    let up = model.y.truncate().normalize();
+    let up = if hand.is_some() {
+        -model.z.truncate().normalize()
+    } else {
+        model.y.truncate().normalize()
+    };
     Some(Matrix4::from_cols(
         right.extend(0.0),
         up.extend(0.0),
@@ -139,9 +143,20 @@ mod tests {
             for hand in [Handedness::Left, Handedness::Right] {
                 for roll in [-90.0, 0.0, 90.0] {
                     let mut world = World::new();
-                    let pose = Matrix4::from_translation(vec3(3.0, 2.0, -1.0))
+                    let controller = Matrix4::from_translation(vec3(3.0, 2.0, -1.0))
                         * Matrix4::from_angle_z(Deg(roll))
                         * Matrix4::from_angle_y(Deg(35.0));
+                    let pose = if presentation == PresentationMode::Vr {
+                        controller
+                            * Matrix4::from(
+                                crate::vr_config::get_vr_hand_model_adjustments_from_model(
+                                    "amp_h", hand,
+                                )
+                                .rotation,
+                            )
+                    } else {
+                        controller
+                    };
                     let amp = world.add_entity(RuntimePropTransform(pose));
                     world.add_unique(GlobalPresentationMode(presentation));
                     world.add_unique(PlayerInfo {
@@ -164,7 +179,13 @@ mod tests {
                         "blade must start inside the ball"
                     );
                     assert!(((tip - base).magnitude() - LENGTH).abs() < 1e-6);
-                    assert!((tip - base).normalize().dot(model.y.truncate().normalize()) > 0.9999);
+                    assert!(
+                        (tip - base)
+                            .normalize()
+                            .dot(controller.y.truncate().normalize())
+                            > 0.9999,
+                        "blade must stand out of the fist in either hand, like the other melee grips",
+                    );
                     assert!((frame(&world, amp).unwrap().determinant() - 1.0).abs() < 1e-5);
                 }
             }
