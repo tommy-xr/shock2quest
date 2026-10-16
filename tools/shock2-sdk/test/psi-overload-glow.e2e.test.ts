@@ -54,7 +54,11 @@ for (const vr of [false, true]) test(
     await game.input.set("right_hand.trigger", 0);
     await game.step({ frames: 3 });
     const flare = (await glows())[0];
-    assert.ok(red(flare) > red(late), `the release flares: ${JSON.stringify(flare)}`);
+    const green = (g: Glow) => g!.color[1];
+    assert.ok(
+      red(flare) > 1.1 * red(late) && green(flare) > 2 * green(late),
+      `the release flares white-hot: ${JSON.stringify(late)} -> ${JSON.stringify(flare)}`,
+    );
     await game.step({ frames: 40 });
     assert.ok((await glows()).every((g) => g === null), "the flash fades out");
   },

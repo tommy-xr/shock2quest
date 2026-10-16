@@ -1,6 +1,6 @@
 //! The amp heats in the overload zone, in both presentations: its device
 //! parts glow its own psi teal on entering the zone and shift to red as the
-//! charge nears burnout; an overload cast flares that colour and cools over
+//! charge nears burnout; an overload cast flares white-hot and cools over
 //! the meter's result flash. The baked hand that shares the model stays skin.
 use cgmath::{Vector3, Vector4, VectorSpace, vec3};
 use engine::scene::Glow;
@@ -14,8 +14,11 @@ const ATTACK_SECS: f32 = 0.05;
 /// dark metal: entering the zone looks like the amp's own energy building.
 const TEAL: Vector3<f32> = vec3(0.1, 0.8, 1.0);
 const RED: Vector3<f32> = vec3(1.0, 0.25, 0.04);
-/// Held glow across the zone, below the release flare's 1.0.
+/// Held glow across the zone.
 const HOLD: [f32; 2] = [0.75, 0.85];
+/// The release burst added over the held colour: the hold is already near
+/// saturation, so the flare whitens rather than only brightening.
+const WHITE_HOT: Vector3<f32> = vec3(0.6, 0.5, 0.35);
 
 /// The 25AE amp atlas keeps all skin (hand, fingers, forearm) left of this u;
 /// the cable, plug and ball segments lie to its right.
@@ -35,21 +38,24 @@ pub(crate) fn color(
 ) -> Option<Vector3<f32>> {
     let charge = charge?;
     let progress = zone_progress(charge.fraction)?;
-    let hold = HOLD[0] + (HOLD[1] - HOLD[0]) * progress;
-    let intensity = match charge.phase {
-        PsiChargePhase::Charging => hold,
+    let held = TEAL.lerp(RED, progress) * (HOLD[0] + (HOLD[1] - HOLD[0]) * progress);
+    match charge.phase {
+        PsiChargePhase::Charging => Some(held),
         PsiChargePhase::Overloaded => {
             let age = flash_age.filter(|age| (0.0..SECS).contains(age))?;
-            if age < ATTACK_SECS {
-                hold + (1.0 - hold) * age / ATTACK_SECS
+            // The burst rises from nothing, so the release frame continues the
+            // hold; then burst and held colour cool together.
+            let (burst, fade) = if age < ATTACK_SECS {
+                (age / ATTACK_SECS, 1.0)
             } else {
                 let cooled = (age - ATTACK_SECS) / (SECS - ATTACK_SECS);
-                (1.0 - cooled) * (1.0 - cooled)
-            }
+                let fade = (1.0 - cooled) * (1.0 - cooled);
+                (fade, fade)
+            };
+            Some(held * fade + WHITE_HOT * burst)
         }
-        PsiChargePhase::Burnout => return None,
-    };
-    Some(TEAL.lerp(RED, progress) * intensity)
+        PsiChargePhase::Burnout => None,
+    }
 }
 
 /// The glow for one of the amp's materials, `None` for art with no known
@@ -103,8 +109,9 @@ mod tests {
     #[test]
     fn a_release_flares_its_colour_then_cools() {
         let held = charging(0.9).unwrap();
+        assert_eq!(flash(0.9, 0.0), Some(held), "the release frame continues the hold");
         let peak = flash(0.9, ATTACK_SECS).unwrap();
-        assert!(peak.x > held.x);
+        assert!(peak.x > held.x && peak.y > 2.0 * held.y, "white-hot: {peak:?}");
         assert!(flash(0.9, 0.5).unwrap().x < flash(0.9, 0.3).unwrap().x);
         assert_eq!(flash(0.9, SECS), None);
         assert_eq!(flash(0.9, -0.1), None);
