@@ -135,6 +135,7 @@ pub struct Game {
     wind_ticks: u32,
     gust_ticks: u32,
     debt: Duration,
+    cup_contact: bool,
 }
 impl Game {
     pub fn new(courses: Arc<[Course; 9]>, rng: &mut impl Rng) -> Self {
@@ -161,6 +162,7 @@ impl Game {
             wind_ticks: 0,
             gust_ticks: 0,
             debt: Duration::ZERO,
+            cup_contact: false,
         };
         game.start_hole(rng);
         game
@@ -321,6 +323,7 @@ impl Game {
         self.origin = [self.ball[0], self.ball[1]];
         self.mode = Mode::Flight;
         self.flight_time = 0.0;
+        self.cup_contact = false;
         self.strokes += 1;
     }
     fn physics(&mut self, rng: &mut impl Rng) {
@@ -354,7 +357,12 @@ impl Game {
             self.acceleration[i] *= 1.0 - if grounded { 0.4 } else { 0.15 } * dt;
         }
         let speed = self.velocity[0].hypot(self.velocity[1]);
-        if grounded && terrain == 183 {
+        if terrain != 183 {
+            self.cup_contact = false;
+        }
+        // A fast putt lips out once; remaining inside the same pixel is not a new cup entry.
+        if grounded && terrain == 183 && !self.cup_contact {
+            self.cup_contact = true;
             if speed < 8.0 {
                 self.finish_shot();
                 return;
@@ -539,6 +547,21 @@ mod tests {
             b.advance(STEP, &mut rb);
         }
         assert_eq!(a, b);
+    }
+    #[test]
+    fn fast_putt_deflects_once_until_it_leaves_the_cup_pixel() {
+        let mut rng = StdRng::seed_from_u64(17);
+        let mut game = Game::new(courses(), &mut rng);
+        game.mode = Mode::Flight;
+        game.ball = [70.5, 176.5, 0.0];
+        game.velocity = [12.0, 0.0, 0.0];
+        game.physics(&mut rng);
+        assert!(game.cup_contact);
+        let speed = game.velocity[0].hypot(game.velocity[1]);
+        assert!(speed < 8.0);
+        game.physics(&mut rng);
+        assert_eq!(game.mode, Mode::Flight);
+        assert!(game.velocity[0].hypot(game.velocity[1]) > speed * 0.98);
     }
     #[test]
     fn sand_wedge_avoids_the_sand_power_penalty() {
