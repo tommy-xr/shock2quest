@@ -977,7 +977,7 @@ where
                     rect: Rect::new(position.x, position.y, size.x, size.y),
                     alpha: *alpha,
                     content: PlacedContent::Bar {
-                        texture: texture.clone(),
+                        texture: upgraded_texture(asset_cache, texture, ImageKind::Ui),
                         fill: *fill,
                     },
                 },
@@ -1293,6 +1293,30 @@ fn texture_options(kind: ImageKind) -> TextureOptions {
 /// Lay out one piece of art: its slot rect, unless it is object-icon art,
 /// which draws at its own authored pixel size centered in the slot (or
 /// uniformly downscaled to fit it, for [`ImageKind::ObjectIconFit`]).
+/// Classic HUD bitmaps whose HD replacement is the same art with no baked
+/// labels: the psi overload meter (its 25AE PNGs are 2x the PCX).
+const HD_SAFE_UI: [&str; 4] = [
+    "LOADBACK.PCX",
+    "LOADMETR.PCX",
+    "LOADGOOD.PCX",
+    "LOADBURN.PCX",
+];
+
+/// The art to draw for `texture`. Object icons, whose art is self-contained,
+/// and `HD_SAFE_UI` upgrade to their HD replacement. Other UI bitmaps may
+/// carry baked labels that HD replacements omit (MAP/RESEARCH/etc.), so they
+/// keep their requested encoding until their labels are drawn separately.
+fn upgraded_texture(asset_cache: &AssetCache, texture: &str, kind: ImageKind) -> String {
+    let upgrade = kind.transparent_index_0()
+        || HD_SAFE_UI
+            .iter()
+            .any(|safe| safe.eq_ignore_ascii_case(texture));
+    upgrade
+        .then(|| dark::util::resolve_object_icon_name(asset_cache, texture))
+        .flatten()
+        .unwrap_or_else(|| texture.to_owned())
+}
+
 fn place_image(
     asset_cache: &mut AssetCache,
     position: Vector2<f32>,
@@ -1301,15 +1325,7 @@ fn place_image(
     alpha: f32,
     kind: ImageKind,
 ) -> PlacedElement {
-    // Upgrade object icons, whose art is self-contained. Ordinary UI bitmaps
-    // may contain baked labels that HD replacements omit (MAP/RESEARCH/etc.),
-    // so keep their requested encoding until their labels are drawn separately.
-    let texture = if kind.transparent_index_0() {
-        dark::util::resolve_object_icon_name(asset_cache, texture)
-            .unwrap_or_else(|| texture.to_owned())
-    } else {
-        texture.to_owned()
-    };
+    let texture = upgraded_texture(asset_cache, texture, kind);
     let loaded = asset_cache.get_ext(&TEXTURE_IMPORTER, &texture, &texture_options(kind));
     // Replacement icons have more texels, not a larger inventory footprint.
     // Keep the classic bitmap's authored size while drawing the upgraded art.
