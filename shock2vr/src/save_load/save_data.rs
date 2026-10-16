@@ -11,8 +11,18 @@ use cgmath::{Quaternion, Vector3};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io};
 
-/// Increment when persisted state needs an upgrade, not for every release.
-pub const SAVE_FORMAT_VERSION: u32 = 1;
+/// Rewrites a save's JSON from one format version to the next, before it is
+/// decoded, so it can reshape any part of it - property values included. One
+/// version's saves can still differ by defaulted fields, so a shape it does not
+/// expect is an `Err`, reported as an incompatible save rather than a panic.
+type Migration = fn(&mut serde_json::Value) -> Result<(), String>;
+
+/// `MIGRATIONS[n]` upgrades version `n + 1` to `n + 2`. Append one to change
+/// the persisted shape incompatibly; never edit or remove a shipped one.
+const MIGRATIONS: &[Migration] = &[];
+
+/// Derived, so the version cannot change without a migration.
+pub const SAVE_FORMAT_VERSION: u32 = 1 + MIGRATIONS.len() as u32;
 
 pub(crate) fn load_failure_message(error: io::ErrorKind) -> &'static str {
     if error == io::ErrorKind::Unsupported {
@@ -100,25 +110,37 @@ impl SaveData {
     pub fn read<T: std::io::Read>(reader: &mut T) -> io::Result<SaveData> {
         let mut text = String::new();
         reader.read_to_string(&mut text)?;
-        let json: serde_json::Value = serde_json::from_str(&text)?;
+        let mut json: serde_json::Value = serde_json::from_str(&text)?;
         // Check the envelope before decoding a potentially incompatible world.
-        if let Some(version) = json.get("metadata").and_then(|m| m.get("format_version")) {
-            let version: u32 = serde_json::from_value(version.clone())?;
-            if version != SAVE_FORMAT_VERSION {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    format!(
-                        "Unsupported save format {version}; this build supports {SAVE_FORMAT_VERSION}"
-                    ),
-                ));
+        let version = match json.get("metadata").and_then(|m| m.get("format_version")) {
+            Some(version) => serde_json::from_value(version.clone())?,
+            None => {
+                tracing::warn!(
+                    "Loading unversioned save best-effort; compatibility is not guaranteed"
+                );
+                1
             }
-        } else {
-            tracing::warn!("Loading unversioned save best-effort; compatibility is not guaranteed");
-        }
+        };
+        migrate(&mut json, version, MIGRATIONS)?;
         // Valid JSON with an unreadable schema belongs to a different save format.
         serde_json::from_value(json)
             .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))
     }
+}
+
+/// Bring a save written at `version` up to the newest of `migrations`.
+fn migrate(json: &mut serde_json::Value, version: u32, migrations: &[Migration]) -> io::Result<()> {
+    let newest = 1 + migrations.len() as u32;
+    if version == 0 || version > newest {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("Unsupported save format {version}; this build supports 1 to {newest}"),
+        ));
+    }
+    for migration in &migrations[version as usize - 1..] {
+        migration(json).map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))?;
+    }
+    Ok(())
 }
 
 /// Dark mission names are case-insensitive even though the save container uses
@@ -270,6 +292,28 @@ mod tests {
             let json = format!(r#"{{"metadata":{{"format_version":{version}}}}}"#);
             assert!(SaveData::read(&mut json.as_bytes()).is_err());
         }
+    }
+
+    #[test]
+    fn migrations_run_in_order_from_the_saved_version() {
+        fn append(json: &mut serde_json::Value, step: &str) -> Result<(), String> {
+            let steps = json.as_array_mut().ok_or("expected a list")?;
+            steps.push(step.into());
+            Ok(())
+        }
+        let migrations: &[Migration] = &[|j| append(j, "1->2"), |j| append(j, "2->3")];
+        for (version, applied) in [(1, vec!["1->2", "2->3"]), (2, vec!["2->3"]), (3, vec![])] {
+            let mut json = serde_json::json!([]);
+            migrate(&mut json, version, migrations).unwrap();
+            assert_eq!(json, serde_json::json!(applied), "from version {version}");
+        }
+        for version in [0, 4] {
+            let error = migrate(&mut serde_json::json!([]), version, migrations).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        }
+        let error = migrate(&mut serde_json::json!({}), 1, migrations).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("expected a list"));
     }
 
     #[test]

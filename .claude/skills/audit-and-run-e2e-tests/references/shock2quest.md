@@ -25,7 +25,7 @@ The SDK lives in `tools/shock2-sdk`. Current scripts clean `dist`, preflight the
 - Body gear can consume a squeeze intended for a support grip. Stage the weapon away from pouch/holster regions when the test targets support mechanics. Retained melee support can deliberately transfer a weapon when the primary hand releases.
 - Use actual ladder rungs/rails from `physics.ladder`, not points on an obsolete solid-box face. Snap turns require fresh stick edges; holding the stick is not repeated turning.
 - Prefer render provenance to undifferentiated draw counts. Replacement particles, procedural gloves, watch bands and weapon meshes can share an entity or broad source label. Verify which object or panel the test actually measured.
-- Pre-v1 save compatibility is not a requirement. Do not add migration code just to load an old private regression fixture. Same-build round trips still must work.
+- Saves from v0.0.3 onward and from the base `main` must keep loading (AGENTS.md section 5). A private regression fixture written by an older dev build is not covered; regenerate it.
 
 ## Optional coverage
 

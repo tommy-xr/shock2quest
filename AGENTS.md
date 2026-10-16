@@ -65,20 +65,31 @@ interaction, deterministic fixed-timestep), assembles the GIF, hosts the
 binaries in a gist, and embeds them in the PR body. Run the capture in a
 subagent when the active agent supports delegation; otherwise run it inline.
 
-### 5. Save Compatibility Is Not a Concern Before v1
+### 5. Saves Keep Loading
 
-**Do not spend effort keeping pre-existing save files working.** Until v1 ships,
-a change is free to add a property, rename a field, or alter the serialized
-shape without a migration, and "this breaks saves made before this commit" is
-not a valid review finding. Re-saving is the expected fix.
+**A save written by any release since v0.0.3, or by the `main` a change is
+based on, must load and restore its state in the changed build.** "This breaks
+older saves" is a valid, blocking review finding. Release saves are tested
+(below); saves from `main` rely on review.
 
-This specifically covers the `restore_missing_component!` backfill list in
-`shock2vr/src/mission/entity_populator/save_file_entity_populator.rs`: a newly
-parsed property does **not** need an entry there just because old saves predate
-it. Add one only when a save in active use would otherwise break.
+- **Adding** a serialized field: give it `#[serde(default)]` (or make it an
+  `Option`) so saves that predate it still decode.
+- **Removing** one is free: decoding ignores unknown fields.
+- **Renaming, retyping or reshaping** serialized state: append a migration to
+  `MIGRATIONS` in `shock2vr/src/save_load/save_data.rs`. It rewrites the save's
+  JSON from the previous format version before decoding (property values
+  included), and bumps `SAVE_FORMAT_VERSION`. Never edit a shipped migration.
+  `SaveMetadata` is the exception: the Load menu reads it unmigrated, so it
+  only ever gains defaulted fields.
+- **Newly parsed authored data** needs a `restore_missing_component!` backfill
+  in `shock2vr/src/mission/entity_populator/save_file_entity_populator.rs` only
+  when code relies on it and has no sensible default.
 
-Saves must still round-trip correctly *within* a build — a save written by the
-current code must load in the current code.
+`cargo test -p shock2vr save_compat` loads every real release save under
+`shock2vr/tests/fixtures/saves/<tag>/` and fails if one no longer decodes or
+drops a saved property or link. When tagging a release, write its fixtures with
+`tools/shock2-sdk/scripts/gen-save-fixtures.ts` (usage in its header) and commit
+them.
 
 ### 6. Token-Efficient Tool Output
 
