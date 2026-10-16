@@ -203,8 +203,16 @@ impl Game {
                 // A climb ends on its connected platform, never on an intermediate ladder tile.
                 if (self.climb_target - (self.y + 16)).signum() != self.input[1] {
                     let row = (self.y + 16) / 4;
+                    if tile(board, (self.x + 6) / 8, row) & 3 != 0 {
+                        self.y = row * 4 - 16;
+                        self.motion = Motion::Walking;
+                        return;
+                    }
                     if let Some(target) = ladder_end(board, (self.x + 6) / 8, row, self.input[1]) {
                         self.climb_target = target;
+                    } else {
+                        self.motion = Motion::Falling;
+                        return;
                     }
                 }
                 self.y += self.input[1] * 2;
@@ -416,6 +424,34 @@ mod tests {
         assert_eq!(game.y, y);
         game.steer(0, 1);
         tick(&mut game, 5);
+        assert_eq!(game.motion, Motion::Walking);
+        assert_eq!(game.y, 240);
+    }
+    #[test]
+    fn immediate_reversal_at_either_ladder_endpoint_stays_on_platform() {
+        let mut game = Game::default();
+        walk_to(&mut game, 94);
+        for direction in [-1, 1] {
+            let y = game.y;
+            game.steer(0, direction);
+            tick(&mut game, 1);
+            assert_eq!(game.motion, Motion::Climbing);
+            game.steer(0, -direction);
+            tick(&mut game, 1);
+            assert_eq!(game.motion, Motion::Walking);
+            assert_eq!(game.y, y);
+            if direction == -1 {
+                climb(&mut game, 12);
+            }
+        }
+    }
+    #[test]
+    fn falling_from_odd_pixel_height_sweeps_through_girder_boundary() {
+        let mut game = Game::default();
+        game.x = 94;
+        game.y = 235;
+        game.motion = Motion::Falling;
+        tick(&mut game, 4);
         assert_eq!(game.motion, Motion::Walking);
         assert_eq!(game.y, 240);
     }
