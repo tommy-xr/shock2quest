@@ -847,6 +847,7 @@ fn run_game_blocking(
                                         time_advanced: 0.0,
                                         new_frame_index: frame_counter,
                                         new_total_time: accumulated_time,
+                                        render_time: game.render_time(),
                                     }));
                                     continue;
                                 }
@@ -987,7 +988,7 @@ fn run_game_blocking(
         }
 
         // Only update the game if not paused or if step was requested
-        let actual_game_time = if !is_paused || step_requested {
+        if !is_paused || step_requested {
             // Deterministic stepping: while stepping (frame- or time-based) advance
             // the simulation by a FIXED timestep rather than the wall-clock dt
             // between HTTP requests. Real dt makes `{frames:N}` non-deterministic
@@ -1113,7 +1114,6 @@ fn run_game_blocking(
                     frames_to_step = 0;
                 }
             }
-            accumulated_time
         } else {
             // Pace the paused deferred-transition pump to the fixed frame rate.
             // Without this the loop spins zero-dt updates flat out, racing the
@@ -1145,8 +1145,7 @@ fn run_game_blocking(
                     &mut action_state,
                 );
             }
-            accumulated_time // Use accumulated time, not real time
-        };
+        }
 
         if let Some(benchmark) = &benchmark_run {
             let (head_offset, head_rotation) = tracked_head(&game, &current_input);
@@ -1170,8 +1169,7 @@ fn run_game_blocking(
         // death pose, once, for every runtime (see `shock2vr::death_camera`).
         // Alive, it hands back exactly what went in.
         let render_context = resolved_camera(&game, pawn_offset, pawn_rotation, &current_input)
-            // Accumulated game time, not real time.
-            .into_render_context(actual_game_time, projection_matrix, screen_size);
+            .into_render_context(game.render_time(), projection_matrix, screen_size);
 
         let view = compute_view_matrix_from_render_context(&render_context);
 
@@ -1287,6 +1285,7 @@ fn run_game_blocking(
                     time_advanced: time_advanced_this_step,
                     new_frame_index: frame_counter,
                     new_total_time: accumulated_time,
+                    render_time: game.render_time(),
                 }));
             }
         }

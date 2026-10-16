@@ -124,6 +124,8 @@ export interface StepResult {
   time_advanced: number;
   new_frame_index: number;
   new_total_time: number;
+  /** The clock animated world textures render on: world time, frozen while paused. */
+  render_time: number;
 }
 
 export interface CommandResult {
