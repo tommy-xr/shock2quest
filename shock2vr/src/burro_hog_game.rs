@@ -101,11 +101,6 @@ impl Game {
             ham.crossed = false;
         }
     }
-    pub fn restart(&mut self) {
-        if self.mode == Mode::GameOver && self.pause >= Duration::from_secs(5) {
-            *self = Self::default();
-        }
-    }
     fn reset_board(&mut self) {
         let odd = self.level % 2 == 1;
         self.x = if odd { 127 } else { 8 };
@@ -132,6 +127,11 @@ impl Game {
             self.pause += STEP;
             match self.mode {
                 Mode::Died if self.pause >= Duration::from_secs(3) => self.reset_board(),
+                Mode::GameOver if self.pause >= Duration::from_secs(5) => {
+                    let debt = self.debt;
+                    *self = Self::default();
+                    self.debt = debt;
+                }
                 Mode::Won if self.pause >= Duration::from_secs(4) => {
                     self.level += 1;
                     self.reset_board();
@@ -360,6 +360,9 @@ mod tests {
     }
     fn walk_to(game: &mut Game, x: i32) {
         for _ in 0..200 {
+            if game.mode == Mode::Won {
+                return;
+            }
             if (game.x - x).abs() <= 2 && game.motion == Motion::Walking {
                 game.steer(0, 0);
                 return;
@@ -437,6 +440,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
         tick(&mut game, 4);
         for remaining in [2, 1, 0] {
+            walk_to(&mut game, 60);
             game.hams.push(Ham {
                 x: game.x,
                 y: game.y + 8,
@@ -456,12 +460,11 @@ mod tests {
             );
             tick(&mut game, 60);
         }
-        game.restart();
         assert_eq!(game.mode, Mode::GameOver);
         tick(&mut game, 40);
-        game.restart();
         assert_eq!(game.lives, 3);
         tick(&mut game, 4);
+        walk_to(&mut game, 60);
         game.hams.push(Ham {
             x: game.x,
             y: game.y + 8,
