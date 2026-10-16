@@ -1,7 +1,7 @@
 {
-  "revision": "d085379e8da3e3660526575d2a3d0ef41255b2d8",
+  "revision": "b03a68b6a13340967d85357da2737a3ddf741f4e",
   "dirty": false,
-  "capturedAt": "2026-10-16T04:30:05.219Z",
+  "capturedAt": "2026-10-16T14:11:20.544Z",
   "mission": "command2.mis",
   "difficulty": "easy",
   "settings": {
@@ -51,7 +51,7 @@
       "dual-psi.gif",
       "dual-psi.mp4"
     ],
-    "frames": 82,
+    "frames": 79,
     "fps": 15
   },
   "hp": [
