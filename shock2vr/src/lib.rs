@@ -7,6 +7,7 @@ pub mod cyber_interface;
 pub mod environment_map;
 mod environmental_aux;
 pub mod game_scene;
+pub mod golf_game;
 pub mod hand_buttons;
 pub mod hand_pose;
 pub mod hand_pose_library;
