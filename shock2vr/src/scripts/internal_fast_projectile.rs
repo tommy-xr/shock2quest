@@ -168,10 +168,9 @@ impl Script for InternalFastProjectileScript {
         let step = (flight.speed * dt).min(MAX_RANGE - flight.traveled);
         flight.age += dt;
         match cast(start, step) {
-            Some(hit) if hit.maybe_entity_id.is_some() => {
-                hit_effects(world, physics, entity_id, origin, hit)
-            }
-            _ => {
+            // Anything struck stops the shot, even a collider with no entity.
+            Some(hit) => hit_effects(world, physics, entity_id, origin, hit),
+            None => {
                 flight.traveled += step;
                 let end = start + forward * step;
                 if flight.traveled >= MAX_RANGE || flight.age >= MAX_FLIGHT_SECONDS {
@@ -206,9 +205,9 @@ impl Script for InternalFastProjectileScript {
     }
 }
 
-/// Everything a shot does when it strikes `hit` (which names an entity),
-/// fired along a line from `start_point`: damage, the victim's collision
-/// notice, impact sound and spang, and the shot's own removal.
+/// Everything a shot does when it strikes `hit`, fired along a line from
+/// `start_point`: damage, the victim's collision notice, impact sound and
+/// spang, and the shot's own removal (only the removal if no entity was hit).
 fn hit_effects(
     world: &World,
     physics: &PhysicsWorld,
