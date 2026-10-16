@@ -2,7 +2,7 @@
 //! ("This lift has been taken offline for repairs.").
 //!
 //! The original draws up to six messages, wrapping each within 446 pixels.
-//! Each expires five seconds after posting; a seventh message scrolls the
+//! Each expires five seconds after posting by default; a seventh message scrolls the
 //! oldest whole message off. Placement lives here once, in 640x480 canvas
 //! pixels: flat emits it into the HUD canvas, VR draws the same canvas on a
 //! head-anchored panel.
@@ -14,7 +14,7 @@ use shipyard::Unique;
 
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 
-/// How long a line stays up. The original's default message time (5 s).
+/// How long a line stays up by default. The original's default message time (5 s).
 pub const MESSAGE_DURATION: Duration = Duration::from_secs(5);
 
 /// Maximum message entries (not wrapped lines), as in MAX_OVERLAY_LINES.

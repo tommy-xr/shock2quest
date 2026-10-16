@@ -31,10 +31,12 @@ test(
     for (const { posting, ...position } of DOORWAYS) {
       await game.player.teleport(position);
       await game.step({ frames: 10 });
+      // Earlier postings are still up; the newest line must be this room's.
       const { messages } = await game.ui.state();
+      const newest = messages.at(-1) ?? "";
       assert.ok(
-        messages.some((m) => m.startsWith("Mission Posting:") && m.includes(posting)),
-        `expected the "${posting}" posting, HUD showed ${JSON.stringify(messages)}`,
+        newest.startsWith("Mission Posting:") && newest.includes(posting),
+        `expected the "${posting}" posting last, HUD showed ${JSON.stringify(messages)}`,
       );
     }
   },
