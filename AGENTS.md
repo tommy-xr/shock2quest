@@ -87,7 +87,10 @@ older saves" is a valid, blocking review finding. Release saves are tested
 
 `cargo test -p shock2vr save_compat` loads every real release save under
 `shock2vr/tests/fixtures/saves/<tag>/` and fails if one no longer decodes or
-drops a saved property or link. When tagging a release, write its fixtures with
+drops a saved property or link. The e2e
+`tools/shock2-sdk/test/release-saves.e2e.test.ts` loads each in the real runtime
+and checks mission, position, quests and inventory against the fixture's
+`manifest.json`. When tagging a release, write its fixtures with
 `tools/shock2-sdk/scripts/gen-save-fixtures.ts` (usage in its header) and commit
 them.
 

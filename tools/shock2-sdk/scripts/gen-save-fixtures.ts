@@ -1,5 +1,6 @@
 // Writes save fixtures from a released build for the shock2vr save-compat unit
-// test. Build the tag's runtime in its own worktree, then:
+// test and release-saves.e2e.test.ts. Build the tag's runtime in its own
+// worktree, then:
 //
 //   node dist/scripts/gen-save-fixtures.js v0.0.3 <worktree>/target/debug/debug_runtime
 //
