@@ -108,7 +108,7 @@ const SHOTS = [
     mission: "command2.mis",
     // 4.5 units behind an assassin idling in a conference room: from 6, the
     // hypnogenesis bolt did not stun it.
-    player: [-18.2, 18.8, 0],
+    player: [-19.6, 18.8, 0.3],
     heading: [0, 0, 1],
     subject: "Assassin",
     // Creatures move slower on easy, so the assassin stays in frame.
@@ -138,7 +138,7 @@ const SHOTS = [
       browse: [-0.12, -0.14, -0.52],
       // A casting amp is raised forward, beside the line of sight; the other
       // drops out of the way.
-      cast: [0.1, -0.1, -0.55],
+      cast: [0.13, -0.13, -0.55],
       lowered: [0.24, -0.45, -0.3],
       // Hit points taken before the training save, so one Pyrokinesis (9)
       // kills it (60 HP).
@@ -1003,7 +1003,8 @@ async function recordPsi(game, shot, held, target, offstage) {
     for (let f = 0; f < 60 && (await prop(target, "AIBehavior")) !== "Stunned"; f++) await onCamera(1);
     assert.equal(await prop(target, "AIBehavior"), "Stunned", `${shot.name}: the subject must be stunned`);
     assert.equal((await game.entities.byTemplate(psi.stunCloud)).length, 1, `${shot.name}: the stun cloud must show`);
-    // Hold on it, stunned and reeling.
+    // Hold on it, stunned and reeling, the left amp back down out of the way.
+    move("left", shot.hands.left, 0.3);
     await onCamera(40);
 
     // 4. Burn it from the raised right amp, killing it.
