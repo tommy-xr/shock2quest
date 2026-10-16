@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::{career::Career, physics::PhysicsWorld, quest_info::QuestInfo};
 
-use super::{Effect, MessagePayload, Script};
+use super::{Effect, MessagePayload, Script, script_util};
 
 pub struct ChooseMissionScript {}
 
@@ -135,9 +135,34 @@ impl ChooseMissionScript {
             tour,
         }
     }
+
+    /// This tour's posting for the room's `BriefTrapN` (N = `P$CharGenRo` + 1),
+    /// the trap the room's doorway tripwire turns on. The traps author no text:
+    /// as in the original, the marker gives each one this year's posting,
+    /// USEMSG.STR `PostN` - numbered like the debrief's `MissionN`.
+    fn posting_effect(world: &World, entity_id: EntityId) -> Option<Effect> {
+        let Effect::GrantTourReward { career, year, tour } =
+            Self::grant_reward_effect(world, entity_id, Self::get_current_year(world))
+        else {
+            return None;
+        };
+        let reward = crate::player_stats::tour_reward(career, year, tour)?;
+        let posting = reward.text_key.strip_prefix("Mission")?;
+        let trap = script_util::get_first_entity_by_name(world, &format!("BriefTrap{}", tour + 1))?;
+        Some(Effect::SetUseMessage {
+            entity_id: trap,
+            message: format!("Post{posting}"),
+        })
+    }
 }
 
 impl Script for ChooseMissionScript {
+    // No saved state, so this also runs on a save's load and re-assigns the
+    // posting there.
+    fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        Self::posting_effect(world, entity_id).unwrap_or(Effect::NoEffect)
+    }
+
     fn handle_message(
         &mut self,
         entity_id: EntityId,
@@ -287,6 +312,32 @@ mod tests {
             ChooseMissionScript::behind_debrief(transition, None),
             GlobalEffect::TransitionLevel { .. }
         ));
+    }
+
+    /// Each room's doorway trap gets this year's posting for the player's
+    /// career: Navy's year-2 room 1 is `Post14` (Ordnance Master), keyed like
+    /// the debrief page `Mission14` the same tour ends on.
+    #[test]
+    fn each_room_gets_this_years_posting_for_the_career() {
+        let mut quests = QuestInfo::new();
+        quests.set_quest_bit_value(
+            crate::career::Career::Navy.quest_bit(),
+            QuestBitValue::COMPLETE,
+        );
+        quests.set_quest_bit_value("training_year_2", QuestBitValue::COMPLETE);
+        let mut world = World::new();
+        world.add_unique(quests);
+        let marker = world.add_entity((PropCharGenRo(1),));
+        world.add_entity((dark::properties::PropSymName("BriefTrap1".into()),));
+        let trap = world.add_entity((dark::properties::PropSymName("BriefTrap2".into()),));
+
+        match ChooseMissionScript::new().initialize(marker, &world) {
+            Effect::SetUseMessage { entity_id, message } => {
+                assert_eq!(entity_id, trap);
+                assert_eq!(message, "Post14");
+            }
+            effect => panic!("expected the room's posting, got {effect:?}"),
+        }
     }
 
     /// Graduating installs the interface; earlier tours leave Earth's flag alone.

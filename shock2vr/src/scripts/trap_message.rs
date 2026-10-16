@@ -1,12 +1,16 @@
-use shipyard::{EntityId, World};
+use std::time::Duration;
+
+use dark::properties::PropMsgTime;
+use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
 
 use super::{Effect, MessagePayload, Script, world_frob::use_message_text};
 
 /// `TrapMessage`: on a switch-on, puts its own `P$UseMsg` text on the HUD
-/// status-message line (eng2's broken lift buttons). Switch-off shows nothing,
-/// and the trap has no output of its own to forward to.
+/// status-message line (eng2's broken lift buttons, station's mission
+/// postings) for its `P$MsgTime`, or the default time without one. Switch-off
+/// shows nothing, and the trap has no output of its own to forward to.
 pub struct TrapMessage;
 
 impl TrapMessage {
@@ -24,10 +28,24 @@ impl Script for TrapMessage {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::TurnOn { from: _ } => match use_message_text(world, entity_id) {
-                Some(text) => Effect::ShowMessage { text },
-                None => Effect::NoEffect,
-            },
+            MessagePayload::TurnOn { from: _ } => {
+                let Some(text) = use_message_text(world, entity_id) else {
+                    return Effect::NoEffect;
+                };
+                let millis = world
+                    .borrow::<View<PropMsgTime>>()
+                    .ok()
+                    .and_then(|v| v.get(entity_id).ok().map(|time| time.0))
+                    .and_then(|ms| u64::try_from(ms).ok())
+                    .filter(|ms| *ms > 0);
+                match millis {
+                    Some(ms) => Effect::ShowMessageFor {
+                        text,
+                        duration: Duration::from_millis(ms),
+                    },
+                    None => Effect::ShowMessage { text },
+                }
+            }
             _ => Effect::NoEffect,
         }
     }
@@ -80,6 +98,25 @@ mod tests {
                 assert_eq!(text, "This lift has been taken offline for repairs.")
             }
             effect => panic!("expected a message, got {effect:?}"),
+        }
+    }
+
+    /// Station's posting traps author `P$MsgTime` 10000: their line stays up
+    /// 10 s, not the default 5 s. The posting's escaped line break is real.
+    #[test]
+    fn an_authored_message_time_sets_how_long_the_line_stays_up() {
+        let (mut world, entity_id) = world_with(
+            "Post2",
+            &[("post2", r"Survival Training\n(Gain: +2 Endurance)")],
+        );
+        world.add_component(entity_id, PropMsgTime(10000));
+
+        match turn_on(&world, entity_id) {
+            Effect::ShowMessageFor { text, duration } => {
+                assert_eq!(text, "Survival Training\n(Gain: +2 Endurance)");
+                assert_eq!(duration, Duration::from_secs(10));
+            }
+            effect => panic!("expected a timed message, got {effect:?}"),
         }
     }
 

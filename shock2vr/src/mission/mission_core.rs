@@ -15059,6 +15059,10 @@ impl MissionCore {
                         );
                     }
                 }
+                Effect::SetUseMessage { entity_id, message } => {
+                    self.world
+                        .add_component(entity_id, dark::properties::PropUseMsg(message));
+                }
                 Effect::SetLocked { entity_id, locked } => {
                     crate::scripts::script_util::set_entity_locked(
                         &mut self.world,
@@ -15080,12 +15084,19 @@ impl MissionCore {
                         door.base_location = base_location;
                     }
                 }
-                Effect::ShowMessage { text } => {
+                Effect::ShowMessage { .. } | Effect::ShowMessageFor { .. } => {
+                    let (text, duration) = match effect {
+                        Effect::ShowMessageFor { text, duration } => (text, duration),
+                        Effect::ShowMessage { text } => {
+                            (text, crate::hud::message_line::MESSAGE_DURATION)
+                        }
+                        _ => unreachable!(),
+                    };
                     let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
                     self.world
                         .borrow::<UniqueViewMut<crate::hud::HudMessages>>()
                         .unwrap()
-                        .push(text, now);
+                        .push(text, now, duration);
                     // Every posted line has its own cue, including multiple
                     // lines in one frame. Do not replace a previous linebeep
                     // through `listener_sounds`: retail does not coalesce them.

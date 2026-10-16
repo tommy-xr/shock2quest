@@ -37,14 +37,14 @@ pub struct HudMessages {
 }
 
 impl HudMessages {
-    /// Show `text` for [`MESSAGE_DURATION`]. Past [`MAX_LINES`] the oldest line
-    /// scrolls off, as the original's overlay does.
-    pub fn push(&mut self, text: String, now: Duration) {
+    /// Show `text` for `duration` (usually [`MESSAGE_DURATION`]). Past
+    /// [`MAX_LINES`] the oldest line scrolls off, as the original's overlay does.
+    pub fn push(&mut self, text: String, now: Duration, duration: Duration) {
         self.lines.retain(|(expiry, _)| *expiry > now);
         if self.lines.len() == MAX_LINES {
             self.lines.remove(0);
         }
-        self.lines.push((now + MESSAGE_DURATION, text));
+        self.lines.push((now + duration, text));
     }
 
     /// The lines still showing at `now`, oldest first. Expired lines are
@@ -137,7 +137,7 @@ pub(crate) mod tests {
     #[test]
     fn a_message_shows_for_five_seconds() {
         let mut messages = HudMessages::default();
-        messages.push("Access Denied.".to_string(), secs(10));
+        messages.push("Access Denied.".to_string(), secs(10), MESSAGE_DURATION);
 
         assert_eq!(messages.active(secs(14)), vec!["Access Denied."]);
         assert!(messages.active(secs(15)).is_empty());
@@ -147,7 +147,7 @@ pub(crate) mod tests {
     fn a_seventh_line_scrolls_the_oldest_off() {
         let mut messages = HudMessages::default();
         for index in 0..7 {
-            messages.push(format!("line {index}"), secs(10));
+            messages.push(format!("line {index}"), secs(10), MESSAGE_DURATION);
         }
 
         let active = messages.active(secs(11));
@@ -162,6 +162,7 @@ pub(crate) mod tests {
         messages.push(
             "Research completed!\nClick Reports to read it.".into(),
             secs(10),
+            MESSAGE_DURATION,
         );
         assert_eq!(
             messages.active(secs(14)),
@@ -174,7 +175,11 @@ pub(crate) mod tests {
     fn six_multiline_messages_retain_all_their_rows() {
         let mut messages = HudMessages::default();
         for index in 0..6 {
-            messages.push(format!("message {index}\nsecond row"), secs(10));
+            messages.push(
+                format!("message {index}\nsecond row"),
+                secs(10),
+                MESSAGE_DURATION,
+            );
         }
         let active = messages.active(secs(11));
         assert_eq!(active.len(), 6);

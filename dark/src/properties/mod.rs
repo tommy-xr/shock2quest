@@ -571,6 +571,12 @@ pub struct PropObjShortName(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropUseMsg(pub String);
 
+/// `P$MsgTime` ("Script\\Message Time"): how long, in milliseconds, a
+/// `TrapMessage` keeps its `P$UseMsg` on the status line. Station's
+/// mission-posting traps author it; without it the line uses the default 5 s.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropMsgTime(pub i32);
+
 /// `P$LockMsg` ("Script\\Locked Message"): what a locked object tells the
 /// player - a key into LOCKMSG.STR or quoted text, like `P$UseMsg`. Shipped
 /// data authors it only on `ObjConsumeButton` receptors (aux power, sim chips).
@@ -2360,6 +2366,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$UseMsg",
             read_variable_length_string,
             PropUseMsg,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$MsgTime",
+            |reader, _len| read_i32(reader),
+            PropMsgTime,
             accumulator::latest,
         ),
         define_prop(

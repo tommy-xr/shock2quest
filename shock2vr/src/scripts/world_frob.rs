@@ -5,11 +5,12 @@ use engine::audio::AudioHandle;
 
 use super::{Effect, script_util::localized_property_text};
 
-/// An entity's `P$UseMsg` text, resolved against USEMSG.STR.
+/// An entity's `P$UseMsg` text, resolved against USEMSG.STR, with the table's
+/// escaped `\n` line breaks made real (station's postings put the gain there).
 pub fn use_message_text(world: &World, entity_id: EntityId) -> Option<String> {
     let v_use_msg = world.borrow::<View<PropUseMsg>>().ok()?;
     let raw = v_use_msg.get(entity_id).ok()?;
-    localized_property_text(world, &raw.0, "usemsg.str")
+    localized_property_text(world, &raw.0, "usemsg.str").map(|text| text.replace("\\n", "\n"))
 }
 
 /// What the player sees and hears for frobbing `entity_id` in the world,
