@@ -27,8 +27,8 @@ pub fn frame(world: &World, amp: EntityId) -> Option<Matrix4<f32>> {
         None
     };
     let model = crate::psi_amp_readout::model_transform(world, amp, hand)?;
-    // VR uses the top-of-fist axis, like the other melee grips, rather than
-    // across the palm. Flat keeps its upright blade. Fitting never scales reach.
+    // VR seats the blade out of the fist at the default amp roll; roll tuning
+    // turns it with the amp. Flat stays upright. Fitting never scales reach.
     let right = model.x.truncate().normalize();
     let up = if hand.is_some() {
         -model.z.truncate().normalize()
