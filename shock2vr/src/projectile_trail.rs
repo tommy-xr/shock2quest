@@ -341,7 +341,6 @@ fn smoke_puffs(frames: &[Rc<dyn TextureTrait>], seconds: f32) -> ParticleSystem 
         .with_size_velocity(0.4)
         .with_color(vec3(0.8, 0.8, 0.8))
         .with_alpha(0.5)
-        .with_fade_in_time(0.03)
         .with_fade_time(seconds);
     if frames.is_empty() {
         return smoke;
