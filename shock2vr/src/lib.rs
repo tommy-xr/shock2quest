@@ -1782,7 +1782,7 @@ impl Game {
         {
             self.simulation_clock.total()
         } else {
-            self.scene_time(time).total
+            self.scene_total
         };
         audio_log::set_sim_time(diagnostic_time.as_secs_f64());
 
@@ -2127,12 +2127,15 @@ impl Game {
     }
 
     /// Seconds on the clock every runtime renders with
-    /// (`EngineRenderContext::time`): the world clock, so animated world
-    /// textures slow with `world_time_scale` and stop while paused. Scenes
-    /// without one (menus, loading) use the scene clock.
+    /// (`EngineRenderContext::time`): the world clock, so animated textures
+    /// (held items' included) slow with `world_time_scale` and stop while
+    /// paused. Scenes without one (menus, loading) use the scene clock, as
+    /// does a save load in flight, which renders its loading scene.
     pub fn render_time(&self) -> f32 {
-        self.active_game_scene
-            .world_time()
+        self.pending_save_load
+            .is_none()
+            .then(|| self.active_game_scene.world_time())
+            .flatten()
             .unwrap_or(self.scene_total)
             .as_secs_f32()
     }
