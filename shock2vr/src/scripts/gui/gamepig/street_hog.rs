@@ -201,6 +201,7 @@ impl StreetHog {
     }
 
     pub fn components(&self, world: &World) -> Vec<GuiComponent<GamePigGuiMsg>> {
+        // Opaque keyed sprites retain the same brightness in flat and mounted views.
         let mut components = vec![
             gui::image("hogback.pcx")
                 .with_position(vec2(13.0, 11.0))
@@ -219,13 +220,9 @@ impl StreetHog {
                 Rect::new(30.0, 21.0, 122.0, 120.0),
             ));
             for x in [32, 64, 96] {
-                components.push(sprite(
-                    &format!("hogdan{suffix}.pcx"),
-                    x + 8,
-                    158,
-                    16.0,
-                    16.0,
-                ));
+                components.push(
+                    sprite(&format!("hogdan{suffix}.pcx"), x + 8, 158, 16.0, 16.0).with_alpha(1.0),
+                );
             }
             components.push(
                 gui::button(GamePigGuiMsg::HogRestart)
@@ -239,13 +236,16 @@ impl StreetHog {
             let kind = ["tr", "ra", "do"][lane.kind];
             let direction = if lane.up { "u" } else { "d" };
             for y in lane.positions() {
-                components.push(sprite(
-                    &format!("hog{kind}{direction}{suffix}.pcx"),
-                    14 + (index as i32 + 1) * 16,
-                    y as i32 + 8,
-                    16.0,
-                    16.0,
-                ));
+                components.push(
+                    sprite(
+                        &format!("hog{kind}{direction}{suffix}.pcx"),
+                        14 + (index as i32 + 1) * 16,
+                        y as i32 + 8,
+                        16.0,
+                        16.0,
+                    )
+                    .with_alpha(1.0),
+                );
             }
         }
         let hog = if self.mode == Mode::Dead {
@@ -255,13 +255,16 @@ impl StreetHog {
         } else {
             "hog"
         };
-        components.push(sprite(
-            &format!("{hog}{suffix}.pcx"),
-            14 + self.column * 16,
-            8 + self.row * 16,
-            16.0,
-            16.0,
-        ));
+        components.push(
+            sprite(
+                &format!("{hog}{suffix}.pcx"),
+                14 + self.column * 16,
+                8 + self.row * 16,
+                16.0,
+                16.0,
+            )
+            .with_alpha(1.0),
+        );
         for row in 0..16 {
             for column in 0..8 {
                 components.push(
@@ -294,13 +297,16 @@ impl StreetHog {
             ));
         }
         for i in 0..self.lives {
-            components.push(sprite(
-                &format!("hog{suffix}.pcx"),
-                98 + i as i32 * 16,
-                264,
-                16.0,
-                16.0,
-            ));
+            components.push(
+                sprite(
+                    &format!("hog{suffix}.pcx"),
+                    98 + i as i32 * 16,
+                    264,
+                    16.0,
+                    16.0,
+                )
+                .with_alpha(1.0),
+            );
         }
         components
     }
