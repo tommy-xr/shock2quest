@@ -94,6 +94,9 @@ pub struct ParticleSystem {
     /// update and are never relaunched; `is_done()` reports when they have all
     /// expired. `false` = continuous emitter (steam vents etc.).
     one_shot: bool,
+    /// A full continuous emitter replaces its oldest particle instead of
+    /// waiting for one to expire.
+    recycle_oldest: bool,
     has_launched: bool,
     /// Sprite for bitmap particles (PRT_SCALED_BITMAP); `None` renders the
     /// default radial glow disk.
@@ -193,6 +196,7 @@ impl ParticleSystem {
             color: vec3(1.0, 1.0, 1.0),
             color_keys: Vec::new(),
             one_shot: false,
+            recycle_oldest: false,
             has_launched: false,
             sprite_texture: None,
             sprite_frames: Vec::new(),
@@ -207,6 +211,13 @@ impl ParticleSystem {
 
     pub fn with_color(self, color: Vector3<f32>) -> ParticleSystem {
         ParticleSystem { color, ..self }
+    }
+
+    pub fn with_recycle_oldest(self, recycle_oldest: bool) -> ParticleSystem {
+        ParticleSystem {
+            recycle_oldest,
+            ..self
+        }
     }
 
     pub fn with_one_shot(self, one_shot: bool) -> ParticleSystem {
@@ -440,7 +451,12 @@ impl ParticleSystem {
             // backdated to its due time - aged, and in world space placed
             // along the emitter's path - so a sub-frame period streaks rather
             // than stacking at the frame's position.
-            while self.launch_time_remaining <= 0.0 && self.particles.len() < self.max_particles {
+            while self.launch_time_remaining <= 0.0
+                && (self.particles.len() < self.max_particles || self.recycle_oldest)
+            {
+                if self.particles.len() >= self.max_particles {
+                    self.particles.remove(0);
+                }
                 let overdue = (-self.launch_time_remaining).min(delta_time);
                 let emitter = self.emitter_transform_at(transform, overdue, delta_time);
                 let mut particle = create_random_particle(self, emitter);
@@ -576,6 +592,24 @@ mod tests {
         assert!((p.position - vec3(4.0, 4.5, 6.0)).magnitude2() < 1e-5);
         assert!((p.velocity - vec3(0.0, -2.0, 0.0)).magnitude2() < 1e-5);
         assert_eq!(system.root_transform, Matrix4::identity());
+    }
+
+    #[test]
+    fn a_full_recycling_emitter_replaces_its_oldest_particle() {
+        let mut system = ParticleSystem::new()
+            .with_world_space(true)
+            .with_recycle_oldest(true)
+            .with_num_particles(3)
+            .with_lifetime(10.0, 10.0)
+            .with_launch_time(Duration::from_millis(100))
+            .with_launch_bounding_box(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0))
+            .with_velocity(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0));
+        for i in 0..6 {
+            let at = Matrix4::from_translation(vec3(i as f32, 0.0, 0.0));
+            system.update(Duration::from_millis(100), at);
+        }
+        let xs: Vec<f32> = system.particles.iter().map(|p| p.position.x).collect();
+        assert_eq!(xs, vec![3.0, 4.0, 5.0]);
     }
 
     #[test]

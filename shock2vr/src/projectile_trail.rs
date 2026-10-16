@@ -13,15 +13,17 @@ use shipyard::EntityId;
 
 /// World units between smoke puffs along a path.
 const SMOKE_SPACING: f32 = 0.18;
-/// Puffs alive per trail; a trail this long stops adding until old ones fade.
+/// Puffs alive per trail; past this the oldest is recycled, so a long
+/// flight keeps smoke near the shot and loses it near the muzzle.
 const MAX_PUFFS: usize = 80;
 /// World units per world second a projectile must move to emit smoke.
 const MIN_TRAIL_SPEED: f32 = 1.0;
-/// Projectiles trailed at once; further ones go untrailed (Quest overdraw:
-/// at most `MAX_TRAILS * MAX_PUFFS` puffs).
+/// Projectiles trailed at once (Quest overdraw: at most
+/// `MAX_TRAILS * MAX_PUFFS` puffs). A new projectile replaces the oldest
+/// trail that is only fading; if all are emitting it goes untrailed.
 const MAX_TRAILS: usize = 8;
 /// World length of a traveling shot's glowing head.
-const HEAD_LENGTH: f32 = 0.35;
+const HEAD_LENGTH: f32 = 0.6;
 
 struct Trail {
     entity: EntityId,
@@ -29,11 +31,10 @@ struct Trail {
     /// The projectile's last sampled position, where the emitter rests once
     /// it is gone.
     position: Vector3<f32>,
-    /// Travel direction while it flies; `None` at rest or once gone.
-    heading: Option<Vector3<f32>>,
-    /// A body-less fast shot, which gets a glowing head.
-    shot: bool,
     live: bool,
+    /// Emitted this tick; a trail that is not and has no puffs left is
+    /// dropped, so resting projectiles do not hold trail slots.
+    emitting: bool,
     /// Where it struck: smoke reaches there on the tick after it is gone.
     end: Option<Vector3<f32>>,
 }
@@ -43,6 +44,9 @@ pub(crate) struct ProjectileTrails {
     /// Every projectile's position last tick, to tell flight from rest.
     last_seen: HashMap<EntityId, Vector3<f32>>,
     seen: HashMap<EntityId, Vector3<f32>>,
+    /// Each body-less shot in flight this tick: `(entity, position,
+    /// heading)`. Kept apart from `trails` so the smoke cap never hides one.
+    heads: Vec<(EntityId, Vector3<f32>, Vector3<f32>)>,
     /// Animated smoke sprite; empty falls back to the default particle disk.
     smoke_frames: Vec<Rc<dyn TextureTrait>>,
 }
@@ -53,6 +57,7 @@ impl ProjectileTrails {
             trails: Vec::new(),
             last_seen: HashMap::new(),
             seen: HashMap::new(),
+            heads: Vec::new(),
             smoke_frames,
         }
     }
@@ -60,7 +65,7 @@ impl ProjectileTrails {
     /// Advances every trail's smoke by the world `dt` and emits along the
     /// path of each projectile in `live` (`(entity, position, is_shot)`)
     /// that is in flight; one resting, jittering or creeping emits nothing.
-    /// New puffs last `smoke_seconds` of world time.
+    /// New trails' puffs last `smoke_seconds` of world time.
     pub fn update(
         &mut self,
         dt: f32,
@@ -76,6 +81,7 @@ impl ProjectileTrails {
             trail.live = false;
         }
         self.seen.clear();
+        self.heads.clear();
         for (entity, position, shot) in live {
             self.seen.insert(entity, position);
             let travel = self
@@ -83,9 +89,12 @@ impl ProjectileTrails {
                 .get(&entity)
                 .map(|previous| position - previous);
             let moving = travel.is_some_and(|travel| travel.magnitude2() >= min_step * min_step);
+            if let Some(travel) = travel.filter(|_| moving && shot) {
+                self.heads.push((entity, position, travel.normalize()));
+            }
             let trail = match self.trails.iter().position(|trail| trail.entity == entity) {
                 Some(index) => &mut self.trails[index],
-                None if moving && self.trails.len() < MAX_TRAILS => {
+                None if moving && self.make_room() => {
                     let travel = travel.unwrap();
                     let start = position - travel;
                     let mut smoke = smoke_puffs(&self.smoke_frames, smoke_seconds);
@@ -96,9 +105,8 @@ impl ProjectileTrails {
                         entity,
                         smoke,
                         position: start,
-                        heading: None,
-                        shot,
                         live: false,
+                        emitting: false,
                         end: None,
                     });
                     self.trails.last_mut().unwrap()
@@ -106,7 +114,7 @@ impl ProjectileTrails {
                 None => continue,
             };
             trail.live = true;
-            trail.heading = travel.filter(|_| moving).map(|travel| travel.normalize());
+            trail.emitting = moving;
             trail.smoke.set_emitting(moving);
             if let Some(travel) = travel.filter(|_| moving) {
                 // One puff per SMOKE_SPACING at this tick's speed.
@@ -121,9 +129,15 @@ impl ProjectileTrails {
             trail.position = position;
         }
         for trail in self.trails.iter_mut().filter(|trail| !trail.live) {
-            trail.heading = None;
+            trail.emitting = false;
             // Gone: draw the last stretch to the impact, then only fade.
             let end = trail.end.take();
+            if let Some(end) = end {
+                let interval = SMOKE_SPACING * dt / (end - trail.position).magnitude().max(1.0e-4);
+                trail
+                    .smoke
+                    .set_launch_time(Duration::from_secs_f32(interval.max(1.0e-4)));
+            }
             trail.smoke.set_emitting(end.is_some());
             trail.position = end.unwrap_or(trail.position);
             trail
@@ -132,8 +146,23 @@ impl ProjectileTrails {
             trail.smoke.set_emitting(false);
         }
         self.trails
-            .retain(|trail| trail.live || trail.smoke.particle_count() > 0);
+            .retain(|trail| trail.emitting || trail.smoke.particle_count() > 0);
         std::mem::swap(&mut self.last_seen, &mut self.seen);
+    }
+
+    /// Whether a new trail fits, evicting the oldest one that is only
+    /// fading if not.
+    fn make_room(&mut self) -> bool {
+        if self.trails.len() < MAX_TRAILS {
+            return true;
+        }
+        match self.trails.iter().position(|trail| !trail.emitting) {
+            Some(index) => {
+                self.trails.remove(index);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Records where `entity` struck, so its smoke reaches the impact.
@@ -146,31 +175,30 @@ impl ProjectileTrails {
     /// Every trail's smoke, and with `heads` a short glowing streak leading
     /// each traveling shot in flight.
     pub fn render(&self, heads: bool) -> Vec<SceneObject> {
+        // Lets `/v1/scene` attribute each object to its projectile.
+        let tag = |entity: EntityId, source: &str| {
+            Some(Rc::new(SceneObjectDebugTag {
+                entity_id: Some(entity.inner()),
+                source: Some(source.into()),
+                ..Default::default()
+            }))
+        };
         let mut objects = Vec::new();
         for trail in &self.trails {
-            // Lets `/v1/scene` attribute the puffs to their projectile.
-            let tag = |source: &str| {
-                Some(Rc::new(SceneObjectDebugTag {
-                    entity_id: Some(trail.entity.inner()),
-                    source: Some(source.into()),
-                    ..Default::default()
-                }))
-            };
-            let smoke_tag = tag("projectile_smoke");
+            let smoke_tag = tag(trail.entity, "projectile_smoke");
             for mut puff in trail.smoke.render() {
                 puff.set_debug_tag(smoke_tag.clone());
                 objects.push(puff);
             }
-            let Some(heading) = trail.heading.filter(|_| heads && trail.shot) else {
-                continue;
-            };
+        }
+        for &(entity, position, heading) in self.heads.iter().filter(|_| heads) {
             // The beam fades toward its far end, so drawing it backward from
             // the shot leaves a bright tip and a fading tail.
-            let head_tag = tag("projectile_head");
+            let head_tag = tag(entity, "projectile_head");
             for mut object in engine::scene::laser_material::beam(
-                trail.position,
+                position,
                 -heading * HEAD_LENGTH,
-                (0.02, vec3(1.0, 0.75, 0.4)),
+                (0.03, vec3(1.0, 0.75, 0.4)),
                 (0.006, vec3(1.0, 0.95, 0.85)),
                 0.0,
             ) {
@@ -196,10 +224,11 @@ fn smoke_puffs(frames: &[Rc<dyn TextureTrait>], seconds: f32) -> ParticleSystem 
     let smoke = ParticleSystem::new()
         .with_world_space(true)
         .with_num_particles(MAX_PUFFS)
-        .with_launch_bounding_box(vec3(-0.01, -0.01, -0.01), vec3(0.01, 0.01, 0.01))
+        .with_recycle_oldest(true)
+        .with_launch_bounding_box(vec3(-0.05, -0.05, -0.05), vec3(0.05, 0.05, 0.05))
         .with_velocity(vec3(-0.08, -0.02, -0.08), vec3(0.08, 0.1, 0.08))
         .with_lifetime(seconds * 0.8, seconds)
-        .with_particle_size(0.3, 0.4)
+        .with_particle_size(0.25, 0.45)
         .with_size_velocity(0.4)
         .with_color(vec3(0.8, 0.8, 0.8))
         .with_alpha(0.5)
@@ -320,6 +349,22 @@ mod tests {
     }
 
     #[test]
+    fn a_new_shot_replaces_a_fading_trail() {
+        let mut trails = trails();
+        let ids = || 1..=(MAX_TRAILS as u64);
+        trails.update(DT, SMOKE, ids().map(|n| (id(n), vec3(0.0, 0.0, 0.0), true)));
+        trails.update(DT, SMOKE, ids().map(|n| (id(n), vec3(0.0, 0.0, 1.0), true)));
+        // All gone, their smoke still fading; a new shot still gets smoke.
+        trails.update(DT, SMOKE, []);
+        let late = id(MAX_TRAILS as u64 + 1);
+        trails.update(DT, SMOKE, [(late, vec3(0.0, 0.0, 0.0), true)]);
+        trails.update(DT, SMOKE, [(late, vec3(0.0, 0.0, 1.0), true)]);
+        assert_eq!(trails.trails.len(), MAX_TRAILS);
+        assert!(trails.trails.iter().any(|trail| trail.entity == late));
+        assert!(trails.trails.iter().all(|trail| trail.entity != id(1)));
+    }
+
+    #[test]
     fn trails_are_capped() {
         let mut trails = trails();
         let ids = || 1..=(MAX_TRAILS as u64 + 4);
@@ -329,12 +374,50 @@ mod tests {
     }
 
     #[test]
-    fn only_a_flying_shot_has_a_heading() {
+    fn only_a_flying_shot_has_a_head() {
         let mut trails = trails();
-        trails.update(DT, SMOKE, [(id(1), vec3(0.0, 0.0, 0.0), true)]);
-        trails.update(DT, SMOKE, [(id(1), vec3(0.0, 0.0, 1.0), true)]);
-        assert_eq!(trails.trails[0].heading, Some(vec3(0.0, 0.0, 1.0)));
+        trails.update(
+            DT,
+            SMOKE,
+            [
+                (id(1), vec3(0.0, 0.0, 0.0), true),
+                (id(2), vec3(0.0, 0.0, 0.0), false),
+            ],
+        );
+        trails.update(
+            DT,
+            SMOKE,
+            [
+                (id(1), vec3(0.0, 0.0, 1.0), true),
+                (id(2), vec3(0.0, 0.0, 1.0), false),
+            ],
+        );
+        assert_eq!(
+            trails.heads,
+            vec![(id(1), vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, 1.0))]
+        );
         trails.update(DT, SMOKE, []);
-        assert_eq!(trails.trails[0].heading, None);
+        assert!(trails.heads.is_empty());
+    }
+
+    #[test]
+    fn the_smoke_cap_does_not_hide_a_shot() {
+        let mut trails = trails();
+        let ids = || 1..=(MAX_TRAILS as u64 + 1);
+        trails.update(DT, SMOKE, ids().map(|n| (id(n), vec3(0.0, 0.0, 0.0), true)));
+        trails.update(DT, SMOKE, ids().map(|n| (id(n), vec3(0.0, 0.0, 1.0), true)));
+        assert_eq!(trails.trails.len(), MAX_TRAILS);
+        assert_eq!(trails.heads.len(), MAX_TRAILS + 1);
+    }
+
+    #[test]
+    fn a_projectile_come_to_rest_frees_its_slot() {
+        let mut trails = trails();
+        fly(&mut trails, 36.0, 3);
+        // It lands and stays put, alive, until its smoke is gone.
+        for _ in 0..(SMOKE / DT) as usize + 2 {
+            trails.update(DT, SMOKE, [(id(1), vec3(1.8, 0.0, 0.0), true)]);
+        }
+        assert!(trails.trails.is_empty());
     }
 }

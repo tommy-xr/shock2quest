@@ -17,6 +17,8 @@ test(
     await game.player.spawnItem("Standard Clip");
     await game.devParams.set("world_time_scale", 0.5);
     await game.devParams.set("slow_time_shot_speed", 0.25);
+    // Down the room to the window, a long clear line.
+    await game.input.set("head.look", [-30, 0]);
     await game.step({ frames: 60 });
 
     const bullet = async () =>
@@ -49,15 +51,21 @@ test(
     const save = `slow_shot_${Date.now()}`;
     assert.equal((await game.save(save)).success, true);
     const uninterrupted = await flight();
+    // Load at full world speed: the build picks hitscan for a new shot, but
+    // the saved one keeps traveling, now two old ticks per frame.
+    await game.devParams.set("world_time_scale", 1);
     assert.equal((await game.load(save)).success, true);
     const reloaded = await flight();
 
-    assert.ok(uninterrupted.path.length > 1);
-    assert.deepEqual(
-      reloaded.path,
-      uninterrupted.path,
-      "same flight after load",
-    );
+    assert.ok(uninterrupted.path.length > 4);
+    for (let k = 0; 2 * k + 2 < uninterrupted.path.length; k++) {
+      const expected = uninterrupted.path[2 * k + 1]!;
+      const actual = reloaded.path[k]!;
+      assert.ok(
+        Math.hypot(...actual.map((v, i) => v - expected[i]!)) < 0.01,
+        `frame ${k} after load: ${actual} vs ${expected}`,
+      );
+    }
     assert.equal(reloaded.spangs, 1, "the reloaded shot lands once");
     assert.equal(uninterrupted.spangs, 1);
   },

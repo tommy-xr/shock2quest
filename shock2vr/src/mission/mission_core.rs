@@ -10468,6 +10468,8 @@ impl MissionCore {
                 );
                 // A saved traveling shot is created here as whatever the
                 // current scale picks, then its saved flight is restored.
+                // Loading needs this script at the same index for any saved
+                // shot: changing when it is attached breaks such saves.
                 script_world.add_entity2(created_entity.entity_id, Box::new(script));
                 // HACK: Don't use physics for these entities...
                 physics.remove(created_entity.entity_id);
