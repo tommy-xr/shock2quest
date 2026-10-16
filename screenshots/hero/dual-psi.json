@@ -1,7 +1,7 @@
 {
-  "revision": "aa7388c7fc93900603845324198f0137ce4e0765",
+  "revision": "d085379e8da3e3660526575d2a3d0ef41255b2d8",
   "dirty": false,
-  "capturedAt": "2026-10-16T04:24:12.855Z",
+  "capturedAt": "2026-10-16T04:30:05.219Z",
   "mission": "command2.mis",
   "difficulty": "easy",
   "settings": {
@@ -36,6 +36,8 @@
     "psionic_ability": 6,
     "psi_tier": 5
   },
+  "aiSpeed": 0.35,
+  "preWound": 55,
   "fovDeg": 85,
   "still": {
     "file": "dual-psi.png",
@@ -49,13 +51,11 @@
       "dual-psi.gif",
       "dual-psi.mp4"
     ],
-    "frames": 80,
+    "frames": 82,
     "fps": 15
   },
   "hp": [
     5,
     0
-  ],
-  "preWound": 55,
-  "aiSpeed": 0.35
+  ]
 }
