@@ -1,7 +1,7 @@
 //! Native courses with shared swing, club, and score controls.
 use super::{GamePigGuiMsg, score_rank, score_table, sprite};
 use crate::{
-    golf_game::{CLUBS, Game, Mode, Notice, PAR},
+    golf_game::{CLUBS, Game, METERS, Mode, Notice, PAR},
     gui::{self, GuiComponent, GuiCursor},
     handheld_input::HandheldControl,
     mini_game_scores::MiniGameScore,
@@ -168,7 +168,7 @@ impl Golf {
             let dx = self.game.target[0] - self.game.ball[0];
             let dy = self.game.target[1] - self.game.ball[1];
             let length = dx.hypot(dy).max(0.001);
-            let distance = CLUBS[self.game.club].range / 2.2;
+            let distance = CLUBS[self.game.club].range / METERS;
             for i in 1..=24 {
                 let t = i as f32 / 24.0;
                 dot(
@@ -206,7 +206,7 @@ impl Golf {
         }
         let distance = ((self.game.ball[0] - course.hole[0])
             .hypot(self.game.ball[1] - course.hole[1])
-            * 2.2) as i32;
+            * METERS) as i32;
         result.push(PanelText::text(
             &format!("{distance}m"),
             Rect::new(
