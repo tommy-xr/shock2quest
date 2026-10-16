@@ -2812,6 +2812,9 @@ impl Game {
             GlobalEffect::PlayerRadiationHit { damage } => {
                 self.hit_feedback.trigger_radiation(damage);
             }
+            GlobalEffect::PsiBurnout => {
+                self.hit_feedback.trigger_burnout();
+            }
             GlobalEffect::PlayerHit { damage } => {
                 self.hit_feedback.trigger(damage);
             }
@@ -3180,6 +3183,14 @@ impl Game {
         if let Some(mut layer) =
             self.hit_feedback
                 .render(self.view_extents, eye_position, eye_forward)
+        {
+            layer.set_transform(pawn_to_world * layer.get_transform());
+            scene.push(layer);
+        }
+        // A burnout's white flash, over the hurt tint its damage raises.
+        if let Some(mut layer) =
+            self.hit_feedback
+                .render_burnout(self.view_extents, eye_position, eye_forward)
         {
             layer.set_transform(pawn_to_world * layer.get_transform());
             scene.push(layer);

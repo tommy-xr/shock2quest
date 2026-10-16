@@ -360,6 +360,8 @@ pub mod render_source {
     pub const USE_MODE_POINTER: &str = "use_mode_pointer";
     /// The red rim tint shown for a moment after the player takes damage.
     pub const HIT_FEEDBACK: &str = "hit_feedback";
+    /// The white rim flash of a psi burnout.
+    pub const PSI_BURNOUT: &str = "psi_burnout";
     /// Floating damage readouts, when the `damage_numbers` dev param is on.
     pub const DAMAGE_NUMBERS: &str = "damage_numbers";
     /// The Menu button's hold-progress ring, promising the pause menu.

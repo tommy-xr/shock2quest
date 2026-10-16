@@ -167,6 +167,16 @@ pub fn hurt_schema(damage: f32) -> &'static str {
     }
 }
 
+/// A psi burnout's flash: a white rim, briefer and softer than a hard hit so
+/// it reads as a jolt to the head rather than a blinding.
+const BURNOUT_SECS: f32 = 0.6;
+const BURNOUT_PEAK: f32 = 0.5;
+const BURNOUT_TINT: Vector3<f32> = Vector3 {
+    x: 0.95,
+    y: 0.95,
+    z: 1.0,
+};
+
 /// The decaying state of the hit tint. Pure: it is advanced with a delta time
 /// and asked for its current strength, and knows nothing about rendering.
 #[derive(Debug, Default)]
@@ -177,6 +187,9 @@ pub struct HitFeedback {
     /// Total and remaining lifetime of the current hit, in seconds.
     duration: f32,
     remaining: f32,
+    /// Remaining lifetime of a psi burnout's flash, independent of the hurt
+    /// tint: a burnout the Power Psi trait spares from damage still flashes.
+    burnout_remaining: f32,
 }
 
 impl HitFeedback {
@@ -208,9 +221,15 @@ impl HitFeedback {
         self.radiation = true;
     }
 
+    /// A psi burnout: a white flash at the rim, drawn alongside any hurt tint.
+    pub fn trigger_burnout(&mut self) {
+        self.burnout_remaining = BURNOUT_SECS;
+    }
+
     /// Advance the decay by `delta_time_secs`.
     pub fn update(&mut self, delta_time_secs: f32) {
         self.remaining = (self.remaining - delta_time_secs).max(0.0);
+        self.burnout_remaining = (self.burnout_remaining - delta_time_secs).max(0.0);
     }
 
     /// Forget any hit in flight - used when the campaign is replaced, so a
@@ -218,6 +237,33 @@ impl HitFeedback {
     pub fn clear(&mut self) {
         self.remaining = 0.0;
         self.peak = 0.0;
+        self.burnout_remaining = 0.0;
+    }
+
+    /// Current burnout flash opacity, decaying linearly like the hurt tint.
+    pub fn burnout_intensity(&self) -> f32 {
+        BURNOUT_PEAK * self.burnout_remaining / BURNOUT_SECS
+    }
+
+    /// The burnout flash layer to draw this frame, if one is showing. Same
+    /// view-locked rim as the hurt tint (see [`HitFeedback::render`]).
+    pub fn render_burnout(
+        &self,
+        view_extents: (f32, f32),
+        eye_position: Vector3<f32>,
+        eye_forward: Vector3<f32>,
+    ) -> Option<SceneObject> {
+        let intensity = self.burnout_intensity();
+        (intensity > 0.0).then(|| {
+            vignette_layer(
+                view_extents,
+                eye_position,
+                eye_forward,
+                BURNOUT_TINT,
+                intensity,
+                crate::util::render_source::PSI_BURNOUT,
+            )
+        })
     }
 
     /// Current rim opacity, 0 when nothing is showing. Linear decay: it
@@ -243,7 +289,9 @@ impl HitFeedback {
         eye_forward: Vector3<f32>,
     ) -> Option<SceneObject> {
         let intensity = self.intensity();
-        if intensity <= 0.0 {
+        // A burnout's own damage would tint its white flash pink: the flash
+        // takes over unless a harder hit is showing.
+        if intensity <= 0.0 || self.burnout_intensity() >= intensity {
             return None;
         }
         if self.radiation {
@@ -382,6 +430,42 @@ pub fn eye_pose(
 mod tests {
     use super::*;
     use cgmath::{Deg, InnerSpace, Rotation3, Zero};
+
+    #[test]
+    fn a_burnout_flashes_white_beside_the_hurt_tint_then_fades() {
+        let mut feedback = HitFeedback::new();
+        let eye = (vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0));
+        feedback.trigger(3.0);
+        feedback.trigger_burnout();
+        assert!(feedback.intensity() > 0.0);
+        assert!(
+            feedback
+                .render(DEFAULT_VIEW_EXTENTS, eye.0, eye.1)
+                .is_none(),
+            "its own small hit doesn't tint the flash pink"
+        );
+        feedback.trigger(DAMAGE_FOR_FULL_STRENGTH);
+        assert!(
+            feedback
+                .render(DEFAULT_VIEW_EXTENTS, eye.0, eye.1)
+                .is_some(),
+            "a harder hit still shows"
+        );
+        assert!((feedback.burnout_intensity() - BURNOUT_PEAK).abs() < 1e-6);
+        feedback.update(BURNOUT_SECS / 2.0);
+        assert!((feedback.burnout_intensity() - BURNOUT_PEAK / 2.0).abs() < 1e-6);
+        feedback.update(BURNOUT_SECS);
+        assert_eq!(feedback.burnout_intensity(), 0.0);
+        assert!(
+            feedback
+                .render_burnout(
+                    DEFAULT_VIEW_EXTENTS,
+                    vec3(0.0, 0.0, 0.0),
+                    vec3(0.0, 0.0, 1.0)
+                )
+                .is_none()
+        );
+    }
 
     #[test]
     fn nothing_shows_until_something_hits_the_player() {
