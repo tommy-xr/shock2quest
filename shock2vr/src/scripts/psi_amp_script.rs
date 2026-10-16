@@ -354,7 +354,7 @@ fn burnout_kick(world: &World, amp_entity: EntityId) -> Effect {
     Effect::KickHeldGun {
         entity_id: amp_entity,
         impulse,
-        // No support grip steadies the amp, so no extra one-handed kick.
+        // The baseline is already the amp's whole kick.
         one_hand: crate::weapon_recoil::RecoilImpulse {
             pitch: 0.0,
             back: 0.0,

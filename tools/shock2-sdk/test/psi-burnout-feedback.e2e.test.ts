@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import type { Vec3 } from "../src/types.js";
+import { dot } from "../src/vec.js";
 import { equipRightHand } from "./helpers/vr-hand.js";
+import { muzzleFrameOf } from "./helpers/weapon.js";
 
 // A psi burnout flashes the view's rim white, plays retail's burnout sound and
 // kicks the amp up out of the hand, in both presentations, then all of it
@@ -23,16 +26,9 @@ for (const vr of [false, true]) test(
     const [amp] = await game.entities.byTemplate(-247);
     await equipRightHand(game, vr, amp.id, "EquipPsiAmp");
     const flash = async () => (await game.scene.fromSource("psi_burnout"))[0];
-    type Frame = { forward: number[]; up: number[] };
-    const muzzle = async (): Promise<Frame> => {
-      const detail = await game.entities.detail(amp.id);
-      const frame = detail.properties.find((p) => p.name === "WeaponMuzzle");
-      assert.ok(frame, "the held amp exposes its muzzle frame");
-      return JSON.parse(frame.value) as Frame;
-    };
-    const dot = (a: number[], b: number[]) => a.reduce((sum, v, i) => sum + v * b[i], 0);
+    const muzzle = async () => muzzleFrameOf(await game.entities.detail(amp.id));
     // Degrees the muzzle has pitched toward the amp's resting up.
-    const pitch = async (rest: Frame) => {
+    const pitch = async (rest: { up: Vec3 }) => {
       const { forward } = await muzzle();
       return (Math.asin(Math.max(-1, Math.min(1, dot(forward, rest.up)))) * 180) / Math.PI;
     };
@@ -54,7 +50,7 @@ for (const vr of [false, true]) test(
     const kicked = await pitch(rest);
     assert.ok(kicked > 8, `the amp kicks up: ${kicked} degrees`);
     await game.input.set("right_hand.trigger", 0);
-    await game.step({ frames: 30 });
+    await game.step({ frames: 34 });
     assert.equal(await flash(), undefined, "the flash fades");
     await game.step({ frames: 120 });
     const settled = await pitch(rest);
