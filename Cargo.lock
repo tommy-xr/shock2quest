@@ -5096,6 +5096,7 @@ dependencies = [
  "dark",
  "engine",
  "engine_ffmpeg",
+ "flate2",
  "num-derive 0.3.3",
  "num-traits",
  "once_cell",

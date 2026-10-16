@@ -1,0 +1,77 @@
+{
+  "earth-start": {
+    "mission": "earth.mis",
+    "vr": false,
+    "position": {
+      "x": 10.686374,
+      "y": 1.7308445,
+      "z": -11.3036375
+    },
+    "quests": [],
+    "inventory": []
+  },
+  "station-navy-year2": {
+    "mission": "station.mis",
+    "vr": false,
+    "position": {
+      "x": 81.78027,
+      "y": -4.356241,
+      "z": 16.539268
+    },
+    "quests": [
+      "career_navy",
+      "training_year_2"
+    ],
+    "inventory": []
+  },
+  "medsci1-kit": {
+    "mission": "medsci1.mis",
+    "vr": false,
+    "position": {
+      "x": -34.967514,
+      "y": -4.755896,
+      "z": 17.858427
+    },
+    "quests": [],
+    "inventory": [
+      "20 Nanites",
+      "Shotgun"
+    ]
+  },
+  "medsci1-kit-vr": {
+    "mission": "medsci1.mis",
+    "vr": true,
+    "position": {
+      "x": -34.967514,
+      "y": -4.755896,
+      "z": 17.858427
+    },
+    "quests": [],
+    "inventory": [
+      "20 Nanites",
+      "Shotgun"
+    ]
+  },
+  "eng1-start": {
+    "mission": "eng1.mis",
+    "vr": false,
+    "position": {
+      "x": 44.55853,
+      "y": -15.356,
+      "z": -40.366577
+    },
+    "quests": [],
+    "inventory": []
+  },
+  "command1-start": {
+    "mission": "command1.mis",
+    "vr": false,
+    "position": {
+      "x": -378.21344,
+      "y": -17.956,
+      "z": 40.485123
+    },
+    "quests": [],
+    "inventory": []
+  }
+}

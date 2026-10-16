@@ -33,6 +33,7 @@ pub struct CollectedLog {
 pub struct QuestInfo {
     /// Player\Mini Games unlock bitfield; global across saves and deck changes.
     pub mini_games: u32,
+    #[serde(default)]
     pub(crate) overworld: crate::overworld_game::Campaign,
     pub mini_game_scores: HashMap<u8, crate::mini_game_scores::MiniGameScores>,
     pub(crate) breath: crate::swimming::Breath,

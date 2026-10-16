@@ -45,3 +45,6 @@ damage-query-audit = []
 
 # Experimental query-only creature damage volumes; preserves the legacy default.
 lazy-hitboxes = []
+
+[dev-dependencies]
+flate2 = "1.1"
