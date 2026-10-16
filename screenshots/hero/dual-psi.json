@@ -1,8 +1,9 @@
 {
-  "revision": "dd77106ee90677da313bed6e97d9f1ebef9982bc",
+  "revision": "aa7388c7fc93900603845324198f0137ce4e0765",
   "dirty": false,
-  "capturedAt": "2026-10-15T19:02:20.017Z",
-  "mission": "ops3.mis",
+  "capturedAt": "2026-10-16T04:24:12.855Z",
+  "mission": "command2.mis",
+  "difficulty": "easy",
   "settings": {
     "vr": {
       "turning": "Smooth",
@@ -22,11 +23,11 @@
     }
   ],
   "player": [
-    27.5,
-    -4.4,
-    94.8
+    -19.6,
+    18.8,
+    0.3
   ],
-  "subject": "OG-Grenade",
+  "subject": "Assassin",
   "loadout": {
     "left": -247,
     "right": -247
@@ -48,11 +49,13 @@
       "dual-psi.gif",
       "dual-psi.mp4"
     ],
-    "frames": 71,
+    "frames": 80,
     "fps": 15
   },
   "hp": [
-    15,
+    5,
     0
-  ]
+  ],
+  "preWound": 55,
+  "aiSpeed": 0.35
 }
