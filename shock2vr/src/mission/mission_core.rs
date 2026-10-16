@@ -9691,18 +9691,6 @@ impl MissionCore {
         true
     }
 
-    /// The overload glow for one of `entity`'s draws, keyed by its material.
-    fn overload_glow(
-        &self,
-        entity: EntityId,
-        obj: &engine::scene::SceneObject,
-    ) -> Option<engine::scene::Glow> {
-        crate::psi_overload_glow::glow(
-            *self.overload_glows.get(&entity)?,
-            obj.material_name.as_deref(),
-        )
-    }
-
     /// Fly the loose body toward the visible amp; catching remains an ordinary
     /// hand interaction. Arrival or cancellation simply restores gravity.
     fn update_psi_pull(&mut self, elapsed: std::time::Duration) -> Vec<Effect> {
@@ -17092,6 +17080,14 @@ impl MissionCore {
                         ..Default::default()
                     });
                     let emissivity_scale = crate::emissive_cue::held_scale(&self.world, weapon);
+                    let heat = crate::psi_overload_glow::color(
+                        self.world
+                            .borrow::<View<crate::runtime_props::RuntimePropPsiCharge>>()
+                            .unwrap()
+                            .get(weapon)
+                            .ok(),
+                        self.overload_glows.get(&weapon).copied(),
+                    );
                     for obj in scene_objs {
                         let mut o = obj.clone();
                         o.set_transform(xform);
@@ -17099,7 +17095,9 @@ impl MissionCore {
                         o.set_lights(weapon_lights.clone());
                         o.set_debug_tag(Some(weapon_tag.clone()));
                         o.set_emissivity_scale(emissivity_scale);
-                        o.set_glow(self.overload_glow(weapon, &o));
+                        o.set_glow(heat.and_then(|heat| {
+                            crate::psi_overload_glow::glow(heat, o.material_name.as_deref())
+                        }));
                         crate::psi_invisibility::apply(&mut o, invisibility);
                         ret.push(o);
                     }
@@ -17552,6 +17550,10 @@ impl MissionCore {
             .borrow::<View<dark::properties::PropSelfIllumination>>()
             .unwrap();
         let v_animated_light = self.world.borrow::<View<PropAnimLight>>().unwrap();
+        let v_psi_charge = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropPsiCharge>>()
+            .unwrap();
         // Debug-only provenance, so tooling can report which entity/model each
         // rendered object came from.
         let v_model_name = self.world.borrow::<View<PropModelName>>().unwrap();
@@ -17845,6 +17847,10 @@ impl MissionCore {
                     (Some(cue), Some(light)) => Some(cue * light),
                     (cue, light) => cue.or(light),
                 };
+                let heat = crate::psi_overload_glow::color(
+                    v_psi_charge.get(*entity_id).ok(),
+                    self.overload_glows.get(entity_id).copied(),
+                );
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(visual_xform);
@@ -17852,7 +17858,9 @@ impl MissionCore {
                     xformed_obj.set_lights(entity_lights.clone());
                     xformed_obj.self_depth_group = self_depth_group;
                     xformed_obj.set_emissivity_scale(emissivity_scale);
-                    xformed_obj.set_glow(self.overload_glow(*entity_id, &xformed_obj));
+                    xformed_obj.set_glow(heat.and_then(|heat| {
+                        crate::psi_overload_glow::glow(heat, xformed_obj.material_name.as_deref())
+                    }));
                     if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);
                         xformed_obj.set_skinned_transparency(Some(0.35));
