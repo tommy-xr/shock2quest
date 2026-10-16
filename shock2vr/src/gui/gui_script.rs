@@ -232,6 +232,7 @@ where
                 let cursor_obj = Some(GuiCursor {
                     position: cursor,
                     held_entity_id: *held_entity_id,
+                    pressed: *is_triggered,
                 });
 
                 let components =

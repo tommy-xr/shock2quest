@@ -1137,6 +1137,7 @@ mod tests {
         let cursor = Some(GuiCursor {
             position: point2(10.0, 10.0),
             held_entity_id: Some(item),
+            pressed: false,
         });
 
         for gui in [
@@ -1205,6 +1206,7 @@ mod tests {
         let cursor = Some(GuiCursor {
             position: point2(10.0, 10.0),
             held_entity_id: Some(item),
+            pressed: false,
         });
         let drawn = |world: &World| -> Vec<Vec<String>> {
             [

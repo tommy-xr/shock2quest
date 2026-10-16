@@ -59,6 +59,7 @@ impl CharacterSheet {
             let cursor = self.point.map(|p| GuiCursor {
                 position: point2(p.x, p.y),
                 held_entity_id: None,
+                pressed: false,
             });
             self.psi = psi_panel_components(&cursor, world, Some(self.tier.max(1)));
             return;

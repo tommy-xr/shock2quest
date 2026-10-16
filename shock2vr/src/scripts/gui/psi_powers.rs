@@ -1175,6 +1175,7 @@ mod tests {
         let over_power = Some(GuiCursor {
             position: cgmath::Point2::new(COLUMN_X[0] + 1.0, ROW_Y + ROW_H + 1.0),
             held_entity_id: None,
+            pressed: false,
         });
         let drawn =
             PsiPowersGui.get_components(&over_power, EntityId::dead(), &world, &PsiPowersGuiState);

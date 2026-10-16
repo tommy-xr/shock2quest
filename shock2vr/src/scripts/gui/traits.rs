@@ -488,6 +488,7 @@ mod tests {
             &Some(GuiCursor {
                 position: point2(MATRIX_X + 1.0, MATRIX_Y + 1.0),
                 held_entity_id: None,
+                pressed: false,
             }),
             machine,
             &world,
@@ -553,6 +554,7 @@ mod tests {
                     MATRIX_Y + MATRIX_PITCH_Y + 1.0,
                 ),
                 held_entity_id: None,
+                pressed: false,
             }),
             machine,
             &world,
@@ -580,6 +582,7 @@ mod tests {
             &Some(GuiCursor {
                 position: point2(OWNED_X + 1.0, OWNED_Y + 1.0),
                 held_entity_id: None,
+                pressed: false,
             }),
             machine,
             &world,

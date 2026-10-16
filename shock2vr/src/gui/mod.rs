@@ -48,6 +48,8 @@ pub struct PanelSidecar {
 pub struct GuiCursor {
     pub position: Point2<f32>,
     pub held_entity_id: Option<EntityId>,
+    /// Primary pointer or trigger state for continuous drags.
+    pub pressed: bool,
 }
 
 pub trait Gui<TState, TMsg>
