@@ -347,6 +347,7 @@ mod tests {
         let cursor = |x, y| GuiCursor {
             position: point2(x, y),
             held_entity_id: None,
+            pressed: false,
         };
         assert_eq!(game.pointer_speed(Some(&cursor(82.0, 100.0))), 0);
         assert_eq!(game.pointer_speed(Some(&cursor(20.0, 100.0))), -8);

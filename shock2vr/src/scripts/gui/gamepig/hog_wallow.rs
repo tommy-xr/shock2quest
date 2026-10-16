@@ -554,6 +554,7 @@ mod tests {
         let cursor = GuiCursor {
             position: cgmath::point2(145.0, 149.0),
             held_entity_id: None,
+            pressed: false,
         };
         game.advance(
             &Time {
