@@ -627,9 +627,7 @@ dev_params! {
     /// Multiplies a traveling shot's speed (fired in slow time):
     /// a real bullet at half world speed is still too fast to dodge.
     SLOW_TIME_SHOT_SPEED = Root::float("slow_time_shot_speed", "Slow-time shot speed", 1.0, 0.05, 1.0, 0.05),
-    /// Projectile trails as a rippling sleeve of air; off for smoke puffs.
-    PROJECTILE_TRAIL_RIPPLE = Root::bool("projectile_trail_ripple", "Projectile ripple trail", true),
-    /// World seconds a projectile's trail takes to fade out.
+    /// World seconds a projectile's smoke puffs take to fade out.
     PROJECTILE_SMOKE_SECONDS = Root::float("projectile_smoke_seconds", "Projectile smoke seconds", 1.5, 0.2, 5.0, 0.1),
     /// Draw a small bullet on traveling shots, which have no model.
     SLOW_TIME_BULLET_HEAD = Root::bool("slow_time_bullet_head", "Slow-time bullet head", true),

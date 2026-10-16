@@ -10376,7 +10376,6 @@ impl MissionCore {
         self.projectile_trails.update(
             world_dt,
             crate::dev_params::get(crate::dev_params::PROJECTILE_SMOKE_SECONDS),
-            crate::dev_params::get_bool(crate::dev_params::PROJECTILE_TRAIL_RIPPLE),
             live,
         );
     }
