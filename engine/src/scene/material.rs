@@ -13,11 +13,18 @@ pub struct Glow {
 
 impl Glow {
     pub const NONE: Glow = Glow::everywhere(Vector3::new(0.0, 0.0, 0.0));
+    /// A rect bound past any real UV, yet inside GLES mediump range (~6.5e4).
+    pub const UNBOUNDED: f32 = 1.0e4;
 
     pub const fn everywhere(color: Vector3<f32>) -> Glow {
         Glow {
             color,
-            uv_rect: Vector4::new(-1.0e9, -1.0e9, 1.0e9, 1.0e9),
+            uv_rect: Vector4::new(
+                -Glow::UNBOUNDED,
+                -Glow::UNBOUNDED,
+                Glow::UNBOUNDED,
+                Glow::UNBOUNDED,
+            ),
         }
     }
 }

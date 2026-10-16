@@ -9691,8 +9691,6 @@ impl MissionCore {
         true
     }
 
-    /// Fly the loose body toward the visible amp; catching remains an ordinary
-    /// hand interaction. Arrival or cancellation simply restores gravity.
     /// The overload glow for one of `entity`'s draws, keyed by its material.
     fn overload_glow(
         &self,
@@ -9705,6 +9703,8 @@ impl MissionCore {
         )
     }
 
+    /// Fly the loose body toward the visible amp; catching remains an ordinary
+    /// hand interaction. Arrival or cancellation simply restores gravity.
     fn update_psi_pull(&mut self, elapsed: std::time::Duration) -> Vec<Effect> {
         if elapsed.is_zero() {
             return vec![];
@@ -12670,6 +12670,9 @@ impl MissionCore {
                 }
 
                 Effect::ClearPsiCharge { entity_id } => {
+                    // The glow is the meter's overload flash: dropping or
+                    // holstering the amp cuts both short together.
+                    self.overload_glows.remove(&entity_id);
                     let mut v_charge = self
                         .world
                         .borrow::<ViewMut<crate::runtime_props::RuntimePropPsiCharge>>()

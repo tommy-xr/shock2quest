@@ -37,7 +37,8 @@ for (const vr of [false, true]) test(
     await game.step({ frames: 3 });
     const flash = await parts();
     const atlas = flash.find((o) => o.material_name === "ND-amp_h.psd");
-    // The atlas's skin lies left of u=0.68; only the device to its right heats.
+    // The 25AE atlas's skin lies left of u=0.68 (checked against the art, not
+    // here): the shared atlas is limited to the device to its right.
     assert.ok(Math.abs(atlas!.glow!.uv_rect[0] - 0.68) < 1e-6, JSON.stringify(atlas?.glow));
     assert.ok(
       flash.every(({ glow: g }) => g !== null && g.color[0] > 0.5 && g.color[0] > 3 * g.color[1]),

@@ -29,9 +29,14 @@ pub(crate) fn glow(age: f32, material: Option<&str>) -> Option<Glow> {
     match material?.to_ascii_lowercase().as_str() {
         "nd-amp_h.psd" => Some(Glow {
             color,
-            uv_rect: Vector4::new(AMP_DEVICE_MIN_U, -1.0e9, 1.0e9, 1.0e9),
+            uv_rect: Vector4::new(
+                AMP_DEVICE_MIN_U,
+                -Glow::UNBOUNDED,
+                Glow::UNBOUNDED,
+                Glow::UNBOUNDED,
+            ),
         }),
-        // The status strip is all device.
+        // The status strip is all device; already bright, it flashes white-hot.
         "nd-amp_il.psd" => Some(Glow::everywhere(color)),
         _ => None,
     }
@@ -59,7 +64,10 @@ mod tests {
     #[test]
     fn only_the_device_heats() {
         assert_eq!(glow(0.1, AMP).unwrap().uv_rect.x, AMP_DEVICE_MIN_U);
-        assert_eq!(glow(0.1, Some("ND-amp_il.psd")).unwrap().uv_rect.x, -1.0e9);
+        assert_eq!(
+            glow(0.1, Some("ND-amp_il.psd")).unwrap().uv_rect.x,
+            -Glow::UNBOUNDED
+        );
         assert_eq!(glow(0.1, Some("amp_h.pcx")), None);
         assert_eq!(glow(0.1, None), None);
     }

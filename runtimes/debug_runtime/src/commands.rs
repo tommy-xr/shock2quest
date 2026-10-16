@@ -356,7 +356,7 @@ pub struct CarriedLightSummary {
     pub range: f32,
 }
 
-/// One scene object as submitted to the renderer
+/// A per-draw glow, as `SceneObjectSummary::glow` reports it.
 #[derive(Clone, Debug, Serialize)]
 pub struct GlowSummary {
     pub color: [f32; 3],
@@ -364,6 +364,7 @@ pub struct GlowSummary {
     pub uv_rect: [f32; 4],
 }
 
+/// One scene object as submitted to the renderer
 #[derive(Clone, Debug, Serialize)]
 pub struct SceneObjectSummary {
     pub material_name: Option<String>,
