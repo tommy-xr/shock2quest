@@ -8,18 +8,19 @@ use cgmath::{InnerSpace, Vector3, vec2, vec3};
 use engine::scene::VertexPositionTextureNormal;
 
 /// World units between rings along the path.
-const RING_SPACING: f32 = 0.04;
+const RING_SPACING: f32 = 0.03;
 /// Rings kept per tube, oldest dropped first: at most this many times
 /// `RING_SPACING` of path (12 world units, a long room).
-pub(crate) const MAX_RINGS: usize = 300;
+pub(crate) const MAX_RINGS: usize = 400;
 /// Vertices around each ring.
 pub(crate) const SIDES: usize = 12;
 /// Ring radius before ripple and swelling.
 const BASE_RADIUS: f32 = 0.06;
 /// Ripple depth as a share of the radius.
 pub(crate) const RIPPLE_AMPLITUDE: f32 = 0.3;
-/// World units from one ripple to the next (about 6.7 per unit).
-pub(crate) const RIPPLE_WAVELENGTH: f32 = 0.15;
+/// World units from one ripple to the next (about 5.6 per unit, six rings
+/// each, so a ripple reads as a curve rather than a zigzag).
+pub(crate) const RIPPLE_WAVELENGTH: f32 = 0.18;
 /// Ripples drift along the tube at this many wavelengths per world second.
 const RIPPLE_DRIFT: f32 = 0.5;
 /// Radius gained per world second of age, as a share of the base.
