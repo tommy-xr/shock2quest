@@ -10466,20 +10466,8 @@ impl MissionCore {
                     crate::dev_params::get(crate::dev_params::WORLD_TIME_SCALE),
                     crate::dev_params::get(crate::dev_params::SLOW_TIME_SHOT_SPEED),
                 );
-                if script.is_traveling() {
-                    // Its flight lives only in the script, so a save cannot
-                    // restore it: drop it from saves rather than reload a shot
-                    // that would re-pick its mode.
-                    world.run(
-                        |entities: EntitiesView, mut skip: ViewMut<RuntimePropDoNotSerialize>| {
-                            entities.add_component(
-                                created_entity.entity_id,
-                                &mut skip,
-                                RuntimePropDoNotSerialize {},
-                            );
-                        },
-                    );
-                }
+                // A saved traveling shot is created here as whatever the
+                // current scale picks, then its saved flight is restored.
                 script_world.add_entity2(created_entity.entity_id, Box::new(script));
                 // HACK: Don't use physics for these entities...
                 physics.remove(created_entity.entity_id);

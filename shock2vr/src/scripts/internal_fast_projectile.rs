@@ -20,7 +20,10 @@ use crate::{
     util::{get_position_from_transform, get_rotation_from_forward_vector},
 };
 
-use super::{Effect, Message, MessagePayload, Script};
+use super::{
+    Effect, Message, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
+};
+use serde::{Deserialize, Serialize};
 
 /// How far an impact spang is backed off the surface it struck - just enough
 /// to keep it out of the world, matching the original engine's hair-width
@@ -38,6 +41,7 @@ pub struct InternalFastProjectileScript {
 }
 
 /// A traveling shot's progress along its line of fire.
+#[derive(Clone, Serialize, Deserialize)]
 struct Flight {
     /// World units per world second.
     speed: f32,
@@ -47,6 +51,15 @@ struct Flight {
     spawn: Point3<f32>,
     traveled: f32,
     age: f32,
+}
+
+const SCRIPT_STATE_KEY: &str = "shock2vr.internal_fast_projectile";
+
+/// Saved so a shot in flight resumes mid-air after a load.
+#[derive(Serialize, Deserialize)]
+struct FastProjectileState {
+    velocity: Vector3<f32>,
+    flight: Option<Flight>,
 }
 
 /// World seconds a traveling shot may fly before it is dropped.
@@ -91,7 +104,8 @@ impl InternalFastProjectileScript {
         }
     }
 
-    pub fn is_traveling(&self) -> bool {
+    #[cfg(test)]
+    fn is_traveling(&self) -> bool {
         self.flight.is_some()
     }
 }
@@ -220,6 +234,33 @@ impl Script for InternalFastProjectileScript {
         _msg: &MessagePayload,
     ) -> Effect {
         Effect::NoEffect
+    }
+
+    fn script_state_key(&self) -> Option<&'static str> {
+        Some(SCRIPT_STATE_KEY)
+    }
+
+    fn save_state(&self) -> Result<ScriptState, ScriptStateError> {
+        ScriptState::encode(
+            1,
+            &FastProjectileState {
+                velocity: self.velocity,
+                flight: self.flight.clone(),
+            },
+            SCRIPT_STATE_KEY,
+        )
+    }
+
+    /// Replaces whatever mode the loading build picked with the saved one.
+    fn restore_state(
+        &mut self,
+        state: &ScriptState,
+        _context: &ScriptRestoreContext<'_>,
+    ) -> Result<(), ScriptStateError> {
+        let restored: FastProjectileState = state.decode(1, SCRIPT_STATE_KEY)?;
+        self.velocity = restored.velocity;
+        self.flight = restored.flight;
+        Ok(())
     }
 }
 
@@ -584,6 +625,18 @@ mod tests {
         wall_z: f32,
         ticks: usize,
     ) -> (Vec<Vec<super::Effect>>, EntityId) {
+        fly_at_thin_wall_reloading(speed, wall_z, ticks, None)
+    }
+
+    /// [`fly_at_thin_wall`], saving the script after `reload_after` ticks and
+    /// restoring it into a fresh hitscan script aimed elsewhere, as a load
+    /// at full world speed would build it.
+    fn fly_at_thin_wall_reloading(
+        speed: f32,
+        wall_z: f32,
+        ticks: usize,
+        reload_after: Option<usize>,
+    ) -> (Vec<Vec<super::Effect>>, EntityId) {
         use crate::runtime_props::RuntimePropProjectileRayOrigin;
         use crate::scripts::{Effect, Script};
         let mut world = World::new();
@@ -611,7 +664,15 @@ mod tests {
             total: std::time::Duration::ZERO,
         };
         let mut per_tick = Vec::new();
-        for _ in 0..ticks {
+        for i in 0..ticks {
+            if reload_after == Some(i) {
+                let saved = script.save_state().unwrap();
+                script = super::InternalFastProjectileScript::new(vec3(1.0, 0.0, 0.0));
+                let ids = std::collections::HashMap::new();
+                script
+                    .restore_state(&saved, &crate::scripts::ScriptRestoreContext::new(&ids))
+                    .unwrap();
+            }
             let effects = Effect::flatten(vec![script.update(projectile, &world, &physics, &tick)]);
             let done = effects
                 .iter()
@@ -700,6 +761,26 @@ mod tests {
             .collect();
         assert!(zs.iter().flatten().all(|z| *z > 0.0), "{zs:?}");
         assert!(zs[0].is_none() && zs[9].is_some(), "{zs:?}");
+    }
+
+    #[test]
+    fn a_shot_saved_mid_flight_resumes_and_hits_once() {
+        use crate::scripts::{Effect, MessagePayload};
+        let (straight, wall) = fly_at_thin_wall(60.0, 3.5, 20);
+        let (reloaded, _) = fly_at_thin_wall_reloading(60.0, 3.5, 20, Some(2));
+        let zs =
+            |ticks: &[Vec<Effect>]| ticks.iter().map(|e| set_position_z(e)).collect::<Vec<_>>();
+        assert_eq!(
+            zs(&reloaded),
+            zs(&straight),
+            "same path either side of the load"
+        );
+        let hits = reloaded
+            .iter()
+            .flatten()
+            .filter(|effect| matches!(effect, Effect::Send { msg } if msg.to == wall && matches!(msg.payload, MessagePayload::Collided { .. })))
+            .count();
+        assert_eq!(hits, 1);
     }
 
     #[test]
