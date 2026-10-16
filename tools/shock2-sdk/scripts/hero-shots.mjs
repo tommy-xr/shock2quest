@@ -141,10 +141,10 @@ const SHOTS = [
       rightFlicks: [[0, 1], [0, 1], [-1, 0], [-1, 0]],
       // The left amp raised while browsing, so its carousel is in view.
       browse: [-0.12, -0.14, -0.52],
-      // A casting amp is raised forward, beside the line of sight; the other
-      // drops out of the way.
-      cast: [0.18, -0.13, -0.55],
-      lowered: [0.24, -0.45, -0.3],
+      // A casting amp is pushed forward and up, beside the line of sight;
+      // the other dips to a lower corner, still in view.
+      cast: [0.16, -0.13, -0.6],
+      lowered: [0.2, -0.26, -0.5],
     },
   },
   {
