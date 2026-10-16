@@ -148,6 +148,7 @@ pub enum RuntimeCommand {
     /// rendering from when it is.
     GetCameraState(oneshot::Sender<CameraStateSnapshot>),
     GetAudioLoops(oneshot::Sender<serde_json::Value>),
+    GetAudioRates(oneshot::Sender<serde_json::Value>),
 
     /// Place the free (debug) camera, or re-attach it to the player. Replies
     /// with the resulting state, so a caller can read back what it set in the

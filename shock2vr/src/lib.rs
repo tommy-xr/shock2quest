@@ -3401,6 +3401,14 @@ impl Game {
         self.audio_context.active_loops()
     }
 
+    /// World audio rate and every live sink's speed (slow time).
+    pub fn audio_rates(&self) -> (f32, Vec<engine::audio::SinkRate>) {
+        (
+            self.audio_context.world_rate(),
+            self.audio_context.sink_rates(),
+        )
+    }
+
     fn update_env_sound_if_necessary(&mut self, new_cue: String) {
         // Retail permits an auxiliary-only environmental region.
         if new_cue.is_empty() {

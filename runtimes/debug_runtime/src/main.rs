@@ -472,6 +472,7 @@ async fn start_http_server(
         .route("/v1/dev-params", axum::routing::post(set_dev_param))
         .route("/v1/audio/recent", get(get_recent_audio))
         .route("/v1/audio/loops", get(get_audio_loops))
+        .route("/v1/audio/rates", get(get_audio_rates))
         .route("/v1/messages/recent", get(get_recent_messages))
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
         .with_state(command_tx)
@@ -544,6 +545,9 @@ async fn start_http_server(
     );
     info!(
         "  GET  /v1/audio/loops      - Live looping sinks (sample, handle, owner, elapsed wall time)"
+    );
+    info!(
+        "  GET  /v1/audio/rates      - World audio rate and live sink speeds by kind (slow time)"
     );
     info!("  GET  /v1/messages/recent  - Recently delivered script messages (to/payload/from)");
     info!("  POST /v1/screenshot       - Capture the current framebuffer");
@@ -1792,6 +1796,14 @@ fn process_command(
                 "paused": entry.paused,
             })).collect();
             let _ = reply.send(json!({ "loops": loops }));
+        }
+        RuntimeCommand::GetAudioRates(reply) => {
+            let (world_rate, sinks) = game.audio_rates();
+            let sinks: Vec<_> = sinks
+                .into_iter()
+                .map(|s| json!({ "kind": s.kind, "follows_world": s.follows_world, "speed": s.speed }))
+                .collect();
+            let _ = reply.send(json!({ "world_rate": world_rate, "sinks": sinks }));
         }
         RuntimeCommand::SetCameraState { request, reply } => {
             let result = apply_camera_request(game, current_input, &request)
@@ -4848,6 +4860,19 @@ async fn get_player_trail(
     let (reply_tx, reply_rx) = oneshot::channel();
     command_tx
         .send(RuntimeCommand::GetPlayerTrail(reply_tx))
+        .map_err(|_| game_loop_unavailable())?;
+    reply_rx
+        .await
+        .map(Json)
+        .map_err(|_| game_loop_unavailable())
+}
+
+async fn get_audio_rates(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::GetAudioRates(reply_tx))
         .map_err(|_| game_loop_unavailable())?;
     reply_rx
         .await
