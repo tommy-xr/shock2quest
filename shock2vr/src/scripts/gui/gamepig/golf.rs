@@ -216,7 +216,11 @@ impl Golf {
                 14.0,
             ),
         ));
-        let strokes = self.game.strokes + u32::from(self.game.mode == Mode::Aim);
+        let strokes = self.game.strokes
+            + u32::from(matches!(
+                self.game.mode,
+                Mode::Aim | Mode::Windup | Mode::Return
+            ));
         let relative =
             self.game.total() as i32 - PAR[..self.game.hole].iter().map(|p| *p as i32).sum::<i32>();
         let [sx, sy] = course.score_marker;
