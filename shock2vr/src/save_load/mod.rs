@@ -2,6 +2,8 @@ mod elevator_cargo;
 mod entity_save_data;
 mod held_item_save_data;
 mod player_vitals;
+#[cfg(test)]
+mod save_compat_tests;
 mod save_data;
 mod save_files;
 
