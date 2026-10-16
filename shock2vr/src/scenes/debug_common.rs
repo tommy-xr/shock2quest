@@ -326,6 +326,10 @@ impl GameScene for DebugScene {
         (objects, position, rotation)
     }
 
+    fn take_offscreen_passes(&mut self) -> Vec<std::rc::Rc<engine::scene::OffscreenPass>> {
+        GameScene::take_offscreen_passes(&mut self.core)
+    }
+
     fn render_per_eye(
         &mut self,
         asset_cache: &mut AssetCache,
@@ -566,6 +570,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
         );
         apply_debug_lighting(&mut scene_objects);
         (scene_objects, camera_position, camera_rotation)
+    }
+
+    fn take_offscreen_passes(&mut self) -> Vec<std::rc::Rc<engine::scene::OffscreenPass>> {
+        GameScene::take_offscreen_passes(&mut self.core)
     }
 
     fn render_per_eye(

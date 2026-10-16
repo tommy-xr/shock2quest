@@ -88,6 +88,7 @@ mod psi;
 mod psi_defenses;
 mod psi_heal_visual;
 mod psi_invisibility;
+mod psi_portal;
 pub mod psi_pull;
 pub mod psi_radar;
 pub mod psi_seekersense;
@@ -3272,6 +3273,15 @@ impl Game {
         (scene, camera_position, camera_rotation)
     }
 
+    /// Offscreen passes from the last `render`; hand them to the engine in
+    /// that frame's `Scene`. A pending load renders its own scene, without any.
+    pub fn take_offscreen_passes(&mut self) -> Vec<std::rc::Rc<engine::scene::OffscreenPass>> {
+        if self.pending_save_load.is_some() {
+            return Vec::new();
+        }
+        self.active_game_scene.take_offscreen_passes()
+    }
+
     pub fn render_per_eye(
         &mut self,
         view: Matrix4<f32>,
@@ -3674,6 +3684,13 @@ impl App {
         match self {
             App::Ready(game) => game.render(),
             App::MissingAssets(missing) => missing.render(),
+        }
+    }
+
+    pub fn take_offscreen_passes(&mut self) -> Vec<std::rc::Rc<engine::scene::OffscreenPass>> {
+        match self {
+            App::Ready(game) => game.take_offscreen_passes(),
+            App::MissingAssets(_) => Vec::new(),
         }
     }
 

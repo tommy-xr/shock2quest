@@ -1525,6 +1525,8 @@ fn main() {
         }
         let scene_started = Instant::now();
         let (scene, camera_pos, camera_rot) = game.render();
+        // Each eye re-renders the passes with its own head pose.
+        let offscreen_passes = game.take_offscreen_passes();
         let scene_elapsed = scene_started.elapsed();
 
         // Render to each eye
@@ -1543,6 +1545,7 @@ fn main() {
                 tracking,
                 true,
                 &scene,
+                &offscreen_passes,
                 benchmark_run.as_ref(),
                 false,
             )
@@ -1561,6 +1564,7 @@ fn main() {
                 tracking,
                 true,
                 &scene,
+                &offscreen_passes,
                 benchmark_run.as_ref(),
                 true,
             )
@@ -1968,6 +1972,7 @@ fn render_swapchain(
     tracking: shock2vr::vr_tracking::TrackingTransform,
     _log: bool,
     scene: &Vec<SceneObject>,
+    offscreen_passes: &[std::rc::Rc<engine::scene::OffscreenPass>],
     benchmark: Option<&shock2vr::benchmark_scene::BenchmarkRun>,
     is_last: bool,
 ) -> xr::Result<(Duration, Duration)> {
@@ -2029,6 +2034,7 @@ fn render_swapchain(
         // gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
         let mut scene_for_render = Scene::from_objects(all_scene_objs);
+        scene_for_render.offscreen_passes = offscreen_passes.to_vec();
 
         // Add hand spotlights (`hand_spotlights` dev param)
         let hand_spotlights = if let Some(benchmark) = benchmark {

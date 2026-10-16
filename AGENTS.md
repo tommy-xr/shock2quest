@@ -792,6 +792,12 @@ The project supports experimental flags for gating in-progress features during d
   default is the only reachable setting without a rebuild. Tell-tale log line:
   `high-detail (PMNM) meshes: true|false`.
 
+- **`psi_portal`**: draw the Quantum Relocation marker as a refracting rift
+  sphere that samples a live offscreen world pass (256x256, per eye). The pass
+  camera uses porthole parallax from the anchor; since the sphere sits at the
+  anchor, it currently refracts what is behind it. Render-only; off until its
+  Quest cost is measured.
+
 #### Adding New Experimental Features
 
 1. **Gate the feature in code**:

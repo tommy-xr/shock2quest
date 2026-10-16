@@ -93,6 +93,7 @@ pub use clipped_screen_material::ClippedScreenMaterial;
 pub mod self_depth;
 
 pub mod pass_focus;
+pub mod portal_material;
 pub mod render_target;
 pub mod sphere;
 

@@ -552,6 +552,7 @@ pub fn main() {
         scene.extend(per_eye_scene);
 
         let mut scene_for_render = Scene::from_objects(scene);
+        scene_for_render.offscreen_passes = game.take_offscreen_passes();
 
         // Add hand spotlights (`hand_spotlights` dev param)
         let hand_spotlights = game.get_hand_lights();
