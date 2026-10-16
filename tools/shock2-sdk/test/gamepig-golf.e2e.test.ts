@@ -14,6 +14,9 @@ for(const vr of [false,true]){
     assert.ok((await elements()).some(e=>e.texture==="gfhol001.pcx"),"authored first course loaded");
     const status=async()=>(await elements()).find(e=>/^Shot /.test(e.text??""))!.text!;
     assert.match(await status(),/Shot 1/);
+    const statusLines=(await elements()).filter(e=>["Hole 1","Shot 1","+0"].includes(e.text??""));
+    assert.equal(statusLines.length,3,"status emits distinct text lines");
+    assert.ok(statusLines[0].rect[1]<statusLines[1].rect[1]&&statusLines[1].rect[1]<statusLines[2].rect[1],"status lines occupy separate rows");
     const golfer=async()=>(await elements()).find(e=>e.texture==="gfgolf2.pcx")!.rect;
     const tee=await golfer();
     const press=async(action:"LeftHandLowerButton"|"LeftHandUpperButton")=>{await game.input.hold(action);await game.step({frames:3});await game.input.release(action);await game.step({frames:3});};
