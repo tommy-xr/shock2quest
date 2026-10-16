@@ -13,6 +13,9 @@ use cgmath::vec2;
 use shipyard::World;
 use std::{f32::consts::TAU, time::Duration};
 
+const PROJECTION_SCALE: f32 = 52.0;
+const PROJECTION_CENTER: [f32; 2] = [70.0, 127.0];
+
 #[derive(Clone, Debug)]
 pub(super) struct HogWallow {
     game: Game,
@@ -94,8 +97,8 @@ impl HogWallow {
                 (13.0..153.0).contains(&c.position.x) && (11.0..287.0).contains(&c.position.y)
             }) {
                 self.aim(
-                    (cursor.position.x - 83.0) / 68.0,
-                    (cursor.position.y - 149.0) / 68.0,
+                    (cursor.position.x - 13.0 - PROJECTION_CENTER[0]) / PROJECTION_SCALE,
+                    (cursor.position.y - 11.0 - PROJECTION_CENTER[1]) / PROJECTION_SCALE,
                 );
             }
         }
@@ -422,8 +425,14 @@ impl Raster {
                 b[i] += (a[i] - b[i]) * t;
             }
         }
-        let a = [70.0 + 68.0 * a[0] / a[2], 138.0 + 68.0 * a[1] / a[2]];
-        let b = [70.0 + 68.0 * b[0] / b[2], 138.0 + 68.0 * b[1] / b[2]];
+        let a = [
+            PROJECTION_CENTER[0] + PROJECTION_SCALE * a[0] / a[2],
+            PROJECTION_CENTER[1] + PROJECTION_SCALE * a[1] / a[2],
+        ];
+        let b = [
+            PROJECTION_CENTER[0] + PROJECTION_SCALE * b[0] / b[2],
+            PROJECTION_CENTER[1] + PROJECTION_SCALE * b[1] / b[2],
+        ];
         let d = [b[0] - a[0], b[1] - a[1]];
         let (mut low, mut high) = (0.0_f32, 1.0_f32);
         for (p, q) in [
@@ -490,6 +499,28 @@ impl Raster {
 mod tests {
     use super::*;
     use crate::quest_info::QuestInfo;
+    #[test]
+    fn ship_fits_every_lane_of_generated_tunnels() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(12);
+        for _ in 0..100 {
+            let game = HogWallow {
+                game: Game::new(&mut rng),
+                ..Default::default()
+            };
+            for lane in 0..game.game.rim.len() {
+                let mut raster = Raster::new();
+                game.draw_actor(&mut raster, lane, 5, -0.21, -1.0);
+                let components = raster.components();
+                assert!(!components.is_empty());
+                for component in components {
+                    let rect = component.rect();
+                    assert!(rect.x > 13.0 && rect.x + rect.w < 153.0);
+                    assert!(rect.y > 27.0 && rect.y + rect.h < 250.0);
+                }
+            }
+        }
+    }
     #[test]
     fn projected_lines_clip_to_playfield_even_during_camera_flythrough() {
         for camera in [-40.0, -1.0, 0.0, 3.0, 7.0, 20.0] {
