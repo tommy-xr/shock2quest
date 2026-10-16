@@ -31,7 +31,7 @@ for(const vr of [false,true]){
     } else {
       const [x,y,w,h]=field.screen_rect;await click(game,{...field,screen_rect:[x+w*0.6,y+h*0.15,0,0]});
     }
-    const ball=async()=>(await elements()).find(e=>e.kind==="fill"&&e.rect[2]===2&&e.rect[3]===2)?.rect;
+    const ball=async()=>(await elements()).find(e=>e.kind==="fill"&&Math.abs(e.rect[2]-2)<0.01&&Math.abs(e.rect[3]-2)<0.01)?.rect;
     const before=await ball();assert.ok(before);
     await primary();await game.step({frames:18});await primary();await game.step({frames:18});await primary();await game.step({frames:18});
     assert.notDeepEqual(await ball(),before,"three clicks launch the ball");
