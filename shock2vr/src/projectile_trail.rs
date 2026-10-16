@@ -1,13 +1,20 @@
-//! Smoke left hanging along projectiles' paths, plus a glowing head on
-//! traveling shots (which have no model). Puffs age on the world clock, so a
+//! Smoke left hanging along projectiles' paths, plus a small bullet drawn at
+//! each traveling shot (which has no model). Puffs age on the world clock, so a
 //! slowed world leaves a shot's whole flight in the air, and outlive their
 //! projectile, fading out gradually.
-use std::{collections::HashMap, rc::Rc, time::Duration};
+use std::{cell::OnceCell, collections::HashMap, rc::Rc, time::Duration};
 
 use cgmath::{InnerSpace, Matrix4, Vector3, vec3};
 use engine::{
-    scene::{ParticleSystem, SceneObject, SceneObjectDebugTag},
+    scene::{
+        Geometry, ParticleSystem, SceneObject, SceneObjectDebugTag, basic_material,
+        cone::Cone,
+        cylinder::Cylinder,
+        light::LightArray,
+        shine::{Shine, ShineBlend},
+    },
     texture::TextureTrait,
+    texture_format::{PixelFormat, RawTextureData},
 };
 use shipyard::EntityId;
 
@@ -22,8 +29,50 @@ const MIN_TRAIL_SPEED: f32 = 1.0;
 /// `MAX_TRAILS * MAX_PUFFS` puffs). A new projectile replaces the oldest
 /// trail that is only fading; if all are emitting it goes untrailed.
 const MAX_TRAILS: usize = 8;
-/// World length of a traveling shot's glowing head.
-const HEAD_LENGTH: f32 = 0.6;
+/// A traveling shot's drawn bullet, in world units: a cylinder body and a
+/// cone nose. Larger than a real round (about 0.03) so it reads at range.
+const BULLET_BODY_LENGTH: f32 = 0.06;
+const BULLET_NOSE_LENGTH: f32 = 0.03;
+const BULLET_RADIUS: f32 = 0.012;
+/// Glow so a bullet still reads where no lamp reaches it.
+const BULLET_EMISSIVITY: f32 = 0.25;
+/// Multiplies the object highlight strength on a bullet: polished brass.
+const BULLET_SPECULAR: f32 = 3.0;
+
+/// A bullet's surfaces: brass body, copper nose, and a brass-tinted
+/// highlight with no view-angle sheen of its own (a black ramp).
+struct BulletArt {
+    body: Rc<dyn TextureTrait>,
+    nose: Rc<dyn TextureTrait>,
+    shine: Shine,
+}
+
+impl BulletArt {
+    fn new() -> Self {
+        let pixel = |rgba: [u8; 4]| -> Rc<dyn TextureTrait> {
+            Rc::new(engine::texture::init_from_memory(RawTextureData {
+                bytes: rgba.to_vec(),
+                width: 1,
+                height: 1,
+                format: PixelFormat::RGBA,
+            }))
+        };
+        Self {
+            body: pixel([200, 150, 70, 255]),
+            nose: pixel([190, 110, 60, 255]),
+            shine: Shine {
+                mask: pixel([255, 225, 160, 255]),
+                ramp: pixel([0, 0, 0, 255]),
+                tint: vec3(1.0, 1.0, 1.0),
+                unlit: false,
+                blend: ShineBlend::Additive,
+                passes: 1,
+                veins: None,
+                vein_scale: 1.0,
+            },
+        }
+    }
+}
 
 struct Trail {
     entity: EntityId,
@@ -50,6 +99,8 @@ pub(crate) struct ProjectileTrails {
     heads: Vec<(EntityId, Vector3<f32>, Vector3<f32>)>,
     /// Animated smoke sprite; empty falls back to the default particle disk.
     smoke_frames: Vec<Rc<dyn TextureTrait>>,
+    /// Made on the first bullet drawn, which has a GL context.
+    bullet_art: OnceCell<BulletArt>,
 }
 
 impl ProjectileTrails {
@@ -60,6 +111,7 @@ impl ProjectileTrails {
             frame: Vec::new(),
             heads: Vec::new(),
             smoke_frames,
+            bullet_art: OnceCell::new(),
         }
     }
 
@@ -185,9 +237,13 @@ impl ProjectileTrails {
         }
     }
 
-    /// Every trail's smoke, and with `heads` a short glowing streak leading
-    /// each traveling shot in flight.
-    pub fn render(&self, heads: bool) -> Vec<SceneObject> {
+    /// Every trail's smoke, and with `heads` a small brass bullet at each
+    /// traveling shot in flight, lit by `lights_at` its position.
+    pub fn render(
+        &self,
+        heads: bool,
+        lights_at: impl Fn(Vector3<f32>) -> Option<Rc<LightArray>>,
+    ) -> Vec<SceneObject> {
         // Lets `/v1/scene` attribute each object to its projectile.
         let tag = |entity: EntityId, source: &str| {
             Some(Rc::new(SceneObjectDebugTag {
@@ -204,19 +260,34 @@ impl ProjectileTrails {
                 objects.push(puff);
             }
         }
-        for &(entity, position, heading) in self.heads.iter().filter(|_| heads) {
-            // The beam fades toward its far end, so drawing it backward from
-            // the shot leaves a bright tip and a fading tail.
-            let head_tag = tag(entity, "projectile_head");
-            for mut object in engine::scene::laser_material::beam(
-                position,
-                -heading * HEAD_LENGTH,
-                (0.03, vec3(1.0, 0.75, 0.4)),
-                (0.006, vec3(1.0, 0.95, 0.85)),
-                0.0,
-            ) {
-                object.set_debug_tag(head_tag.clone());
-                objects.push(object);
+        if heads && !self.heads.is_empty() {
+            let art = self.bullet_art.get_or_init(BulletArt::new);
+            for &(entity, position, heading) in &self.heads {
+                let head_tag = tag(entity, "projectile_head");
+                // Lit by the room like any prop, with its highlight boosted
+                // so the brass reads as polished metal.
+                let lights = lights_at(position).map(|lights| {
+                    Rc::new(
+                        (*lights)
+                            .clone()
+                            .with_specular(lights.specular * BULLET_SPECULAR),
+                    )
+                });
+                let [body, nose] = bullet_frames(position, heading);
+                let parts: [(Box<dyn Geometry>, &Rc<dyn TextureTrait>, Matrix4<f32>); 2] = [
+                    (Box::new(Cylinder), &art.body, body),
+                    (Box::new(Cone), &art.nose, nose),
+                ];
+                for (geometry, texture, frame) in parts {
+                    let mut material =
+                        basic_material::create(texture.clone(), BULLET_EMISSIVITY, 0.0);
+                    material.set_shine(art.shine.clone());
+                    let mut object = SceneObject::new(material, geometry);
+                    object.set_transform(frame);
+                    object.set_lights(lights.clone());
+                    object.set_debug_tag(head_tag.clone());
+                    objects.push(object);
+                }
             }
         }
         objects
@@ -229,6 +300,31 @@ impl ProjectileTrails {
             .map(|trail| (trail.entity, trail.smoke.particle_count()))
             .collect()
     }
+}
+
+/// Transforms of the unit cylinder (body) and unit cone (nose) for a bullet
+/// whose nose tip is at `tip`, flying along unit `heading`.
+fn bullet_frames(tip: Vector3<f32>, heading: Vector3<f32>) -> [Matrix4<f32>; 2] {
+    let side = if heading.y.abs() < 0.9 {
+        vec3(0.0, 1.0, 0.0)
+    } else {
+        vec3(1.0, 0.0, 0.0)
+    };
+    let right = side.cross(heading).normalize();
+    let up = heading.cross(right);
+    let frame = |base: Vector3<f32>, length: f32| {
+        Matrix4::from_cols(
+            (right * BULLET_RADIUS).extend(0.0),
+            (up * BULLET_RADIUS).extend(0.0),
+            (heading * length).extend(0.0),
+            base.extend(1.0),
+        )
+    };
+    let nose_base = tip - heading * BULLET_NOSE_LENGTH;
+    [
+        frame(nose_base - heading * BULLET_BODY_LENGTH, BULLET_BODY_LENGTH),
+        frame(nose_base, BULLET_NOSE_LENGTH),
+    ]
 }
 
 /// Grey smoke puffs (the caller sets the launch period each tick), drifting
@@ -437,6 +533,24 @@ mod tests {
         );
         trails.update(DT, SMOKE, []);
         assert!(trails.heads.is_empty());
+    }
+
+    #[test]
+    fn a_bullet_runs_from_its_tail_to_its_nose_tip_along_its_heading() {
+        use cgmath::{EuclideanSpace, Transform};
+        let tip = vec3(1.0, 2.0, 3.0);
+        let heading = vec3(0.0, 0.6, 0.8);
+        let [body, nose] = bullet_frames(tip, heading);
+        let at = |m: Matrix4<f32>, z: f32| m.transform_point(cgmath::point3(0.0, 0.0, z));
+        let length = BULLET_BODY_LENGTH + BULLET_NOSE_LENGTH;
+        assert!((at(nose, 1.0) - cgmath::Point3::from_vec(tip)).magnitude() < 1e-5);
+        assert!((at(nose, 0.0) - at(body, 1.0)).magnitude() < 1e-5);
+        let tail = cgmath::Point3::from_vec(tip - heading * length);
+        assert!((at(body, 0.0) - tail).magnitude() < 1e-5);
+        // Round, of BULLET_RADIUS, across the heading.
+        let rim = body.transform_point(cgmath::point3(1.0, 0.0, 0.0)) - at(body, 0.0);
+        assert!((rim.magnitude() - BULLET_RADIUS).abs() < 1e-6);
+        assert!(rim.dot(heading).abs() < 1e-6);
     }
 
     #[test]

@@ -17999,9 +17999,14 @@ impl MissionCore {
         for trail in &self.psi_drain_trails {
             scene.extend(trail.render());
         }
-        scene.extend(self.projectile_trails.render(crate::dev_params::get_bool(
-            crate::dev_params::SLOW_TIME_BULLET_HEAD,
-        )));
+        scene.extend(self.projectile_trails.render(
+            crate::dev_params::get_bool(crate::dev_params::SLOW_TIME_BULLET_HEAD),
+            |position| {
+                object_lights
+                    .as_ref()
+                    .map(|lighting| lighting.at_position(position))
+            },
+        ));
         // Render particle systems
         if options.render_particles {
             for (particle_entity_id, particle_system) in &self.id_to_particle_system {
