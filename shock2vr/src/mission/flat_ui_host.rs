@@ -498,6 +498,11 @@ impl FlatUiHost {
             .collect();
     }
 
+    /// The item riding the cursor, which RMB would apply to the frob target.
+    pub fn cursor_entity(&self) -> Option<EntityId> {
+        self.cursor_item.as_ref().map(|held| held.entity)
+    }
+
     /// The item currently held on the cursor mid-drag (for `/v1/ui` `cursor`).
     pub fn cursor_debug(&self) -> Option<crate::game_scene::DebugUiCursor> {
         self.cursor_item

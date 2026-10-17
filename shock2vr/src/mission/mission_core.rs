@@ -3234,6 +3234,9 @@ pub struct MissionCore {
     psi_pull: Option<crate::psi_pull::Flight>,
     free_hand_psi_pull: crate::vr_psi_pull::FreeHandPull,
     psi_pull_aim: Vec<EntityId>,
+    /// Per hand (left, right): the release target that will accept the held
+    /// item. Flat uses the right slot for the use-mode cursor item.
+    tool_ready: [Option<EntityId>; 2],
     healing_pulses: HashMap<EntityId, f32>,
     /// Seconds since each amp's overload cast, while its red flash lasts.
     overload_glows: HashMap<EntityId, f32>,
@@ -4383,6 +4386,7 @@ impl MissionCore {
             psi_pull: None,
             free_hand_psi_pull: Default::default(),
             psi_pull_aim: Vec::new(),
+            tool_ready: [None; 2],
             healing_pulses: HashMap::new(),
             overload_glows: HashMap::new(),
             gui: GuiManager::new(),
@@ -7156,6 +7160,22 @@ impl MissionCore {
             &mut interaction_msgs,
             game_options,
         );
+        // Cue each hand once as it reaches a target that will take its item,
+        // like the shoulder slot's ready tick.
+        let tool_ready = self.tool_ready_targets(game_options.presentation_mode);
+        if game_options.presentation_mode == crate::PresentationMode::Vr {
+            for (i, hand) in [crate::Handedness::Left, crate::Handedness::Right]
+                .into_iter()
+                .enumerate()
+            {
+                if let Some(pulse) =
+                    crate::haptics::tool_ready_pulse(self.tool_ready[i], tool_ready[i])
+                {
+                    effects.push(Effect::HandHaptic { hand, pulse });
+                }
+            }
+        }
+        self.tool_ready = tool_ready;
         self.personal_card.grip = self
             .personal_card
             .hand
@@ -7596,6 +7616,26 @@ impl MissionCore {
                 _ => {}
             }
         }
+        // Releases offered to a target that accepts them; confirmed below once
+        // a script consumes the item.
+        let tool_offers: Vec<_> = interaction_msgs
+            .iter()
+            .filter_map(|effect| match effect {
+                VirtualHandEffect::OutMessage {
+                    message:
+                        Message {
+                            to,
+                            payload: MessagePayload::ProvideForConsumption { entity },
+                        },
+                } => {
+                    let slot = held.iter().position(|held| *held == Some(*entity))?;
+                    self.script_world
+                        .accepts_tool(*to, &self.world, *entity)
+                        .then_some((*entity, slot))
+                }
+                _ => None,
+            })
+            .collect();
         effects.extend(self.process_virtual_hand_effects(asset_cache, interaction_msgs));
         effects.extend(self.update_psi_pull(time.elapsed));
         self.psi_pull_aim = self.psi_pull_aim_targets();
@@ -7979,6 +8019,14 @@ impl MissionCore {
             scope: "game", level: DEBUG, "script_world.update",
             self.script_world.update(&self.world, &self.physics, time)
         );
+        for (item, slot) in tool_offers {
+            if destroys(&script_effects, item) {
+                effects.push(Effect::HandHaptic {
+                    hand: [crate::Handedness::Left, crate::Handedness::Right][slot],
+                    pulse: crate::haptics::TOOL_APPLIED,
+                });
+            }
+        }
         effects.append(&mut script_effects);
         drop(script_profile);
 
@@ -19407,6 +19455,29 @@ impl MissionCore {
     /// own returned `Vec<Effect>` for the frame (`update`), and either way
     /// they still reach `handle_effects`'s `Effect::PlaySound` handler this
     /// frame.
+    /// Per hand: the release target that will accept the held item. Flat's
+    /// equivalent is the use-mode cursor item over the bounded frob target,
+    /// the pair RMB applies.
+    fn tool_ready_targets(&self, presentation: crate::PresentationMode) -> [Option<EntityId>; 2] {
+        let offers = if presentation == crate::PresentationMode::Vr {
+            self.interaction.release_offers()
+        } else {
+            [
+                None,
+                self.flat_ui
+                    .cursor_entity()
+                    .zip(self.interaction.frob_target()),
+            ]
+        };
+        offers.map(|offer| {
+            offer.and_then(|(item, target)| {
+                self.script_world
+                    .accepts_tool(target, &self.world, item)
+                    .then_some(target)
+            })
+        })
+    }
+
     fn process_virtual_hand_effects(
         &mut self,
         asset_cache: &mut AssetCache,
@@ -20356,6 +20427,15 @@ pub fn is_melee_weapon(world: &World, entity_id: EntityId) -> bool {
 /// wield happens and there is nothing to fit a collider to - the gun would
 /// sweep the inherited loose-pickup box, sized and centred for a different
 /// mesh, and stop at the wrong distance from every wall. No fit, no body.
+/// Whether `effects` (nested ones included) destroy `entity`.
+fn destroys(effects: &[Effect], entity: EntityId) -> bool {
+    effects.iter().any(|effect| match effect {
+        Effect::DestroyEntity { entity_id } => *entity_id == entity,
+        Effect::Multiple(inner) | Effect::Combined { effects: inner } => destroys(inner, entity),
+        _ => false,
+    })
+}
+
 pub fn held_item_collision_group(world: &World, entity_id: EntityId) -> Option<CollisionGroup> {
     if is_vr_melee_weapon(world, entity_id) {
         return Some(CollisionGroup::held_melee());

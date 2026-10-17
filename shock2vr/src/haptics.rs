@@ -12,6 +12,26 @@ pub const SHOULDER_READY: HapticPulse = HapticPulse {
     duration_ms: 60,
 };
 
+/// A held item now points at a target that will take it on release.
+pub const TOOL_READY: HapticPulse = HapticPulse {
+    amplitude: 0.45,
+    duration_ms: 60,
+};
+/// A released item was consumed by its target: firmer than the ready tick.
+pub const TOOL_APPLIED: HapticPulse = HapticPulse {
+    amplitude: 0.7,
+    duration_ms: 90,
+};
+
+/// Ready cue on the entered edge only, like the shoulder slot: `next` is the
+/// accepting release target this frame, `previous` last frame's.
+pub(crate) fn tool_ready_pulse(
+    previous: Option<shipyard::EntityId>,
+    next: Option<shipyard::EntityId>,
+) -> Option<HapticPulse> {
+    (next.is_some() && next != previous).then_some(TOOL_READY)
+}
+
 /// Smasher feedback follows charge transitions, never the per-frame readout.
 pub(crate) fn melee_charge_pulse(previous: Option<f32>, next: Option<f32>) -> Option<HapticPulse> {
     match (previous, next) {
@@ -153,6 +173,23 @@ pub fn take(world: &World) -> [Option<HapticPulse>; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_ready_cues_on_entry_only() {
+        let crate_a = shipyard::EntityId::new_from_index_and_gen(1, 0);
+        let crate_b = shipyard::EntityId::new_from_index_and_gen(2, 0);
+        assert_eq!(tool_ready_pulse(None, Some(crate_a)), Some(TOOL_READY));
+        // Lingering over the same target, leaving it, and nothing at all are silent.
+        assert_eq!(tool_ready_pulse(Some(crate_a), Some(crate_a)), None);
+        assert_eq!(tool_ready_pulse(Some(crate_a), None), None);
+        assert_eq!(tool_ready_pulse(None, None), None);
+        // Sweeping straight onto another accepting target is a new entry.
+        assert_eq!(
+            tool_ready_pulse(Some(crate_a), Some(crate_b)),
+            Some(TOOL_READY)
+        );
+        assert!(TOOL_APPLIED.amplitude > TOOL_READY.amplitude);
+    }
 
     #[test]
     fn smasher_charge_cues_edges_only() {

@@ -90,6 +90,12 @@ pub trait PlayerInteraction {
         Vec::new()
     }
 
+    /// Per hand (left, right): the held item and what releasing it now would
+    /// offer it to. Flatscreen has no hand release.
+    fn release_offers(&self) -> [Option<(EntityId, EntityId)>; 2] {
+        [None; 2]
+    }
+
     fn hand_feedback_diagnostics(&self) -> serde_json::Value {
         serde_json::Value::Null
     }
@@ -1580,6 +1586,13 @@ impl PlayerInteraction for VrInteraction {
             .into_iter()
             .filter_map(|hand| hand.maintenance_preview(world))
             .collect()
+    }
+
+    fn release_offers(&self) -> [Option<(EntityId, EntityId)>; 2] {
+        [
+            self.left_hand.release_offer(),
+            self.right_hand.release_offer(),
+        ]
     }
 
     fn hand_feedback_diagnostics(&self) -> serde_json::Value {
