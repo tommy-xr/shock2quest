@@ -295,10 +295,13 @@ for (const vr of [false,true]) {
     const [disc]=await game.entities.byTemplate(1608);assert.ok(disc);
     await game.entities.sendMessage(disc.id,{type:"Frob"});await game.step({frames:5});
     await click(await logs());
+    const entry=(await game.ui.state()).strip!.elements.find(e=>e.label==="pda_entry:0");assert.ok(entry,"native button opens the PDA list");
+    await click(entry);
     const reader=(await game.ui.state()).active_panel;assert.ok(reader);
-    assert.ok(reader.elements.some(e=>e.text?.includes("45100")),"native button opens authored Amanpour transcript");
+    assert.ok(reader.elements.some(e=>e.text?.includes("45100")),"list entry opens authored Amanpour transcript");
     await capture("reader");await click(await logs());
-    assert.equal((await game.ui.state()).active_panel,null,"button closes only the reader");assert.equal((await game.ui.state()).mode,"use");
+    assert.equal((await game.ui.state()).active_panel,null,"button swaps the reader for the list");assert.equal((await game.ui.state()).mode,"use");
+    await click(await logs());
     const before=(await game.info()).player.stats!;
     const nanites=(await game.entities.list({filter:"Nanite",limit:100})).entities;
     let awarded=0;
