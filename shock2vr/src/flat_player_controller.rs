@@ -88,6 +88,8 @@ pub struct FlatPlayerController {
     wielded_entity: Option<EntityId>,
     last_fire_pressed: bool,
     last_use_pressed: bool,
+    /// What a use-button press would frob this frame: the reach-bounded pick.
+    frob_target: Option<EntityId>,
     /// Camera/crosshair fire ray (world space) from the last `update`, so the
     /// firing path can spawn projectiles along the crosshair (camera-origin aim).
     last_aim: Option<(Point3<f32>, Vector3<f32>)>,
@@ -108,11 +110,17 @@ impl FlatPlayerController {
             wielded_entity: None,
             last_fire_pressed: false,
             last_use_pressed: false,
+            frob_target: None,
             last_aim: None,
             last_aim_bias: vec3(0.0, 0.0, 0.0).truncate(),
             recoil: crate::weapon_recoil::RecoilState::default(),
             turn_sway: crate::flat_turn_sway::FlatTurnSway::default(),
         }
+    }
+
+    /// The reach-bounded crosshair target from the last `update`.
+    pub fn frob_target(&self) -> Option<EntityId> {
+        self.frob_target
     }
 
     /// Kick the viewmodel spring for a shot just fired by the wielded weapon.
@@ -299,6 +307,7 @@ impl FlatPlayerController {
                     self.wielded_entity,
                 )
             });
+        self.frob_target = frob_target;
         let highlighted = frob_target.or(highlighted);
 
         // Place the viewmodel + fire on the trigger edge.
@@ -1054,7 +1063,8 @@ mod tests {
             .expect("the fixture target must remain visible to an unbounded ray");
         assert_eq!(ray_hit.maybe_entity_id, Some(target));
 
-        let (effects, highlighted) = FlatPlayerController::new().update(
+        let mut controller = FlatPlayerController::new();
+        let (effects, highlighted) = controller.update(
             &Hand {
                 squeeze_value: 1.0,
                 ..Hand::default()
@@ -1076,6 +1086,7 @@ mod tests {
             effects.is_empty(),
             "ineligible use must emit no frob effects, got {effects:?}"
         );
+        assert_eq!(controller.frob_target(), None, "nothing in reach to frob");
     }
     #[test]
     fn negative_pick_bias_surface_yields_to_frobbable_overlay() {
