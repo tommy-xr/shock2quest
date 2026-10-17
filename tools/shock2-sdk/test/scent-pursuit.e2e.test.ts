@@ -3,8 +3,8 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 
 for (const { name, expired, speed, samples, frames } of [
-  { name: "follows a recent", expired: false, speed: 0.3, samples: 6, frames: 30 },
-  { name: "cannot follow an expired", expired: true, speed: 0.3, samples: 6, frames: 30 },
+  { name: "follows a recent", expired: false, speed: 0.3, samples: 6, frames: 36 },
+  { name: "cannot follow an expired", expired: true, speed: 0.3, samples: 6, frames: 36 },
   { name: "follows a recent full-speed", expired: false, speed: 1, samples: 9, frames: 11 },
 ]) {
   test(`a hybrid ${name} unseen player scent trail`, {

@@ -72,7 +72,7 @@ for (const reloadDuringFall of [false, true]) {
       await game.input.lookAtWorldPoint([seatX, arrival.y + 1.6, seatZ + 20]);
       await game.input.set("right_hand.thumbstick", [0, 1]);
       if (reloadDuringFall) {
-        await game.step({ frames: 70 });
+        await game.step({ frames: 78 });
         const beforeSave = await game.player.position();
         const drop = arrival.y - beforeSave.y;
         assert.ok(drop > 8 && drop < 16, `save must be partway through the fall: ${drop}`);

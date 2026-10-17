@@ -137,7 +137,7 @@ test(
         player.position[1] + player.camera_offset[1],
         player.position[2] + 10,
       ]);
-      await game.input.set("right_hand.thumbstick", [0, 0.16]);
+      await game.input.set("right_hand.thumbstick", [0, 0.19]);
       await game.step({ frames: 1 });
       const before = (await game.info()).player.position;
       await game.step({ frames: 12 });
@@ -145,7 +145,7 @@ test(
       return planar(before, (await game.info()).player.position);
     };
     const baseMoved = await measure();
-    close(baseMoved, RUN * 1.2 * 0.032, "level-1 movement before the native purchase");
+    close(baseMoved, RUN * 1.2 * 0.038, "level-1 movement before the native purchase");
     await teleportVerified(game, { x, y: y + 0.5, z: z + 1.2 });
     await game.step({ frames: 30 });
     await game.entities.sendMessage(trainer.id, { type: "Frob" });
@@ -174,7 +174,7 @@ test(
     );
     close(
       moved,
-      RUN * 1.3 * 0.032,
+      RUN * 1.3 * 0.038,
       "purchased Agility changes actual movement",
     );
     await game.step({ frames: 10 });

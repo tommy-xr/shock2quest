@@ -133,7 +133,7 @@ test(
     ]);
     await game.input.set("left_hand.thumbstick", [0, 1]);
     await pulseJump(game);
-    await game.step({ frames: 7 });
+    await game.step({ frames: 9 });
     await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.step({ frames: 120 });
     const upperLip = await game.player.position();

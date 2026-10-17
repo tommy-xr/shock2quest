@@ -85,7 +85,7 @@ test("debug_many_pool (VR): swim to the sloped rim and exit with the stick", {
   await game.step({ frames: 2 });
   await game.input.lookAtWorldPoint([41.3, 10.7, 30]);
   await game.input.hold("LeftHandLowerButton");
-  await game.input.set("left_hand.thumbstick", [0, 0.32]);
+  await game.input.set("left_hand.thumbstick", [0, 0.38]);
   await game.step({ frames: 210 });
   await game.input.release("LeftHandLowerButton");
   await game.input.set("left_hand.thumbstick", [0, 0]);

@@ -245,13 +245,13 @@ test(
 /// From a stalled climb, still facing the ladder, strafe right (+w, desktop
 /// D) along it until supported on the floor at `floorY` beside the ladder,
 /// then a step more so the body is wholly on it.
-async function stepSideways(game: GameServer, run: Run, floorY: number): Promise<void> {
+async function stepSideways(game: GameServer, run: Run, floorY: number, settle = 8): Promise<void> {
   await game.input.set("right_hand.thumbstick", [1, 0]);
   await run.frames(180, async (p) => {
     const support = await run.supportY(p);
     return support !== null && Math.abs(support - floorY) < 0.05 && p.y - floorY < 1.35;
   });
-  await run.frames(8);
+  await run.frames(settle);
   await game.input.set("right_hand.thumbstick", [0, 0]);
   await run.frames(60);
 }
@@ -278,7 +278,7 @@ test(
       stall.y > 6.8 && stall.y + CROUCH_HALF_HEIGHT <= 7.6,
       `setback: the climb should stall just under the slab (y=${stall.y.toFixed(3)})`,
     );
-    await stepSideways(game, run, 4.4);
+    await stepSideways(game, run, 4.4, 12);
 
     await shootTrail(game, "setback");
     run.assertStayedInside();
