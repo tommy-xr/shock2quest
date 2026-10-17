@@ -686,7 +686,7 @@ fn select_build_run<'a>(runs: &'a [BuildRun], sha: &str, branch: &str) -> Result
     }
     let Some(latest) = runs.first() else {
         bail!(
-            "no Build Android run for {sha} (paths-ignored pushes skip it); start one: gh workflow run build-android.yml --ref {branch}"
+            "no Build Android run for {sha} (paths-ignored pushes skip it); for a same-repo branch, start one: gh workflow run build-android.yml --ref {branch}"
         )
     };
     if latest.status != "completed" {
@@ -712,7 +712,7 @@ fn uninstall_before_retry(install_error: &str, allow_uninstall: bool) -> Result<
     }
     ensure!(
         allow_uninstall,
-        "installed app has another signing key; replacing it uninstalls it and deletes its saves (pr --allow-uninstall, or adb uninstall {PACKAGE})"
+        "installed app has another signing key; replacing it uninstalls it and deletes its saves (cargo dvr pr <n> --allow-uninstall, or adb uninstall {PACKAGE})"
     );
     Ok(true)
 }
@@ -770,12 +770,15 @@ fn fetch_pr_apk(number: u32) -> Result<PathBuf> {
     if let Err(error) = downloaded {
         let _ = std::fs::remove_dir_all(&staging);
         bail!(
-            "{} has no APK artifact (built before CI uploaded one, or older than 30 days): {error}",
+            "could not download the APK from {} (missing if built before CI uploaded one, or older than 30 days): {error}",
             run.url
         );
     }
-    let _ = std::fs::remove_dir_all(&cache);
-    std::fs::rename(&staging, &cache)?;
+    // A concurrent run may have published first; keep its copy.
+    if std::fs::rename(&staging, &cache).is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+        ensure!(apk.is_file(), "could not populate {}", cache.display());
+    }
     Ok(apk)
 }
 
