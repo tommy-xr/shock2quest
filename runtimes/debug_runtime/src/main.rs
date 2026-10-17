@@ -1231,6 +1231,7 @@ fn run_game_blocking(
 
         // Create the final scene for rendering
         let mut scene_for_render = Scene::from_objects(scene);
+        scene_for_render.offscreen_passes = game.take_offscreen_passes();
 
         // Add hand spotlights
         let hand_spotlights = if let Some(benchmark) = &benchmark_run {

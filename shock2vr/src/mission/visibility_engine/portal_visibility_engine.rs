@@ -33,6 +33,8 @@ pub struct PortalVisibilityEngine {
     entity_cell_cache: HashMap<EntityId, EntityCells>,
 
     is_visible: HashMap<EntityId, bool>,
+    /// The psi portal's remote view; `None` defers to `is_visible`.
+    secondary_visible: Option<HashMap<EntityId, bool>>,
 
     debug_portals: Vec<PortalDebugInfo>,
     #[allow(dead_code)]
@@ -102,6 +104,7 @@ impl PortalVisibilityEngine {
         PortalVisibilityEngine {
             entity_cell_cache: HashMap::new(),
             is_visible: HashMap::new(),
+            secondary_visible: None,
             debug_portals: Vec::new(),
             is_debug: false,
         }
@@ -221,7 +224,21 @@ impl PortalVisibilityEngine {
         &mut self,
         world: &World,
         visible_cells: &HashSet<u32>,
+        lookup: impl FnMut(Vector3<f32>, Option<Vector3<f32>>, &mut Vec<u32>),
+    ) {
+        let mut is_visible = std::mem::take(&mut self.is_visible);
+        self.entity_visibility(world, visible_cells, lookup, &mut is_visible);
+        self.is_visible = is_visible;
+    }
+
+    /// Per-entity visibility against one view's cells; the membership cache
+    /// is shared between views.
+    fn entity_visibility(
+        &mut self,
+        world: &World,
+        visible_cells: &HashSet<u32>,
         mut lookup: impl FnMut(Vector3<f32>, Option<Vector3<f32>>, &mut Vec<u32>),
+        is_visible: &mut HashMap<EntityId, bool>,
     ) {
         let positions = world.borrow::<View<PropPosition>>().unwrap();
         let dimensions = world.borrow::<View<PropPhysDimensions>>().unwrap();
@@ -229,7 +246,7 @@ impl PortalVisibilityEngine {
         // Remove destroyed entities and entities that lost their position.
         self.entity_cell_cache
             .retain(|id, _| positions.get(*id).is_ok());
-        self.is_visible.clear();
+        is_visible.clear();
         for (id, pos) in positions.iter().with_id() {
             let visible = if has_refs.get(id).is_ok_and(|refs| !refs.0) {
                 false
@@ -240,7 +257,75 @@ impl PortalVisibilityEngine {
                     .or_insert_with(|| EntityCells::new(pos.position, size))
                     .is_visible(pos.position, size, visible_cells, &mut lookup)
             };
-            self.is_visible.insert(id, visible);
+            is_visible.insert(id, visible);
+        }
+    }
+
+    /// Cells visible from the culling view's eye, starting from the cell that
+    /// contains it - or `fallback`'s cell when the eye is outside every cell.
+    fn visible_cells(
+        spatial_data: &dyn SpatialQueryEngine,
+        culling_info: &CullingInfo,
+        fallback: Option<Vector3<f32>>,
+        debug_cells: &mut Vec<PortalDebugInfo>,
+    ) -> Option<HashSet<u32>> {
+        let camera_position = camera_position_from_view_matrix(culling_info.view);
+        let camera_cell_idx = spatial_data
+            .get_cell_idx_from_position(camera_position)
+            .or_else(|| fallback.and_then(|p| spatial_data.get_cell_idx_from_position(p)));
+        let camera_cell =
+            camera_cell_idx.and_then(|index| spatial_data.get_cell_by_index(index as usize));
+
+        render_log!(
+            DEBUG,
+            "visibility engine - starting from cell: {:?}",
+            camera_cell_idx
+        );
+
+        let camera_cell = camera_cell?;
+        let projection_view = culling_info.projection * culling_info.view;
+        let frustum = Frustum::from_matrix4(projection_view)?;
+
+        let mut visible_cells = HashSet::new();
+        let mut visited_cells = HashMap::new();
+        let screen_portal = Aabb2::new(
+            point2(0.0, 0.0),
+            point2(culling_info.screen_size.x, culling_info.screen_size.y),
+        );
+        Self::check_cell_recursive(
+            spatial_data,
+            screen_portal,
+            culling_info.screen_size.x,
+            culling_info.screen_size.y,
+            projection_view,
+            &frustum,
+            &mut visible_cells,
+            &mut visited_cells,
+            debug_cells,
+            camera_cell,
+            0,
+        );
+
+        render_log!(
+            DEBUG,
+            "total cells: {} | visible cells: {}",
+            spatial_data.get_cell_count(),
+            visible_cells.len()
+        );
+        Some(visible_cells)
+    }
+}
+
+/// Entity cell membership: the box's cells when it has dimensions, else the
+/// cell holding its origin.
+fn entity_cells(
+    spatial_data: &dyn SpatialQueryEngine,
+) -> impl FnMut(Vector3<f32>, Option<Vector3<f32>>, &mut Vec<u32>) + '_ {
+    move |position, size, cells| {
+        if let Some(size) = size {
+            spatial_data.cells_intersecting_box(position, size * 0.5, cells);
+        } else if let Some(cell) = spatial_data.get_cell_idx_from_position(position) {
+            cells.push(cell);
         }
     }
 }
@@ -259,72 +344,42 @@ impl VisibilityEngine for PortalVisibilityEngine {
         culling_info: &CullingInfo,
     ) {
         self.debug_portals.clear();
-        let camera_position = camera_position_from_view_matrix(culling_info.view);
 
         // If no spatial data is available, mark all entities as visible
         let Some(spatial_data) = spatial_data else {
             return;
         };
-
-        let maybe_camera_cell_idx = spatial_data.get_cell_idx_from_position(camera_position);
-        let maybe_camera_cell =
-            maybe_camera_cell_idx.and_then(|index| spatial_data.get_cell_by_index(index as usize));
-
-        render_log!(
-            DEBUG,
-            "visibility engine - starting from cell: {:?}",
-            maybe_camera_cell_idx
-        );
-
-        if maybe_camera_cell.is_none() {
+        let Some(visible_cells) =
+            Self::visible_cells(spatial_data, culling_info, None, &mut self.debug_portals)
+        else {
             return;
-        }
+        };
+        self.update_entities(world, &visible_cells, entity_cells(spatial_data));
+    }
 
-        let projection_view = culling_info.projection * culling_info.view;
-        let maybe_frustum = Frustum::from_matrix4(projection_view);
-
-        if maybe_frustum.is_none() {
+    fn prepare_secondary(
+        &mut self,
+        spatial_data: Option<&dyn SpatialQueryEngine>,
+        world: &World,
+        view: Option<(&CullingInfo, Vector3<f32>)>,
+    ) {
+        let mut visible = self.secondary_visible.take().unwrap_or_default();
+        let Some((spatial_data, (info, fallback))) = spatial_data.zip(view) else {
             return;
+        };
+        let Some(cells) = Self::visible_cells(spatial_data, info, Some(fallback), &mut Vec::new())
+        else {
+            return;
+        };
+        self.entity_visibility(world, &cells, entity_cells(spatial_data), &mut visible);
+        self.secondary_visible = Some(visible);
+    }
+
+    fn is_visible_secondary(&mut self, entity_id: EntityId) -> bool {
+        match &self.secondary_visible {
+            Some(visible) => *visible.get(&entity_id).unwrap_or(&false),
+            None => self.is_visible(entity_id),
         }
-
-        let frustum = maybe_frustum.unwrap();
-
-        let mut visible_cells = HashSet::new();
-        let mut visited_cells = HashMap::new();
-
-        let camera_cell = maybe_camera_cell.unwrap();
-        let screen_portal = Aabb2::new(
-            point2(0.0, 0.0),
-            point2(culling_info.screen_size.x, culling_info.screen_size.y),
-        );
-        Self::check_cell_recursive(
-            spatial_data,
-            screen_portal,
-            culling_info.screen_size.x,
-            culling_info.screen_size.y,
-            projection_view,
-            &frustum,
-            &mut visible_cells,
-            &mut visited_cells,
-            &mut self.debug_portals,
-            camera_cell,
-            0,
-        );
-
-        render_log!(
-            DEBUG,
-            "total cells: {} | visible cells: {}",
-            spatial_data.get_cell_count(),
-            visible_cells.len()
-        );
-
-        self.update_entities(world, &visible_cells, |position, size, cells| {
-            if let Some(size) = size {
-                spatial_data.cells_intersecting_box(position, size * 0.5, cells);
-            } else if let Some(cell) = spatial_data.get_cell_idx_from_position(position) {
-                cells.push(cell);
-            }
-        });
     }
 
     fn is_visible(&mut self, entity_id: EntityId) -> bool {

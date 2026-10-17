@@ -261,6 +261,10 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.render(asset_cache, options)
     }
 
+    fn take_offscreen_passes(&mut self) -> Vec<std::rc::Rc<engine::scene::OffscreenPass>> {
+        crate::game_scene::GameScene::take_offscreen_passes(&mut self.mission_core)
+    }
+
     fn render_per_eye(
         &mut self,
         asset_cache: &mut AssetCache,

@@ -3316,6 +3316,15 @@ pub struct MissionCore {
     player_footsteps: crate::mission::player_footsteps::PlayerFootsteps,
     /// Debug overlay of the player's recent path (`player_trail` dev param).
     debug_trail: crate::debug_trail::DebugTrail,
+    /// Live-view sphere at the Quantum Relocation marker.
+    psi_portal: crate::psi_portal::PsiPortal,
+    /// Passes built by the last `render`, taken by the runtime's renderer.
+    offscreen_passes: Vec<std::rc::Rc<engine::scene::OffscreenPass>>,
+    /// The open portal's view, culled again in `finish_render`.
+    portal_view: Option<crate::psi_portal::PortalView>,
+    /// Last `finish_render`'s view and projection, for `render`'s portal
+    /// on-screen test (the same test as its cull).
+    last_cull_view: Option<(Matrix4<f32>, Matrix4<f32>)>,
 
     /// First-person animation for the flat melee viewmodel: the wielded melee
     /// entity and its motion player (loops the player-melee idle; a swing is
@@ -4390,6 +4399,10 @@ impl MissionCore {
             debug_weapon_index: 0,
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
             debug_trail: Default::default(),
+            psi_portal: Default::default(),
+            offscreen_passes: Vec::new(),
+            portal_view: None,
+            last_cull_view: None,
             flat_melee_anim: None,
             thrown_items: Default::default(),
             use_mode: false,
@@ -17427,10 +17440,30 @@ impl MissionCore {
             projection,
             screen_size,
         };
+        self.last_cull_view = Some((view, projection));
         profile!(
             scope: "render", level: DEBUG, "visibility_engine.prepare",
             self.visibility_engine
                 .prepare(self.spatial_data.as_deref(), &self.world, &culling_info)
+        );
+        // The portal's remote camera: the same view, translated to its eye
+        // and narrowed to the sphere (grown by the gate's slack).
+        let portal = self.portal_view.and_then(|portal| {
+            let (view, projection) = portal.cull(view, projection)?;
+            let info = CullingInfo {
+                view,
+                projection,
+                screen_size,
+            };
+            Some((info, portal.anchor_eye))
+        });
+        profile!(
+            scope: "render", level: DEBUG, "visibility_engine.prepare_secondary",
+            self.visibility_engine.prepare_secondary(
+                self.spatial_data.as_deref(),
+                &self.world,
+                portal.as_ref().map(|(info, eye)| (info, *eye)),
+            )
         );
     }
 
@@ -17513,7 +17546,7 @@ impl MissionCore {
         asset_cache: &mut AssetCache,
         options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        let _v_position = self.world.borrow::<View<PropPosition>>().unwrap();
+        let v_position = self.world.borrow::<View<PropPosition>>().unwrap();
         let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let v_frame_state = self.world.borrow::<View<PropFrameAnimState>>().unwrap();
         let v_render_type = self.world.borrow::<View<PropRenderType>>().unwrap();
@@ -17666,6 +17699,37 @@ impl MissionCore {
                 .collect()
         };
 
+        // The psi portal's remote camera is culled separately (`finish_render`);
+        // the entity loops below build objects for either view in one pass.
+        // Only while the marker's cell and the sphere are in view, and never
+        // with the player's eye inside the sphere (right after casting it
+        // stands at the eye).
+        let player_eye = crate::psi_portal::eye_point(
+            self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos,
+        );
+        self.portal_view = options
+            .experimental_features
+            .contains(crate::psi_portal::EXPERIMENTAL_FLAG)
+            .then(|| crate::psi_teleport::marker(&self.world))
+            .flatten()
+            .filter(|(marker, _)| self.visibility_engine.is_visible(*marker))
+            .map(|(id, marker)| {
+                let rotation = v_position
+                    .get(id)
+                    .map_or(Quaternion::new(1.0, 0.0, 0.0, 0.0), |p| p.rotation);
+                crate::psi_portal::PortalView::at_marker(
+                    marker,
+                    rotation,
+                    crate::dev_params::get(crate::dev_params::PSI_PORTAL_REMOTE_OFFSET),
+                )
+            })
+            .filter(|view| view.clear_of(player_eye))
+            .filter(|view| {
+                self.last_cull_view
+                    .is_none_or(|(camera, projection)| view.cull(camera, projection).is_some())
+            });
+        let mut portal_cull = crate::psi_portal::PortalCull::new(self.portal_view.is_some());
+
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
@@ -17688,9 +17752,10 @@ impl MissionCore {
             }
 
             let visible = self.visibility_engine.is_visible(*entity_id);
+            let remote = portal_cull.sees(self.visibility_engine.as_mut(), *entity_id, visible);
             let echo = radar_contacts.get(&entity_id.inner()).copied();
             let item_echo = item_contacts.get(&entity_id.inner()).copied();
-            if !visible && echo.is_none() && item_echo.is_none() {
+            if !visible && !remote && echo.is_none() && item_echo.is_none() {
                 continue;
             }
 
@@ -17861,10 +17926,13 @@ impl MissionCore {
                     }
                     if visible {
                         scene.push(xformed_obj);
+                    } else if remote {
+                        portal_cull.pass_only.push(xformed_obj);
                     }
                 }
 
-                if options.debug_skeletons {
+                // Entities only the portal sees get no main-scene skeleton.
+                if options.debug_skeletons && (visible || !remote) {
                     if let Ok(joint_transforms) = v_joint_transforms.get(*entity_id) {
                         let world_joints: Vec<Matrix4<f32>> = joint_transforms
                             .0
@@ -17940,9 +18008,15 @@ impl MissionCore {
             for (particle_entity_id, particle_system) in &self.id_to_particle_system {
                 // A world-space trail outlives its emitter's cell, so culling
                 // it with the emitter would drop the whole streak at a portal.
-                if !particle_system.is_world_space()
-                    && !self.visibility_engine.is_visible(*particle_entity_id)
-                {
+                let world_space = particle_system.is_world_space();
+                let visible = world_space || self.visibility_engine.is_visible(*particle_entity_id);
+                let remote = !world_space
+                    && portal_cull.sees(
+                        self.visibility_engine.as_mut(),
+                        *particle_entity_id,
+                        visible,
+                    );
+                if !visible && !remote {
                     continue;
                 }
 
@@ -17962,7 +18036,11 @@ impl MissionCore {
                 for object in &mut particle_systems {
                     object.set_debug_tag(Some(debug_tag.clone()));
                 }
-                scene.extend(particle_systems);
+                if visible {
+                    scene.extend(particle_systems);
+                } else {
+                    portal_cull.pass_only.extend(particle_systems);
+                }
             }
         }
 
@@ -18353,6 +18431,15 @@ impl MissionCore {
 
         // Player trail: shared world pass, so flat and VR draw the same lines.
         scene.extend(self.debug_trail.render());
+
+        // Teleport anchor: a world object in both presentations. Its pass views
+        // the scene built so far (debug overlays below are left out of it).
+        self.offscreen_passes.clear();
+        if let Some(view) = self.portal_view {
+            let (sphere, pass) = self.psi_portal.render(view, &scene, portal_cull);
+            scene.push(sphere);
+            self.offscreen_passes.push(pass);
+        }
 
         // Render debug physics
         if crate::dev_params::get_bool(crate::dev_params::DEBUG_PHYSICS) {
@@ -24421,6 +24508,10 @@ impl crate::game_scene::GameScene for MissionCore {
         options: &GameOptions,
     ) -> Vec<SceneObject> {
         self.render_per_eye(asset_cache, view, projection, screen_size, options)
+    }
+
+    fn take_offscreen_passes(&mut self) -> Vec<std::rc::Rc<engine::scene::OffscreenPass>> {
+        std::mem::take(&mut self.offscreen_passes)
     }
 
     fn finish_render(

@@ -194,3 +194,17 @@ fn oblique_long_portals_retain_their_visible_middle() {
         assert!(intersects(&screen, &bounds).is_some(), "angle={angle}");
     }
 }
+
+#[test]
+fn secondary_view_mirrors_main_until_culled_separately() {
+    let mut world = World::new();
+    let id = world.add_entity((position(-1.0), PropHasRefs(true)));
+    let mut engine = PortalVisibilityEngine::new();
+    engine.update_entities(&world, &HashSet::from([0]), membership);
+    assert!(engine.is_visible_secondary(id));
+    let mut secondary = HashMap::new();
+    engine.entity_visibility(&world, &HashSet::from([1]), membership, &mut secondary);
+    engine.secondary_visible = Some(secondary);
+    assert!(engine.is_visible(id));
+    assert!(!engine.is_visible_secondary(id));
+}

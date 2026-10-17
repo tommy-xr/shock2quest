@@ -617,6 +617,13 @@ dev_params! {
     /// The player loses no hit points from any source, so never shows the hit
     /// tint or dies - keeps deterministic captures from being spoiled by damage.
     CHEAT = Root::bool("cheat", "Cheat: invulnerable", false),
+    /// Moves the psi portal's remote camera this many world units off the
+    /// Quantum Relocation anchor, along the marker's facing, so the sphere
+    /// previews a genuine other-place view (`psi_portal` flag). 0 = the anchor.
+    PSI_PORTAL_REMOTE_OFFSET = Root::float("psi_portal_remote_offset", "Portal remote offset", 0.0, -20.0, 20.0, 0.5),
+    /// Renders the psi portal's view once per VR eye, stereo-correct, instead
+    /// of once per frame from the head centre (Quest only; flat is mono).
+    PSI_PORTAL_STEREO = Root::bool("psi_portal_stereo", "Portal stereo pass", false),
     /// Developer flight uses the established Agility-1 rate [`PLAYER_MOVE_SPEED`].
     /// Stat upgrades do not change it. These are SS2 units, not world
     /// units per second: the consumer divides by `dark::SCALE_FACTOR` (2.5)

@@ -102,6 +102,12 @@ pub trait GameScene {
         options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>);
 
+    /// Offscreen passes the last `render` built, for the runtime to hand to
+    /// the engine with that frame's scene.
+    fn take_offscreen_passes(&mut self) -> Vec<std::rc::Rc<engine::scene::OffscreenPass>> {
+        Vec::new()
+    }
+
     /// VR-specific per-eye rendering
     fn render_per_eye(
         &mut self,

@@ -1525,10 +1525,27 @@ fn main() {
         }
         let scene_started = Instant::now();
         let (scene, camera_pos, camera_rot) = game.render();
+        let time = now.elapsed().as_secs_f32();
+        // Offscreen passes render once, from the head centre, for both eyes to
+        // sample; `psi_portal_stereo` renders them per eye instead.
+        let mut offscreen_passes = game.take_offscreen_passes();
+        if !shock2vr::dev_params::get_bool(shock2vr::dev_params::PSI_PORTAL_STEREO) {
+            render_centre_passes(
+                &game,
+                &engine,
+                camera_pos,
+                camera_rot,
+                std::mem::take(&mut offscreen_passes),
+                &views,
+                head_centre_stage,
+                tracking,
+                time,
+                benchmark_run.as_ref(),
+            );
+        }
         let scene_elapsed = scene_started.elapsed();
 
         // Render to each eye
-        let time = now.elapsed().as_secs_f32();
         let (left_eye_elapsed, _) = xr_try!(
             "render_left_eye",
             render_swapchain(
@@ -1543,6 +1560,7 @@ fn main() {
                 tracking,
                 true,
                 &scene,
+                &offscreen_passes,
                 benchmark_run.as_ref(),
                 false,
             )
@@ -1561,6 +1579,7 @@ fn main() {
                 tracking,
                 true,
                 &scene,
+                &offscreen_passes,
                 benchmark_run.as_ref(),
                 true,
             )
@@ -1954,6 +1973,72 @@ fn stage_offset_meters() -> f32 {
     shock2vr::dev_params::get(shock2vr::dev_params::EYE_HEIGHT_OFFSET)
 }
 
+fn hand_lights(
+    game: &App,
+    benchmark: Option<&shock2vr::benchmark_scene::BenchmarkRun>,
+) -> Vec<engine::scene::light::SceneLight> {
+    match benchmark {
+        Some(benchmark) => benchmark
+            .scene
+            .spotlight()
+            .map(Into::into)
+            .into_iter()
+            .collect(),
+        None => game.get_hand_lights(),
+    }
+}
+
+/// Renders `passes` from the midpoint of the eyes, with a projection that
+/// covers both eyes' fields of view.
+#[allow(clippy::too_many_arguments)]
+fn render_centre_passes(
+    game: &App,
+    engine: &Box<dyn engine::Engine>,
+    camera_pos: Vector3<f32>,
+    camera_rot: Quaternion<f32>,
+    passes: Vec<std::rc::Rc<engine::scene::OffscreenPass>>,
+    views: &[xr::View],
+    head_centre_stage: Vector3<f32>,
+    tracking: shock2vr::vr_tracking::TrackingTransform,
+    time: f32,
+    benchmark: Option<&shock2vr::benchmark_scene::BenchmarkRun>,
+) {
+    if passes.is_empty() {
+        return;
+    }
+    let (left, right) = (views[0].fov, views[1].fov);
+    // Each eye sits half the IPD to the side of the centre, so it sees a
+    // little past the centre's outer edges; widen them so a sphere there
+    // still renders (about 2 degrees at the closest the portal allows).
+    let eye_slack = 5f32.to_radians();
+    let fov = xr::Fovf {
+        angle_left: left.angle_left.min(right.angle_left) - eye_slack,
+        angle_right: left.angle_right.max(right.angle_right) + eye_slack,
+        angle_up: left.angle_up.max(right.angle_up),
+        angle_down: left.angle_down.min(right.angle_down),
+    };
+    let projection = create_projection_matrix(&fov, shock2vr::NEAR_PLANE, shock2vr::FAR_PLANE);
+    let q = views[0].pose.orientation;
+    let head_rotation = Quaternion::new(q.w, q.x, q.y, q.z);
+    let camera = game.resolve_camera(
+        camera_pos,
+        camera_rot,
+        tracking.stage_to_pawn(head_centre_stage),
+        head_rotation,
+    );
+    // Each pass renders at its target's size, so the screen size is unused.
+    let context = camera.into_render_context(time, projection, vec2(1.0, 1.0));
+    let mut scene = Scene::from_objects(Vec::new());
+    scene.offscreen_passes = passes;
+    for spotlight in hand_lights(game, benchmark) {
+        scene.lights_mut().add_light(spotlight);
+    }
+    profile!(
+        "[oculus.engine.render_offscreen_passes]",
+        engine.render_offscreen_passes(&context, &scene)
+    );
+}
+
 fn render_swapchain(
     game: &mut App,
     engine: &Box<dyn engine::Engine>,
@@ -1968,6 +2053,7 @@ fn render_swapchain(
     tracking: shock2vr::vr_tracking::TrackingTransform,
     _log: bool,
     scene: &Vec<SceneObject>,
+    offscreen_passes: &[std::rc::Rc<engine::scene::OffscreenPass>],
     benchmark: Option<&shock2vr::benchmark_scene::BenchmarkRun>,
     is_last: bool,
 ) -> xr::Result<(Duration, Duration)> {
@@ -2029,19 +2115,10 @@ fn render_swapchain(
         // gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
         let mut scene_for_render = Scene::from_objects(all_scene_objs);
+        scene_for_render.offscreen_passes = offscreen_passes.to_vec();
 
         // Add hand spotlights (`hand_spotlights` dev param)
-        let hand_spotlights = if let Some(benchmark) = benchmark {
-            benchmark
-                .scene
-                .spotlight()
-                .map(Into::into)
-                .into_iter()
-                .collect()
-        } else {
-            game.get_hand_lights()
-        };
-        for spotlight in hand_spotlights {
+        for spotlight in hand_lights(game, benchmark) {
             scene_for_render.lights_mut().add_light(spotlight);
         }
 
