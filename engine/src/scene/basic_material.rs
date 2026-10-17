@@ -8,6 +8,7 @@ use crate::engine::EngineRenderContext;
 use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
 
+use super::material::Glow;
 use crate::texture::TextureTrait;
 use c_string::*;
 use cgmath::Matrix4;
@@ -54,6 +55,9 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         // Material properties
         uniform sampler2D texture1;
         uniform float emissivity;
+        // Per-draw glow, added regardless of authored emission, inside a UV rect.
+        uniform vec3 glow;
+        uniform vec4 glowRect;
         // Darkens a glow part's lit colour along with its glow (see `lit_scale`).
         uniform float litScale;
         uniform float ambientIntensity;
@@ -161,6 +165,10 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 
 
             vec3 finalColor = texColor.rgb * emissivity;
+            // Mostly flat, so dark metal heats up too; a little detail keeps its form.
+            vec2 inRect = step(glowRect.xy, texCoord) * step(texCoord, glowRect.zw);
+            finalColor += glow * inRect.x * inRect.y
+                * (0.6 + 0.4 * dot(texColor.rgb, vec3(0.299, 0.587, 0.114)));
 
             // Light reaching the surface before albedo, shared with the shine.
             vec3 normal = normalize(worldNormal);
@@ -191,6 +199,8 @@ struct UnifiedUniforms {
 
     // Material properties
     emissivity_loc: i32,
+    glow_loc: i32,
+    glow_rect_loc: i32,
     lit_scale_loc: i32,
     ambient_intensity_loc: i32,
     transparency_loc: i32,
@@ -222,6 +232,8 @@ where
     emissivity: f32,
     /// Per-draw multiplier from `Material::set_emissivity_scale`.
     emissivity_scale: f32,
+    /// Per-draw glow from `Material::set_glow`.
+    glow: Glow,
     transparency: f32,
     base_transparency: f32,
     additive_unlit: bool,
@@ -296,6 +308,15 @@ where
             gl::Uniform1f(
                 uniforms.emissivity_loc,
                 self.emissivity * self.emissivity_scale,
+            );
+            let Glow { color, uv_rect } = self.glow;
+            gl::Uniform3f(uniforms.glow_loc, color.x, color.y, color.z);
+            gl::Uniform4f(
+                uniforms.glow_rect_loc,
+                uv_rect.x,
+                uv_rect.y,
+                uv_rect.z,
+                uv_rect.w,
             );
             gl::Uniform1f(
                 uniforms.lit_scale_loc,
@@ -379,6 +400,10 @@ where
 
     fn set_emissivity_scale(&mut self, scale: f32) {
         self.emissivity_scale = scale;
+    }
+
+    fn set_glow(&mut self, glow: Glow) {
+        self.glow = glow;
     }
 
     fn set_diffuse_texture(&mut self, texture: std::rc::Rc<dyn TextureTrait>) {
@@ -474,6 +499,11 @@ where
                     emissivity_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("emissivity").as_ptr(),
+                    ),
+                    glow_loc: gl::GetUniformLocation(shader.gl_id, c_str!("glow").as_ptr()),
+                    glow_rect_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("glowRect").as_ptr(),
                     ),
                     lit_scale_loc: gl::GetUniformLocation(
                         shader.gl_id,
@@ -686,6 +716,7 @@ where
         diffuse_override: None,
         emissivity,
         emissivity_scale: 1.0,
+        glow: Glow::NONE,
         transparency,
         base_transparency: transparency,
         additive_unlit,
@@ -713,6 +744,7 @@ where
         diffuse_override: None,
         emissivity,
         emissivity_scale: 1.0,
+        glow: Glow::NONE,
         transparency,
         base_transparency: transparency,
         additive_unlit: false,
@@ -736,6 +768,7 @@ where
         diffuse_override: None,
         emissivity: 1.0,
         emissivity_scale: 1.0,
+        glow: Glow::NONE,
         transparency,
         base_transparency: transparency,
         additive_unlit: false,
@@ -759,6 +792,7 @@ pub fn create_incidence(
         diffuse_override: None,
         emissivity: 0.0,
         emissivity_scale: 1.0,
+        glow: Glow::NONE,
         transparency: 0.0,
         base_transparency: 0.0,
         additive_unlit: false,

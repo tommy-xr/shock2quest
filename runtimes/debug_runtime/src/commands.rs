@@ -356,6 +356,14 @@ pub struct CarriedLightSummary {
     pub range: f32,
 }
 
+/// A per-draw glow, as `SceneObjectSummary::glow` reports it.
+#[derive(Clone, Debug, Serialize)]
+pub struct GlowSummary {
+    pub color: [f32; 3],
+    /// Texture-space rect it is limited to: min u, min v, max u, max v.
+    pub uv_rect: [f32; 4],
+}
+
 /// One scene object as submitted to the renderer
 #[derive(Clone, Debug, Serialize)]
 pub struct SceneObjectSummary {
@@ -374,6 +382,8 @@ pub struct SceneObjectSummary {
     /// Transparency in effect for this draw (0.0 = opaque, 1.0 = invisible).
     pub transparency: Option<f32>,
     pub depth_write: bool,
+    /// Glow added this draw (e.g. an overloaded psi amp).
+    pub glow: Option<GlowSummary>,
     /// Authored passes in draw order (empty for ordinary materials).
     pub material_passes: Vec<String>,
     /// Per-instance weights supplied to deformable object geometry.

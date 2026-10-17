@@ -554,6 +554,8 @@ export interface SceneObjectSummary {
   /** Transparency in effect for this draw (0 = opaque, 1 = invisible). */
   transparency: number | null;
   depth_write: boolean;
+  /** Glow added this draw (e.g. an overloaded psi amp), limited to a UV rect [minU, minV, maxU, maxV]. */
+  glow: { color: [number, number, number]; uv_rect: [number, number, number, number] } | null;
   /** Authored material passes in draw order. */
   material_passes?: string[];
   /** Per-instance weights on deformable LGMD object geometry. */

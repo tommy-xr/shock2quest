@@ -3229,6 +3229,8 @@ pub struct MissionCore {
     psi_drain_trails: Vec<crate::psi_visuals::DrainTrail>,
     psi_pull: Option<crate::psi_pull::Flight>,
     healing_pulses: HashMap<EntityId, f32>,
+    /// Seconds since each amp's overload cast, while its red flash lasts.
+    overload_glows: HashMap<EntityId, f32>,
     pub entity_info: Arc<SystemShock2EntityInfo>,
     pub physics: PhysicsWorld,
     pub script_world: ScriptWorld,
@@ -4369,6 +4371,7 @@ impl MissionCore {
             psi_drain_trails: Vec::new(),
             psi_pull: None,
             healing_pulses: HashMap::new(),
+            overload_glows: HashMap::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
             rag_doll_manager: RagDollManager::new(),
@@ -5846,6 +5849,10 @@ impl MissionCore {
         self.healing_pulses.retain(|_, age| {
             *age += time.elapsed.as_secs_f32();
             *age < 1.0
+        });
+        self.overload_glows.retain(|_, age| {
+            *age += time.elapsed.as_secs_f32();
+            *age < crate::psi_overload_glow::ATTACK_SECS
         });
         self.psi_drain_trails
             .retain_mut(|trail| trail.advance(time.elapsed));
@@ -12641,6 +12648,9 @@ impl MissionCore {
                     fraction,
                     phase,
                 } => {
+                    if phase == crate::runtime_props::PsiChargePhase::Overloaded {
+                        self.overload_glows.insert(entity_id, 0.0);
+                    }
                     self.world.add_component(
                         entity_id,
                         crate::runtime_props::RuntimePropPsiCharge { fraction, phase },
@@ -12648,6 +12658,9 @@ impl MissionCore {
                 }
 
                 Effect::ClearPsiCharge { entity_id } => {
+                    // The glow is the meter's overload flash: dropping or
+                    // holstering the amp cuts both short together.
+                    self.overload_glows.remove(&entity_id);
                     let mut v_charge = self
                         .world
                         .borrow::<ViewMut<crate::runtime_props::RuntimePropPsiCharge>>()
@@ -17067,6 +17080,14 @@ impl MissionCore {
                         ..Default::default()
                     });
                     let emissivity_scale = crate::emissive_cue::held_scale(&self.world, weapon);
+                    let heat = crate::psi_overload_glow::color(
+                        self.world
+                            .borrow::<View<crate::runtime_props::RuntimePropPsiCharge>>()
+                            .unwrap()
+                            .get(weapon)
+                            .ok(),
+                        self.overload_glows.get(&weapon).copied(),
+                    );
                     for obj in scene_objs {
                         let mut o = obj.clone();
                         o.set_transform(xform);
@@ -17074,6 +17095,9 @@ impl MissionCore {
                         o.set_lights(weapon_lights.clone());
                         o.set_debug_tag(Some(weapon_tag.clone()));
                         o.set_emissivity_scale(emissivity_scale);
+                        o.set_glow(heat.and_then(|heat| {
+                            crate::psi_overload_glow::glow(heat, o.material_name.as_deref())
+                        }));
                         crate::psi_invisibility::apply(&mut o, invisibility);
                         ret.push(o);
                     }
@@ -17526,6 +17550,10 @@ impl MissionCore {
             .borrow::<View<dark::properties::PropSelfIllumination>>()
             .unwrap();
         let v_animated_light = self.world.borrow::<View<PropAnimLight>>().unwrap();
+        let v_psi_charge = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropPsiCharge>>()
+            .unwrap();
         // Debug-only provenance, so tooling can report which entity/model each
         // rendered object came from.
         let v_model_name = self.world.borrow::<View<PropModelName>>().unwrap();
@@ -17819,6 +17847,10 @@ impl MissionCore {
                     (Some(cue), Some(light)) => Some(cue * light),
                     (cue, light) => cue.or(light),
                 };
+                let heat = crate::psi_overload_glow::color(
+                    v_psi_charge.get(*entity_id).ok(),
+                    self.overload_glows.get(entity_id).copied(),
+                );
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(visual_xform);
@@ -17826,6 +17858,9 @@ impl MissionCore {
                     xformed_obj.set_lights(entity_lights.clone());
                     xformed_obj.self_depth_group = self_depth_group;
                     xformed_obj.set_emissivity_scale(emissivity_scale);
+                    xformed_obj.set_glow(heat.and_then(|heat| {
+                        crate::psi_overload_glow::glow(heat, xformed_obj.material_name.as_deref())
+                    }));
                     if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);
                         xformed_obj.set_skinned_transparency(Some(0.35));
