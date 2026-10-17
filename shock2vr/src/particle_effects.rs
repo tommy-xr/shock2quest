@@ -64,13 +64,16 @@ pub(crate) fn barrel_smoke(
     Some(smoke)
 }
 
-/// The report of a creature's gun. Creature launches author no flash of their
-/// own (only turret guns carry `GunFlash`), so these are keyed by the round.
+/// The report of an AI's gun, keyed by the round. Creature launches author no
+/// flash of their own; turret guns may carry `GunFlash` and take only the
+/// smoke and sprite flash from here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AiMuzzle {
     Slug,
     Midwife,
     DroidLaser,
+    /// The laser turret's bolt is red; otherwise it reports like the droid's.
+    TurretLaser,
 }
 
 impl AiMuzzle {
@@ -79,6 +82,8 @@ impl AiMuzzle {
             ("grunt shotgun slug", Self::Slug),
             ("midwife shot", Self::Midwife),
             ("droid laser bolt", Self::DroidLaser),
+            ("turret slug", Self::Slug),
+            ("turret laser bolt", Self::TurretLaser),
         ]
         .into_iter()
         .find_map(|(name, kind)| (lookup(name) == Some(template)).then_some(kind))
@@ -97,7 +102,7 @@ impl AiMuzzle {
     /// security droid's launch offset is its cannon's breech.
     pub fn barrel_reach(self) -> f32 {
         match self {
-            Self::Slug | Self::Midwife => 0.0,
+            Self::Slug | Self::Midwife | Self::TurretLaser => 0.0,
             Self::DroidLaser => 2.0,
         }
     }
@@ -116,7 +121,7 @@ impl AiMuzzle {
                 count: 3,
                 sprite_flash: None,
             },
-            Self::DroidLaser => AiReport {
+            Self::DroidLaser | Self::TurretLaser => AiReport {
                 smoke: Kind::Laser,
                 scale: 3.0,
                 alpha: 1.5,
@@ -134,6 +139,11 @@ impl AiMuzzle {
                 sprite_flash: None,
             },
         }
+    }
+
+    /// Smoke and flash colour, where it differs from the borrowed profile's.
+    fn tint(self) -> Option<cgmath::Vector3<f32>> {
+        matches!(self, Self::TurretLaser).then_some(vec3(1.0, 0.3, 0.25))
     }
 }
 
@@ -161,6 +171,7 @@ pub(crate) fn ai_muzzle_particles(
 ) -> (Option<ParticleSystem>, Option<ParticleSystem>) {
     let report = kind.report();
     let profile = BarrelSmokeProfile::for_weapon(report.smoke);
+    let color = kind.tint().unwrap_or(profile.color);
     let launch = |mut system: ParticleSystem| {
         system.update(Duration::ZERO, frame);
         system
@@ -170,6 +181,7 @@ pub(crate) fn ai_muzzle_particles(
         .map(|frames| {
             launch(
                 smoke_particles(report.smoke, report.scale, frames)
+                    .with_color(color)
                     .with_alpha(profile.alpha * report.alpha)
                     .with_num_particles(report.count)
                     .with_lifetime(
@@ -181,7 +193,7 @@ pub(crate) fn ai_muzzle_particles(
         });
     let flash = report.sprite_flash.and_then(|size| {
         let frames = particle_frames(assets, "NDsbll");
-        (!frames.is_empty()).then(|| launch(flash_particles(profile.color, size, frames)))
+        (!frames.is_empty()).then(|| launch(flash_particles(color, size, frames)))
     });
     (smoke, flash)
 }
@@ -803,7 +815,15 @@ mod tests {
         assert!(midwife.alpha < droid.alpha && droid.alpha < slug.alpha);
         assert!(midwife.sprite_flash.is_none() && slug.sprite_flash.is_none());
         assert!(droid.sprite_flash.is_some());
-        for kind in [AiMuzzle::Slug, AiMuzzle::Midwife, AiMuzzle::DroidLaser] {
+        // The laser turret's red bolt gets a red report.
+        let red = AiMuzzle::TurretLaser.tint().unwrap();
+        assert!(red.x > red.y && red.x > red.z, "{red:?}");
+        for kind in [
+            AiMuzzle::Slug,
+            AiMuzzle::Midwife,
+            AiMuzzle::DroidLaser,
+            AiMuzzle::TurretLaser,
+        ] {
             let report = kind.report();
             let mut smoke = smoke_particles(report.smoke, report.scale, vec![]);
             smoke.update(Duration::ZERO, Matrix4::identity());
