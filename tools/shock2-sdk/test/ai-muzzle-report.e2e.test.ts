@@ -5,23 +5,25 @@ import { GameServer } from "../src/index.js";
 
 // A creature's shot shows its report at the weapon, not just the bare
 // projectile: the hybrid's flash and smoke, the droid's quieter laser flash
-// and wisp, and the midwife's faint wisp. `debug_ai_ranged` stands a shotgun
-// hybrid, a midwife and a security droid ahead of the player. Each case keeps one
-// shooter alive: another's round in flight blocks a line of fire, which can
-// hold a shooter's trigger for the whole window.
+// and wisp, and the midwife's faint wisp, each with its gunshot.
+// `debug_ai_ranged` stands a shotgun hybrid, a midwife and a security droid
+// ahead of the player. Each case keeps one shooter alive: another's round in
+// flight blocks a line of fire, which can hold a shooter's trigger for the
+// whole window.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-const ROUNDS: Record<string, string> = {
-  "OG-Shotgun": "Grunt Shotgun Slug",
-  Midwife: "Midwife Shot",
-  Security: "Droid Laser Bolt",
+// Shooter -> [round, gunshot sample resolved from the round's launch schema].
+const ROUNDS: Record<string, [string, string]> = {
+  "OG-Shotgun": ["Grunt Shotgun Slug", "ogsgun"],
+  Midwife: ["Midwife Shot", "f_mwlas"],
+  Security: ["Droid Laser Bolt", "fdrolas"],
 };
 
 function distance(a: [number, number, number], b: [number, number, number]): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
-for (const [shooterName, roundName] of Object.entries(ROUNDS)) {
+for (const [shooterName, [roundName, gunshot]] of Object.entries(ROUNDS)) {
   test(
     `${shooterName} fires with its muzzle report`,
     { skip: !e2eEnabled, timeout: 300_000 },
@@ -63,6 +65,13 @@ for (const [shooterName, roundName] of Object.entries(ROUNDS)) {
 
       assert.ok(firedAt !== undefined, `${shooterName} must fire within the window`);
       assert.ok(sprites.has("NDsmk"), `${shooterName}'s shot must leave barrel smoke`);
+      const launches = (await game.audio.recent()).sounds.filter((s) =>
+        s.tags.some(([tag, value]) => tag === "event" && value === "launch"),
+      );
+      assert.ok(
+        launches.some((s) => s.sample.toLowerCase().startsWith(gunshot)),
+        `${shooterName}'s shot must play its gunshot (${launches.map((s) => s.sample)})`,
+      );
       if (shooterName === "OG-Shotgun") {
         // Ahead of the body at the gun, and short of where the round spawns
         // (a clearance unit beyond the launch joint).
