@@ -74,6 +74,7 @@ pub mod basic_material;
 pub use basic_material::BasicMaterial;
 
 pub mod color_material;
+pub mod cone;
 pub mod cylinder;
 pub mod laser_material;
 pub use color_material::ColorMaterial;

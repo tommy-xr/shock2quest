@@ -76,6 +76,10 @@ pub struct EntitySaveData {
     pub projectile_launchers: Vec<(u64 /* projectile */, u64 /* launcher */)>,
     #[serde(default)]
     pub projectile_velocities: HashMap<u64, cgmath::Vector3<f32>>,
+    /// Projectiles created in slow time keep their trail after load, whatever
+    /// the world scale is then.
+    #[serde(default)]
+    pub slow_time_projectiles: Vec<u64 /* entity id */>,
     #[serde(default)]
     pub thrown_props: HashMap<u64, crate::throwing::SavedThrow>,
     /// Runtime Add/Remove metaproperty relation deltas. The resulting Dark
@@ -112,6 +116,7 @@ impl EntitySaveData {
             shoulder_weapons: HashMap::new(),
             canonical_template_ids: HashMap::new(),
             launched_projectiles: Vec::new(),
+            slow_time_projectiles: Vec::new(),
             player_fired_projectiles: Vec::new(),
             projectile_launchers: Vec::new(),
             projectile_velocities: HashMap::new(),
@@ -273,6 +278,15 @@ impl EntitySaveData {
             let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
             if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
                 world.add_component(*new_entity_id, RuntimePropLaunchedProjectile);
+            }
+        }
+        for old_entity_id in &self.slow_time_projectiles {
+            let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
+            if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
+                world.add_component(
+                    *new_entity_id,
+                    crate::runtime_props::RuntimePropSlowTimeProjectile,
+                );
             }
         }
         for old_entity_id in &self.player_fired_projectiles {
@@ -741,6 +755,37 @@ mod tests {
             .borrow::<View<RuntimePropCanonicalTemplateId>>()
             .unwrap();
         assert_eq!(canonical.get(new_entity).unwrap().0, -1358);
+    }
+
+    #[test]
+    fn a_slow_time_projectile_keeps_its_marker_across_a_save() {
+        use crate::mission::{GlobalTemplateIdMap, PlayerInfo};
+        use crate::runtime_props::{RuntimePropDoNotSerialize, RuntimePropSlowTimeProjectile};
+        let mut world = World::new();
+        let player = world.add_entity(RuntimePropDoNotSerialize);
+        let inventory = world.add_entity(());
+        let slowed =
+            world.add_entity((RuntimePropLaunchedProjectile, RuntimePropSlowTimeProjectile));
+        let normal = world.add_entity(RuntimePropLaunchedProjectile);
+        world.add_unique(GlobalTemplateIdMap(HashMap::new()));
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            inventory_entity_id: inventory,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+        });
+        let (saved, _) = crate::save_load::to_save_data(&world);
+        let encoded = serde_json::to_string(&saved).unwrap();
+        let decoded: EntitySaveData = serde_json::from_str(&encoded).unwrap();
+        let mut restored = World::new();
+        let (_, remapped) = decoded.instantiate(&mut restored);
+        let markers = restored
+            .borrow::<View<RuntimePropSlowTimeProjectile>>()
+            .unwrap();
+        assert!(markers.contains(remapped[&slowed]));
+        assert!(!markers.contains(remapped[&normal]));
     }
 
     #[test]

@@ -325,6 +325,16 @@ pub(crate) fn to_transition_save_data(
         .map(|(entity_id, _)| entity_id.inner())
         .filter(|entity_id| !entities_to_filter.contains(entity_id))
         .partition(|entity_id| held_entities.contains(entity_id));
+    let world_slow_time_projectiles: Vec<u64> = world
+        .borrow::<View<crate::runtime_props::RuntimePropSlowTimeProjectile>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .map(|(entity_id, _)| entity_id.inner())
+        .filter(|entity_id| {
+            !entities_to_filter.contains(entity_id) && !held_entities.contains(entity_id)
+        })
+        .collect();
     let world_projectile_launchers = world
         .borrow::<View<crate::runtime_props::RuntimePropProjectileLauncher>>()
         .unwrap()
@@ -433,6 +443,7 @@ pub(crate) fn to_transition_save_data(
         player_fired_projectiles: world_player_fired_projectiles,
         projectile_launchers: world_projectile_launchers,
         projectile_velocities: world_velocities.into_iter().collect(),
+        slow_time_projectiles: world_slow_time_projectiles,
         thrown_props,
         meta_properties: world_meta_properties,
         script_states: world_script_states,
@@ -461,6 +472,7 @@ pub(crate) fn to_transition_save_data(
         player_fired_projectiles: held_player_fired_projectiles,
         projectile_launchers: Vec::new(),
         projectile_velocities: held_velocities.into_iter().collect(),
+        slow_time_projectiles: Vec::new(),
         thrown_props: cargo_thrown_props,
         meta_properties: held_meta_properties,
         script_states: held_script_states,
