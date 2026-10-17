@@ -24446,6 +24446,13 @@ impl crate::game_scene::GameScene for MissionCore {
         true
     }
 
+    fn world_time(&self) -> Option<std::time::Duration> {
+        self.world
+            .borrow::<UniqueView<Time>>()
+            .ok()
+            .map(|t| t.total)
+    }
+
     fn update(
         &mut self,
         time: &Time,

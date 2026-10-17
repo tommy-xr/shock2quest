@@ -190,6 +190,12 @@ pub trait GameScene {
         false
     }
 
+    /// Total of the world clock (slowed by `world_time_scale`, frozen while
+    /// paused), for scenes that run one. Animated world textures render on it.
+    fn world_time(&self) -> Option<std::time::Duration> {
+        None
+    }
+
     /// Whether the player's collider is currently crouched (the *actual*
     /// physics state - stand-up can be refused for lack of headroom). Drives
     /// the crouch-aware camera height; non-mission scenes have no player.

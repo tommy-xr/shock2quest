@@ -305,6 +305,8 @@ pub struct StepResult {
     pub time_advanced: f32,
     pub new_frame_index: u64,
     pub new_total_time: f32,
+    /// The clock animated world textures render on (`Game::render_time`).
+    pub render_time: f32,
 }
 
 /// Specification for taking a screenshot

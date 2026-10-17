@@ -580,7 +580,6 @@ fn main() {
     // Set once a scene has asked to quit and we've asked OpenXR to exit, so the
     // request is made exactly once (the runtime takes several frames to answer).
     let mut exit_requested = false;
-    let now = Instant::now();
     let engine = engine::android();
     let bundle_storage = engine.get_storage();
     // Quest has no launch-flag UI: ship the physical gun path, including
@@ -1528,7 +1527,7 @@ fn main() {
         let scene_elapsed = scene_started.elapsed();
 
         // Render to each eye
-        let time = now.elapsed().as_secs_f32();
+        let time = game.render_time();
         let (left_eye_elapsed, _) = xr_try!(
             "render_left_eye",
             render_swapchain(

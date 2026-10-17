@@ -537,7 +537,7 @@ pub fn main() {
                 vec3(0.0, head_height / SCALE_FACTOR, 0.0),
                 camera_rotation(&camera_context),
             )
-            .into_render_context(glfw.get_time() as f32, projection_matrix, screen_size);
+            .into_render_context(game.render_time(), projection_matrix, screen_size);
 
         let view = compute_view_matrix_from_render_context(&render_context);
         let per_eye_scene = profile!(

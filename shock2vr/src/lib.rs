@@ -824,6 +824,9 @@ pub struct Game {
     /// Wall-clock time spent with the simulation suspended, subtracted from the
     /// clock the scene sees. See [`Game::scene_time`].
     time_suspended: std::time::Duration,
+    /// The scene clock's total at the last update; the render clock of scenes
+    /// with no world clock (menus, loading). See [`Game::render_time`].
+    scene_total: std::time::Duration,
     /// Campaign simulation time, preserved across missions and saves.
     played: std::time::Duration,
     simulation_clock: fixed_step::FixedStepClock,
@@ -1711,6 +1714,7 @@ impl Game {
             handheld_input: Default::default(),
             menu_hold_ring: scenes::cutscene_skip::RingArt::default(),
             time_suspended: std::time::Duration::ZERO,
+            scene_total: std::time::Duration::ZERO,
             played,
             simulation_clock: fixed_step::FixedStepClock::new(
                 std::num::NonZeroU32::new(60).unwrap(),
@@ -1763,6 +1767,7 @@ impl Game {
         let span = span!(Level::INFO, "update");
         let _enter = span.enter();
         let delta_time = time.elapsed.as_secs_f32();
+        self.scene_total = self.scene_time(time).total;
         // Discard unconsumed output before every early return (pause/loading).
         // A short feedback pulse belongs only to the frame that requested it.
         haptics::take(self.world());
@@ -1778,7 +1783,7 @@ impl Game {
         {
             self.simulation_clock.total()
         } else {
-            self.scene_time(time).total
+            self.scene_total
         };
         audio_log::set_sim_time(diagnostic_time.as_secs_f64());
 
@@ -2120,6 +2125,20 @@ impl Game {
             elapsed: time.elapsed,
             total: time.total.saturating_sub(self.time_suspended),
         }
+    }
+
+    /// Seconds on the clock every runtime renders with
+    /// (`EngineRenderContext::time`): the world clock, so animated textures
+    /// (held items' included) slow with `world_time_scale` and stop while
+    /// paused. Scenes without one (menus, loading) use the scene clock, as
+    /// does a save load in flight, which renders its loading scene.
+    pub fn render_time(&self) -> f32 {
+        self.pending_save_load
+            .is_none()
+            .then(|| self.active_game_scene.world_time())
+            .flatten()
+            .unwrap_or(self.scene_total)
+            .as_secs_f32()
     }
 
     /// Whether the pause menu is allowed to be up right now.
@@ -3693,6 +3712,14 @@ impl App {
         match self {
             App::Ready(game) => game.update(time, input_context, action_state),
             App::MissingAssets(missing) => missing.update(time, input_context),
+        }
+    }
+
+    /// See [`Game::render_time`]. The missing-assets screen draws only text.
+    pub fn render_time(&self) -> f32 {
+        match self {
+            App::Ready(game) => game.render_time(),
+            App::MissingAssets(_) => 0.0,
         }
     }
 

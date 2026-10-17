@@ -232,6 +232,10 @@ impl crate::game_scene::GameScene for Mission {
         true
     }
 
+    fn world_time(&self) -> Option<std::time::Duration> {
+        self.mission_core.world_time()
+    }
+
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
         self.mission_core.on_exit(audio_context);
     }
