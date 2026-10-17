@@ -36,6 +36,8 @@ pub(crate) struct Carousel {
     transition: f32,
     /// (row, slot) the sphere leans ahead of a step the stick is heading for.
     lean: (f32, f32),
+    /// The power that step selects, and how far the push is toward it (0..1).
+    target: Option<(usize, f32)>,
 }
 
 /// A sparse set of purchased powers on the selected tier and its trained
@@ -211,6 +213,7 @@ impl Carousel {
                 .collect(),
             transition: 1.0,
             lean: (0.0, 0.0),
+            target: None,
             stick_latched: crate::scripts::gui::NavLatch::Held(None),
             stick: (vec2(0.0, 0.0), false),
             trigger_armed: false,
@@ -247,6 +250,7 @@ impl Carousel {
         // Toward where the target is drawn, unleaned: after earlier turns that
         // can differ from its canonical slot (a 2-power tier's -1 drawn at +1).
         self.lean = (0.0, 0.0);
+        self.target = target;
         let drawn = target.and_then(|(target, amount)| {
             let (.., row, slot) = self
                 .positions(powers, known)
@@ -257,6 +261,14 @@ impl Carousel {
         });
         self.lean = drawn.unwrap_or((0.0, 0.0));
     }
+    /// How solid the frame on `index`'s card is: dim as a push starts toward
+    /// it, solid as the push reaches the step. `None` for every other card.
+    fn frame_strength(&self, index: usize) -> Option<f32> {
+        self.target
+            .filter(|(target, _)| *target == index && index != self.index)
+            .map(|(_, amount)| 0.2 + 0.8 * amount)
+    }
+
     pub fn update(&mut self, dt: f32) {
         self.transition = (self.transition + dt / 0.25).min(1.0);
     }
@@ -352,6 +364,17 @@ impl Carousel {
                 &icon(p.power.power_id),
                 alpha,
             );
+            if let Some(strength) = self.frame_strength(index) {
+                for edge_rect in [
+                    Rect::new(0.0, 0.0, 48.0, 2.0),
+                    Rect::new(0.0, 46.0, 48.0, 2.0),
+                    Rect::new(0.0, 2.0, 2.0, 44.0),
+                    Rect::new(46.0, 2.0, 2.0, 44.0),
+                ] {
+                    card.fill(edge_rect, [90, 226, 255])
+                        .opacity(strength * edge);
+                }
+            }
             if let Some(label) = pair.and_then(|pair| {
                 if pair.current == p.template_id {
                     Some("C")
@@ -603,16 +626,22 @@ mod tests {
         };
         let start = slot_of(&menu, 1);
         assert_ne!(start, 0.0);
+        // The target's frame firms up as the push nears the step.
+        menu.lean_toward(Some((1, 0.25)), &powers, &known);
+        let faint = menu.frame_strength(1).unwrap();
         menu.lean_toward(Some((1, 1.0)), &powers, &known);
+        assert!(menu.frame_strength(1).unwrap() > faint);
+        assert_eq!(menu.frame_strength(0), None);
         let leaned = slot_of(&menu, 1);
         assert!((leaned - start * (1.0 - MAX_LEAN)).abs() < 1e-6);
         menu.preview(1, &powers, &known);
         assert!((slot_of(&menu, 1) - leaned).abs() < 1e-6);
         menu.update(0.25);
         assert_eq!(slot_of(&menu, 1), 0.0);
-        // Nothing to lean toward: the sphere sits square.
+        // Nothing to lean toward: the sphere sits square, and no card is framed.
         menu.lean_toward(None, &powers, &known);
         assert_eq!(slot_of(&menu, 1), 0.0);
+        assert_eq!(menu.frame_strength(0), None);
         // Back toward the first power, now drawn on the other side: the lean
         // still brings it toward focus.
         let start = slot_of(&menu, 0);
