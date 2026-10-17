@@ -456,6 +456,7 @@ For debugging visual/rendering changes without a full interactive session:
    curl -X POST http://127.0.0.1:8080/v1/entities/40/message -d '{"type": "TurnOn"}'
 
    # Flat debug input: right stick = movement [strafe, forward], left x = turn.
+   # Every stick reads +x as a push right and +y as a push forward.
    # With --vr: left stick = movement, right x = turn. The turn stick y
    # flies only with the player_flight dev parameter enabled (default off).
    # (Teleporting into a trigger volume fires it, same as walking in.)

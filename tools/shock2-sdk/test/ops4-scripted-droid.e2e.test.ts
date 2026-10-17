@@ -86,7 +86,7 @@ test(
     );
     // Walk around the advancing droid and through the actual opening. No
     // teleport, direct moveTo, or injected script message after initial setup.
-    await move([-1, 0], 8);
+    await move([1, 0], 8);
     await move([0, 1], 120);
     // Avoid relying on incidental collision deflection to align us with
     // the narrow doorway. Steer from observed position if its jamb catches us.

@@ -71,7 +71,7 @@ for (const vr of [false, true]) {
       await game.step({ frames: 30 });
       assert.equal(await left(), aligned, "neutral input remains stable after alignment");
       const player = (await game.info()).player.rotation;
-      await game.input.set("right_hand.thumbstick", [1, 0]);
+      await game.input.set("right_hand.thumbstick", [-1, 0]);
       await game.step({ frames: 12 });
       await game.input.set("right_hand.thumbstick", [0, 0]);
       assert.notDeepEqual((await game.info()).player.rotation, player, "other hand still turns the player");

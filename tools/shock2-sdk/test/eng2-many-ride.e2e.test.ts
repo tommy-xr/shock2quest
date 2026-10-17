@@ -83,7 +83,7 @@ test(
       game.player.position(),
       only(game, CAGE_PLATFORM),
     ]);
-    await game.input.set("right_hand.thumbstick", [1, 0]);
+    await game.input.set("right_hand.thumbstick", [-1, 0]);
     await game.step({ frames: 60 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
     const [playerAfterStrafe, cageAfterStrafe] = await Promise.all([
@@ -130,7 +130,7 @@ test(
       game.player.position(),
       only(game, CAGE_PLATFORM),
     ]);
-    await game.input.set("right_hand.thumbstick", [1, 0]);
+    await game.input.set("right_hand.thumbstick", [-1, 0]);
     await game.step({ frames: 60 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
     const [playerAfterReleaseStrafe, cageAfterReleaseStrafe] = await Promise.all([
@@ -239,7 +239,7 @@ test(
     // The restored pose is ordinary level geometry and controls are live: a
     // full strafe must move the player instead of leaving them on the isolated
     // continuously-moving cutscene cage.
-    await game.input.set("left_hand.thumbstick", [1, 0]);
+    await game.input.set("left_hand.thumbstick", [-1, 0]);
     await game.step({ frames: 60 });
     await game.input.set("left_hand.thumbstick", [0, 0]);
     assert.ok(

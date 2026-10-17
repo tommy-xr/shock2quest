@@ -38,7 +38,7 @@ test(
     await game.player.teleport({ x: x + 4, y, z });
     await game.step({ frames: 30 });
 
-    await game.input.set("left_hand.thumbstick", [0.75, 0]);
+    await game.input.set("left_hand.thumbstick", [-0.75, 0]);
     await game.step({ frames: 20 });
     await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.save("world-aim-e2e");
