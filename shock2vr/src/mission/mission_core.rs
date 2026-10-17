@@ -5069,12 +5069,8 @@ impl MissionCore {
                         .world
                         .borrow::<UniqueView<PlayerPsiKnownPowers>>()
                         .unwrap();
-                    let target = |index, step: crate::scripts::gui::NavStep| {
-                        let (axis, forward) = step.axis();
-                        crate::psi::step_selection(&powers.0, &known.0, index, axis, forward)
-                    };
                     if let Some(step) = step {
-                        let next = target(menu.index, step);
+                        let next = menu.step_target(step, &powers.0, &known.0);
                         // Only a step that moves the dial clicks.
                         if next != menu.index {
                             effects.push(Effect::HandHaptic {
@@ -5090,7 +5086,7 @@ impl MissionCore {
                         menu.stick_latched,
                         &crate::scripts::gui::PSI_STICK_NAV,
                     )
-                    .map(|(step, amount)| (target(menu.index, step), amount));
+                    .map(|(step, amount)| (menu.step_target(step, &powers.0, &known.0), amount));
                     menu.stick = (stick, lean.is_some());
                     menu.lean_toward(lean, &powers.0, &known.0);
                 }

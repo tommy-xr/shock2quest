@@ -256,6 +256,31 @@ impl Carousel {
         });
         self.lean = drawn.unwrap_or((0.0, 0.0));
     }
+    /// The power a stick step selects. Up and down go straight up and down:
+    /// of the tier they reach, the card drawn nearest the centre column.
+    pub fn step_target(
+        &self,
+        step: crate::scripts::gui::NavStep,
+        powers: &[crate::psi::PsiPowerInfo],
+        known: &std::collections::HashSet<i32>,
+    ) -> usize {
+        let (axis, forward) = step.axis();
+        let next = crate::psi::step_selection(powers, known, self.index, axis, forward);
+        if axis != crate::psi::PsiSelectionAxis::Tier {
+            return next;
+        }
+        let tier = powers[next].tier();
+        // Unleaned, so a lean in progress cannot change which card is above.
+        self.positions(powers, known)
+            .into_iter()
+            .filter(|(i, ..)| powers[*i].tier() == tier)
+            .min_by(|a, b| {
+                let column = |slot: f32| visible_slot(slot + self.lean.1).abs();
+                column(a.4).total_cmp(&column(b.4))
+            })
+            .map_or(next, |(i, ..)| i)
+    }
+
     /// How solid the frame on `index`'s card is: dim as a push starts toward
     /// it, solid as the push reaches the step. `None` for every other card.
     fn frame_strength(&self, index: usize) -> Option<f32> {
@@ -675,6 +700,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Up and down go straight up and down: a tier step lands on the card
+    /// drawn directly above, however far the sphere has turned.
+    #[test]
+    fn a_tier_step_lands_on_the_card_drawn_directly_above() {
+        use crate::scripts::gui::NavStep;
+        let fixture = powers();
+        let powers: Vec<_> = (1..=5)
+            .chain(9..=13)
+            .map(|id| {
+                let mut p = fixture[0].clone();
+                p.template_id = -id;
+                p.power.power_id = id;
+                p
+            })
+            .collect();
+        assert_ne!(powers[0].tier(), powers[5].tier());
+        let known: HashSet<_> = powers.iter().map(|p| p.template_id).collect();
+        let mut world = World::new();
+        let amp = world.add_entity(());
+        world.add_unique(GlobalPsiPowers(powers.clone()));
+        world.add_unique(PlayerPsiKnownPowers(known.clone()));
+        let mut menu = Carousel::new(&world, amp, Handedness::Right).unwrap();
+        for _ in 0..2 {
+            let next = menu.step_target(NavStep::PowerNext, &powers, &known);
+            menu.preview(next, &powers, &known);
+            menu.update(0.25);
+        }
+        let above = menu.step_target(NavStep::TierNext, &powers, &known);
+        assert_eq!(powers[above].tier(), powers[5].tier());
+        let (.., slot) = menu
+            .positions(&powers, &known)
+            .into_iter()
+            .find(|(i, ..)| *i == above)
+            .unwrap();
+        assert!(visible_slot(slot).abs() < 0.5, "drawn at slot {slot}");
     }
 
     /// A push right (reported as -x) selects the card drawn on the right.
