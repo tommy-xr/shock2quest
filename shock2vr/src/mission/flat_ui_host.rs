@@ -103,6 +103,8 @@ pub enum FlatUiDragAction {
     /// reload, ammo cycle, psi selector). Not tied to a cursor item - the
     /// target is the entity in the last drawn readout, never a hand lookup.
     Readout(ReadoutButton, Option<EntityId>),
+    /// An entry picked from the LOGS list, to open in the media reader.
+    OpenPdaEntry(crate::quest_info::PdaEntry),
 }
 
 /// Double-click window (frames at 60Hz) and radius (canvas px) for the
@@ -1393,11 +1395,13 @@ impl FlatUiHost {
                     // Switching utilities must not leave an opaque map over it.
                     self.close();
                 }
-                let actions = if self.utilities.take_map_request() {
-                    vec![FlatUiDragAction::ToggleMap]
-                } else {
-                    Vec::new()
-                };
+                let mut actions = Vec::new();
+                if self.utilities.take_map_request() {
+                    actions.push(FlatUiDragAction::ToggleMap);
+                }
+                if let Some(entry) = self.utilities.take_pda_request() {
+                    actions.push(FlatUiDragAction::OpenPdaEntry(entry));
+                }
                 return (Vec::new(), actions);
             }
         }

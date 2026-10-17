@@ -165,42 +165,114 @@ impl PdaList {
 
     pub(super) fn elements(&self) -> Vec<DebugUiElement> {
         let mut out = Vec::new();
-        let mut add = |kind: &str, rect: Rect, texture: Option<&str>, text: Option<&str>, label: String| {
-            let r = [PANEL.x + rect.x, PANEL.y + rect.y, rect.w, rect.h];
-            out.push(DebugUiElement {
-                kind: kind.into(),
-                texture: texture.map(str::to_owned),
-                text: text.map(str::to_owned),
-                label: Some(label),
-                entity_id: None,
-                rect: r,
-                screen_rect: r,
-            });
-        };
-        add("image", Rect::new(0.0, 0.0, 188.0, 296.0), Some("iface/pda.pcx"), None, "pda".into());
-        add("button", Rect::new(163.0, 8.0, 20.0, 21.0), Some("iface/closeoff.pcx"), None, "utility_close".into());
-        add("button", Rect::new(13.0, 11.0, 18.0, 18.0), Some("iface/left0.pcx"), None, "pda_deck_previous".into());
-        add("button", Rect::new(137.0, 11.0, 18.0, 18.0), Some("iface/right0.pcx"), None, "pda_deck_next".into());
-        add("text", Rect::new(35.0, 13.0, 95.0, 10.0), None, Some(&self.header), "pda_header".into());
-        add("text", Rect::new(35.0, 23.0, 95.0, 10.0), None, Some(&self.deck_name), "pda_header".into());
+        let mut add =
+            |kind: &str, rect: Rect, texture: Option<&str>, text: Option<&str>, label: String| {
+                let r = [PANEL.x + rect.x, PANEL.y + rect.y, rect.w, rect.h];
+                out.push(DebugUiElement {
+                    kind: kind.into(),
+                    texture: texture.map(str::to_owned),
+                    text: text.map(str::to_owned),
+                    label: Some(label),
+                    entity_id: None,
+                    rect: r,
+                    screen_rect: r,
+                });
+            };
+        add(
+            "image",
+            Rect::new(0.0, 0.0, 188.0, 296.0),
+            Some("iface/pda.pcx"),
+            None,
+            "pda".into(),
+        );
+        add(
+            "button",
+            Rect::new(163.0, 8.0, 20.0, 21.0),
+            Some("iface/closeoff.pcx"),
+            None,
+            "utility_close".into(),
+        );
+        add(
+            "button",
+            Rect::new(13.0, 11.0, 18.0, 18.0),
+            Some("iface/left0.pcx"),
+            None,
+            "pda_deck_previous".into(),
+        );
+        add(
+            "button",
+            Rect::new(137.0, 11.0, 18.0, 18.0),
+            Some("iface/right0.pcx"),
+            None,
+            "pda_deck_next".into(),
+        );
+        add(
+            "text",
+            Rect::new(35.0, 13.0, 95.0, 10.0),
+            None,
+            Some(&self.header),
+            "pda_header".into(),
+        );
+        add(
+            "text",
+            Rect::new(35.0, 23.0, 95.0, 10.0),
+            None,
+            Some(&self.deck_name),
+            "pda_header".into(),
+        );
         if self.rows.is_empty() {
             let empty = match self.kind {
                 PdaKind::Email => "No collected emails.",
                 PdaKind::Log => "No collected logs.",
             };
-            add("text", Rect::new(22.0, ROW_TOP, 130.0, 12.0), None, Some(empty), "utility_text".into());
+            add(
+                "text",
+                Rect::new(22.0, ROW_TOP, 130.0, 12.0),
+                None,
+                Some(empty),
+                "utility_text".into(),
+            );
         }
-        for (row, (_, name)) in self.rows.iter().enumerate().skip(self.offset).take(VISIBLE_ROWS) {
+        for (row, (_, name)) in self
+            .rows
+            .iter()
+            .enumerate()
+            .skip(self.offset)
+            .take(VISIBLE_ROWS)
+        {
             let y = ROW_TOP + (row - self.offset) as f32 * ROW_DY;
-            add("button", Rect::new(13.0, y, 139.0, ROW_DY), None, Some(name), format!("pda_entry:{row}"));
+            add(
+                "button",
+                Rect::new(13.0, y, 139.0, ROW_DY),
+                None,
+                Some(name),
+                format!("pda_entry:{row}"),
+            );
             // Names are two authored lines: sender + date, then subject.
-            for (line, text) in name.lines().filter(|l| !l.trim().is_empty()).take(2).enumerate() {
+            for (line, text) in name
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .take(2)
+                .enumerate()
+            {
                 let rect = Rect::new(22.0, y + line as f32 * 12.0, 130.0, 12.0);
                 add("text", rect, None, Some(text.trim()), "utility_text".into());
             }
         }
-        add("button", Rect::new(157.0, 152.0, 18.0, 17.0), Some("iface/up0.pcx"), None, "pda_scroll_up".into());
-        add("button", Rect::new(157.0, 247.0, 18.0, 17.0), Some("iface/down0.pcx"), None, "pda_scroll_down".into());
+        add(
+            "button",
+            Rect::new(157.0, 152.0, 18.0, 17.0),
+            Some("iface/up0.pcx"),
+            None,
+            "pda_scroll_up".into(),
+        );
+        add(
+            "button",
+            Rect::new(157.0, 247.0, 18.0, 17.0),
+            Some("iface/down0.pcx"),
+            None,
+            "pda_scroll_down".into(),
+        );
         for (kind, art, x, label) in [
             (PdaKind::Email, "pemail", 12.0, "pda_tab_email"),
             (PdaKind::Log, "plogs", 53.0, "pda_tab_logs"),
@@ -208,7 +280,13 @@ impl PdaList {
             // The `1` art is the pressed state; retail draws it on the active tab.
             let state = if kind == self.kind { 1 } else { 0 };
             let texture = format!("iface/{art}{state}.pcx");
-            add("button", Rect::new(x, 268.0, 40.0, 18.0), Some(&texture), None, label.into());
+            add(
+                "button",
+                Rect::new(x, 268.0, 40.0, 18.0),
+                Some(&texture),
+                None,
+                label.into(),
+            );
         }
         out
     }
@@ -219,7 +297,11 @@ impl PdaList {
             if let Some(texture) = &e.texture {
                 canvas.image(r, texture);
             }
-            if let Some(text) = e.text.as_deref().filter(|t| e.kind == "text" && !t.is_empty()) {
+            if let Some(text) = e
+                .text
+                .as_deref()
+                .filter(|t| e.kind == "text" && !t.is_empty())
+            {
                 let align = if e.label.as_deref() == Some("pda_header") {
                     HAlign::Center
                 } else {
@@ -272,11 +354,19 @@ mod tests {
 
         assert_eq!(
             press(&mut list, "pda_entry:0"),
-            PdaAction::Open(PdaEntry { kind: PdaKind::Log, deck: 2, index: 20 })
+            PdaAction::Open(PdaEntry {
+                kind: PdaKind::Log,
+                deck: 2,
+                index: 20
+            })
         );
         assert_eq!(
             press(&mut list, "pda_entry:1"),
-            PdaAction::Open(PdaEntry { kind: PdaKind::Log, deck: 2, index: 4 })
+            PdaAction::Open(PdaEntry {
+                kind: PdaKind::Log,
+                deck: 2,
+                index: 4
+            })
         );
         assert_eq!(press(&mut list, "utility_close"), PdaAction::Close);
     }
