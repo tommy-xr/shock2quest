@@ -149,7 +149,7 @@ impl FreeCamera {
 
         let (move_thumbstick, turn_thumbstick) =
             input_context.locomotion_sticks(presentation, true);
-        let turn = turn_thumbstick.x * delta_time * PLAYER_TURN_RATE;
+        let turn = -turn_thumbstick.x * delta_time * PLAYER_TURN_RATE;
         let rotation =
             rotation * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), cgmath::Rad(turn));
 
@@ -162,7 +162,7 @@ impl FreeCamera {
         let step = delta_time * speed;
         let position = position
             + facing.rotate_vector(vec3(
-                -step * move_thumbstick.x,
+                step * move_thumbstick.x,
                 0.0,
                 -step * move_thumbstick.y,
             ))
@@ -400,6 +400,13 @@ mod tests {
         assert!(position.x.abs() < 1e-4 && position.y.abs() < 1e-4);
     }
 
+    /// A push right on the right stick strafes right.
+    #[test]
+    fn the_right_stick_x_strafes_right() {
+        let (position, _) = flown(|input| input.right_hand.thumbstick.x = 1.0);
+        assert!(position.x > 0.1, "expected +X travel, got {position:?}");
+    }
+
     /// The left stick's y is vertical, in world space - flying up is up
     /// however the camera is pitched.
     #[test]
@@ -415,7 +422,7 @@ mod tests {
         let (position, rotation) = flown(|input| input.left_hand.thumbstick.x = 1.0);
         assert!(position.magnitude() < 1e-4, "turning must not move");
         let facing = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-        assert!(facing.x.abs() > 0.1, "expected a yaw, got {facing:?}");
+        assert!(facing.x > 0.1, "a push right turns right, got {facing:?}");
         assert!(facing.y.abs() < 1e-4, "yaw must not pitch the camera");
     }
 

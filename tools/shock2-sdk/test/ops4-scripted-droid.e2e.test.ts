@@ -86,7 +86,7 @@ test(
     );
     // Walk around the advancing droid and through the actual opening. No
     // teleport, direct moveTo, or injected script message after initial setup.
-    await move([-1, 0], 8);
+    await move([1, 0], 8);
     await move([0, 1], 120);
     // Avoid relying on incidental collision deflection to align us with
     // the narrow doorway. Steer from observed position if its jamb catches us.
@@ -97,8 +97,8 @@ test(
       const dz = -98 - p.z;
       const length = Math.hypot(dx, dz);
       await move(p.z < -90.5 && Math.abs(dx) > 0.2
-        ? [-Math.sign(dx) * 0.35, 0]
-        : [-dx / length, -dz / length], 6);
+        ? [Math.sign(dx) * 0.35, 0]
+        : [dx / length, -dz / length], 6);
     }
     await move([0, 0], 10);
     const player = (await game.info()).player;

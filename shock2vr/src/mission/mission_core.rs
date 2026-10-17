@@ -5181,7 +5181,8 @@ impl MissionCore {
             0.0
         } else {
             self.vr_comfort
-                .turn_radians(turn_thumbstick_value.x, delta_time, vr_settings)
+                // A push right turns right: a negative yaw.
+                .turn_radians(-turn_thumbstick_value.x, delta_time, vr_settings)
         };
         let mut new_rotation = player.rotation
             * cgmath::Quaternion::from_axis_angle(
@@ -5242,7 +5243,7 @@ impl MissionCore {
             1.0
         };
         let forward = dir.rotate_vector(cgmath::vec3(
-            -delta_time * move_thumbstick_value.x * PLAYER_SIDESTEP_SCALE * move_speed
+            delta_time * move_thumbstick_value.x * PLAYER_SIDESTEP_SCALE * move_speed
                 / dark::SCALE_FACTOR,
             0.0,
             -delta_time * move_thumbstick_value.y * back_scale * move_speed / dark::SCALE_FACTOR,

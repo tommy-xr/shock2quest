@@ -71,7 +71,7 @@ for (const hand of ["left", "right"] as const) {
       await game.step({ frames: 60 });
       const beforeOtherStick = (await game.info()).player;
       const otherHand = hand === "left" ? "right" : "left";
-      await game.input.set(`${otherHand}_hand.thumbstick`, [1, 0]);
+      await game.input.set(`${otherHand}_hand.thumbstick`, [-1, 0]);
       await game.step({ frames: 12 });
       await game.input.set(`${otherHand}_hand.thumbstick`, [0, 0]);
       await game.step({ frames: 2 });

@@ -29,7 +29,7 @@ for (const vr of [false, true]) {
     await game.input.set(movement, [0, 0]);
     await game.step({ frames: 2 });
     const strafed = (await game.info()).player;
-    assert.ok(dot(sub(strafed.position, walked.position), quatRotate(start.rotation, [-1, 0, 0])) > 0.5, "movement stick strafes");
+    assert.ok(dot(sub(strafed.position, walked.position), quatRotate(start.rotation, [1, 0, 0])) > 0.5, "a push right strafes right");
     assert.deepEqual(strafed.rotation, start.rotation, "strafe does not turn");
 
     for (const vertical of [1, -1]) {
@@ -45,6 +45,8 @@ for (const vr of [false, true]) {
     const turned = (await game.info()).player;
     assert.ok(Math.abs(turned.rotation.reduce((dot, v, i) => dot + v * start.rotation[i], 0)) < 0.999,
       "turn stick rotates the player");
+    assert.ok(dot(quatRotate(turned.rotation, [0, 0, -1]), quatRotate(start.rotation, [1, 0, 0])) > 0,
+      "a push right turns right");
     assert.ok(Math.hypot(...turned.position.map((v, i) => v - strafed.position[i])) < 0.05,
       "turning does not translate the player");
 

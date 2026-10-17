@@ -22,7 +22,8 @@ use crate::input_context::InputContext;
 use crate::time::Time;
 use crate::{PresentationMode, paths};
 
-pub const RECORDING_VERSION: u32 = 1;
+/// 2: thumbstick +x is a push right; version 1 recorded it as a push left.
+pub const RECORDING_VERSION: u32 = 2;
 
 /// Flush this often (in frames) so a killed process keeps nearly everything.
 const FLUSH_INTERVAL_FRAMES: u32 = 60;
@@ -140,18 +141,24 @@ pub fn read_recording(path: &Path) -> io::Result<(RecordingHeader, Vec<RecordedF
             ));
         }
     };
-    if header.version != RECORDING_VERSION {
+    if !(1..=RECORDING_VERSION).contains(&header.version) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "recording version {} (expected {RECORDING_VERSION})",
+                "recording version {} (expected 1..={RECORDING_VERSION})",
                 header.version
             ),
         ));
     }
-    let frames = lines
+    let mut frames = lines
         .map(|line| Ok(serde_json::from_str(&line?)?))
         .collect::<io::Result<Vec<RecordedFrame>>>()?;
+    if header.version == 1 {
+        for frame in &mut frames {
+            frame.input.left_hand.thumbstick.x *= -1.0;
+            frame.input.right_hand.thumbstick.x *= -1.0;
+        }
+    }
     Ok((header, frames))
 }
 
@@ -213,5 +220,43 @@ mod tests {
         assert!(replayed.just_triggered(InputAction::CycleAmmo));
         assert!(!replayed.is_held(InputAction::CycleAmmo));
         assert_eq!(frames[0].total, 3.0);
+    }
+
+    /// Version 1 recorded a push right as -x; it replays as the same push.
+    #[test]
+    fn a_version_1_recording_replays_its_sticks_unmirrored() {
+        let path = std::env::temp_dir().join(format!("rec-v1-{}.jsonl", std::process::id()));
+        let header = RecordingHeader {
+            version: 1,
+            scene: "medsci1.mis".into(),
+            save: "rec.sav".into(),
+            presentation: PresentationMode::Vr,
+            experimental: vec![],
+            glove_forward_cm: 0.0,
+        };
+        let mut input = InputContext::default();
+        input.left_hand.thumbstick = cgmath::vec2(-1.0, 0.5);
+        input.right_hand.thumbstick = cgmath::vec2(0.25, 0.0);
+        let time = Time {
+            elapsed: std::time::Duration::from_secs_f32(1.0 / 72.0),
+            total: std::time::Duration::from_secs(1),
+        };
+        let mut recorder = InputRecorder::create(&path, &header).unwrap();
+        recorder
+            .record(&RecordedFrame::capture(
+                &time,
+                &input,
+                &InputActionState::new(),
+            ))
+            .unwrap();
+        recorder.finish().unwrap();
+
+        let (_, frames) = read_recording(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(frames[0].input.left_hand.thumbstick, cgmath::vec2(1.0, 0.5));
+        assert_eq!(
+            frames[0].input.right_hand.thumbstick,
+            cgmath::vec2(-0.25, 0.0)
+        );
     }
 }

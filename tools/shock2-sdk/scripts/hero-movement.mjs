@@ -40,15 +40,14 @@ const clearRadius = 45;
 const fovDeg = 85;
 // A touch over the authored light level: the mall is moody and reads dim on video.
 const levelLight = 1.4;
-// Stick values are game input, where x is the negated physical axis (the Quest
-// runtime flips it): x > 0 is a push to the left, so strafe and turn go left.
+// Stick x > 0 is a push right; the strafe and turn phases push left.
 // Crouch toggles like the Quest's left stick click.
 const phases = [
   { name: "walk", count: 7, right: [0, 0], left: [0, 0.7], crouch: 0 },
-  { name: "strafe", count: 6, right: [0, 0], left: [0.6, 0], crouch: 0 },
-  { name: "turn", count: 5, right: [0.8, 0], left: [0, 0], crouch: 0 },
+  { name: "strafe", count: 6, right: [0, 0], left: [-0.6, 0], crouch: 0 },
+  { name: "turn", count: 5, right: [-0.8, 0], left: [0, 0], crouch: 0 },
   { name: "crouch", count: 6, right: [0, 0], left: [0, 0], crouch: 1 },
-  { name: "stand", count: 5, right: [-0.8, 0], left: [0, 0], crouch: 0 },
+  { name: "stand", count: 5, right: [0.8, 0], left: [0, 0], crouch: 0 },
   // Long enough to land (~0.8 s here) and settle.
   { name: "jump", count: 14, right: [0, 0], left: [0, 0], crouch: 0 },
 ];

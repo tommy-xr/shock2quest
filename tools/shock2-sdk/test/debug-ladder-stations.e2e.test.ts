@@ -246,7 +246,7 @@ test(
 /// D) along it until supported on the floor at `floorY` beside the ladder,
 /// then a step more so the body is wholly on it.
 async function stepSideways(game: GameServer, run: Run, floorY: number): Promise<void> {
-  await game.input.set("right_hand.thumbstick", [1, 0]);
+  await game.input.set("right_hand.thumbstick", [-1, 0]);
   await run.frames(180, async (p) => {
     const support = await run.supportY(p);
     return support !== null && Math.abs(support - floorY) < 0.05 && p.y - floorY < 1.35;

@@ -43,7 +43,7 @@ for (const vr of [false, true]) {
     if (vr) {
       assert.equal(Math.round((await pig()).rect[1] - initial[1]), -16, "neutral stick does not repeat hops");
       const rotation = (await game.info()).player.rotation;
-      await game.input.set("right_hand.thumbstick", [1, 0]);
+      await game.input.set("right_hand.thumbstick", [-1, 0]);
       await game.step({ frames: 12 });
       await game.input.set("right_hand.thumbstick", [0, 0]);
       assert.notDeepEqual((await game.info()).player.rotation, rotation, "free hand still turns");

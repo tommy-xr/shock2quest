@@ -385,7 +385,7 @@ async function take(game, framesDir) {
     if (!turning && turnedAt === null) turnedAt = f;
     // Ease into the turn, and out of it as it nears the target.
     const push = turning ? Math.min(Math.min(1, f / 10), 0.25 + Math.abs(error) * 0.6) : 0;
-    await game.input.set("right_hand.thumbstick", [Math.sign(error) * push, 0]);
+    await game.input.set("right_hand.thumbstick", [-Math.sign(error) * push, 0]);
     aim = (await targets()) ?? aim;
     look.target = f < 8 ? look.target : aim.head;
     await frame();

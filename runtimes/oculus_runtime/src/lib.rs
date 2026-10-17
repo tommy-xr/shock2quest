@@ -1236,14 +1236,13 @@ fn main() {
         input_context.right_hand.trigger_value = right_trigger_value;
         input_context.right_hand.squeeze_value = right_squeeze_value;
         input_context.right_hand.thumbstick =
-            vec2(-right_thumbstick_value.x, right_thumbstick_value.y);
+            vec2(right_thumbstick_value.x, right_thumbstick_value.y);
 
         input_context.left_hand.rotation = left_hand_rotation;
         input_context.left_hand.position = left_hand_position;
         input_context.left_hand.trigger_value = left_trigger_value;
         input_context.left_hand.squeeze_value = left_squeeze_value;
-        input_context.left_hand.thumbstick =
-            vec2(-left_thumbstick_value.x, left_thumbstick_value.y);
+        input_context.left_hand.thumbstick = vec2(left_thumbstick_value.x, left_thumbstick_value.y);
         // Jump is a hand's LOWER face button now, which arrives as an action
         // and is resolved per hand - so no runtime channel drives it in VR.
         input_context.jump = false;

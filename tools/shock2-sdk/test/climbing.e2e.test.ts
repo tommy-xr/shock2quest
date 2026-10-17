@@ -74,7 +74,7 @@ test(
     );
 
     // Press into the ladder and hold.
-    await game.input.set("right_hand.thumbstick", [-1, 0]);
+    await game.input.set("right_hand.thumbstick", [1, 0]);
     await game.step({ frames: 240 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
 

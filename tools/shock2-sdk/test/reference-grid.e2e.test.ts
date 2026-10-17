@@ -39,7 +39,7 @@ for (const vr of [false, true]) {
     await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
     await game.step({ frames: 90 });
     assert.equal((await grid()).length, 0, "grid fades out after stopping");
-    await game.input.set(vr ? "right_hand.thumbstick" : "left_hand.thumbstick", [1, 0]);
+    await game.input.set(vr ? "right_hand.thumbstick" : "left_hand.thumbstick", [-1, 0]);
     await game.step({ frames: 12 });
     assert.equal((await grid()).length, 0, "snap origin correction is not sustained travel");
     await game.input.set(vr ? "right_hand.thumbstick" : "left_hand.thumbstick", [0, 0]);

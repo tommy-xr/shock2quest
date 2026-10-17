@@ -39,7 +39,7 @@ for (const vr of [false, true]) {
         const still = (await game.ui.state()).active_panel!.elements.filter(e => e.texture === "pongpadd.pcx").sort((a, b) => b.rect[1] - a.rect[1])[0];
         assert.equal(still.rect[0], stopped.rect[0], "releasing the stick stops the paddle");
         const beforeOther = (await game.info()).player.rotation;
-        await game.input.set("right_hand.thumbstick", [1, 0]);
+        await game.input.set("right_hand.thumbstick", [-1, 0]);
         await game.step({ frames: 12 });
         await game.input.set("right_hand.thumbstick", [0, 0]);
         await game.step({ frames: 2 });

@@ -160,6 +160,7 @@ impl Head {
 pub struct Hand {
     pub position: Vector3<f32>,
     pub rotation: Quaternion<f32>,
+    /// +x is a push right, +y a push forward (away from the user).
     pub thumbstick: Vector2<f32>,
     pub trigger_value: f32,
     pub squeeze_value: f32,
