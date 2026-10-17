@@ -122,7 +122,10 @@ test("picks a successful run for the SHA", () => {
 });
 
 test("refuses when the SHA has no run", () => {
-  assert.throws(() => selectBuildRun([], SHA), /no Build Android run/);
+  assert.throws(
+    () => selectBuildRun([], SHA, "feat/x"),
+    /no Build Android run.*--ref feat\/x/,
+  );
 });
 
 test("refuses an in-progress run and names its URL", () => {

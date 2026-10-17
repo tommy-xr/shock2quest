@@ -7,6 +7,8 @@ on:
       - '**/*.md'
       - 'tools/shock2-sdk/**'
       - '.github/workflows/sdk-tests.yml'
+  # Builds an APK for a head commit that paths-ignore skipped.
+  workflow_dispatch:
   # Not needed with wildcard branches
   # pull_request:
   #   branches: ["main"]

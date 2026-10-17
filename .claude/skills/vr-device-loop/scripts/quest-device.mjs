@@ -468,7 +468,7 @@ export function apkArtifactName(sha) {
 
 // Picks a successful Build Android run from `gh run list --commit SHA` rows
 // (newest first); otherwise throws, so a stale build is never installed.
-export function selectBuildRun(runs, sha) {
+export function selectBuildRun(runs, sha, branch) {
   const succeeded = runs.find(
     (run) => run.status === "completed" && run.conclusion === "success",
   );
@@ -476,7 +476,7 @@ export function selectBuildRun(runs, sha) {
   const latest = runs[0];
   if (!latest) {
     throw new Error(
-      `no Build Android run for ${sha} (markdown-only pushes skip it)`,
+      `no Build Android run for ${sha} (markdown-only pushes skip it); start one: gh workflow run build-android.yml --ref ${branch}`,
     );
   }
   if (latest.status !== "completed") {
@@ -519,7 +519,7 @@ export function fetchPrApk(number) {
       "databaseId,status,conclusion,url",
     ]),
   );
-  const run = selectBuildRun(runs, sha);
+  const run = selectBuildRun(runs, sha, headRefName);
   // Download beside the cache so an interrupted download is never reused.
   const partial = `${cacheDirectory}.partial`;
   rmSync(partial, { recursive: true, force: true });
