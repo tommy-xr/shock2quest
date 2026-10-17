@@ -47,7 +47,6 @@ pub(crate) struct MfdUtilities {
     query_offset: usize,
     font: Option<std::rc::Rc<Box<dyn engine::Font>>>,
     icon: Option<String>,
-    hover: Option<Vector2<f32>>,
 }
 
 impl MfdUtilities {
@@ -103,6 +102,11 @@ impl MfdUtilities {
     pub(crate) fn is_inspecting(&self) -> bool {
         self.inspecting
     }
+    /// Every clickable control's canvas rect, in hit-test order.
+    pub(crate) fn control_rects(&self) -> impl Iterator<Item = Rect> {
+        self.controls().into_iter().map(|(_, rect, _, _)| rect)
+    }
+
     fn controls(&self) -> Vec<(Control, Rect, &'static str, &'static str)> {
         // Retail shkiface.cpp iface_rects[2..6], on the bottom bio/ammo strips.
         // Keep art, hit testing, and debug discovery on these same canvas rects.
@@ -151,54 +155,21 @@ impl MfdUtilities {
         controls
             .into_iter()
             .map(|(control, rect, label)| {
-                let hovered = self.hover.is_some_and(|point| rect.contains(point));
                 let texture = match control {
-                    Control::Close if self.selected.is_some() => {
-                        if hovered {
-                            "iface/closeon.pcx"
-                        } else {
-                            "iface/closeoff.pcx"
-                        }
-                    }
-                    Control::LineUp => {
-                        if hovered {
-                            "iface/up1.pcx"
-                        } else {
-                            "iface/up0.pcx"
-                        }
-                    }
-                    Control::LineDown => {
-                        if hovered {
-                            "iface/down1.pcx"
-                        } else {
-                            "iface/down0.pcx"
-                        }
-                    }
-                    Control::Previous if self.selected.is_some() => {
-                        if hovered {
-                            "iface/pgup1.pcx"
-                        } else {
-                            "iface/pgup0.pcx"
-                        }
-                    }
-                    Control::Next if self.selected.is_some() => {
-                        if hovered {
-                            "iface/pgdn1.pcx"
-                        } else {
-                            "iface/pgdn0.pcx"
-                        }
-                    }
+                    Control::Close => "iface/closeoff.pcx",
+                    Control::LineUp => "iface/up0.pcx",
+                    Control::LineDown => "iface/down0.pcx",
+                    Control::Previous if self.selected.is_some() => "iface/pgup0.pcx",
+                    Control::Next if self.selected.is_some() => "iface/pgdn0.pcx",
                     Control::AccessCards if self.access_cards => "iface/ifbtn11.pcx",
                     Control::AccessCards => "iface/ifbtn10.pcx",
                     Control::Character if self.character => "iface/ifbtn21.pcx",
                     Control::Character => "iface/ifbtn20.pcx",
-                    Control::Close if self.character => "iface/closeoff.pcx",
                     Control::Inspect if self.inspecting => "iface/ifbtn31.pcx",
                     Control::Inspect => "iface/ifbtn30.pcx",
                     Control::Research if self.research => "iface/ifbtn41.pcx",
                     Control::Research => "iface/ifbtn40.pcx",
                     Control::Map => "iface/ifbtn50.pcx",
-                    Control::Close if self.empty_logs || self.access_cards => "iface/closeoff.pcx",
                     _ => "IFBTN00.PCX",
                 };
                 (control, rect, label, texture)
@@ -215,7 +186,6 @@ impl MfdUtilities {
         candidate: Option<EntityId>,
         dragging: bool,
     ) -> bool {
-        self.hover = Some(point);
         if let Some((control, _, _, _)) = self
             .controls()
             .into_iter()
