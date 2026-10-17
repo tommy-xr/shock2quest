@@ -10433,9 +10433,10 @@ impl MissionCore {
     }
 
     /// Bound overlapping wisps per gun and across the mission.
+    /// Flash sprites are not counted.
     fn barrel_smoke_has_room(&self, gun: EntityId) -> bool {
-        self.barrel_smoke.len() < 24
-            && self.barrel_smoke.iter().filter(|(g, ..)| *g == gun).count() < 3
+        let smoke = || self.barrel_smoke.iter().filter(|(_, s, _)| *s == "NDsmk");
+        smoke().count() < 24 && smoke().filter(|(g, ..)| *g == gun).count() < 3
     }
 
     /// Samples every projectile created in slow time into its trail, except
