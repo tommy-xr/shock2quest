@@ -6,8 +6,11 @@ import { beforeEach, test } from "node:test";
 
 import {
   MISSION_CONFIG,
+  apkArtifactName,
+  isSignatureMismatch,
   missionSelection,
   restoreMissionSelection,
+  selectBuildRun,
   selectMission,
 } from "./quest-device.mjs";
 
@@ -99,4 +102,51 @@ test("read errors abort the snapshot instead of reporting absence", () => {
 test("unexpected probe output cannot be treated as an absent selector", () => {
   device.failure = "probe";
   assert.throws(() => missionSelection("test-device"), /mission selector/);
+});
+
+const SHA = "0123456789abcdef0123456789abcdef01234567";
+const run = (databaseId, status, conclusion) => ({
+  databaseId,
+  status,
+  conclusion,
+  url: `https://example.test/runs/${databaseId}`,
+});
+
+test("artifact name carries the full head SHA", () => {
+  assert.equal(apkArtifactName(SHA), `shock2quest-apk-${SHA}`);
+});
+
+test("picks a successful run for the SHA", () => {
+  const runs = [run(2, "completed", "failure"), run(1, "completed", "success")];
+  assert.equal(selectBuildRun(runs, SHA).databaseId, 1);
+});
+
+test("refuses when the SHA has no run", () => {
+  assert.throws(() => selectBuildRun([], SHA), /no Build Android run/);
+});
+
+test("refuses an in-progress run and names its URL", () => {
+  assert.throws(
+    () => selectBuildRun([run(3, "in_progress", "")], SHA),
+    /still in_progress: https:\/\/example.test\/runs\/3/,
+  );
+});
+
+test("refuses a failed run and names its URL", () => {
+  assert.throws(
+    () => selectBuildRun([run(4, "completed", "failure")], SHA),
+    /failure: https:\/\/example.test\/runs\/4/,
+  );
+});
+
+test("only a signature mismatch triggers the uninstall fallback", () => {
+  assert.ok(
+    isSignatureMismatch(
+      "adb: failed to install x.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package signatures do not match newer version; ignoring!]",
+    ),
+  );
+  assert.equal(
+    isSignatureMismatch("Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]"),
+    false,
+  );
 });
