@@ -1235,7 +1235,6 @@ impl Script for HordeDirector {
                 });
             }
             effects.extend(unlock_os_stations(world, self.wave + 1));
-            effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Trainers in subway; shops on street; OS bank at the stair landing: start / waves 3/6/9".into() });
         }
         if !self.music_synced {
             effects.push(self.music());
@@ -1544,6 +1543,12 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
+        let supplies = "Supplies on BOTH floors! Search crates; security crates need hacking. Unclaimed drops expire in 90 seconds.";
+        // A run opens with the first supply drop as its only message.
+        assert_eq!(
+            hud_text(tick(&mut HordeDirector::default(), &world, 0.1)),
+            [supplies]
+        );
         assert_eq!(hud_text(director.start_wave(&world)), Vec::<String>::new());
         assert_eq!(
             hud_text(tick(&mut director, &world, 6.0)),
@@ -1554,12 +1559,7 @@ mod tests {
             ["Wave 3 cleared! +45 nanites, +14 cyber modules"]
         );
         // The rest opens with the supply drop, which the screens do not show.
-        assert_eq!(
-            hud_text(tick(&mut director, &world, 6.0)),
-            [
-                "Supplies on BOTH floors! Search crates; security crates need hacking. Unclaimed drops expire in 90 seconds."
-            ]
-        );
+        assert_eq!(hud_text(tick(&mut director, &world, 6.0)), [supplies]);
         director.phase = Phase::Failed;
         assert_eq!(
             hud_text(director.status()),
