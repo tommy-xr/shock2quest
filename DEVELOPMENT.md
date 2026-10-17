@@ -1395,8 +1395,8 @@ To try a PR without building, install the APK CI attached to its head commit
 node .claude/skills/vr-device-loop/scripts/quest-device.mjs pr 1234 [--mission debug_gloves]
 ```
 
-CI APKs carry the release signature, so replacing a local build uninstalls it
-first and deletes its saves (see [vr-device-loop](.claude/skills/vr-device-loop/SKILL.md#install-a-prs-ci-build)).
+CI APKs carry the release signature; replacing a local build needs
+`--allow-uninstall`, which deletes its saves (see [vr-device-loop](.claude/skills/vr-device-loop/SKILL.md#install-a-prs-ci-build)).
 
 ##### Saved games
 

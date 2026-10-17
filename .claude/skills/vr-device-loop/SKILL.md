@@ -95,10 +95,11 @@ node .claude/skills/vr-device-loop/scripts/quest-device.mjs pr 1234
 node .claude/skills/vr-device-loop/scripts/quest-device.mjs pr 1234 --mission debug_gloves
 ```
 
-It refuses when the head commit's build is missing, running or failed. Over a
-locally built (debug-key) APK it uninstalls first, which deletes app-private
-saves; game data and settings under `/sdcard/shock2quest` survive. Shell alias
-(`ss2vr` is already `cargo dvr`):
+It refuses when the head commit's build is missing, running or failed. A local
+build carries another signature, so replacing it needs an uninstall: pass
+`--allow-uninstall`, which deletes the app-private saves (game data and settings
+under `/sdcard/shock2quest` survive). CI APKs (versionCode of 0.1.0) block
+installing an older release over them until uninstalled. Shell alias:
 
 ```sh
 alias s2q-pr='node "$(git rev-parse --show-toplevel)/.claude/skills/vr-device-loop/scripts/quest-device.mjs" pr'

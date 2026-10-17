@@ -7,6 +7,7 @@ import { beforeEach, test } from "node:test";
 import {
   MISSION_CONFIG,
   apkArtifactName,
+  installApk,
   isSignatureMismatch,
   missionSelection,
   restoreMissionSelection,
@@ -16,7 +17,13 @@ import {
 
 let device;
 beforeEach((t) => {
-  device = { exists: false, contents: Buffer.alloc(0), failure: null };
+  device = {
+    exists: false,
+    contents: Buffer.alloc(0),
+    failure: null,
+    installedKey: "debug",
+    uninstalls: 0,
+  };
   t.mock.method(childProcess, "execFileSync", (command, args, options) => {
     assert.equal(command, "adb");
     assert.deepEqual(args.slice(0, 2), ["-s", "test-device"]);
@@ -43,6 +50,17 @@ beforeEach((t) => {
       assert.equal(values[1], MISSION_CONFIG);
       device.contents = readFileSync(values[0]);
       device.exists = true;
+    } else if (operation === "install") {
+      if (device.installedKey === "debug") {
+        const error = new Error("Command failed: adb install");
+        error.stderr =
+          "adb: failed to install x.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]";
+        throw error;
+      }
+      device.installedKey = "release";
+    } else if (operation === "uninstall") {
+      device.installedKey = null;
+      device.uninstalls += 1;
     } else if (operation === "shell" && values[0] === "rm") {
       assert.deepEqual(values, ["rm", "-f", MISSION_CONFIG]);
       device.exists = false;
@@ -152,4 +170,15 @@ test("only a signature mismatch triggers the uninstall fallback", () => {
     isSignatureMismatch("Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]"),
     false,
   );
+});
+
+test("a signature change refuses to uninstall unless allowed", () => {
+  assert.throws(
+    () => installApk("test-device", "x.apk"),
+    /--allow-uninstall/,
+  );
+  assert.equal(device.uninstalls, 0);
+  installApk("test-device", "x.apk", { allowUninstall: true });
+  assert.equal(device.uninstalls, 1);
+  assert.equal(device.installedKey, "release");
 });

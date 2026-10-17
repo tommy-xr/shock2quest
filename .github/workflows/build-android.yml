@@ -48,15 +48,18 @@ jobs:
 
       - uses: ./.github/actions/setup-android
 
-      # Dev profile, signed with the release key when the secrets exist (absent
-      # on forks: cargo-apk falls back to its debug key).
+      # Dev profile, signed with the release key. Forks lack the secrets, so
+      # cargo-apk falls back to its debug key there.
       - name: Build Android APK
         working-directory: runtimes/oculus_runtime
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          IS_FORK: ${{ github.event.repository.fork }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            test "$IS_FORK" = true || { echo 'Release signing secrets are missing.'; exit 1; }
+          else
             umask 077
             export CARGO_APK_DEV_KEYSTORE="$RUNNER_TEMP/release.keystore"
             export CARGO_APK_DEV_KEYSTORE_PASSWORD="$KEYSTORE_PASSWORD"

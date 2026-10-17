@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   renameSync,
   rmSync,
@@ -11,7 +12,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 
 export const PACKAGE = "com.tommybuilds.shock2quest";
 export const ACTIVITY = `${PACKAGE}/android.app.NativeActivity`;
@@ -476,7 +478,7 @@ export function selectBuildRun(runs, sha, branch) {
   const latest = runs[0];
   if (!latest) {
     throw new Error(
-      `no Build Android run for ${sha} (markdown-only pushes skip it); start one: gh workflow run build-android.yml --ref ${branch}`,
+      `no Build Android run for ${sha} (paths-ignored pushes skip it); start one: gh workflow run build-android.yml --ref ${branch}`,
     );
   }
   if (latest.status !== "completed") {
@@ -490,8 +492,10 @@ export function isSignatureMismatch(output) {
   return output.includes("INSTALL_FAILED_UPDATE_INCOMPATIBLE");
 }
 
+// Runs from this script's clone so the repo resolves wherever it is invoked.
 function gh(args) {
   return execFileSync("gh", args, {
+    cwd: dirname(fileURLToPath(import.meta.url)),
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -505,6 +509,7 @@ export function fetchPrApk(number) {
   const cacheDirectory = resolve(tmpdir(), "shock2quest-pr-apk", sha);
   const apkPath = resolve(cacheDirectory, "shock2quest.apk");
   process.stderr.write(`PR #${number} ${headRefName} @ ${sha}\n`);
+  // One SHA is one build, so a cached APK cannot be stale.
   if (existsSync(apkPath)) return apkPath;
 
   const runs = JSON.parse(
@@ -520,23 +525,32 @@ export function fetchPrApk(number) {
     ]),
   );
   const run = selectBuildRun(runs, sha, headRefName);
-  // Download beside the cache so an interrupted download is never reused.
-  const partial = `${cacheDirectory}.partial`;
-  rmSync(partial, { recursive: true, force: true });
-  gh([
-    "run",
-    "download",
-    String(run.databaseId),
-    "-n",
-    apkArtifactName(sha),
-    "-D",
-    partial,
-  ]);
-  renameSync(partial, cacheDirectory);
+  // Stage privately so an interrupted or concurrent download is never reused.
+  mkdirSync(dirname(cacheDirectory), { recursive: true });
+  const staging = mkdtempSync(`${cacheDirectory}.partial-`);
+  try {
+    gh([
+      "run",
+      "download",
+      String(run.databaseId),
+      "-n",
+      apkArtifactName(sha),
+      "-D",
+      staging,
+    ]);
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw new Error(
+      `${run.url} has no APK artifact (built before CI uploaded one, or older than 30 days): ${error.stderr ?? error.message}`,
+    );
+  }
+  rmSync(cacheDirectory, { recursive: true, force: true });
+  renameSync(staging, cacheDirectory);
   return apkPath;
 }
 
-export function installApk(serial, apkPath) {
+// Saves are app-private, so the uninstall a signature change needs is opt-in.
+export function installApk(serial, apkPath, { allowUninstall = false } = {}) {
   // -g grants storage up front; a fresh install would otherwise prompt.
   const install = () => adb(serial, ["install", "-r", "-g", apkPath]);
   try {
@@ -544,19 +558,17 @@ export function installApk(serial, apkPath) {
   } catch (error) {
     const output = `${error.message}${error.stdout ?? ""}${error.stderr ?? ""}`;
     if (!isSignatureMismatch(output)) throw error;
+    if (!allowUninstall) {
+      throw new Error(
+        "installed APK has another signature; rerun with --allow-uninstall to replace it (deletes its saves)",
+      );
+    }
     process.stderr.write(
-      "installed APK has another signature; uninstalling it first (this deletes its app-private saves)\n",
+      "installed APK has another signature; uninstalling it (its saves are deleted)\n",
     );
     adb(serial, ["uninstall", PACKAGE]);
     install();
   }
-}
-
-function takeOption(args, name) {
-  const index = args.indexOf(name);
-  if (index === -1) return undefined;
-  const [, value] = args.splice(index, 2);
-  return value;
 }
 
 function usage() {
@@ -570,13 +582,21 @@ function usage() {
   quest-device.mjs [--serial SERIAL] stop
   quest-device.mjs [--serial SERIAL] restore
   quest-device.mjs [--serial SERIAL] reset-mission
-  quest-device.mjs pr NUMBER [--mission MISSION] [--serial SERIAL]`;
+  quest-device.mjs [--serial SERIAL] pr NUMBER [--mission MISSION] [--allow-uninstall]`;
 }
 
 async function main(argv) {
-  const args = [...argv];
-  const serial = resolveSerial(takeOption(args, "--serial"));
-  const [command, ...values] = args;
+  const { values: options, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      serial: { type: "string" },
+      mission: { type: "string", default: DEFAULT_MISSION },
+      "allow-uninstall": { type: "boolean", default: false },
+    },
+  });
+  const serial = resolveSerial(options.serial);
+  const [command, ...values] = positionals;
 
   if (command === "status") {
     process.stdout.write(`${JSON.stringify(deviceStatus(serial), null, 2)}\n`);
@@ -600,10 +620,10 @@ async function main(argv) {
     const seconds = values[1] === undefined ? 8 : Number(values[1]);
     process.stdout.write(`${recordVideo(serial, values[0], seconds)}\n`);
   } else if (command === "pr" && /^\d+$/.test(values[0] ?? "")) {
-    const mission = validateMission(
-      takeOption(values, "--mission") ?? DEFAULT_MISSION,
-    );
-    installApk(serial, fetchPrApk(values[0]));
+    const mission = validateMission(options.mission);
+    installApk(serial, fetchPrApk(values[0]), {
+      allowUninstall: options["allow-uninstall"],
+    });
     const { logs: _logs, ...summary } = await launchMission(serial, mission);
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   } else if (command === "stop") {
