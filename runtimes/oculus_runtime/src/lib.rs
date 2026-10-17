@@ -39,6 +39,9 @@ unsafe extern "C" {}
 
 #[cfg_attr(target_os = "android", ndk_glue::main)]
 fn main() {
+    // Without a subscriber every engine `render_log!` (shader compile/link
+    // failures included) is dropped; stdout reaches logcat as RustStdoutStderr.
+    engine::logging::init_logging("SHOCK2_LOG");
     #[cfg(target_os = "android")]
     {
         use std::os::unix::ffi::OsStrExt;
