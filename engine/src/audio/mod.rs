@@ -64,6 +64,14 @@ pub struct ActiveLoop<T> {
     pub paused: bool,
 }
 
+/// One live sink's playback speed, from [`AudioContext::sink_rates`].
+pub struct SinkRate {
+    /// "spatial", "listener", "environmental", "ambient_emitter" or "music".
+    pub kind: &'static str,
+    pub follows_world: bool,
+    pub speed: f32,
+}
+
 struct LoopPlayback {
     handle: u64,
     sample: String,
@@ -101,6 +109,9 @@ pub struct AudioPlaybackSettings {
     pub looping: bool,
     /// Gameplay pauses with simulation; frontend hum and clicks opt out.
     pub pause_with_scene: bool,
+    /// Listener-relative plays only: follow [`AudioContext::set_world_rate`].
+    /// Positional plays always do.
+    pub follows_world: bool,
 }
 
 impl Default for AudioPlaybackSettings {
@@ -110,6 +121,7 @@ impl Default for AudioPlaybackSettings {
             channel_gains: [STATIC_CENTER_GAIN, STATIC_CENTER_GAIN],
             looping: false,
             pause_with_scene: true,
+            follows_world: false,
         }
     }
 }
@@ -169,6 +181,7 @@ enum SinkAdapter<TSourceKey> {
     StaticSink {
         sink: Sink,
         pause_with_scene: bool,
+        follows_world: bool,
     },
     PositionalSink {
         sink: SpatialSink,
@@ -180,10 +193,11 @@ impl<TSourceKey> SinkAdapter<TSourceKey>
 where
     TSourceKey: Copy,
 {
-    fn fixed(sink: Sink, pause_with_scene: bool) -> SinkAdapter<TSourceKey> {
+    fn fixed(sink: Sink, pause_with_scene: bool, follows_world: bool) -> SinkAdapter<TSourceKey> {
         SinkAdapter::StaticSink {
             sink,
             pause_with_scene,
+            follows_world,
         }
     }
 
@@ -229,6 +243,7 @@ where
             SinkAdapter::StaticSink {
                 sink,
                 pause_with_scene,
+                ..
             } => {
                 if *pause_with_scene {
                     if paused {
@@ -245,6 +260,31 @@ where
                     sink.play();
                 }
             }
+        }
+    }
+
+    /// Positional sinks are world sounds; static ones only when they opt in.
+    fn follows_world(&self) -> bool {
+        match self {
+            SinkAdapter::StaticSink { follows_world, .. } => *follows_world,
+            SinkAdapter::PositionalSink { .. } => true,
+        }
+    }
+
+    fn set_world_rate(&self, rate: f32) {
+        if !self.follows_world() {
+            return;
+        }
+        match self {
+            SinkAdapter::StaticSink { sink, .. } => sink.set_speed(rate),
+            SinkAdapter::PositionalSink { sink, .. } => sink.set_speed(rate),
+        }
+    }
+
+    fn speed(&self) -> f32 {
+        match self {
+            SinkAdapter::StaticSink { sink, .. } => sink.speed(),
+            SinkAdapter::PositionalSink { sink, .. } => sink.speed(),
         }
     }
 
@@ -278,6 +318,8 @@ where
     handle_to_sink: HashMap<u64, SinkAdapter<TAmbientKey>>,
     handle_loops: HashMap<u64, LoopPlayback>,
     scene_paused: bool,
+    /// Playback rate of world sounds; see [`AudioContext::set_world_rate`].
+    world_rate: f32,
     // Background music
     background_music: Option<Sink>,
     background_music_player: Option<Box<dyn BackgroundMusic<TCue>>>,
@@ -319,6 +361,7 @@ where
             handle_loops: HashMap::new(),
             channel_to_last_handle: HashMap::new(),
             scene_paused: false,
+            world_rate: 1.0,
             background_music: None,
             background_music_player: None,
             next_music_cue: None,
@@ -363,6 +406,73 @@ where
         }
     }
 
+    /// Play world sounds at `rate` while the world clock is slowed. rodio
+    /// resamples, so pitch drops with speed.
+    ///
+    /// World: positional sounds (SFX, speech, positional loops), ambient
+    /// emitters, the environmental bed, and listener-relative plays with
+    /// `follows_world` (the bed's auxiliary layers).
+    /// Exempt: music and every other listener-relative play (UI, HUD and
+    /// player feedback, logs, emails, menu sounds, cutscene streams).
+    ///
+    /// Sinks created later start at the current rate. An unchanged rate
+    /// touches no sinks.
+    pub fn set_world_rate(&mut self, rate: f32) {
+        if self.world_rate == rate {
+            return;
+        }
+        self.world_rate = rate;
+        for sink in self.handle_to_sink.values() {
+            sink.set_world_rate(rate);
+        }
+        if let Some((sink, _)) = &self.environmental_sink {
+            sink.set_speed(rate);
+        }
+        for (sink, _) in self.ambient_sounds.values() {
+            sink.set_speed(rate);
+        }
+    }
+
+    pub fn world_rate(&self) -> f32 {
+        self.world_rate
+    }
+
+    /// Every live sink's kind and speed, for headless inspection.
+    pub fn sink_rates(&self) -> Vec<SinkRate> {
+        let rate = |kind, follows_world, speed| SinkRate {
+            kind,
+            follows_world,
+            speed,
+        };
+        let mut rates: Vec<_> = self
+            .handle_to_sink
+            .values()
+            .map(|sink| {
+                let kind = match sink {
+                    SinkAdapter::StaticSink { .. } => "listener",
+                    SinkAdapter::PositionalSink { .. } => "spatial",
+                };
+                rate(kind, sink.follows_world(), sink.speed())
+            })
+            .collect();
+        rates.extend(
+            self.environmental_sink
+                .iter()
+                .map(|(sink, _)| rate("environmental", true, sink.speed())),
+        );
+        rates.extend(
+            self.ambient_sounds
+                .values()
+                .map(|(sink, _)| rate("ambient_emitter", true, sink.speed())),
+        );
+        rates.extend(
+            self.background_music
+                .iter()
+                .map(|sink| rate("music", false, sink.speed())),
+        );
+        rates
+    }
+
     /// Safe without advancing the scene, listener pose, or music selection.
     /// In particular, menu rollover clicks must not accumulate during pause.
     pub fn reap_finished_sounds(&mut self) {
@@ -398,6 +508,7 @@ where
         if self.scene_paused {
             sink.pause();
         }
+        sink.set_speed(self.world_rate);
         clip.add_to_sink_looping(&sink);
         sink.set_volume(0.2);
         self.environmental_sink = Some((sink, LoopPlayback::new(AudioHandle::new().id(), &clip)));
@@ -543,6 +654,7 @@ where
                 if self.scene_paused {
                     sink.pause();
                 }
+                sink.set_speed(self.world_rate);
                 clip.add_to_spatial_sink_looping(&sink);
                 sink.set_volume(0.5);
                 self.ambient_sounds.insert(
@@ -807,7 +919,7 @@ pub fn play_streaming_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     sink.append(ChannelVolume::new(source, settings.channel_gains.to_vec()));
     context
         .handle_to_sink
-        .insert(id, SinkAdapter::fixed(sink, true));
+        .insert(id, SinkAdapter::fixed(sink, true, false));
     preempted
 }
 
@@ -859,9 +971,9 @@ pub fn play_audio_with_settings<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
             .insert(id, LoopPlayback::new(id, &audio_clip));
     }
 
-    context
-        .handle_to_sink
-        .insert(id, SinkAdapter::fixed(sink, settings.pause_with_scene));
+    let adapter = SinkAdapter::fixed(sink, settings.pause_with_scene, settings.follows_world);
+    adapter.set_world_rate(context.world_rate);
+    context.handle_to_sink.insert(id, adapter);
     preempted
 }
 
@@ -932,9 +1044,9 @@ pub fn play_spatial_audio_with_settings<TAmbientKey: Hash + Eq + Copy, TCue: Clo
             .handle_loops
             .insert(id, LoopPlayback::new(id, &audio_clip));
     }
-    context
-        .handle_to_sink
-        .insert(id, SinkAdapter::positional(sink, position, source));
+    let adapter = SinkAdapter::positional(sink, position, source);
+    adapter.set_world_rate(context.world_rate);
+    context.handle_to_sink.insert(id, adapter);
     preempted
 }
 
@@ -1155,7 +1267,7 @@ mod tests {
     fn paused_sink_emits_silence_without_consuming_the_clip() {
         let clip = AudioClip::from_raw(1, 48_000, vec![8192; 48_000]);
         let (sink, mut output) = rodio::Sink::new_idle();
-        let adapter = super::SinkAdapter::<()>::fixed(sink, true);
+        let adapter = super::SinkAdapter::<()>::fixed(sink, true, false);
         adapter.set_scene_paused(true);
         if let super::SinkAdapter::StaticSink { sink, .. } = &adapter {
             clip.add_to_sink(sink);
@@ -1268,6 +1380,87 @@ mod tests {
     }
 
     #[test]
+    fn world_rate_slows_world_sinks_and_spares_exempt_ones() {
+        let clip = AudioClip::from_raw(1, 48_000, vec![8192; 48_000]);
+        let (world, mut world_out) = rodio::Sink::new_idle();
+        let (exempt, mut exempt_out) = rodio::Sink::new_idle();
+        let world = super::SinkAdapter::<()>::fixed(world, true, true);
+        let exempt = super::SinkAdapter::<()>::fixed(exempt, true, false);
+        for adapter in [&world, &exempt] {
+            if let super::SinkAdapter::StaticSink { sink, .. } = adapter {
+                clip.add_to_sink(sink);
+            }
+            adapter.set_world_rate(0.5);
+        }
+        assert_eq!(world.speed(), 0.5);
+        assert_eq!(exempt.speed(), 1.0);
+        // The rate reaches the mixer as a lower sample rate: slower and lower.
+        world_out.next();
+        exempt_out.next();
+        assert_eq!(world_out.sample_rate(), 24_000);
+        assert_eq!(exempt_out.sample_rate(), 48_000);
+    }
+
+    #[test]
+    #[ignore = "requires an audio output device"]
+    fn world_rate_covers_live_and_later_world_sinks_but_not_music_or_ui() {
+        use super::*;
+        struct Bed;
+        impl BackgroundMusic<String> for Bed {
+            fn next_clip(&mut self, _: Option<String>) -> Option<Rc<AudioClip>> {
+                Some(Rc::new(AudioClip::from_raw(1, 8000, vec![0; 80000])))
+            }
+        }
+        let clip = Rc::new(AudioClip::from_raw(1, 8000, vec![0; 80000]));
+        let mut audio = AudioContext::<u32, String>::new();
+        let play_all = |audio: &mut AudioContext<u32, String>| {
+            let ui = AudioHandle::new();
+            play_audio(audio, ui.clone(), None, clip.clone());
+            let aux = AudioHandle::new();
+            play_audio_with_settings(
+                audio,
+                aux.clone(),
+                None,
+                clip.clone(),
+                AudioPlaybackSettings {
+                    follows_world: true,
+                    ..Default::default()
+                },
+            );
+            let spatial = AudioHandle::new();
+            let origin = vec3(0.0, 0.0, 0.0);
+            play_spatial_audio(audio, origin, None, spatial.clone(), None, clip.clone());
+            (ui, aux, spatial)
+        };
+        let before = play_all(&mut audio);
+        audio.set_background_music(Box::new(Bed));
+        audio.set_environmental_sound(clip.clone());
+        let ears = (vec3(-0.1, 0.0, 0.0), vec3(0.1, 0.0, 0.0));
+        let emitter = (1, vec3(0.0, 0.0, 0.0), clip.clone());
+        audio.update(ears.0, ears.1, vec![emitter.clone()], |_| None);
+
+        audio.set_world_rate(0.5);
+        let after = play_all(&mut audio);
+        audio.update(
+            ears.0,
+            ears.1,
+            vec![emitter, (2, vec3(1.0, 0.0, 0.0), clip.clone())],
+            |_| None,
+        );
+        for (ui, aux, spatial) in [before, after] {
+            assert_eq!(audio.handle_to_sink[&ui.id()].speed(), 1.0);
+            assert_eq!(audio.handle_to_sink[&aux.id()].speed(), 0.5);
+            assert_eq!(audio.handle_to_sink[&spatial.id()].speed(), 0.5);
+        }
+        assert_eq!(audio.background_music.as_ref().unwrap().speed(), 1.0);
+        assert_eq!(audio.environmental_sink.as_ref().unwrap().0.speed(), 0.5);
+        audio.set_environmental_sound(clip.clone());
+        assert_eq!(audio.environmental_sink.as_ref().unwrap().0.speed(), 0.5);
+        assert_eq!(audio.ambient_sounds[&1].0.speed(), 0.5);
+        assert_eq!(audio.ambient_sounds[&2].0.speed(), 0.5);
+    }
+
+    #[test]
     fn environmental_bed_repeats_without_game_updates() {
         let clip = AudioClip::from_raw(1, 48_000, vec![8192; 64]);
         let (sink, mut output) = rodio::Sink::new_idle();
@@ -1333,6 +1526,23 @@ mod tests {
     fn wav_duration_reads_avg_bytes_per_sec_and_data_size() {
         let duration = wav_duration(&riff(22050, 11025)).expect("duration");
         assert_eq!(duration.as_secs_f64(), 0.5);
+    }
+
+    /// The mixer re-reads a source's rate once per frame. Decoded clips come
+    /// in packet-sized frames, so a live world-rate change lands within one
+    /// packet (~50 ms at 22 kHz) rather than at the end of the clip.
+    #[test]
+    fn a_live_rate_change_reaches_a_decoded_clip_within_a_packet() {
+        let clip = AudioClip::from_bytes(riff(22050, 22050 * 3));
+        let (sink, mut output) = rodio::Sink::new_idle();
+        clip.add_to_sink(&sink);
+        output.by_ref().take(5000).for_each(drop);
+        sink.set_speed(0.5);
+        let frame = output.current_frame_len().unwrap();
+        assert!(frame <= 2048, "frame of {frame} samples");
+        output.by_ref().take(frame).for_each(drop);
+        assert_eq!(output.sample_rate(), 11_025);
+        sink.stop();
     }
 
     #[test]

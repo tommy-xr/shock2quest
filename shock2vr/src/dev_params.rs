@@ -623,6 +623,11 @@ dev_params! {
     /// Multiplies a traveling shot's speed (fired while the world is slowed):
     /// a real bullet at half world speed is still too fast to dodge.
     SLOW_TIME_SHOT_SPEED = Root::float("slow_time_shot_speed", "Slow-time shot speed", 1.0, 0.05, 1.0, 0.05),
+    /// Lowest rate world sounds play at while the world is slowed: audio runs
+    /// at `max(world_time_scale, floor)`, pitch dropping with speed. A plain
+    /// resampler turns muddy below about half rate, so at 0.25 world audio
+    /// still plays at 0.5. Music, UI, HUD, logs and emails stay at full rate.
+    SLOW_TIME_AUDIO_FLOOR = Root::float("slow_time_audio_floor", "Slow-time audio floor", 0.5, 0.1, 1.0, 0.05),
     /// The player loses no hit points from any source, so never shows the hit
     /// tint or dies - keeps deterministic captures from being spoiled by damage.
     CHEAT = Root::bool("cheat", "Cheat: invulnerable", false),
