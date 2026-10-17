@@ -59,9 +59,164 @@ pub(crate) fn barrel_smoke(
                 .to_homogeneous();
         }
     }
-    let mut smoke = smoke_particles(kind, frames);
+    let mut smoke = smoke_particles(kind, 1.0, frames);
     smoke.update(Duration::ZERO, frame);
     Some(smoke)
+}
+
+/// The report of an AI's gun, keyed by the round. Creature launches author no
+/// flash of their own; turret guns may carry `GunFlash` and take only the
+/// smoke and sprite flash from here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AiMuzzle {
+    Slug,
+    Midwife,
+    DroidLaser,
+    /// The laser turret's bolt is red; otherwise it reports like the droid's.
+    TurretLaser,
+}
+
+impl AiMuzzle {
+    pub fn for_projectile(template: i32, lookup: impl Fn(&str) -> Option<i32>) -> Option<Self> {
+        [
+            ("grunt shotgun slug", Self::Slug),
+            ("midwife shot", Self::Midwife),
+            ("droid laser bolt", Self::DroidLaser),
+            ("turret slug", Self::Slug),
+            ("turret laser bolt", Self::TurretLaser),
+        ]
+        .into_iter()
+        .find_map(|(name, kind)| (lookup(name) == Some(template)).then_some(kind))
+    }
+
+    /// The hybrid's shotgun takes the player's gun flash, `Assault Flash`.
+    /// The slug turrets' `Slug Flash` reads as a dull ribbon here: the
+    /// renderer ignores its FullBright render type.
+    pub fn authored_flash(self) -> Option<&'static str> {
+        matches!(self, Self::Slug).then_some("assault flash")
+    }
+
+    /// How far along the shooter's facing the visible muzzle sits from the
+    /// authored launch point, measured off the models: the hybrid's launch
+    /// joint is its shotgun's muzzle, the midwife's is her hand, and the
+    /// security droid's launch offset is its cannon's breech.
+    pub fn barrel_reach(self) -> f32 {
+        match self {
+            Self::Slug | Self::Midwife | Self::TurretLaser => 0.0,
+            Self::DroidLaser => 2.0,
+        }
+    }
+
+    /// Only the hybrid's slug gun is loud: a gun-sized cloud. The droid's
+    /// laser is quieter, and the midwife's organic weapon leaves a faint wisp
+    /// with no flash at all.
+    fn report(self) -> AiReport {
+        use crate::weapon_modification::Kind;
+        match self {
+            Self::Slug => AiReport {
+                smoke: Kind::Shotgun,
+                scale: 5.0,
+                alpha: 2.0,
+                life: 1.0,
+                count: 3,
+                sprite_flash: None,
+            },
+            Self::DroidLaser | Self::TurretLaser => AiReport {
+                smoke: Kind::Laser,
+                scale: 3.0,
+                alpha: 1.5,
+                life: 0.8,
+                count: 2,
+                sprite_flash: Some(0.25),
+            },
+            // The fusion cannon's green exhaust, thinned to a wisp.
+            Self::Midwife => AiReport {
+                smoke: Kind::Fusion,
+                scale: 2.0,
+                alpha: 0.8,
+                life: 0.5,
+                count: 1,
+                sprite_flash: None,
+            },
+        }
+    }
+
+    /// Smoke and flash colour, where it differs from the borrowed profile's.
+    fn tint(self) -> Option<cgmath::Vector3<f32>> {
+        matches!(self, Self::TurretLaser).then_some(vec3(1.0, 0.3, 0.25))
+    }
+}
+
+/// A creature's report as multipliers over the player's smoke profile for
+/// the same kind of round, plus an optional tinted sprite flash.
+struct AiReport {
+    smoke: crate::weapon_modification::Kind,
+    /// Size (spread and growth) multiplier.
+    scale: f32,
+    /// Alpha multiplier.
+    alpha: f32,
+    /// Lifetime multiplier.
+    life: f32,
+    count: usize,
+    /// Starting size of the sprite flash, for rounds with no authored flash.
+    sprite_flash: Option<f32>,
+}
+
+/// Flash sprite (when the report has one) and smoke for a creature's shot.
+/// `frame` is the launch frame: origin at the muzzle, +Z along the shot.
+pub(crate) fn ai_muzzle_particles(
+    kind: AiMuzzle,
+    frame: Matrix4<f32>,
+    assets: &mut AssetCache,
+) -> (Option<ParticleSystem>, Option<ParticleSystem>) {
+    let report = kind.report();
+    let profile = BarrelSmokeProfile::for_weapon(report.smoke);
+    let color = kind.tint().unwrap_or(profile.color);
+    let launch = |mut system: ParticleSystem| {
+        system.update(Duration::ZERO, frame);
+        system
+    };
+    let smoke = Some(particle_frames(assets, "NDsmk"))
+        .filter(|frames| !frames.is_empty())
+        .map(|frames| {
+            launch(
+                smoke_particles(report.smoke, report.scale, frames)
+                    .with_color(color)
+                    .with_alpha(profile.alpha * report.alpha)
+                    .with_num_particles(report.count)
+                    .with_lifetime(
+                        profile.lifetime.0 * report.life,
+                        profile.lifetime.1 * report.life,
+                    )
+                    .with_fade_time(profile.fade * report.life),
+            )
+        });
+    let flash = report.sprite_flash.and_then(|size| {
+        let frames = particle_frames(assets, "NDsbll");
+        (!frames.is_empty()).then(|| launch(flash_particles(color, size, frames)))
+    });
+    (smoke, flash)
+}
+
+/// One brief, bright, expanding sprite at the muzzle.
+fn flash_particles(
+    color: cgmath::Vector3<f32>,
+    size: f32,
+    frames: Vec<Rc<dyn TextureTrait>>,
+) -> ParticleSystem {
+    ParticleSystem::new()
+        .with_one_shot(true)
+        .with_world_space(true)
+        .with_num_particles(1)
+        .with_launch_bounding_box(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0))
+        .with_velocity(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0))
+        .with_lifetime(0.1, 0.1)
+        .with_particle_size(size, size)
+        .with_size_velocity(size * 4.0)
+        .with_color(color)
+        .with_alpha(0.9)
+        .with_fade_time(0.08)
+        .with_sprite_animation(frames, Duration::from_millis(30), false)
 }
 
 /// Small, bounded exhaust profiles. These change the after-shot character,
@@ -144,8 +299,11 @@ impl BarrelSmokeProfile {
     }
 }
 
+/// `scale` sizes the wisp's spread and growth, not its timing. Drift grows
+/// only with its square root, so a big wisp still hangs at the muzzle.
 fn smoke_particles(
     kind: crate::weapon_modification::Kind,
+    scale: f32,
     frames: Vec<Rc<dyn TextureTrait>>,
 ) -> ParticleSystem {
     let profile = BarrelSmokeProfile::for_weapon(kind);
@@ -153,15 +311,18 @@ fn smoke_particles(
         .with_one_shot(true)
         .with_world_space(true)
         .with_num_particles(profile.count)
-        .with_launch_bounding_box(vec3(-0.008, -0.008, 0.005), vec3(0.008, 0.008, 0.025))
-        .with_lifetime(profile.lifetime.0, profile.lifetime.1)
-        .with_particle_size(profile.size.0, profile.size.1)
-        .with_velocity(
-            vec3(-0.035, -0.015, profile.forward_speed.0),
-            vec3(0.035, 0.025, profile.forward_speed.1),
+        .with_launch_bounding_box(
+            vec3(-0.008, -0.008, 0.005) * scale,
+            vec3(0.008, 0.008, 0.025) * scale,
         )
-        .with_acceleration(vec3(0.0, profile.rise, 0.0))
-        .with_size_velocity(profile.growth)
+        .with_lifetime(profile.lifetime.0, profile.lifetime.1)
+        .with_particle_size(profile.size.0 * scale, profile.size.1 * scale)
+        .with_velocity(
+            vec3(-0.035, -0.015, profile.forward_speed.0) * scale.sqrt(),
+            vec3(0.035, 0.025, profile.forward_speed.1) * scale.sqrt(),
+        )
+        .with_acceleration(vec3(0.0, profile.rise * scale.sqrt(), 0.0))
+        .with_size_velocity(profile.growth * scale)
         .with_color(profile.color)
         .with_alpha(profile.alpha)
         .with_fade_in_time(0.045)
@@ -612,7 +773,7 @@ mod tests {
             Kind::Annelid,
             Kind::Viral,
         ] {
-            let mut particles = smoke_particles(kind, vec![]);
+            let mut particles = smoke_particles(kind, 1.0, vec![]);
             particles.update(Duration::ZERO, Matrix4::identity());
             particles.update(Duration::from_millis(100), Matrix4::identity());
             assert!(!particles.is_done());
@@ -621,6 +782,62 @@ mod tests {
             particles.update(Duration::from_secs(1), Matrix4::identity());
             assert!(particles.is_done(), "a spent wisp must not emit again");
         }
+    }
+
+    #[test]
+    fn ai_muzzle_follows_the_round_and_its_smoke_expires() {
+        let lookup = |name: &str| match name {
+            "grunt shotgun slug" => Some(-676),
+            "midwife shot" => Some(-1603),
+            "droid laser bolt" => Some(-1501),
+            _ => None,
+        };
+        assert_eq!(AiMuzzle::for_projectile(-676, lookup), Some(AiMuzzle::Slug));
+        assert_eq!(
+            AiMuzzle::for_projectile(-1603, lookup),
+            Some(AiMuzzle::Midwife)
+        );
+        assert_eq!(
+            AiMuzzle::for_projectile(-1501, lookup),
+            Some(AiMuzzle::DroidLaser)
+        );
+        assert_eq!(AiMuzzle::for_projectile(-1600, lookup), None);
+        assert_eq!(AiMuzzle::Slug.authored_flash(), Some("assault flash"));
+        assert_eq!(AiMuzzle::Midwife.authored_flash(), None);
+        assert_eq!(AiMuzzle::DroidLaser.authored_flash(), None);
+        // The midwife's wisp is green, fainter and sparser than the droid's,
+        // which is fainter than the hybrid's; only the droid has a sprite.
+        let [slug, droid, midwife] =
+            [AiMuzzle::Slug, AiMuzzle::DroidLaser, AiMuzzle::Midwife].map(AiMuzzle::report);
+        let green = BarrelSmokeProfile::for_weapon(midwife.smoke).color;
+        assert!(green.y > green.x && green.y > green.z, "{green:?}");
+        let alpha = |r: &AiReport| BarrelSmokeProfile::for_weapon(r.smoke).alpha * r.alpha;
+        assert!(alpha(&midwife) < alpha(&droid) && alpha(&droid) < alpha(&slug));
+        assert!(midwife.count < droid.count && droid.count < slug.count);
+        assert!(midwife.sprite_flash.is_none() && slug.sprite_flash.is_none());
+        assert!(droid.sprite_flash.is_some());
+        // The laser turret's red bolt gets a red report.
+        let red = AiMuzzle::TurretLaser.tint().unwrap();
+        assert!(red.x > red.y && red.x > red.z, "{red:?}");
+        for kind in [
+            AiMuzzle::Slug,
+            AiMuzzle::Midwife,
+            AiMuzzle::DroidLaser,
+            AiMuzzle::TurretLaser,
+        ] {
+            let report = kind.report();
+            let mut smoke = smoke_particles(report.smoke, report.scale, vec![]);
+            smoke.update(Duration::ZERO, Matrix4::identity());
+            smoke.update(Duration::from_secs(1), Matrix4::identity());
+            assert!(
+                smoke.is_done(),
+                "{kind:?}: scaling must not lengthen the wisp"
+            );
+        }
+        let mut flash = flash_particles(vec3(1.0, 1.0, 1.0), 0.25, vec![]);
+        flash.update(Duration::ZERO, Matrix4::identity());
+        flash.update(Duration::from_millis(150), Matrix4::identity());
+        assert!(flash.is_done());
     }
 
     #[test]

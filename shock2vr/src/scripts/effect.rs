@@ -1018,6 +1018,13 @@ pub enum Effect {
     WeaponRecoil {
         entity_id: EntityId,
     },
+    /// An AI (creature or turret) fired: spawn its muzzle flash sprite and smoke at `frame`
+    /// (origin at the muzzle, +Z along the shot).
+    AiMuzzleParticles {
+        shooter: EntityId,
+        kind: crate::particle_effects::AiMuzzle,
+        frame: Matrix4<f32>,
+    },
     /// A flat animation reached the chamber's ejection event. Resolve the
     /// current weapon transform when applied, after this frame's placement.
     EjectWeaponCasings {
