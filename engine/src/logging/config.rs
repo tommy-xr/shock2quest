@@ -88,6 +88,7 @@ pub fn init_logging(env_var_name: &str) -> LogConfig {
     use tracing_subscriber;
 
     let _ = tracing_subscriber::fmt()
+        .with_ansi(false)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
 

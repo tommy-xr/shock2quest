@@ -1,6 +1,6 @@
+use crate::render_log;
 use gl::types::*;
 use std::ptr;
-use tracing::warn;
 
 pub struct ShaderProgram {
     pub gl_id: u32,
@@ -34,8 +34,9 @@ pub fn link(vertex_shader: &Shader, fragment_shader: &Shader) -> ShaderProgram {
                 ptr::null_mut(),
                 info_log.as_mut_ptr() as *mut GLchar,
             );
-            warn!(
-                "ERROR::SHADER::PROGRAM::COMPILATION_FAILED\n{}",
+            render_log!(
+                ERROR,
+                "Shader program link failed: {}",
                 String::from_utf8_lossy(&info_log)
             );
         }
