@@ -29,6 +29,23 @@ pub struct CollectedLog {
     pub read: bool,
 }
 
+/// A PDA list tab. Retail's PDA also has Notes and Help tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PdaKind {
+    Email,
+    #[default]
+    Log,
+}
+
+/// One PDA entry: an email or audio log, keyed like the string tables
+/// (`level<deck>.str` `EmailName<index>` / `LogName<index>`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PdaEntry {
+    pub kind: PdaKind,
+    pub deck: u32,
+    pub index: u32,
+}
+
 #[derive(Deserialize, Serialize, Unique, Clone, Debug)]
 pub struct QuestInfo {
     /// Player\Mini Games unlock bitfield; global across saves and deck changes.
@@ -234,6 +251,63 @@ impl QuestInfo {
         was_unread
     }
 
+    /// Received emails as `(deck, email)`, parsed back from their `EMddnn`
+    /// sound names.
+    fn collected_emails(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        self.played_emails.iter().filter_map(|name| {
+            let digits = name.strip_prefix("EM")?;
+            let deck = digits.get(..2)?.parse().ok()?;
+            let email = digits.get(2..)?.parse().ok()?;
+            Some((deck, email))
+        })
+    }
+
+    /// One deck's PDA list, oldest first like retail. Logs keep pickup order;
+    /// emails keep no receipt time, so they list in index (story) order.
+    pub fn pda_entries(&self, kind: PdaKind, deck: u32) -> Vec<u32> {
+        match kind {
+            PdaKind::Log => self
+                .collected_logs
+                .iter()
+                .filter(|entry| entry.deck == deck)
+                .map(|entry| entry.log)
+                .collect(),
+            PdaKind::Email => {
+                let mut emails: Vec<u32> = self
+                    .collected_emails()
+                    .filter(|(d, _)| *d == deck)
+                    .map(|(_, email)| email)
+                    .collect();
+                emails.sort_unstable();
+                emails
+            }
+        }
+    }
+
+    /// Decks with any email or log, ascending: the PDA's deck arrows cycle these.
+    pub fn pda_decks(&self) -> Vec<u32> {
+        let decks: BTreeSet<u32> = self
+            .collected_logs
+            .iter()
+            .map(|entry| entry.deck)
+            .chain(self.collected_emails().map(|(deck, _)| deck))
+            .collect();
+        decks.into_iter().collect()
+    }
+
+    /// Where the PDA opens: the newest log's deck, else the latest email deck.
+    pub fn pda_default_view(&self) -> Option<(PdaKind, u32)> {
+        self.collected_logs
+            .last()
+            .map(|entry| (PdaKind::Log, entry.deck))
+            .or_else(|| {
+                self.collected_emails()
+                    .map(|(deck, _)| deck)
+                    .max()
+                    .map(|deck| (PdaKind::Email, deck))
+            })
+    }
+
     /// The player's persistent character sheet.
     pub fn player_stats(&self) -> &PlayerStats {
         &self.player_stats
@@ -408,6 +482,27 @@ mod log_tests {
         assert!(!quest_info.mark_log_read(2, 20));
         assert!(!quest_info.mark_log_read(9, 9));
         assert_eq!(quest_info.collected_logs().len(), 1);
+    }
+
+    /// Every collected log and played email stays listed per deck, not just the
+    /// newest one the reader control reaches.
+    #[test]
+    fn pda_lists_every_collected_entry_per_deck_oldest_first() {
+        let mut quest_info = quest_info_with(&[(2, 20), (3, 1), (2, 4)]);
+        for (deck, email) in [(2, 12), (2, 3), (4, 1)] {
+            quest_info.mark_email_as_played(&crate::util::get_email_sound_file(deck, email));
+        }
+
+        assert_eq!(quest_info.pda_entries(PdaKind::Log, 2), vec![20, 4]);
+        assert_eq!(quest_info.pda_entries(PdaKind::Log, 3), vec![1]);
+        assert_eq!(quest_info.pda_entries(PdaKind::Email, 2), vec![3, 12]);
+        assert_eq!(quest_info.pda_decks(), vec![2, 3, 4]);
+        assert_eq!(quest_info.pda_default_view(), Some((PdaKind::Log, 2)));
+
+        let mut emails_only = QuestInfo::new();
+        emails_only.mark_email_as_played(&crate::util::get_email_sound_file(1, 2));
+        assert_eq!(emails_only.pda_default_view(), Some((PdaKind::Email, 1)));
+        assert_eq!(QuestInfo::new().pda_default_view(), None);
     }
 
     /// Saves written before read tracking restore their logs as unread.

@@ -26,6 +26,7 @@ pub mod player_trail;
 pub(crate) mod projectile_spray;
 mod psi_hack_panel;
 pub(crate) mod reload;
+mod pda_list;
 mod research_overview;
 mod room_gravity;
 mod shoulder_backpack;
