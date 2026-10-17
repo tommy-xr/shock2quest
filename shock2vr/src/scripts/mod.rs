@@ -3,6 +3,7 @@ pub use message_origin::MessageOrigin;
 pub mod ai;
 mod change_interface;
 pub mod effect;
+pub mod item_psi;
 pub(crate) mod proximity_grenade;
 pub mod speech_registry;
 pub mod speech_util;
