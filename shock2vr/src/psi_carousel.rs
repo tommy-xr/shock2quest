@@ -59,6 +59,8 @@ fn entries(
     let rows: &[i32] = match tiers.len() {
         0 => &[],
         1 => &[0],
+        // The lone neighbour is both next and previous; it sits above, where
+        // a push up reaches it, so a push down also lands on the card above.
         2 => &[0, 1],
         _ => &[-1, 0, 1],
     };

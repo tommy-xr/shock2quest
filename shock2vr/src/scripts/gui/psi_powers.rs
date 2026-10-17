@@ -1408,7 +1408,7 @@ mod tests {
         let free = NavLatch::Free;
         assert_eq!(psi(vec2(0.0, -0.7), free).0, Some(NavStep::TierPrev));
         assert_eq!(psi(vec2(0.0, 0.7), free), (None, free));
-        // ~38 degrees off the cardinal: down only.
+        // ~37 degrees off the cardinal: down only.
         assert_eq!(psi(vec2(0.6, -0.8), free).0, Some(NavStep::TierPrev));
         assert_eq!(psi(vec2(0.6, 0.8), free), (None, free));
         assert_eq!(
@@ -1429,6 +1429,10 @@ mod tests {
         let (_, latch) = handheld(vec2(0.0, 1.0), NavLatch::Free);
         let (_, latch) = handheld(vec2(0.0, 0.0), latch);
         assert_eq!(handheld(vec2(0.0, -0.6), latch).0, Some(NavStep::TierPrev));
+        assert_eq!(
+            HANDHELD_STICK_NAV.limits(NavStep::TierPrev),
+            HANDHELD_STICK_NAV.limits(NavStep::TierNext)
+        );
     }
 
     /// The lean grows from nothing to its fullest as the push nears
