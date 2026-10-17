@@ -95,14 +95,22 @@ const FOCUS_LIFT: f32 = 0.045;
 /// A push about to step leans the sphere this fraction of the way to its target.
 const MAX_LEAN: f32 = 0.3;
 
+/// Rows climb: the next tier (a push up) is drawn above, the previous below.
 fn arc_position(row: f32, slot: f32) -> cgmath::Vector3<f32> {
     let yaw = slot * SLOT_ANGLE;
     let pitch = row * ROW_ANGLE;
     cgmath::vec3(
         SPHERE_RADIUS * yaw.sin() * pitch.cos(),
-        -SPHERE_RADIUS * pitch.sin(),
+        SPHERE_RADIUS * pitch.sin(),
         SPHERE_RADIUS * (yaw.cos() * pitch.cos() - 1.0),
     )
+}
+
+/// Turns a card at `arc_position(row, slot)` to face radially outward, as if
+/// printed on the sphere.
+fn card_facing(row: f32, slot: f32) -> cgmath::Matrix4<f32> {
+    use cgmath::{Matrix4, Rad};
+    Matrix4::from_angle_y(Rad(slot * SLOT_ANGLE)) * Matrix4::from_angle_x(Rad(-row * ROW_ANGLE))
 }
 
 /// One shared front-facing arc for every latitude, including sparse tiers.
@@ -282,7 +290,7 @@ impl Carousel {
         assets: &mut engine::assets::asset_cache::AssetCache,
         eye: cgmath::Vector3<f32>,
     ) -> Vec<engine::scene::SceneObject> {
-        use cgmath::{Matrix4, Rad, vec3};
+        use cgmath::{Matrix4, vec3};
         // Attach to the synchronized physical amp, not a raw controller pose:
         // the card sphere is centred on the amp's ball. The projection stays
         // upright and faces the viewer as the amp moves.
@@ -351,9 +359,7 @@ impl Carousel {
             }
             let transform = root
                 * Matrix4::from_translation(position)
-                // Face radially outward, as if printed on the sphere.
-                * Matrix4::from_angle_y(Rad(slot_position * SLOT_ANGLE))
-                * Matrix4::from_angle_x(Rad(row_position * ROW_ANGLE))
+                * card_facing(row_position, slot_position)
                 * Matrix4::from_scale(size);
             objects.extend(card.render_world_space(assets, transform, None, None, 0.001));
             if drawn_tiers.insert(p.tier()) {
@@ -606,6 +612,19 @@ mod tests {
             let expected = SPHERE_RADIUS * 0.1 * BALL_RADII_PER_UNIT;
             assert!(((card - ball).magnitude() - expected).abs() < 1e-5);
         }
+    }
+
+    /// Pushing up steps to the next tier, so it is drawn above, its card
+    /// facing out from the sphere's centre like every other.
+    #[test]
+    fn the_next_tier_is_drawn_above_and_faces_out() {
+        let card = arc_position(1.0, 0.5);
+        assert!(card.y > 0.0);
+        let normal = (card_facing(1.0, 0.5) * vec3(0.0, 0.0, 1.0).extend(0.0))
+            .truncate()
+            .normalize();
+        let radial = (card - vec3(0.0, 0.0, -SPHERE_RADIUS)).normalize();
+        assert!((normal - radial).magnitude() < 1e-5);
     }
 
     #[test]

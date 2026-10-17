@@ -226,6 +226,8 @@ pub struct StickNavTuning {
     /// The smaller axis may be at most this fraction of the larger one; an
     /// ambiguous diagonal waits until it leans clearly one way.
     axis_slop: f32,
+    /// `engage` and `axis_slop` for a push down.
+    down: (f32, f32),
     /// Seconds after a step's release in which the opposite step is ignored.
     settle: f32,
 }
@@ -233,9 +235,12 @@ pub struct StickNavTuning {
 /// The psi selectors. Engaging late lets a thumb's arc settle on its
 /// direction; steps need ~30 degrees of a cardinal (tan 30 = 0.58); and a
 /// flicked stick springs back past centre, which must not step backwards.
+/// A thumb pulling down curls toward the palm and falls short, so down
+/// engages sooner and takes ~40 degrees (tan 40 = 0.84).
 pub const PSI_STICK_NAV: StickNavTuning = StickNavTuning {
     engage: 0.75,
     axis_slop: 0.58,
+    down: (0.65, 0.84),
     settle: 0.1,
 };
 
@@ -244,8 +249,19 @@ pub const PSI_STICK_NAV: StickNavTuning = StickNavTuning {
 pub const HANDHELD_STICK_NAV: StickNavTuning = StickNavTuning {
     engage: 0.5,
     axis_slop: 1.0,
+    down: (0.5, 1.0),
     settle: 0.0,
 };
+
+impl StickNavTuning {
+    /// `(engage, axis_slop)` for a push toward `step`.
+    fn limits(&self, step: NavStep) -> (f32, f32) {
+        match step {
+            NavStep::TierPrev => self.down,
+            _ => (self.engage, self.axis_slop),
+        }
+    }
+}
 
 /// [`stick_nav`]'s state between frames.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -290,7 +306,9 @@ pub fn stick_nav(
         NavLatch::Settling(..) | NavLatch::Free => NavLatch::Free,
     };
     match aimed_step(stick, latch, tuning) {
-        Some(step) if magnitude >= tuning.engage => (Some(step), NavLatch::Held(Some(step))),
+        Some(step) if magnitude >= tuning.limits(step).0 => {
+            (Some(step), NavLatch::Held(Some(step)))
+        }
         _ => (None, latch),
     }
 }
@@ -308,9 +326,10 @@ pub fn stick_lean(
         return None;
     }
     let step = aimed_step(stick, latch, tuning)?;
+    let engage = tuning.limits(step).0;
     Some((
         step,
-        ((magnitude - LEAN_START) / (tuning.engage - LEAN_START)).min(1.0),
+        ((magnitude - LEAN_START) / (engage - LEAN_START)).min(1.0),
     ))
 }
 
@@ -318,10 +337,10 @@ pub fn stick_lean(
 /// ambiguous diagonal or a spring-back the latch is ignoring.
 fn aimed_step(stick: Vector2<f32>, latch: NavLatch, tuning: &StickNavTuning) -> Option<NavStep> {
     let (x, y) = (stick.x.abs(), stick.y.abs());
-    if x.min(y) > tuning.axis_slop * x.max(y) {
+    let step = dominant_step(stick);
+    if x.min(y) > tuning.limits(step).1 * x.max(y) {
         return None;
     }
-    let step = dominant_step(stick);
     match latch {
         NavLatch::Settling(last, _) if step == last.opposite() => None,
         _ => Some(step),
@@ -1380,6 +1399,22 @@ mod tests {
         assert_eq!(psi(vec2(0.9, 0.8), free), (None, free));
         // Settled on the intended direction.
         assert_eq!(psi(vec2(0.9, 0.2), free).0, Some(NavStep::PowerNext));
+    }
+
+    /// A thumb pulling down curls toward the palm and falls short, so down
+    /// steps sooner and drifts wider than the other three.
+    #[test]
+    fn a_down_push_is_more_forgiving() {
+        let free = NavLatch::Free;
+        assert_eq!(psi(vec2(0.0, -0.7), free).0, Some(NavStep::TierPrev));
+        assert_eq!(psi(vec2(0.0, 0.7), free), (None, free));
+        // ~38 degrees off the cardinal: down only.
+        assert_eq!(psi(vec2(0.6, -0.8), free).0, Some(NavStep::TierPrev));
+        assert_eq!(psi(vec2(0.6, 0.8), free), (None, free));
+        assert_eq!(
+            stick_lean(vec2(0.0, -0.7), free, &PSI_STICK_NAV),
+            Some((NavStep::TierPrev, 1.0))
+        );
     }
 
     /// GamePig keeps its looser feel: diagonals walk the overworld, and a
