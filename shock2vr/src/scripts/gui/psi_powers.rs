@@ -197,14 +197,18 @@ impl NavStep {
     /// walk the powers inside one - the same two axes the flat readout's four
     /// arrows drive, so the stick and the arrows cannot diverge.
     pub fn effect(self) -> Effect {
+        let (axis, forward) = self.axis();
+        Effect::StepPsiSelection { axis, forward }
+    }
+
+    pub fn axis(self) -> (crate::psi::PsiSelectionAxis, bool) {
         use crate::psi::PsiSelectionAxis::{Power, Tier};
-        let (axis, forward) = match self {
+        match self {
             NavStep::TierPrev => (Tier, false),
             NavStep::TierNext => (Tier, true),
             NavStep::PowerPrev => (Power, false),
             NavStep::PowerNext => (Power, true),
-        };
-        Effect::StepPsiSelection { axis, forward }
+        }
     }
 }
 
@@ -212,6 +216,8 @@ impl NavStep {
 /// the engage threshold is hysteresis: a stick resting just under it cannot
 /// chatter through the whole tier.
 const NAV_RELEASE: f32 = 0.3;
+/// How far the stick must be pushed before [`stick_lean`] previews a step.
+const LEAN_START: f32 = 0.25;
 
 /// How a stick push turns into steps.
 pub struct StickNavTuning {
@@ -283,10 +289,48 @@ pub fn stick_nav(
         NavLatch::Settling(step, left) if left > dt => NavLatch::Settling(step, left - dt),
         NavLatch::Settling(..) | NavLatch::Free => NavLatch::Free,
     };
-    if magnitude < tuning.engage || x.min(y) > tuning.axis_slop * magnitude {
-        return (None, latch);
+    match aimed_step(stick, latch, tuning) {
+        Some(step) if magnitude >= tuning.engage => (Some(step), NavLatch::Held(Some(step))),
+        _ => (None, latch),
     }
-    let step = if y >= x {
+}
+
+/// The step a push is heading for and how far along it is (1 = about to
+/// step), so a selector can preview it. `None` while the stick is still held
+/// from a step, and for any push [`stick_nav`] would not step.
+pub fn stick_lean(
+    stick: Vector2<f32>,
+    latch: NavLatch,
+    tuning: &StickNavTuning,
+) -> Option<(NavStep, f32)> {
+    let magnitude = stick.x.abs().max(stick.y.abs());
+    if matches!(latch, NavLatch::Held(_)) || magnitude <= LEAN_START {
+        return None;
+    }
+    let step = aimed_step(stick, latch, tuning)?;
+    Some((
+        step,
+        ((magnitude - LEAN_START) / (tuning.engage - LEAN_START)).min(1.0),
+    ))
+}
+
+/// The step an unlatched push points at, whatever its length: `None` for an
+/// ambiguous diagonal or a spring-back the latch is ignoring.
+fn aimed_step(stick: Vector2<f32>, latch: NavLatch, tuning: &StickNavTuning) -> Option<NavStep> {
+    let (x, y) = (stick.x.abs(), stick.y.abs());
+    if x.min(y) > tuning.axis_slop * x.max(y) {
+        return None;
+    }
+    let step = dominant_step(stick);
+    match latch {
+        NavLatch::Settling(last, _) if step == last.opposite() => None,
+        _ => Some(step),
+    }
+}
+
+/// Up/down walk tiers, left/right powers; a tie goes to the tiers.
+fn dominant_step(stick: Vector2<f32>) -> NavStep {
+    if stick.y.abs() >= stick.x.abs() {
         if stick.y > 0.0 {
             NavStep::TierNext
         } else {
@@ -296,11 +340,7 @@ pub fn stick_nav(
         NavStep::PowerNext
     } else {
         NavStep::PowerPrev
-    };
-    if matches!(latch, NavLatch::Settling(last, _) if step == last.opposite()) {
-        return (None, latch);
     }
-    (Some(step), NavLatch::Held(Some(step)))
 }
 
 // --- The panel --------------------------------------------------------------
@@ -1354,6 +1394,32 @@ mod tests {
         let (_, latch) = handheld(vec2(0.0, 1.0), NavLatch::Free);
         let (_, latch) = handheld(vec2(0.0, 0.0), latch);
         assert_eq!(handheld(vec2(0.0, -0.6), latch).0, Some(NavStep::TierPrev));
+    }
+
+    /// The lean grows from nothing to its fullest as the push nears
+    /// the engage threshold, and never previews what will not step.
+    #[test]
+    fn stick_lean_previews_the_step_a_push_is_heading_for() {
+        let lean = |stick, latch| stick_lean(stick, latch, &PSI_STICK_NAV);
+        assert_eq!(lean(vec2(0.2, 0.0), NavLatch::Free), None);
+        let (step, amount) = lean(vec2(0.5, 0.1), NavLatch::Free).unwrap();
+        assert_eq!(step, NavStep::PowerNext);
+        assert!((amount - 0.5).abs() < 1e-6);
+        assert_eq!(
+            lean(vec2(0.0, -1.0), NavLatch::Free),
+            Some((NavStep::TierPrev, 1.0))
+        );
+        // Still held from the step it just took.
+        assert_eq!(
+            lean(vec2(1.0, 0.0), NavLatch::Held(Some(NavStep::PowerNext))),
+            None
+        );
+        // Nor is a diagonal that will not step.
+        assert_eq!(lean(vec2(0.6, 0.5), NavLatch::Free), None);
+        // A spring-back is not previewed; a push the same way is.
+        let settling = NavLatch::Settling(NavStep::TierNext, 0.05);
+        assert_eq!(lean(vec2(0.0, -0.6), settling), None);
+        assert_eq!(lean(vec2(0.0, 0.6), settling).unwrap().0, NavStep::TierNext);
     }
 
     /// The stick drives the same two axes the readout's arrows do.

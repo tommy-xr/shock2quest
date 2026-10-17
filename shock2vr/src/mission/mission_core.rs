@@ -5053,8 +5053,9 @@ impl MissionCore {
                 let confirm = menu.trigger_armed && pressed;
                 menu.trigger_armed |= !pressed;
                 self.psi_carousel_swallow[hand_slot(menu.hand)] = pressed;
+                let stick = input.thumbstick;
                 let (step, latched) = crate::scripts::gui::stick_nav(
-                    input.thumbstick,
+                    stick,
                     menu.stick_latched,
                     tick.elapsed.as_secs_f32(),
                     &crate::scripts::gui::PSI_STICK_NAV,
@@ -5062,21 +5063,35 @@ impl MissionCore {
                 menu.stick_latched = latched;
                 input.thumbstick = cgmath::vec2(0.0, 0.0);
                 input.trigger_value = 0.0;
-                if let Some(step) = step {
-                    if let Effect::StepPsiSelection { axis, forward } = step.effect() {
-                        let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
-                        let known = self
-                            .world
-                            .borrow::<UniqueView<PlayerPsiKnownPowers>>()
-                            .unwrap();
-                        menu.preview(
-                            crate::psi::step_selection(
-                                &powers.0, &known.0, menu.index, axis, forward,
-                            ),
-                            &powers.0,
-                            &known.0,
-                        );
+                {
+                    let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+                    let known = self
+                        .world
+                        .borrow::<UniqueView<PlayerPsiKnownPowers>>()
+                        .unwrap();
+                    let target = |index, step: crate::scripts::gui::NavStep| {
+                        let (axis, forward) = step.axis();
+                        crate::psi::step_selection(&powers.0, &known.0, index, axis, forward)
+                    };
+                    if let Some(step) = step {
+                        let next = target(menu.index, step);
+                        // Only a step that moves the dial clicks.
+                        if next != menu.index {
+                            effects.push(Effect::HandHaptic {
+                                hand: menu.hand,
+                                pulse: crate::haptics::PSI_NAV_TICK,
+                            });
+                        }
+                        menu.preview(next, &powers.0, &known.0);
                     }
+                    // Lean toward the step a push is heading for, before it fires.
+                    let lean = crate::scripts::gui::stick_lean(
+                        stick,
+                        menu.stick_latched,
+                        &crate::scripts::gui::PSI_STICK_NAV,
+                    )
+                    .map(|(step, amount)| (target(menu.index, step), amount));
+                    menu.lean_toward(lean, &powers.0, &known.0);
                 }
                 menu.update(tick.elapsed.as_secs_f32());
                 if confirm {
@@ -5139,6 +5154,10 @@ impl MissionCore {
             self.psi_nav_latched = latched;
             if let Some(step) = step {
                 effects.push(step.effect());
+                effects.push(Effect::HandHaptic {
+                    hand,
+                    pulse: crate::haptics::PSI_NAV_TICK,
+                });
             }
             let mut withheld = input_context.clone();
             match hand {

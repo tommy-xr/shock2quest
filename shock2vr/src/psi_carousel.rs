@@ -32,6 +32,8 @@ pub(crate) struct Carousel {
     previous_index: usize,
     starts: Vec<(usize, f32, f32)>,
     transition: f32,
+    /// (row, slot) the sphere leans ahead of a step the stick is heading for.
+    lean: (f32, f32),
 }
 
 /// A sparse set of purchased powers on the selected tier and its trained
@@ -90,6 +92,8 @@ const ROW_ANGLE: f32 = 0.34;
 const BALL_RADII_PER_UNIT: f32 = 3.4;
 /// How far the focal card lifts off the sphere, in carousel-local units.
 const FOCUS_LIFT: f32 = 0.045;
+/// A push about to step leans the sphere this fraction of the way to its target.
+const MAX_LEAN: f32 = 0.3;
 
 fn arc_position(row: f32, slot: f32) -> cgmath::Vector3<f32> {
     let yaw = slot * SLOT_ANGLE;
@@ -181,6 +185,7 @@ impl Carousel {
                 .map(|(i, r, s)| (i, r as f32, s as f32))
                 .collect(),
             transition: 1.0,
+            lean: (0.0, 0.0),
             stick_latched: crate::scripts::gui::NavLatch::Held(None),
             trigger_armed: false,
         })
@@ -200,7 +205,31 @@ impl Carousel {
             self.previous_index = self.index;
             self.index = index;
             self.transition = 0.0;
+            self.lean = (0.0, 0.0);
         }
+    }
+
+    /// Lean `amount` (0..1) of [`MAX_LEAN`] toward `target`'s card, so the
+    /// step a push is heading for shows before it fires. The step's own turn
+    /// then starts from the leaned sphere.
+    pub fn lean_toward(
+        &mut self,
+        target: Option<(usize, f32)>,
+        powers: &[crate::psi::PsiPowerInfo],
+        known: &std::collections::HashSet<i32>,
+    ) {
+        // Toward where the target is drawn, unleaned: after earlier turns that
+        // can differ from its canonical slot (a 2-power tier's -1 drawn at +1).
+        self.lean = (0.0, 0.0);
+        let drawn = target.and_then(|(target, amount)| {
+            let (.., row, slot) = self
+                .positions(powers, known)
+                .into_iter()
+                .find(|(i, ..)| *i == target)?;
+            let amount = amount * MAX_LEAN;
+            Some((row * amount, visible_slot(slot) * amount))
+        });
+        self.lean = drawn.unwrap_or((0.0, 0.0));
     }
     pub fn update(&mut self, dt: f32) {
         self.transition = (self.transition + dt / 0.25).min(1.0);
@@ -240,8 +269,8 @@ impl Carousel {
                     index,
                     row,
                     slot,
-                    start.0 + (row as f32 - start.0) * eased,
-                    slot_position,
+                    start.0 + (row as f32 - start.0) * eased - self.lean.0,
+                    slot_position - self.lean.1,
                 )
             })
             .collect()
@@ -496,6 +525,43 @@ mod tests {
         let settled = menu.positions(&powers, &known);
         let focus = settled.iter().find(|(i, _, _, _, _)| *i == 0).unwrap();
         assert_eq!((focus.3, focus.4), (0.0, 0.0));
+    }
+
+    /// Leaning brings the target toward focus, and the step that follows
+    /// turns on from the leaned position rather than snapping back first.
+    #[test]
+    fn a_lean_previews_the_target_and_the_step_continues_from_it() {
+        let powers = powers();
+        let known = HashSet::from([-1, -2]);
+        let mut world = World::new();
+        let amp = world.add_entity(());
+        world.add_unique(GlobalPsiPowers(powers.clone()));
+        world.add_unique(PlayerPsiKnownPowers(known.clone()));
+        let mut menu = Carousel::new(&world, amp, Handedness::Right).unwrap();
+        let slot_of = |menu: &Carousel, index| {
+            menu.positions(&powers, &known)
+                .into_iter()
+                .find(|(i, _, _, _, _)| *i == index)
+                .unwrap()
+                .4
+        };
+        let start = slot_of(&menu, 1);
+        assert_ne!(start, 0.0);
+        menu.lean_toward(Some((1, 1.0)), &powers, &known);
+        let leaned = slot_of(&menu, 1);
+        assert!((leaned - start * (1.0 - MAX_LEAN)).abs() < 1e-6);
+        menu.preview(1, &powers, &known);
+        assert!((slot_of(&menu, 1) - leaned).abs() < 1e-6);
+        menu.update(0.25);
+        assert_eq!(slot_of(&menu, 1), 0.0);
+        // Nothing to lean toward: the sphere sits square.
+        menu.lean_toward(None, &powers, &known);
+        assert_eq!(slot_of(&menu, 1), 0.0);
+        // Back toward the first power, now drawn on the other side: the lean
+        // still brings it toward focus.
+        let start = slot_of(&menu, 0);
+        menu.lean_toward(Some((0, 1.0)), &powers, &known);
+        assert!(slot_of(&menu, 0).abs() < start.abs());
     }
 
     #[test]
