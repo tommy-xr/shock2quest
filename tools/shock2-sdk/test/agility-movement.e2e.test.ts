@@ -14,9 +14,8 @@ const close = (actual: number, expected: number, description: string) =>
   );
 
 // The shipped GAMEPARAM speed table is [1.2,1.3,1.4,1.5,1.6,1.7,1.85,2].
-// Retail runs 11 Dark units/s x speed[AGI-1]; the default move_speed_scale
-// dev param adds 1.2x. World units are Dark units / 2.5.
-const RUN = (11 * 1.2) / 2.5;
+// Retail runs 11 Dark units/s x speed[AGI-1]. World units are Dark units / 2.5.
+const RUN = 11 / 2.5;
 for (const vr of [false, true]) {
   test(
     `Agility changes shared ${vr ? "VR" : "flat"} movement, without scaling turn or developer flight`,

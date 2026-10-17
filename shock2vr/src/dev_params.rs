@@ -617,9 +617,9 @@ dev_params! {
     /// The player loses no hit points from any source, so never shows the hit
     /// tint or dies - keeps deterministic captures from being spoiled by damage.
     CHEAT = Root::bool("cheat", "Cheat: invulnerable", false),
-    /// Multiplies the player's retail run speed (Agility included). 1.0 is
-    /// retail; the default runs a little faster for stick locomotion.
-    MOVE_SPEED_SCALE = Root::float("move_speed_scale", "Move speed (x retail)", 1.2, 1.0, 1.5, 0.05),
+    /// Multiplies the player's retail run speed (Agility included); 1.0 is
+    /// retail.
+    MOVE_SPEED_SCALE = Root::float("move_speed_scale", "Move speed (x retail)", 1.0, 1.0, 1.5, 0.05),
     /// Developer flight speed. Stat upgrades do not change it. These are SS2
     /// units, not world units per second: the consumer divides by
     /// `dark::SCALE_FACTOR` (2.5) exactly as the player's locomotion does, so
