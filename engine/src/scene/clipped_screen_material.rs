@@ -121,8 +121,14 @@ where
 
             // Set transformation matrices
             gl::UniformMatrix4fv(uniforms.world_loc, 1, gl::FALSE, world_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.view_loc, 1, gl::FALSE, view.as_ptr());
-            gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
+            crate::multiview::bind_view_projection(
+                uniforms.view_loc,
+                uniforms.projection_loc,
+                &view,
+                &projection,
+                render_context,
+                !self.screen_space,
+            );
 
             // Set clipping value
             gl::Uniform1f(uniforms.clip_x_loc, self.clip_percentage);

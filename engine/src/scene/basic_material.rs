@@ -291,8 +291,14 @@ where
 
             // Set basic transformation matrices
             gl::UniformMatrix4fv(uniforms.world_loc, 1, gl::FALSE, world_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.view_loc, 1, gl::FALSE, view_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
+            crate::multiview::bind_view_projection(
+                uniforms.view_loc,
+                uniforms.projection_loc,
+                &view_matrix,
+                &projection,
+                render_context,
+                true,
+            );
             let normal_matrix = crate::scene::material::normal_matrix(world_matrix);
             gl::UniformMatrix3fv(
                 uniforms.normal_matrix_loc,

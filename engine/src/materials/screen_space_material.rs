@@ -89,7 +89,15 @@ impl ScreenSpaceMaterial {
             );
 
             gl::UniformMatrix4fv(uniforms.world_loc, 1, gl::FALSE, world_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
+            // No `view` uniform: -1 skips it.
+            crate::multiview::bind_view_projection(
+                -1,
+                uniforms.projection_loc,
+                &cgmath::Matrix4::identity(),
+                &projection,
+                render_context,
+                false,
+            );
             gl::Uniform4f(
                 uniforms.text_color_loc,
                 self.text_color.x,

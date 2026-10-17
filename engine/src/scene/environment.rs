@@ -133,12 +133,13 @@ impl Material for EnvironmentPreviewMaterial {
         unsafe {
             gl::UseProgram(program.gl_id);
             gl::UniformMatrix4fv(uniforms.world, 1, gl::FALSE, world_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.view, 1, gl::FALSE, view_matrix.as_ptr());
-            gl::UniformMatrix4fv(
+            crate::multiview::bind_view_projection(
+                uniforms.view,
                 uniforms.projection,
-                1,
-                gl::FALSE,
-                render_context.projection_matrix.as_ptr(),
+                &view_matrix,
+                &render_context.projection_matrix,
+                render_context,
+                true,
             );
             gl::Uniform3fv(uniforms.eye, 1, eye.as_ptr());
             gl::Uniform1i(uniforms.environment, ENVIRONMENT_UNIT as i32);

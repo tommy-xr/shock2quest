@@ -152,6 +152,9 @@ pub struct SceneObject {
     render_layer: RenderLayer,
     /// Viewmodel framing changes projection, never the world-space light inputs.
     projection_override: Option<Matrix4<f32>>,
+    /// Multiview only: the eye this object was built for (`render_per_eye`);
+    /// it draws in no other eye.
+    pub only_eye: Option<usize>,
     /// Per-object transparency override (0.0 = opaque, 1.0 = invisible).
     /// Materials are shared (`Rc`) across every object using the same model, so
     /// a lasting material-level override would bleed between entities; instead
@@ -428,6 +431,7 @@ impl SceneObject {
             self_depth_group: None,
             render_layer: RenderLayer::World,
             projection_override: None,
+            only_eye: None,
             transparency_override: None,
             emissivity_scale: None,
             glow: None,
@@ -480,6 +484,25 @@ impl SceneObject {
         Some(depth)
     }
 
+    fn draw_context(&self, render_context: &EngineRenderContext) -> EngineRenderContext {
+        EngineRenderContext {
+            world_wave: self.world_wave,
+            projection_matrix: self
+                .projection_override
+                .unwrap_or(render_context.projection_matrix),
+            multiview: render_context
+                .multiview
+                .map(|views| crate::multiview::Views {
+                    projection: self
+                        .projection_override
+                        .map_or(views.projection, |p| [p; 2]),
+                    only_eye: self.only_eye,
+                    ..views
+                }),
+            ..*render_context
+        }
+    }
+
     pub fn draw_opaque(
         &self,
         engine_context: &OpenGLEngine,
@@ -493,13 +516,7 @@ impl SceneObject {
                 .initialize(engine_context.is_opengl_es);
         }
 
-        let render_context = EngineRenderContext {
-            world_wave: self.world_wave,
-            projection_matrix: self
-                .projection_override
-                .unwrap_or(render_context.projection_matrix),
-            ..*render_context
-        };
+        let render_context = self.draw_context(render_context);
         let xform = self.transform * self.local_transform;
         if let Some(stack) = self
             .material_stack
@@ -565,13 +582,7 @@ impl SceneObject {
         view: &Matrix4<f32>,
         lights: &crate::scene::light::LightArray,
     ) {
-        let render_context = EngineRenderContext {
-            world_wave: self.world_wave,
-            projection_matrix: self
-                .projection_override
-                .unwrap_or(render_context.projection_matrix),
-            ..*render_context
-        };
+        let render_context = self.draw_context(render_context);
         if let Some(stack) = self
             .material_stack
             .as_ref()
@@ -729,6 +740,7 @@ impl SceneObject {
             self_depth_group: None,
             render_layer: RenderLayer::World,
             projection_override: None,
+            only_eye: None,
             transparency_override: None,
             emissivity_scale: None,
             glow: None,
@@ -756,6 +768,7 @@ impl SceneObject {
             self_depth_group: self.self_depth_group,
             render_layer: self.render_layer,
             projection_override: self.projection_override,
+            only_eye: self.only_eye,
             transparency_override: self.transparency_override,
             emissivity_scale: self.emissivity_scale,
             glow: self.glow,

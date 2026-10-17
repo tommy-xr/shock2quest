@@ -22,13 +22,31 @@ pub struct Mask {
 // Units 0–1 hold diffuse/pass textures, 2–5 shine maps, and 7 the environment cube.
 const TEXTURE_UNIT: u32 = 6;
 
+/// Under multiview the scratch holds one layer per eye.
+fn texture_target() -> gl::types::GLenum {
+    if crate::multiview::is_enabled() {
+        gl::TEXTURE_2D_ARRAY
+    } else {
+        gl::TEXTURE_2D
+    }
+}
+
 pub(crate) const GLSL: &str = r#"
 uniform bool selfDepthEnabled;
+#ifdef MULTIVIEW
+uniform highp sampler2DArray selfDepthTexture;
+#else
 uniform highp sampler2D selfDepthTexture;
+#endif
 uniform ivec2 selfDepthOrigin;
 bool hiddenBySelfDepth() {
     if (!selfDepthEnabled) return false;
-    highp float nearest = texelFetch(selfDepthTexture, ivec2(gl_FragCoord.xy) - selfDepthOrigin, 0).r;
+    ivec2 texel = ivec2(gl_FragCoord.xy) - selfDepthOrigin;
+#ifdef MULTIVIEW
+    highp float nearest = texelFetch(selfDepthTexture, ivec3(texel, int(gl_ViewID_OVR)), 0).r;
+#else
+    highp float nearest = texelFetch(selfDepthTexture, texel, 0).r;
+#endif
     // One depth24 quantization step, plus rounding between the two draws.
     return gl_FragCoord.z > nearest + 0.00000012;
 }
@@ -86,7 +104,7 @@ impl Uniforms {
             );
             if let Some(mask) = mask {
                 gl::ActiveTexture(gl::TEXTURE0 + TEXTURE_UNIT);
-                gl::BindTexture(gl::TEXTURE_2D, mask.texture);
+                gl::BindTexture(texture_target(), mask.texture);
                 gl::Uniform2i(self.origin, mask.origin[0], mask.origin[1]);
                 gl::ActiveTexture(gl::TEXTURE0);
             }
@@ -128,7 +146,7 @@ impl Target {
             let scissor = gl::IsEnabled(gl::SCISSOR_TEST);
             gl::Disable(gl::SCISSOR_TEST);
             gl::ActiveTexture(gl::TEXTURE0 + TEXTURE_UNIT);
-            gl::BindTexture(gl::TEXTURE_2D, 0);
+            gl::BindTexture(texture_target(), 0);
 
             if self.framebuffer == 0 {
                 gl::GenFramebuffers(1, &mut self.framebuffer);
@@ -137,29 +155,53 @@ impl Target {
             gl::BindFramebuffer(gl::FRAMEBUFFER, self.framebuffer);
             let size = [viewport[2], viewport[3]];
             if self.size != size {
-                gl::BindTexture(gl::TEXTURE_2D, self.texture);
-                gl::TexImage2D(
-                    gl::TEXTURE_2D,
-                    0,
-                    gl::DEPTH_COMPONENT24 as i32,
-                    size[0],
-                    size[1],
-                    0,
-                    gl::DEPTH_COMPONENT,
-                    gl::UNSIGNED_INT,
-                    std::ptr::null(),
-                );
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
-                gl::FramebufferTexture2D(
-                    gl::FRAMEBUFFER,
-                    gl::DEPTH_ATTACHMENT,
-                    gl::TEXTURE_2D,
-                    self.texture,
-                    0,
-                );
+                let target = texture_target();
+                gl::BindTexture(target, self.texture);
+                if crate::multiview::is_enabled() {
+                    gl::TexImage3D(
+                        target,
+                        0,
+                        gl::DEPTH_COMPONENT24 as i32,
+                        size[0],
+                        size[1],
+                        crate::multiview::VIEW_COUNT as i32,
+                        0,
+                        gl::DEPTH_COMPONENT,
+                        gl::UNSIGNED_INT,
+                        std::ptr::null(),
+                    );
+                } else {
+                    gl::TexImage2D(
+                        target,
+                        0,
+                        gl::DEPTH_COMPONENT24 as i32,
+                        size[0],
+                        size[1],
+                        0,
+                        gl::DEPTH_COMPONENT,
+                        gl::UNSIGNED_INT,
+                        std::ptr::null(),
+                    );
+                }
+                gl::TexParameteri(target, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+                gl::TexParameteri(target, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+                gl::TexParameteri(target, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+                gl::TexParameteri(target, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+                if crate::multiview::is_enabled() {
+                    crate::multiview::attach_layers(
+                        gl::FRAMEBUFFER,
+                        gl::DEPTH_ATTACHMENT,
+                        self.texture,
+                    );
+                } else {
+                    gl::FramebufferTexture2D(
+                        gl::FRAMEBUFFER,
+                        gl::DEPTH_ATTACHMENT,
+                        target,
+                        self.texture,
+                        0,
+                    );
+                }
                 gl::DrawBuffers(1, &gl::NONE);
                 gl::ReadBuffer(gl::NONE);
                 assert_eq!(
@@ -167,7 +209,7 @@ impl Target {
                     gl::FRAMEBUFFER_COMPLETE,
                     "apparition self-depth framebuffer is incomplete"
                 );
-                gl::BindTexture(gl::TEXTURE_2D, 0);
+                gl::BindTexture(target, 0);
                 self.size = size;
             }
             gl::ActiveTexture(gl::TEXTURE0);

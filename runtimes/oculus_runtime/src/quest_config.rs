@@ -21,6 +21,21 @@ pub fn fixed_simulation_enabled() -> bool {
     }
 }
 
+/// Opt-in single-pass stereo (OVR_multiview2) for A/B profiling.
+#[cfg(target_os = "android")]
+pub fn multiview_requested() -> bool {
+    let path = shock2vr::paths::data_root().join("multiview.txt");
+    match fs::read_to_string(path) {
+        Ok(raw) if raw.trim() == "on" => true,
+        Ok(raw) if raw.trim() == "off" => false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        other => {
+            println!("SHOCK2QUEST_MULTIVIEW_CONFIG invalid={other:?} fallback=off");
+            false
+        }
+    }
+}
+
 pub fn configured_mission() -> String {
     match fs::read_to_string(MISSION_CONFIG_PATH) {
         Ok(raw) => match parse_mission(&raw) {

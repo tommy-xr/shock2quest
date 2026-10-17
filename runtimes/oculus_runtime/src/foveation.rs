@@ -93,14 +93,17 @@ fn has_scaled_bin_support() -> bool {
 
 /// Apply to the complete stereo pair before allocating application FBOs. A
 /// failed eye never leaves the other eye foveated: drop both and retry off.
+/// `array_size` is the layer count per swapchain: 2 for one multiview
+/// swapchain holding both eyes.
 pub fn create(
     session: &xr::Session<xr::OpenGlEs>,
     views: &[xr::ViewConfigurationView],
     requested: Level,
+    array_size: u32,
 ) -> xr::Result<EyeSwapchains> {
     let supported = session.instance().exts().fb_foveation.is_some() && has_scaled_bin_support();
     if requested != Level::Off && supported {
-        match create_pair(session, views, requested) {
+        match create_pair(session, views, requested, array_size) {
             Ok(pair) => {
                 println!(
                     "SHOCK2QUEST_FFR requested={} effective={} dynamic=false status=applied",
@@ -112,7 +115,7 @@ pub fn create(
             Err(error) => println!("SHOCK2QUEST_FFR_FAILURE error={error:?} fallback=off"),
         }
     }
-    let pair = create_pair(session, views, Level::Off)?;
+    let pair = create_pair(session, views, Level::Off, array_size)?;
     println!(
         "SHOCK2QUEST_FFR requested={} effective=off dynamic=false status={}",
         requested.as_str(),
@@ -131,6 +134,7 @@ fn create_pair(
     session: &xr::Session<xr::OpenGlEs>,
     views: &[xr::ViewConfigurationView],
     level: Level,
+    array_size: u32,
 ) -> xr::Result<EyeSwapchains> {
     let profile = if level == Level::Off {
         None
@@ -154,7 +158,7 @@ fn create_pair(
             width: view.recommended_image_rect_width,
             height: view.recommended_image_rect_height,
             face_count: 1,
-            array_size: 1,
+            array_size,
             mip_count: 1,
         };
         let handle = if let Some(profile) = &profile {
