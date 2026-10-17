@@ -27,4 +27,6 @@ noted each, and exported JSON (shape in `website/README.md`).
 5. **Report** per note: done (what changed, file:line) or skipped (why).
 
 A selector that no longer resolves means the page changed since the export;
-fall back to the text and the box position.
+fall back to the text and the box position. The export does not record which
+controls tab or equipment-tour step was showing, so for boxes in those widgets
+trust `text` over `selector`; for the `#clip` video (no text) ask which mode.

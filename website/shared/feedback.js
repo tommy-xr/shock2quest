@@ -19,7 +19,8 @@ const css = `
 #fb-panel ol{margin:0;padding-left:20px}
 #fb-panel li{margin-bottom:4px}
 #fb-panel li small{display:block;color:#999;word-break:break-all}
-#fb-layer{position:fixed;inset:0;z-index:10000;cursor:crosshair;display:none}
+#fb-panel.min > :not(b):not(.row){display:none}
+#fb-layer{position:fixed;inset:0;z-index:10000;cursor:crosshair;display:none;touch-action:none}
 #fb-layer.on{display:block}
 .fb-box{position:absolute;border:2px dashed #ff3ea5;background:rgba(255,62,165,.08);pointer-events:none;z-index:9999}
 .fb-box span{position:absolute;right:-2px;top:-20px;background:#ff3ea5;color:#000;font:700 12px system-ui;padding:0 5px}
@@ -30,7 +31,7 @@ const layer = Object.assign(document.createElement("div"), { id: "fb-layer" });
 const panel = Object.assign(document.createElement("div"), { id: "fb-panel" });
 panel.innerHTML = `
 <b>Feedback</b>
-<div class="row"><button data-act="annotate" aria-pressed="false">Annotate (A)</button><button data-act="export">Export JSON</button><button data-act="clear">Clear</button></div>
+<div class="row"><button data-act="annotate" aria-pressed="false">Annotate (A)</button><button data-act="export">Export JSON</button><button data-act="clear">Clear</button><button data-act="min" aria-pressed="false" title="Collapse the panel">_</button></div>
 <div data-pending hidden><textarea placeholder="Note for this box (Ctrl+Enter saves, Esc cancels)"></textarea><div class="row"><button data-act="save">Save note</button><button data-act="cancel">Cancel</button></div></div>
 <label>Overall<textarea data-overall placeholder="General feedback on the page"></textarea></label>
 <ol></ol>`;
@@ -101,10 +102,12 @@ function enclosing(r) {
   return best;
 }
 
-// A drag marks a region; a click (under 4px of travel) marks the element clicked.
+// A drag marks a region; a click (under 4px of travel either way) marks the element
+// clicked. Starting a new box keeps the previous one's note if it has one.
 let start = null, draft = null;
 layer.addEventListener("pointerdown", (e) => {
-  if (pending) finishPending(false);
+  if (e.button !== 0) return;
+  if (pending) finishPending(true);
   start = { x: e.clientX, y: e.clientY };
   draft = boxEl({ ...start, w: 0, h: 0 }, "", true);
   document.body.append(draft);
@@ -113,12 +116,13 @@ layer.addEventListener("pointerdown", (e) => {
 layer.addEventListener("pointermove", (e) => {
   if (start) place(draft, normalizeRect(start, { x: e.clientX, y: e.clientY }));
 });
+layer.addEventListener("pointercancel", () => { start = null; draft?.remove(); });
 layer.addEventListener("pointerup", (e) => {
   if (!start) return;
   let r = normalizeRect(start, { x: e.clientX, y: e.clientY });
   start = null;
   draft.remove();
-  const click = r.w < 4 && r.h < 4;
+  const click = r.w < 4 || r.h < 4;
   const target = click ? hit(e.clientX, e.clientY) : enclosing(r);
   if (click) { const b = target.getBoundingClientRect(); r = normalizeRect({ x: b.left, y: b.top }, { x: b.right, y: b.bottom }); }
   const rect = { ...r, x: r.x + Math.round(scrollX), y: r.y + Math.round(scrollY) };
@@ -136,6 +140,7 @@ layer.addEventListener("pointerup", (e) => {
 });
 
 function exportJson() {
+  if (pending) finishPending(true);
   const created = new Date();
   const json = JSON.stringify(buildExport({ url: location.href, created, overall: state.overall, annotations: state.annotations }), null, 2);
   const a = Object.assign(document.createElement("a"), {
@@ -149,6 +154,7 @@ panel.addEventListener("click", (e) => {
   const act = e.target.dataset?.act;
   if (act === "annotate") setAnnotating(!layer.classList.contains("on"));
   else if (act === "export") exportJson();
+  else if (act === "min") e.target.setAttribute("aria-pressed", panel.classList.toggle("min"));
   else if (act === "save" || act === "cancel") finishPending(act === "save");
   else if (act === "clear" && confirm("Delete all feedback on this page?")) {
     finishPending(false);

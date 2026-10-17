@@ -5,16 +5,18 @@ export const FORMAT = "shock2quest-website-feedback/1";
 const SAFE_ID = /^[A-Za-z][\w-]*$/;
 const SAFE_CLASS = /^-?[_A-Za-z][\w-]*$/;
 
-// One path step: tag, then the first data-* attribute or else up to two classes,
-// then :nth-of-type when same-tag siblings make the step ambiguous.
+// One path step: tag, then up to two classes or else the first data-* attribute
+// (classes first: data-* can be runtime state, e.g. data-tracked), then
+// :nth-of-type when same-tag siblings make the step ambiguous.
 function step(e) {
   let s = e.tagName.toLowerCase();
+  const classes = typeof e.className === "string" // SVG elements carry an SVGAnimatedString
+    ? e.className.split(/\s+/).filter((c) => SAFE_CLASS.test(c)).slice(0, 2) : [];
   const [key, value] = Object.entries(e.dataset ?? {})[0] ?? [];
-  if (key !== undefined) {
+  if (classes.length) s += classes.map((c) => "." + c).join("");
+  else if (key !== undefined) {
     const attr = key.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
     s += `[data-${attr}="${String(value).replace(/["\\]/g, "\\$&")}"]`;
-  } else if (typeof e.className === "string") { // SVG elements carry an SVGAnimatedString
-    s += e.className.split(/\s+/).filter((c) => SAFE_CLASS.test(c)).slice(0, 2).map((c) => "." + c).join("");
   }
   const same = [...(e.parentElement?.children ?? [])].filter((c) => c.tagName === e.tagName);
   if (same.length > 1) s += `:nth-of-type(${same.indexOf(e) + 1})`;

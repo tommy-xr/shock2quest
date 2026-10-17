@@ -19,14 +19,16 @@ test("an id short-circuits the path", () => {
   assert.equal(selectorFor(p), "#controls > p");
 });
 
-test("data-* beats classes, nth-of-type disambiguates same-tag siblings", () => {
+test("classes beat data-* (often runtime state), nth-of-type disambiguates same-tag siblings", () => {
   const body = el("body");
   const sec = el("section", { className: "hero dark" }, body);
   el("p", {}, sec);
   const p2 = el("p", { dataset: { d: "pre" } }, sec);
   const div = el("div", { className: "chip" }, sec);
+  const view = el("span", { className: "view", dataset: { tracked: "true" } }, sec);
   assert.equal(selectorFor(p2), 'body > section.hero.dark > p[data-d="pre"]:nth-of-type(2)');
   assert.equal(selectorFor(div), "body > section.hero.dark > div.chip");
+  assert.equal(selectorFor(view), "body > section.hero.dark > span.view");
 });
 
 test("camelCase dataset keys become kebab attributes; unsafe ids are skipped", () => {
