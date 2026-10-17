@@ -35,6 +35,14 @@ done
 curl -s -X POST $BASE/v1/control/input -d '{"left_hand.thumbstick":[0.0,0.0]}'  # stop
 ```
 
+**Brief effects (muzzle flash, impact spark, a one-frame hit):** slow the
+world so the effect spans several captured frames instead of falling between
+them: `curl -X POST .../v1/dev-params -d '{"world_time_scale":0.6}'` (range
+0.1-1.0; stepping stays 60 Hz, the sim just advances less per frame). Stay
+ABOVE `slow_time_shot_threshold` (default 0.5) unless you want projectiles to
+switch to the slow-time traveling-shot look (drawn bullet + trail), which
+changes what's on screen. Say in the PR caption which captures are slowed.
+
 Motion options via `/v1/control/input` (set channel, then step): `left_hand.thumbstick:[turn,0]`
 to look around, `right_hand.thumbstick:[strafe,forward]` to walk. A discrete
 teleport-and-poke session records as a choppier slideshow; continuous motion is
