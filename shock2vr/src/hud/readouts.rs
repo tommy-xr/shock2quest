@@ -104,12 +104,9 @@ pub(crate) fn exit_button() -> ReadoutButtonSpec {
 }
 
 /// Shared by the full interface and its missing-software screen.
-pub(crate) fn emit_exit_button(canvas: &mut UiCanvas, hover: Option<Vector2<f32>>) {
+pub(crate) fn emit_exit_button(canvas: &mut UiCanvas) {
     canvas.image(Rect::new(281.0, 434.0, 78.0, 44.0), "iface/micelook.png");
-    let mut exit = exit_button();
-    if hover.is_some_and(|point| exit.rect.contains(point)) {
-        exit.texture = Some("iface/ml1.png");
-    }
+    let exit = exit_button();
     ammo_panel::draw_button(canvas, &exit, exit.rect);
 }
 
@@ -241,11 +238,7 @@ impl UseModeReadouts {
 
 /// Emit the expanded bio + ammo readouts along the bottom of the shared
 /// 640x480 interface canvas.
-pub(crate) fn emit_use_mode(
-    canvas: &mut UiCanvas,
-    readouts: &UseModeReadouts,
-    hover: Option<Vector2<f32>>,
-) {
+pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
     if let Some(seconds) = readouts.alarm_seconds {
         super::alarm_panel::emit(canvas, super::alarm_panel::FLAT_ORIGIN, seconds);
     }
@@ -280,7 +273,7 @@ pub(crate) fn emit_use_mode(
     // Always: the way out of the game does not depend on what is wielded.
     let system = system_button();
     ammo_panel::draw_button(canvas, &system, system.rect);
-    emit_exit_button(canvas, hover);
+    emit_exit_button(canvas);
     // shkiface.cpp button 0 and shkinv.cpp fake equipment icon wells.
     canvas.image(LOG_BUTTON, "iface/ifbtn00.pcx");
     canvas.fitted_object_icon(Rect::new(385.0, 434.0, 34.0, 32.0), "disc.pcx");
@@ -400,7 +393,7 @@ mod tests {
         assert_eq!(tabs[0].text.as_deref(), Some("LEFT 6"));
         assert_eq!(tabs[1].text.as_deref(), Some("RIGHT 12"));
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
-        emit_use_mode(&mut canvas, &r, None);
+        emit_use_mode(&mut canvas, &r);
         for tab in tabs {
             assert!(tab.rect.y >= 420.0, "clear of the right MFD and wide map");
             let clicked = buttons(&r)
@@ -432,7 +425,7 @@ mod tests {
     fn the_bio_monitor_is_always_drawn() {
         // Both backdrops + 2 bars + 2 numbers, with no weapon wielded.
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
-        emit_use_mode(&mut canvas, &readouts(None, false), None);
+        emit_use_mode(&mut canvas, &readouts(None, false));
         assert_eq!(canvas.element_count(), 16 + SYSTEM_ELEMENTS);
     }
 
@@ -440,7 +433,7 @@ mod tests {
     fn a_wielded_clip_adds_the_ammo_gauge() {
         // ...plus the AMMOFULL backdrop + the round count.
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
-        emit_use_mode(&mut canvas, &readouts(Some(12), false), None);
+        emit_use_mode(&mut canvas, &readouts(Some(12), false));
         assert_eq!(canvas.element_count(), 17 + SYSTEM_ELEMENTS);
     }
 
@@ -451,7 +444,7 @@ mod tests {
     fn the_system_button_is_drawn_and_clickable_at_the_same_rect() {
         for readouts in [readouts(None, false), readouts(Some(12), true)] {
             let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
-            emit_use_mode(&mut canvas, &readouts, None);
+            emit_use_mode(&mut canvas, &readouts);
 
             let drawn: Vec<_> = canvas
                 .elements()

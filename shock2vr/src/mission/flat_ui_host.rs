@@ -71,6 +71,9 @@ const CLOSE_BUTTON_MARGIN: Vector2<f32> = Vector2::new(25.0, 8.0);
 /// `CURSOR.PCX` native size.
 const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
 
+/// The colour of 25AE's `IFBTNx2` rollover frames.
+const HOVER_OUTLINE: [u8; 3] = [0, 255, 255];
+
 /// The HUD's data font, as the rest of this canvas uses.
 const NAME_STRIP_FONT: &str = "mainfont.fon";
 
@@ -316,7 +319,6 @@ pub struct FlatUiHost {
     pub(crate) utilities: super::mfd_utilities::MfdUtilities,
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
-    hover_close: bool,
     last_pointer_pressed: bool,
     last_secondary_pressed: bool,
     vr_pointer_pressed: [bool; 2],
@@ -408,7 +410,6 @@ impl FlatUiHost {
             selected_ammo: None,
             utilities: Default::default(),
             cursor_canvas: None,
-            hover_close: false,
             last_pointer_pressed: false,
             last_secondary_pressed: true,
             vr_pointer_pressed: [true; 2],
@@ -524,6 +525,7 @@ impl FlatUiHost {
                     Handedness::Left => "left".to_string(),
                     Handedness::Right => "right".to_string(),
                 }),
+                hovered: self.hovered_button().map(|r| [r.x, r.y, r.w, r.h]),
             })
     }
 
@@ -829,7 +831,7 @@ impl FlatUiHost {
             return Vec::new();
         };
         let mut canvas = UiCanvas::new(CANVAS_SIZE);
-        readouts::emit_use_mode(&mut canvas, readouts, self.cursor_canvas);
+        readouts::emit_use_mode(&mut canvas, readouts);
         canvas
             .elements()
             .iter()
@@ -978,7 +980,6 @@ impl FlatUiHost {
         self.panel_size_px = None;
         self.panel_sidecar = None;
         self.components.clear();
-        self.hover_close = false;
     }
 
     /// Whether this host consumes layout for an object panel or inventory strip.
@@ -1049,6 +1050,43 @@ impl FlatUiHost {
                 Some(remaining) => mark.frames_left = remaining,
                 None => self.last_lift = None,
             }
+        }
+    }
+
+    /// The interface button under the pointer: the rects `update_canvas`
+    /// hit-tests, in its order (utilities, readouts, then the panel close).
+    fn hovered_button(&self) -> Option<Rect> {
+        let point = self.cursor_canvas?;
+        let utilities = (!self.software_missing && (self.strip.is_some() || self.device))
+            .then(|| self.utilities.control_rects())
+            .into_iter()
+            .flatten();
+        let readouts = self.readout_buttons().into_iter().map(|spec| spec.rect);
+        let close = self
+            .panel_rect()
+            .filter(|_| !self.software_missing)
+            .map(|panel| self.close_rect(panel));
+        utilities
+            .chain(readouts)
+            .chain(close)
+            .find(|rect| rect.contains(point))
+    }
+
+    /// Every interface button's one hover cue: 25AE's rollover art for the
+    /// iface buttons (`IFBTNx2`) is exactly a 1 px cyan frame on the button's
+    /// rect, so drawing that frame gives every button the same treatment.
+    /// Retail's `*1` frames (`ML1`, `CLOSEON`, ...) are pressed art, not hover.
+    fn emit_hover_outline(&self, canvas: &mut UiCanvas) {
+        let Some(r) = self.hovered_button() else {
+            return;
+        };
+        for edge in [
+            Rect::new(r.x, r.y, r.w, 1.0),
+            Rect::new(r.x, r.y + r.h - 1.0, r.w, 1.0),
+            Rect::new(r.x, r.y, 1.0, r.h),
+            Rect::new(r.x + r.w - 1.0, r.y, 1.0, r.h),
+        ] {
+            canvas.fill(edge, HOVER_OUTLINE);
         }
     }
 
@@ -1182,7 +1220,6 @@ impl FlatUiHost {
         let previous_grabs = self.last_pointer_grabbing;
         let mut messages = Vec::new();
         let mut actions = Vec::new();
-        let mut hover_close = false;
         for pointer in pointers {
             let slot = crate::vr_config::hand_slot(pointer.hand);
             self.last_pointer_pressed = self.vr_pointer_pressed[slot];
@@ -1190,11 +1227,9 @@ impl FlatUiHost {
             self.last_pointer_grabbing = previous_grabs;
             let (next_messages, next_actions) = self.update_canvas(world, Some(pointer));
             self.vr_pointer_pressed[slot] = pointer.pressed;
-            hover_close |= self.hover_close;
             messages.extend(next_messages);
             actions.extend(next_actions);
         }
-        self.hover_close = hover_close;
         // Keep the legacy single-pointer diagnostic/name line as a summary.
         // Item hover and gestures above are always evaluated for both hands.
         let summary = pointers
@@ -1327,14 +1362,10 @@ impl FlatUiHost {
 
         let Some(pointer) = pointer else {
             self.cursor_canvas = None;
-            self.hover_close = false;
             return (Vec::new(), Vec::new());
         };
         let canvas_pos = pointer.canvas_pos;
         self.cursor_canvas = canvas_pos;
-        if canvas_pos.is_none() {
-            self.hover_close = false;
-        }
 
         // A press fully outside the canvas (flat: the letterbox bars) is a
         // bare-view click: throw a held item, else close the panel. In VR the
@@ -1381,7 +1412,6 @@ impl FlatUiHost {
                 if self.utilities.has_left_panel() {
                     self.close();
                 }
-                self.hover_close = false;
                 if self.utilities.is_open()
                     && (self
                         .panel_rect()
@@ -1406,7 +1436,6 @@ impl FlatUiHost {
             }
         }
         if strip_rect.is_some_and(|r| armor_readout_rect(r).contains(canvas_pos)) {
-            self.hover_close = false;
             let messages = if pressed_edge && self.cursor_item.is_none() {
                 self.armor_item
                     .as_ref()
@@ -1426,7 +1455,6 @@ impl FlatUiHost {
                 .iter()
                 .position(|r| r.contains(canvas_pos))
         }) {
-            self.hover_close = false;
             let messages = if pressed_edge && self.cursor_item.is_none() {
                 self.implant_items[slot]
                     .as_ref()
@@ -1449,7 +1477,6 @@ impl FlatUiHost {
             // These are read-only holster snapshots. Hand weapon controls use
             // their own selectors below; a paperdoll click must not select a
             // different, currently held object or transfer storage ownership.
-            self.hover_close = false;
             return (Vec::new(), Vec::new());
         }
         let panel_rect = self.panel_rect();
@@ -1475,7 +1502,6 @@ impl FlatUiHost {
         // the held item - the original blocks losing `drag_obj`). RMB over
         // the bare view applies it, keeping it on the cursor until consumed. ---
         if self.cursor_item.is_some() {
-            self.hover_close = false;
             if secondary_edge
                 && !over_strip
                 && !over_panel
@@ -1590,7 +1616,6 @@ impl FlatUiHost {
         // the strip - so nothing reaches the world). Hover highlights via
         // GUIHover. ---
         if over_strip {
-            self.hover_close = false;
             // VR has a separate squeeze for pickup. A free hand's trigger
             // therefore uses the item instead of starting the mouse drag.
             if pointer.bare_view == BareViewPress::Ignore {
@@ -1666,8 +1691,7 @@ impl FlatUiHost {
         // Host-drawn close button (the shared guis have no close component;
         // VR uses its world-space distance close instead).
         let close_rect = self.close_rect(rect);
-        self.hover_close = close_rect.contains(canvas_pos);
-        if pressed_edge && self.hover_close {
+        if pressed_edge && close_rect.contains(canvas_pos) {
             self.close();
             return (Vec::new(), Vec::new());
         }
@@ -1740,7 +1764,8 @@ impl FlatUiHost {
             let mut canvas = UiCanvas::new(CANVAS_SIZE);
             let menu = readouts::system_button();
             crate::hud::ammo_panel::draw_button(&mut canvas, &menu, menu.rect);
-            readouts::emit_exit_button(&mut canvas, self.cursor_canvas);
+            readouts::emit_exit_button(&mut canvas);
+            self.emit_hover_outline(&mut canvas);
             if let Some(cursor) = self.cursor_canvas.filter(|_| arrow) {
                 canvas.image(
                     Rect::new(cursor.x, cursor.y, CURSOR_SIZE.x, CURSOR_SIZE.y),
@@ -1759,7 +1784,7 @@ impl FlatUiHost {
         // overlaps the bio panel by - the stacking the flat HUD had when it
         // drew them under this canvas.
         if let Some(readouts) = self.readouts.as_ref() {
-            readouts::emit_use_mode(&mut canvas, readouts, self.cursor_canvas);
+            readouts::emit_use_mode(&mut canvas, readouts);
         }
         if self.device {
             self.utilities.draw(&mut canvas);
@@ -1895,14 +1920,7 @@ impl FlatUiHost {
         }
         if let Some(rect) = panel_rect {
             draw_components(&mut canvas, &self.components, rect, None, false);
-            canvas.image(
-                self.close_rect(rect),
-                if self.hover_close {
-                    "closeon.pcx"
-                } else {
-                    "closeoff.pcx"
-                },
-            );
+            canvas.image(self.close_rect(rect), "closeoff.pcx");
         }
         if strip_rect.is_some() {
             for preview in &self.placement_preview {
@@ -1922,6 +1940,7 @@ impl FlatUiHost {
                 }
             }
         }
+        self.emit_hover_outline(&mut canvas);
         if let Some(cursor) = self.cursor_canvas {
             // The cursor IS the lifted item: draw its icon in place of the
             // arrow (the original's `SCM_DRAGOBJ`, §2.4). Fall back to the
@@ -4273,6 +4292,54 @@ mod tests {
         }));
         host.software_missing = false;
         assert!(host.readout_buttons_debug().len() > 1);
+    }
+
+    /// Bounding box of the rollover outline's fills, `None` when none drew.
+    fn rollover_outline(canvas: &UiCanvas) -> Option<Rect> {
+        let edges: Vec<Rect> = canvas
+            .elements()
+            .iter()
+            .filter(|e| matches!(e, UiElement::Fill { color, .. } if *color == HOVER_OUTLINE))
+            .map(UiElement::rect)
+            .collect();
+        let first = *edges.first()?;
+        Some(edges.iter().fold(first, |a, b| {
+            let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+            let r = (a.x + a.w).max(b.x + b.w);
+            let bottom = (a.y + a.h).max(b.y + b.h);
+            Rect::new(x, y, r - x, bottom - y)
+        }))
+    }
+
+    /// Every interface button shares one hover treatment, the outline 25AE
+    /// authors for its iface buttons, shown only while the pointer is on it.
+    #[test]
+    fn every_interface_button_shows_the_rollover_outline_on_hover() {
+        let (world, mut host, _wrench, _inv) = drag_world();
+        host.set_readouts(Some(readout_fixture()));
+        let hover = |host: &mut FlatUiHost, at: Vector2<f32>| {
+            host.update(
+                &world,
+                Some(Pointer2D {
+                    position: norm(at.x, at.y),
+                    secondary: false,
+                    pressed: false,
+                }),
+            );
+            rollover_outline(&host.build_canvas_with(false).unwrap())
+        };
+        let buttons: Vec<Rect> = host
+            .readout_buttons_debug()
+            .into_iter()
+            .chain(host.utility_elements_debug())
+            .filter(|e| e.kind == "button")
+            .map(|e| Rect::new(e.rect[0], e.rect[1], e.rect[2], e.rect[3]))
+            .collect();
+        assert!(buttons.len() >= 10, "readouts + utilities: {buttons:?}");
+        for rect in buttons {
+            assert_eq!(hover(&mut host, rect.center()), Some(rect));
+        }
+        assert_eq!(hover(&mut host, vec2(300.0, 200.0)), None);
     }
 
     #[test]
