@@ -50,9 +50,7 @@ impl ObjConsumeButton {
         receptor: EntityId,
         candidate: EntityId,
     ) -> Effect {
-        if self.one_shot_phase != OneShotPhase::Idle
-            || !can_consume_entity(world, receptor, candidate)
-        {
+        if !self.accepts_tool(receptor, world, candidate) {
             return Effect::NoEffect;
         }
 
@@ -111,6 +109,10 @@ impl Script for ObjConsumeButton {
             }
             _ => Effect::NoEffect,
         }
+    }
+
+    fn accepts_tool(&self, entity_id: EntityId, world: &World, tool: EntityId) -> bool {
+        self.one_shot_phase == OneShotPhase::Idle && can_consume_entity(world, entity_id, tool)
     }
 
     fn update(

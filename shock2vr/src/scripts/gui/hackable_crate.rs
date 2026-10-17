@@ -272,7 +272,7 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
         world: &World,
         provided_entity_id: EntityId,
     ) -> Option<Effect> {
-        if can_hack(world, entity_id) && is_free_hack_tool(world, provided_entity_id) {
+        if self.accepts_tool(entity_id, world, provided_entity_id) {
             return Some(Effect::combine(vec![
                 crate_hack_success(entity_id, world),
                 Effect::DestroyEntity {
@@ -291,6 +291,15 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
         // path swallow the item into a `Contains` link nothing can ever reach
         // again. An open crate falls through and accepts the deposit normally.
         (!is_open(world, entity_id)).then_some(Effect::NoEffect)
+    }
+
+    fn accepts_tool(
+        &self,
+        entity_id: EntityId,
+        world: &World,
+        provided_entity_id: EntityId,
+    ) -> bool {
+        can_hack(world, entity_id) && is_free_hack_tool(world, provided_entity_id)
     }
 }
 
@@ -617,6 +626,11 @@ mod tests {
         let pick = ice_pick(&mut world);
         let gui = HackableCrateGui::new();
 
+        assert!(
+            gui.accepts_tool(security_crate, &world, pick),
+            "flat mode should discover the authored FreeHack acceptance"
+        );
+
         let effect = gui
             .on_provide_for_consumption(security_crate, &world, pick)
             .expect("an ICE Pick should be claimed as a tool, not deposited");
@@ -651,6 +665,11 @@ mod tests {
         let (mut world, security_crate, _clip) = crate_world();
         let wrench = world.add_entity(PropObjIcon("icn_wrench".to_owned()));
         let gui = HackableCrateGui::new();
+
+        assert!(
+            !gui.accepts_tool(security_crate, &world, wrench),
+            "flat mode must leave a rejected item on the cursor"
+        );
 
         let effects = Effect::flatten(vec![
             gui.on_provide_for_consumption(security_crate, &world, wrench)

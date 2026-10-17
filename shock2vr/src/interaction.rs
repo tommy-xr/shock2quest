@@ -147,6 +147,12 @@ pub trait PlayerInteraction {
     /// Entities under the reticle/hands, for the hover-highlight overlay.
     fn highlighted_entities(&self) -> Vec<EntityId>;
 
+    /// Flat's reach-bounded crosshair target, where a cursor tool is applied.
+    /// VR applies tools by touch instead.
+    fn frob_target(&self) -> Option<EntityId> {
+        None
+    }
+
     /// What one hand alone is aiming at - for readouts that must name a single
     /// object rather than highlight every pick. Flat aims with the reticle, so
     /// it reports that pick for either hand.
@@ -2232,6 +2238,10 @@ impl PlayerInteraction for FlatInteraction {
 
     fn highlighted_entities(&self) -> Vec<EntityId> {
         self.highlighted.into_iter().collect()
+    }
+
+    fn frob_target(&self) -> Option<EntityId> {
+        self.controller.frob_target()
     }
 
     fn highlighted_entity(&self, _hand: Handedness) -> Option<EntityId> {

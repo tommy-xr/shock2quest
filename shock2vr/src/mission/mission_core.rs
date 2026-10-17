@@ -9902,7 +9902,8 @@ impl MissionCore {
 
     /// Apply a cursor-is-the-item drag action from the `FlatUiHost` (§1.5/§2.4).
     /// A lifted item stays in the backpack container (the host just hides it
-    /// from the strip), so `Place` only plays feedback. `Throw` detaches + launches; `Wield`
+    /// from the strip), so `Place` only plays feedback. `Throw` detaches + launches; `Apply`
+    /// offers a tool to the crosshair target; `Wield`
     /// produces the same effect a backpack click does (returned for the normal
     /// effect pipeline, which has `asset_cache` for the grab).
     fn apply_flat_drag_action(
@@ -9946,6 +9947,25 @@ impl MissionCore {
             FlatUiDragAction::Throw(entity_id) => {
                 self.throw_entity_into_world(entity_id);
                 Vec::new()
+            }
+            // Only a target that explicitly accepts the item is offered it, so
+            // RMB never deposits into a container or drops an ignored item.
+            FlatUiDragAction::Apply(entity_id) => {
+                let Some(target) = self.interaction.frob_target() else {
+                    return Vec::new();
+                };
+                if !self
+                    .script_world
+                    .accepts_tool(target, &self.world, entity_id)
+                {
+                    return Vec::new();
+                }
+                vec![Effect::Send {
+                    msg: Message {
+                        payload: MessagePayload::ProvideForConsumption { entity: entity_id },
+                        to: target,
+                    },
+                }]
             }
             // The AMMOFULL readout's controls emit the same effects as their
             // keyboard/action counterparts, so the button and the key are one
