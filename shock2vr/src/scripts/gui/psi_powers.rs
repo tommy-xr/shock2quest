@@ -208,36 +208,99 @@ impl NavStep {
     }
 }
 
-/// How far the stick must be pushed to register a step, and how far it must
-/// come back before the next one. The gap is hysteresis: a stick resting just
-/// under the threshold cannot chatter through the whole tier.
-const NAV_ENGAGE: f32 = 0.5;
+/// How far the stick must come back before it can step again. The gap below
+/// the engage threshold is hysteresis: a stick resting just under it cannot
+/// chatter through the whole tier.
 const NAV_RELEASE: f32 = 0.3;
+
+/// How a stick push turns into steps.
+pub struct StickNavTuning {
+    /// How far the stick must be pushed (its larger axis) to step.
+    engage: f32,
+    /// The smaller axis may be at most this fraction of the larger one; an
+    /// ambiguous diagonal waits until it leans clearly one way.
+    axis_slop: f32,
+    /// Seconds after a step's release in which the opposite step is ignored.
+    settle: f32,
+}
+
+/// The psi selectors. Engaging late lets a thumb's arc settle on its
+/// direction; steps need ~30 degrees of a cardinal (tan 30 = 0.58); and a
+/// flicked stick springs back past centre, which must not step backwards.
+pub const PSI_STICK_NAV: StickNavTuning = StickNavTuning {
+    engage: 0.75,
+    axis_slop: 0.58,
+    settle: 0.1,
+};
+
+/// GamePig games: the overworld walks on diagonals and the hoppers step as
+/// fast as the thumb flicks.
+pub const HANDHELD_STICK_NAV: StickNavTuning = StickNavTuning {
+    engage: 0.5,
+    axis_slop: 1.0,
+    settle: 0.0,
+};
+
+/// [`stick_nav`]'s state between frames.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum NavLatch {
+    #[default]
+    Free,
+    /// Pushed, after `Some(step)`: the stick must come back before it steps.
+    Held(Option<NavStep>),
+    /// Released after a step; for the remaining seconds its opposite is ignored.
+    Settling(NavStep, f32),
+}
+
+impl NavStep {
+    fn opposite(self) -> Self {
+        match self {
+            NavStep::TierPrev => NavStep::TierNext,
+            NavStep::TierNext => NavStep::TierPrev,
+            NavStep::PowerPrev => NavStep::PowerNext,
+            NavStep::PowerNext => NavStep::PowerPrev,
+        }
+    }
+}
 
 /// Edge-triggered stick navigation: one step per flick, whatever the frame
 /// rate. Returns the step (if this frame is the rising edge) and the new latch
-/// state. The dominant axis wins, so a diagonal push is never both.
-pub fn stick_nav(stick: Vector2<f32>, latched: bool) -> (Option<NavStep>, bool) {
-    let (x, y) = (stick.x, stick.y);
-    let magnitude = x.abs().max(y.abs());
-    if latched {
-        return (None, magnitude >= NAV_RELEASE);
+/// state. A push steps along one cardinal, never two.
+pub fn stick_nav(
+    stick: Vector2<f32>,
+    latch: NavLatch,
+    dt: f32,
+    tuning: &StickNavTuning,
+) -> (Option<NavStep>, NavLatch) {
+    let (x, y) = (stick.x.abs(), stick.y.abs());
+    let magnitude = x.max(y);
+    let latch = match latch {
+        NavLatch::Held(_) if magnitude >= NAV_RELEASE => return (None, latch),
+        NavLatch::Held(Some(step)) if tuning.settle > 0.0 => {
+            return (None, NavLatch::Settling(step, tuning.settle));
+        }
+        NavLatch::Held(_) => return (None, NavLatch::Free),
+        NavLatch::Settling(step, left) if left > dt => NavLatch::Settling(step, left - dt),
+        NavLatch::Settling(..) | NavLatch::Free => NavLatch::Free,
+    };
+    if magnitude < tuning.engage || x.min(y) > tuning.axis_slop * magnitude {
+        return (None, latch);
     }
-    if magnitude < NAV_ENGAGE {
-        return (None, false);
-    }
-    let step = if y.abs() >= x.abs() {
-        if y > 0.0 {
+    let step = if y >= x {
+        if stick.y > 0.0 {
             NavStep::TierNext
         } else {
             NavStep::TierPrev
         }
-    } else if x > 0.0 {
+    } else if stick.x > 0.0 {
         NavStep::PowerNext
     } else {
         NavStep::PowerPrev
     };
-    (Some(step), true)
+    if matches!(latch, NavLatch::Settling(last, _) if step == last.opposite()) {
+        return (None, latch);
+    }
+    (Some(step), NavLatch::Held(Some(step)))
 }
 
 // --- The panel --------------------------------------------------------------
@@ -1208,35 +1271,89 @@ mod tests {
         assert!(matches!(effect, Effect::SelectPsiPower { power_id: 5 }));
     }
 
+    const DT: f32 = 1.0 / 60.0;
+
+    fn psi(stick: Vector2<f32>, latch: NavLatch) -> (Option<NavStep>, NavLatch) {
+        stick_nav(stick, latch, DT, &PSI_STICK_NAV)
+    }
+
     /// One step per flick: holding the stick over cannot walk the whole tier,
     /// and the stick has to come back past the release threshold first.
     #[test]
     fn stick_navigation_is_edge_triggered_with_hysteresis() {
-        let (step, latched) = stick_nav(vec2(0.0, 1.0), false);
+        let (step, latch) = psi(vec2(0.0, 1.0), NavLatch::Free);
         assert_eq!(step, Some(NavStep::TierNext));
-        assert!(latched);
-        // Held: nothing more happens, and the latch survives.
-        assert_eq!(stick_nav(vec2(0.0, 1.0), true), (None, true));
-        // Released past the hysteresis gap: unlatched, still no step.
-        assert_eq!(stick_nav(vec2(0.0, 0.4), true), (None, true));
-        assert_eq!(stick_nav(vec2(0.0, 0.0), true), (None, false));
-        // ...and only then does the next flick register.
-        assert_eq!(stick_nav(vec2(0.0, -1.0), false).0, Some(NavStep::TierPrev));
+        // Held, even just above the release threshold: no more steps.
+        assert_eq!(psi(vec2(0.0, 1.0), latch), (None, latch));
+        assert_eq!(psi(vec2(0.0, 0.4), latch), (None, latch));
+        let (step, latch) = psi(vec2(0.0, 0.0), latch);
+        assert_eq!(step, None);
+        // Scrolling on in the same direction is not held back.
+        assert_eq!(psi(vec2(0.0, 1.0), latch).0, Some(NavStep::TierNext));
+    }
+
+    /// A flicked stick springs back past centre; that overshoot is not a
+    /// flick the other way - but a real one, a moment later, is.
+    #[test]
+    fn spring_back_overshoot_does_not_step_backwards() {
+        let (_, latch) = psi(vec2(0.0, 1.0), NavLatch::Free);
+        let (_, mut latch) = psi(vec2(0.0, 0.1), latch);
+        let (step, after_bounce) = psi(vec2(0.0, -0.8), latch);
+        assert_eq!(step, None);
+        for _ in 0..7 {
+            latch = psi(vec2(0.0, 0.0), latch).1;
+        }
+        assert_eq!(latch, NavLatch::Free);
+        assert_ne!(after_bounce, NavLatch::Free);
+        assert_eq!(psi(vec2(0.0, -1.0), latch).0, Some(NavStep::TierPrev));
+    }
+
+    /// A selector that opens with the stick latched has no bounce to wait out.
+    #[test]
+    fn releasing_an_opening_latch_steps_at_once() {
+        let (step, latch) = psi(vec2(0.0, 0.0), NavLatch::Held(None));
+        assert_eq!((step, latch), (None, NavLatch::Free));
+        assert_eq!(psi(vec2(0.0, -1.0), latch).0, Some(NavStep::TierPrev));
     }
 
     #[test]
-    fn the_dominant_stick_axis_decides_the_step() {
-        assert_eq!(stick_nav(vec2(1.0, 0.0), false).0, Some(NavStep::PowerNext));
-        assert_eq!(
-            stick_nav(vec2(-1.0, 0.0), false).0,
-            Some(NavStep::PowerPrev)
-        );
-        // A diagonal is one step, never two: the larger component wins.
-        assert_eq!(stick_nav(vec2(0.9, 0.6), false).0, Some(NavStep::PowerNext));
-        assert_eq!(stick_nav(vec2(0.6, 0.9), false).0, Some(NavStep::TierNext));
+    fn a_push_steps_only_near_a_cardinal() {
+        let free = NavLatch::Free;
+        assert_eq!(psi(vec2(1.0, 0.0), free).0, Some(NavStep::PowerNext));
+        assert_eq!(psi(vec2(-1.0, 0.0), free).0, Some(NavStep::PowerPrev));
+        // Within ~30 degrees of a cardinal still steps along it.
+        assert_eq!(psi(vec2(0.9, 0.45), free).0, Some(NavStep::PowerNext));
+        assert_eq!(psi(vec2(0.45, -0.9), free).0, Some(NavStep::TierPrev));
         // Below the engage threshold nothing happens at all - a resting stick
         // must not browse.
-        assert_eq!(stick_nav(vec2(0.4, 0.4), false), (None, false));
+        assert_eq!(psi(vec2(0.4, 0.4), free), (None, free));
+    }
+
+    /// A thumb sweeping right arcs through "up" first; the step waits until
+    /// the push is both far enough and clearly one way.
+    #[test]
+    fn a_push_commits_only_once_it_is_far_and_unambiguous() {
+        let free = NavLatch::Free;
+        // Early in the arc: leaning up, but not pushed far enough yet.
+        assert_eq!(psi(vec2(0.3, 0.55), free), (None, free));
+        // Fully pushed but diagonal: no step, and nothing latched.
+        assert_eq!(psi(vec2(0.9, 0.8), free), (None, free));
+        // Settled on the intended direction.
+        assert_eq!(psi(vec2(0.9, 0.2), free).0, Some(NavStep::PowerNext));
+    }
+
+    /// GamePig keeps its looser feel: diagonals walk the overworld, and a
+    /// reverse hop right after a release is a real one.
+    #[test]
+    fn handheld_navigation_takes_diagonals_and_quick_reversals() {
+        let handheld = |stick, latch| stick_nav(stick, latch, DT, &HANDHELD_STICK_NAV);
+        assert_eq!(
+            handheld(vec2(0.6, 0.55), NavLatch::Free).0,
+            Some(NavStep::PowerNext)
+        );
+        let (_, latch) = handheld(vec2(0.0, 1.0), NavLatch::Free);
+        let (_, latch) = handheld(vec2(0.0, 0.0), latch);
+        assert_eq!(handheld(vec2(0.0, -0.6), latch).0, Some(NavStep::TierPrev));
     }
 
     /// The stick drives the same two axes the readout's arrows do.
