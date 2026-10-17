@@ -13,8 +13,12 @@ pub struct RecoilImpulse {
     pub one_hand_pitch_falloff: f32,
     pub heading: f32,
     pub back: f32,
+    /// Upward slide in WORLD up (see [`RecoilState::lift`]): raises the hand
+    /// toward the eyes however the grip rolls the model.
+    pub lift: f32,
     pub pitch_limit: f32,
     pub back_limit: f32,
+    pub lift_limit: f32,
     pub heading_limit: f32,
     pub angular_rate: f32,
     pub back_rate: f32,
@@ -37,6 +41,8 @@ pub fn vr_impulses(
             * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE),
         heading: impulse.heading * scale * crate::dev_params::get(crate::dev_params::GUN_YAW_SCALE),
         back: impulse.back * scale * crate::dev_params::get(crate::dev_params::GUN_KICKBACK_SCALE),
+        // Guns never lift, so no gun knob scales it.
+        lift: impulse.lift * scale,
         ..impulse
     };
     (
@@ -140,9 +146,11 @@ fn scaled_flat(base: RecoilImpulse, scale: f32) -> RecoilImpulse {
         pitch: base.pitch * scale,
         heading: base.heading * scale,
         back: base.back * scale,
+        lift: base.lift * scale,
         pitch_limit: cap(base.pitch_limit),
         heading_limit: cap(base.heading_limit),
         back_limit: cap(base.back_limit),
+        lift_limit: cap(base.lift_limit),
         ..base
     }
 }
@@ -307,6 +315,8 @@ fn authored_impulse<R: Rng + ?Sized>(
         back: kick.kick_back / dark::SCALE_FACTOR,
         pitch_limit: kick.kick_pitch_max_degrees.abs(),
         back_limit: kick.kick_back_max.abs() / dark::SCALE_FACTOR,
+        lift: 0.0,
+        lift_limit: 0.0,
         heading_limit: f32::MAX,
         angular_rate: recovery_rate(
             kick.kick_angular_return_rate_degrees,
@@ -443,6 +453,7 @@ pub struct RecoilState {
     pitch: Spring,
     heading: Spring,
     back: Spring,
+    lift: Spring,
     impulse: Option<RecoilImpulse>,
 }
 impl RecoilState {
@@ -452,8 +463,10 @@ impl RecoilState {
             impulse.pitch,
             impulse.heading,
             impulse.back,
+            impulse.lift,
             impulse.pitch_limit,
             impulse.back_limit,
+            impulse.lift_limit,
             impulse.heading_limit,
             impulse.angular_rate,
             impulse.back_rate,
@@ -467,6 +480,7 @@ impl RecoilState {
             || impulse.back_rate <= 0.0
             || impulse.pitch_limit < 0.0
             || impulse.back_limit < 0.0
+            || impulse.lift_limit < 0.0
             || impulse.heading_limit < 0.0
             || Vector3::unit_y().cross(impulse.forward).magnitude2() < 1e-8
         {
@@ -475,9 +489,15 @@ impl RecoilState {
         self.pitch.kick(impulse.pitch, impulse.angular_rate);
         self.heading.kick(impulse.heading, impulse.angular_rate);
         self.back.kick(impulse.back, impulse.back_rate);
+        self.lift.kick(impulse.lift, impulse.back_rate);
         self.impulse = Some(impulse);
     }
+    /// The current lift, in world units along world up.
+    pub fn lift(&self) -> f32 {
+        self.lift.position
+    }
     /// Translation and local rotation axes/angles, in the held model's frame.
+    /// Lift is left out: read it from [`Self::lift`] after stepping.
     pub fn step(&mut self, dt: f32) -> (Vector3<f32>, cgmath::Quaternion<f32>) {
         use cgmath::{Deg, Quaternion, Rotation3};
         let Some(i) = self.impulse else {
@@ -486,6 +506,7 @@ impl RecoilState {
         self.pitch.step(dt, i.angular_rate, i.pitch_limit);
         self.heading.step(dt, i.angular_rate, i.heading_limit);
         self.back.step(dt, i.back_rate, i.back_limit);
+        self.lift.step(dt, i.back_rate, i.lift_limit);
         let forward = i.forward.normalize();
         let right = Vector3::unit_y().cross(forward).normalize();
         (
@@ -553,6 +574,8 @@ mod tests {
             pitch_limit: 4.0,
             heading_limit: f32::MAX,
             back_limit: 0.2,
+            lift: 0.0,
+            lift_limit: 0.0,
             angular_rate: 2.0,
             back_rate: 1.0,
             one_hand_pitch_falloff: 0.3,
@@ -663,6 +686,8 @@ mod tests {
             back: -0.01,
             pitch_limit: 8.0,
             back_limit: 0.2,
+            lift: 0.0,
+            lift_limit: 0.0,
             heading_limit: f32::MAX,
             angular_rate: 2.0,
             back_rate: 3.0,
@@ -720,6 +745,8 @@ mod tests {
             back: -0.1,
             pitch_limit: 10.0,
             back_limit: 0.2,
+            lift: 0.0,
+            lift_limit: 0.0,
             heading_limit: f32::MAX,
             angular_rate: 1.0,
             back_rate: 2.0,
@@ -763,6 +790,8 @@ mod tests {
             back: -0.1,
             pitch_limit: 10.0,
             back_limit: 0.2,
+            lift: 0.0,
+            lift_limit: 0.0,
             heading_limit: f32::MAX,
             angular_rate: 1.0,
             back_rate: 1.0,
@@ -798,6 +827,8 @@ mod tests {
                 back: -0.1,
                 pitch_limit: 10.0,
                 back_limit: 0.2,
+                lift: 0.0,
+                lift_limit: 0.0,
                 heading_limit: f32::MAX,
                 angular_rate: 1.0,
                 back_rate: 1.0,
@@ -822,6 +853,8 @@ mod tests {
             back: -0.1,
             pitch_limit: 10.0,
             back_limit: 0.2,
+            lift: 0.0,
+            lift_limit: 0.0,
             heading_limit: f32::MAX,
             angular_rate: 1.0,
             back_rate: 1.0,
@@ -830,6 +863,36 @@ mod tests {
         });
         assert!(state.impulse.is_none());
         assert_eq!(state.step(0.1).0, vec3(0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn lift_rises_then_settles() {
+        let mut state = RecoilState::default();
+        state.kick(RecoilImpulse {
+            pitch: 0.0,
+            heading: 0.0,
+            back: 0.0,
+            lift: 0.1,
+            pitch_limit: 0.0,
+            back_limit: 0.0,
+            lift_limit: 0.2,
+            heading_limit: 0.0,
+            angular_rate: 1.0,
+            back_rate: 1.0,
+            one_hand_pitch_falloff: 0.0,
+            forward: -Vector3::unit_x(),
+        });
+        let (offset, _) = state.step((2.5_f32).ln() / 6.0);
+        assert_eq!(
+            offset,
+            vec3(0.0, 0.0, 0.0),
+            "lift is not a model-frame offset"
+        );
+        assert!((state.lift() - 0.1).abs() < 1e-4, "{}", state.lift());
+        for _ in 0..240 {
+            state.step(1.0 / 60.0);
+        }
+        assert!(state.lift().abs() < 1e-3);
     }
 
     #[test]

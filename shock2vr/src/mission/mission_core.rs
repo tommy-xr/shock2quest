@@ -20824,6 +20824,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     serde_json::json!({
                         "position": [frame.w.x, frame.w.y, frame.w.z],
                         "forward": [frame.z.x, frame.z.y, frame.z.z],
+                        "up": [frame.y.x, frame.y.y, frame.y.z],
                     })
                     .to_string(),
                 )

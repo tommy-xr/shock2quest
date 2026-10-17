@@ -324,6 +324,7 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
             delta: -damage,
         },
         Effect::GlobalEffect(super::GlobalEffect::PsiBurnout),
+        burnout_kick(world, amp_entity),
         // Retail's burnout sound, at the ears like the player's own grunt.
         Effect::PlaySound {
             handle: AudioHandle::new(),
@@ -332,6 +333,38 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
             spatial: false,
         },
     ])
+}
+
+/// The amp jumps up toward the eyes and back out of the hand: VR kicks the
+/// held body, flat the viewmodel, through the guns' recoil springs.
+fn burnout_kick(world: &World, amp_entity: EntityId) -> Effect {
+    let impulse = crate::weapon_recoil::RecoilImpulse {
+        pitch: 25.0,
+        one_hand_pitch_falloff: 0.0,
+        heading: 0.0,
+        // Negative is back along the barrel, as authored gun kick.
+        back: -0.1,
+        // World units (~10 cm at Strength 1), unlike the model-frame back.
+        lift: 0.1,
+        pitch_limit: 35.0,
+        back_limit: 0.15,
+        lift_limit: 0.2,
+        heading_limit: 0.0,
+        angular_rate: 1.0,
+        back_rate: 1.5,
+        forward: crate::weapon_muzzle::resolve(world, amp_entity).axis,
+    };
+    Effect::KickHeldGun {
+        entity_id: amp_entity,
+        impulse,
+        // The baseline is already the amp's whole kick.
+        one_hand: crate::weapon_recoil::RecoilImpulse {
+            pitch: 0.0,
+            back: 0.0,
+            lift: 0.0,
+            ..impulse
+        },
+    }
 }
 
 /// Whether the player has been trained in the power. Selection gating
@@ -1036,12 +1069,16 @@ mod tests {
                 })
                 .sum();
             assert_eq!(damage, if owned { 0 } else { -3 });
+            assert!(effects.iter().any(
+                |e| matches!(e, Effect::KickHeldGun { entity_id, impulse, .. } if *entity_id == amp && impulse.pitch > 0.0 && impulse.back < 0.0 && impulse.lift > 0.0)
+            ));
             assert!(effects.iter().all(|e| matches!(
                 e,
                 Effect::AdjustHitPoints { .. }
                     | Effect::SpendPsiPoints { .. }
                     | Effect::SetPsiCharge { .. }
                     | Effect::GlobalEffect(super::super::GlobalEffect::PsiBurnout)
+                    | Effect::KickHeldGun { .. }
                     | Effect::PlaySound { .. }
             )));
         }
