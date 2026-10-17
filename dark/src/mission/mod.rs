@@ -1,6 +1,7 @@
 mod bsp_tree;
 mod cell;
 mod cell_portal;
+pub mod identity;
 pub mod light_table;
 mod map_params;
 pub mod path_database;
