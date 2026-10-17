@@ -66,8 +66,23 @@ pub enum MediaGuiMsg {
     Return,
 }
 
-/// The PDA entry the reader shows, from the `PropLog` it was bound with: an
-/// email sets `email` and leaves `log` unset, an audio log the reverse.
+/// The `PropLog` the reader is bound with for `entry`: an email sets `email`
+/// and leaves `log` unset, an audio log the reverse. [`shown_entry`] reads it back.
+pub(crate) fn reader_prop_log(entry: PdaEntry) -> PropLog {
+    let (email, log) = match entry.kind {
+        PdaKind::Log => (LOG_UNSET, entry.index),
+        PdaKind::Email => (entry.index, LOG_UNSET),
+    };
+    PropLog {
+        deck: entry.deck,
+        email,
+        log,
+        note: 0,
+        video: 0,
+    }
+}
+
+/// The PDA entry the reader shows, from its [`reader_prop_log`].
 fn shown_entry(world: &World, entity_id: EntityId) -> Option<PdaEntry> {
     let v_log = world.borrow::<View<PropLog>>().unwrap();
     let log = v_log.get(entity_id).ok()?;
@@ -638,15 +653,9 @@ mod tests {
     #[test]
     fn return_reopens_the_list_at_the_shown_entry() {
         let mut world = World::new();
-        let log = |deck, email, log| PropLog {
-            deck,
-            email,
-            log,
-            note: 0,
-            video: 0,
-        };
-        let audio = world.add_entity(log(2, LOG_UNSET, 20));
-        let email = world.add_entity(log(4, 7, LOG_UNSET));
+        let entry = |kind, deck, index| PdaEntry { kind, deck, index };
+        let audio = world.add_entity(reader_prop_log(entry(PdaKind::Log, 2, 20)));
+        let email = world.add_entity(reader_prop_log(entry(PdaKind::Email, 4, 7)));
         let gui = MediaGui;
         let state = MediaGuiState::default();
         let returned = |entity| match gui

@@ -10001,6 +10001,10 @@ impl MissionCore {
                             return Vec::new();
                         }
                         self.flat_ui.close();
+                        // The list is part of the interface, as after Return.
+                        if self.use_mode_shortcut == Some(UseModeShortcut::LogReader) {
+                            self.use_mode_shortcut = None;
+                        }
                         if let Ok(quests) = self.world.borrow::<UniqueView<QuestInfo>>() {
                             let (kind, deck) =
                                 quests.pda_default_view().unwrap_or((PdaKind::Log, 1));
@@ -12474,21 +12478,8 @@ impl MissionCore {
                         );
                         continue;
                     };
-                    // 33 is PropLog's "unset" slot; the set one names the entry.
-                    let (email, log) = match entry.kind {
-                        PdaKind::Log => (33, entry.index),
-                        PdaKind::Email => (entry.index, 33),
-                    };
-                    self.world.add_component(
-                        panel_entity,
-                        dark::properties::PropLog {
-                            deck: entry.deck,
-                            email,
-                            log,
-                            note: 0,
-                            video: 0,
-                        },
-                    );
+                    self.world
+                        .add_component(panel_entity, crate::scripts::gui::reader_prop_log(entry));
                     self.script_world.dispatch(Message {
                         to: panel_entity,
                         payload: MessagePayload::PanelOpened,
@@ -12529,25 +12520,25 @@ impl MissionCore {
 
                     // Only after a localized reader is bound to the active
                     // presentation do read state and audio advance together.
-                    let deck = entry.deck;
+                    let PdaEntry { deck, index, .. } = entry;
                     match entry.kind {
                         PdaKind::Log => {
                             if let Ok(mut quest_info) =
                                 self.world.borrow::<UniqueViewMut<QuestInfo>>()
                             {
-                                quest_info.mark_log_read(deck, log);
+                                quest_info.mark_log_read(deck, index);
                             }
                             effects.push_front(Effect::PlaySound {
                                 handle: AudioHandle::new(),
                                 source: None,
-                                name: format!("LOG{deck:02}{log:02}"),
+                                name: format!("LOG{deck:02}{index:02}"),
                                 spatial: false,
                             });
                         }
                         // Retail replays an email's audio each time it is read.
                         PdaKind::Email => effects.push_front(Effect::PlayEmail {
                             deck,
-                            email,
+                            email: index,
                             force: true,
                         }),
                     }
@@ -12560,6 +12551,13 @@ impl MissionCore {
                     if self.use_mode_shortcut == Some(UseModeShortcut::LogReader) {
                         self.use_mode_shortcut = None;
                     }
+                    // A flat reader can be up outside the interface, which is
+                    // the only place the list draws.
+                    if !self.use_mode && !self.flat_ui.device {
+                        effects.push_front(
+                            self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT),
+                        );
+                    }
                     if let Ok(quests) = self.world.borrow::<UniqueView<QuestInfo>>() {
                         self.flat_ui.utilities.open_logs(
                             entry.kind,
@@ -12568,6 +12566,11 @@ impl MissionCore {
                             &quests,
                         );
                     }
+                    // Effects run after the regular utility refresh. Fill the
+                    // list before this frame renders it.
+                    self.flat_ui
+                        .utilities
+                        .refresh(&self.world, asset_cache, &self.entity_info);
                 }
 
                 Effect::ToggleMap => {

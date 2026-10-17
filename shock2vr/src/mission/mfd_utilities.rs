@@ -303,10 +303,9 @@ impl MfdUtilities {
             match list.update(point, pressed) {
                 PdaAction::None => {}
                 PdaAction::Close => *self = Self::default(),
-                PdaAction::Open(entry) => {
-                    *self = Self::default();
-                    self.pda_request = Some(entry);
-                }
+                // The list stays until the reader binds (`FlatUiHost::open`
+                // clears it), so an entry that cannot open leaves it up.
+                PdaAction::Open(entry) => self.pda_request = Some(entry),
             }
             return consumed;
         }
@@ -411,14 +410,7 @@ impl MfdUtilities {
             self.character_sheet.draw(canvas);
         }
         if self.access_cards {
-            canvas.image(
-                Rect::new(2.0, 124.0, 188.0, 296.0),
-                if self.access_cards {
-                    "iface/security.pcx"
-                } else {
-                    "iface/pda.pcx"
-                },
-            );
+            canvas.image(Rect::new(2.0, 124.0, 188.0, 296.0), "iface/security.pcx");
             canvas.text_native_fit(
                 Rect::new(17.0, 136.0, 139.0, 12.0),
                 &self.title,

@@ -55,7 +55,10 @@ for (const vr of [false, true]) {
 
     await click(await logsButton());
     assert.equal((await game.ui.state()).mode, "use");
-    assert.ok((await strip()).some((e) => e.label === "pda_header" && e.text?.includes("2")), "deck 2 header");
+    // Authored misc.str LevelBase1 + Level1, not the built-in fallback.
+    const headers = (await strip()).filter((e) => e.label === "pda_header").map((e) => e.text);
+    assert.equal(headers[0], "Logs: Deck 2");
+    assert.match(headers[1] ?? "", /med/i, "deck name from misc.str Level1");
     await click(await control("pda_entry:0"));
     assert.ok((await reader()).elements.some((e) => e.text?.includes("45100")), "the older log opens from the list");
 
