@@ -96,7 +96,8 @@ impl Views {
 }
 
 /// Upload a draw's `view` / `projection` uniforms; a location of -1 skips it.
-/// Single-view this is exactly the two plain uploads.
+/// Single-view this is exactly the two plain uploads. Under multiview a
+/// `camera` draw takes each eye's projection from `Views`, not `projection`.
 ///
 /// # Safety
 /// Requires a current GL context with the draw's program in use.
@@ -144,7 +145,7 @@ pub(crate) fn shader_header(vertex: bool) -> &'static str {
 }
 
 /// Uniforms that differ per eye: the camera matrices, and the eye position
-/// fragment lighting reads (`eye` is the environment preview's).
+/// fragment lighting reads.
 const PER_EYE: [(&str, &str); 7] = [
     ("mat4", "view"),
     ("mat4", "projection"),
@@ -152,7 +153,7 @@ const PER_EYE: [(&str, &str); 7] = [
     ("vec3", "incidenceEye"),
     ("vec3", "materialPassEye"),
     ("vec3", "eyePosition"),
-    ("vec3", "eye"),
+    ("vec3", "environmentEye"),
 ];
 
 /// Turn each `PER_EYE` declaration (`uniform [precision] type name;`) into a
@@ -171,12 +172,26 @@ pub(crate) fn rewrite_view_uniforms(shader: &str) -> String {
                 decl.trim_end_matches(';').trim_end()
             )),
             None => {
+                // Its count-2 upload would fail and leave the draw's matrices
+                // stale; engine logging is invisible on Quest, so print.
+                if unrewritten_per_eye_declaration(decl) {
+                    println!("SHOCK2QUEST_MULTIVIEW_UNREWRITTEN uniform={decl:?}");
+                }
                 out.push_str(line);
                 out.push('\n');
             }
         }
     }
     out
+}
+
+/// A `uniform` line naming a per-eye uniform in a form the rewrite skips,
+/// e.g. `uniform mat4 view, projection;`.
+fn unrewritten_per_eye_declaration(decl: &str) -> bool {
+    decl.starts_with("uniform")
+        && decl
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .any(|token| PER_EYE.iter().any(|&(_, name)| name == token))
 }
 
 fn per_eye_name(decl: &str) -> Option<&str> {
@@ -232,13 +247,25 @@ mod tests {
     #[test]
     fn rewrites_fragment_eye_uniforms_but_not_lookalikes() {
         let out = rewrite_view_uniforms(
-            "uniform vec3 shineEye;\nuniform vec3 shineTint;\nuniform float eye;",
+            "uniform vec3 shineEye;\nuniform vec3 shineTint;\nuniform float shineEyes;",
         );
         assert!(
             out.contains("uniform vec3 shineEye[2];\n#define shineEye shineEye[gl_ViewID_OVR]\n")
         );
         assert!(out.contains("uniform vec3 shineTint;\n"));
-        assert!(out.contains("uniform float eye;\n"));
+        assert!(out.contains("uniform float shineEyes;\n"));
+    }
+
+    #[test]
+    fn flags_per_eye_declarations_the_rewrite_skips() {
+        assert!(unrewritten_per_eye_declaration(
+            "uniform mat4 view, projection;"
+        ));
+        assert!(unrewritten_per_eye_declaration(
+            "uniform mat4 view; // camera"
+        ));
+        assert!(!unrewritten_per_eye_declaration("uniform mat4 world;"));
+        assert!(!unrewritten_per_eye_declaration("vec4 view = vec4(0.0);"));
     }
 
     #[test]

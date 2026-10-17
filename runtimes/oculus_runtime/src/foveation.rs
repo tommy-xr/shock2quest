@@ -79,14 +79,18 @@ pub struct EyeSwapchains {
 }
 
 fn has_scaled_bin_support() -> bool {
+    has_gl_extension(b"GL_QCOM_texture_foveated")
+}
+
+/// Whether the current GLES context advertises `extension`.
+pub fn has_gl_extension(extension: &[u8]) -> bool {
     // Called only on the render thread after GLES initialization.
     unsafe {
         let mut count = 0;
         gl::GetIntegerv(gl::NUM_EXTENSIONS, &mut count);
         (0..count).any(|index| {
             let name = gl::GetStringi(gl::EXTENSIONS, index as u32);
-            !name.is_null()
-                && std::ffi::CStr::from_ptr(name.cast()).to_bytes() == b"GL_QCOM_texture_foveated"
+            !name.is_null() && std::ffi::CStr::from_ptr(name.cast()).to_bytes() == extension
         })
     }
 }

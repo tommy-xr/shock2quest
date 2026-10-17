@@ -2023,16 +2023,7 @@ fn android_pump_events() -> bool {
 
 /// Enable OVR_multiview2 when requested and the driver supports it.
 fn enable_multiview(egl: &egl::DynamicInstance<egl::EGL1_4>, requested: bool) -> bool {
-    // Called on the render thread with the GLES context current.
-    let supported = unsafe {
-        let mut count = 0;
-        gl::GetIntegerv(gl::NUM_EXTENSIONS, &mut count);
-        (0..count).any(|index| {
-            let name = gl::GetStringi(gl::EXTENSIONS, index as u32);
-            !name.is_null()
-                && std::ffi::CStr::from_ptr(name.cast()).to_bytes() == b"GL_OVR_multiview2"
-        })
-    };
+    let supported = foveation::has_gl_extension(b"GL_OVR_multiview2");
     let attach = egl.get_proc_address("glFramebufferTextureMultiviewOVR");
     let effective = requested && supported && attach.is_some();
     if effective {
@@ -2094,29 +2085,15 @@ fn render_swapchain(
     let mut all_scene_objs = game.render_per_eye(view_matrix, projection_matrix, screen_size);
     all_scene_objs.extend(scene.iter().cloned());
 
-    // SAFETY: This is only calling into OpenGL APIs and not copying memory
-    unsafe {
-        gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, framebuffer.gl_color_buffer);
-        // Render
-        gl::Viewport(0, 0, width, height);
-        gl::Scissor(0, 0, width, height);
-        // gl::ClearColor(r, g, b, 1.0);
-        // gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-
-        let scene_for_render = scene_with_hand_lights(game, all_scene_objs, benchmark);
-
-        profile!(
-            "[oculus.engine.render]",
-            engine.render(&render_context, &scene_for_render)
-        );
-
-        // GL(glViewport(0, 0, frameBuffer->Width, frameBuffer->Height));
-        // GL(glScissor(0, 0, frameBuffer->Width, frameBuffer->Height));
-        // GL(glClearColor(1.0f, 0.0f, 0.0f, clearAlpha));
-        // GL(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
-
-        gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, 0);
-    }
+    draw_into(
+        game,
+        engine,
+        framebuffer,
+        (width, height),
+        &render_context,
+        all_scene_objs,
+        benchmark,
+    );
 
     let finish_elapsed = if is_last {
         let finish_started = Instant::now();
@@ -2189,18 +2166,15 @@ fn render_multiview(
         multiview: Some(engine::multiview::Views::new(view_matrices, projections)),
         ..contexts[0]
     };
-    // SAFETY: This is only calling into OpenGL APIs and not copying memory
-    unsafe {
-        gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, framebuffer.gl_color_buffer);
-        gl::Viewport(0, 0, width, height);
-        gl::Scissor(0, 0, width, height);
-        let scene_for_render = scene_with_hand_lights(game, all_scene_objs, benchmark);
-        profile!(
-            "[oculus.engine.render]",
-            engine.render(&render_context, &scene_for_render)
-        );
-        gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, 0);
-    }
+    draw_into(
+        game,
+        engine,
+        framebuffer,
+        (width, height),
+        &render_context,
+        all_scene_objs,
+        benchmark,
+    );
 
     let finish_started = Instant::now();
     game.finish_render(view_matrices[1], projections[1], screen_size);
@@ -2214,33 +2188,59 @@ fn render_multiview(
     ))
 }
 
-fn scene_with_hand_lights(
+/// Render `objects` plus the hand lights into one swapchain image's framebuffer.
+fn draw_into(
     game: &App,
+    engine: &Box<dyn engine::Engine>,
+    framebuffer: &Framebuffer,
+    (width, height): (i32, i32),
+    render_context: &engine::EngineRenderContext,
     objects: Vec<SceneObject>,
     benchmark: Option<&shock2vr::benchmark_scene::BenchmarkRun>,
-) -> Scene {
-    let mut scene_for_render = Scene::from_objects(objects);
+) {
+    // SAFETY: This is only calling into OpenGL APIs and not copying memory
+    unsafe {
+        gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, framebuffer.gl_color_buffer);
+        // Render
+        gl::Viewport(0, 0, width, height);
+        gl::Scissor(0, 0, width, height);
+        // gl::ClearColor(r, g, b, 1.0);
+        // gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
-    // Add hand spotlights (`hand_spotlights` dev param)
-    let hand_spotlights = if let Some(benchmark) = benchmark {
-        benchmark
-            .scene
-            .spotlight()
-            .map(Into::into)
-            .into_iter()
-            .collect()
-    } else {
-        game.get_hand_lights()
-    };
-    for spotlight in hand_spotlights {
-        scene_for_render.lights_mut().add_light(spotlight);
+        let mut scene_for_render = Scene::from_objects(objects);
+
+        // Add hand spotlights (`hand_spotlights` dev param)
+        let hand_spotlights = if let Some(benchmark) = benchmark {
+            benchmark
+                .scene
+                .spotlight()
+                .map(Into::into)
+                .into_iter()
+                .collect()
+        } else {
+            game.get_hand_lights()
+        };
+        for spotlight in hand_spotlights {
+            scene_for_render.lights_mut().add_light(spotlight);
+        }
+
+        profile!(
+            "[oculus.engine.render]",
+            engine.render(render_context, &scene_for_render)
+        );
+
+        // GL(glViewport(0, 0, frameBuffer->Width, frameBuffer->Height));
+        // GL(glScissor(0, 0, frameBuffer->Width, frameBuffer->Height));
+        // GL(glClearColor(1.0f, 0.0f, 0.0f, clearAlpha));
+        // GL(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
+
+        gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, 0);
     }
-    scene_for_render
 }
 
 /// One eye's camera and render context.
 fn eye_render_context(
-    game: &mut App,
+    game: &App,
     camera_pos: Vector3<f32>,
     camera_rot: Quaternion<f32>,
     time: f32,

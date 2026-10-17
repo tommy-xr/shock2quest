@@ -45,10 +45,10 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
         in vec3 worldPos;
 
         uniform samplerCube environment;
-        uniform vec3 eye;
+        uniform vec3 environmentEye;
 
         void main() {
-            vec3 direction = environmentDirection(normalize(worldPos - eye));
+            vec3 direction = environmentDirection(normalize(worldPos - environmentEye));
             fragColor = vec4(textureLod(environment, direction, 0.0).rgb, 1.0);
         }
 "#;
@@ -112,7 +112,7 @@ impl Material for EnvironmentPreviewMaterial {
                     view: loc(c_str!("view")),
                     projection: loc(c_str!("projection")),
                     environment: loc(c_str!("environment")),
-                    eye: loc(c_str!("eye")),
+                    eye: loc(c_str!("environmentEye")),
                 };
                 (shader, uniforms)
             }
