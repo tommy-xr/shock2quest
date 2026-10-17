@@ -7881,9 +7881,13 @@ impl PhysicsWorld {
         // along the face and suppress the gravity pass for this frame (see
         // `climb_redirect`). A jump grips only once its arc is falling, like
         // any other fall (#907); the rise stays ballistic so a jump past a
-        // ladder clears it. A held grip lets go once the feet are down.
+        // ladder clears it. A held grip lets go once the feet are down - but
+        // not after an ascent stalled under a ceiling, whose walk-pass frame
+        // reads the ladder's own top as ground (only that frame keeps the
+        // grip without climbing).
         let rising_jump = player_handle.jump_velocity.is_some_and(|v| v > 0.0);
-        let held = player_handle.ladder_grip.is_some() && !player_handle.is_grounded;
+        let held = player_handle.ladder_grip.is_some()
+            && (!player_handle.is_grounded || !player_handle.is_climbing);
         let climb_movement = if !push_to_climb || rising_jump {
             None
         } else {
@@ -15093,6 +15097,51 @@ mod tests {
             (end.z - 0.45).abs() < 0.02 && (end.y - start.y).abs() < 0.01 && player.is_climbing(),
             "should hang with its centre at the ladder's side (z 0.45): {start:?} -> {end:?}"
         );
+    }
+
+    /// A crouched climb stalled under a ceiling, with the feet just under the
+    /// ladder's top, still holds when the stick turns to a strafe (rick1 Ladder 499).
+    /// The stall bobs, so every phase of it is tried. Negative-first: on a
+    /// stalled frame the walk pass read the ladder's top as ground and the
+    /// strafe let go and fell.
+    #[test]
+    fn a_strafe_from_a_climb_stalled_under_a_ceiling_keeps_the_grip() {
+        // Ladder 499's 7.2 ceiling stands 0.92 over its top.
+        let half_height = PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR;
+        let ceiling = 8.0 + 0.92;
+        for phase in 0..8 {
+            let (mut world, mut player, walk) = climbed_single_ladder();
+            assert!(world.set_player_crouch(true, &mut player));
+            world.add_kinematic(
+                EntityId::from_inner(2002).unwrap(),
+                vec3(-6.0, ceiling + 0.5, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(4.0, 1.0, 4.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            for _ in 0..60 + phase {
+                world.update(Vector3::new(walk, 0.0, 0.0), &mut player);
+            }
+            let stall = world.get_player_translation(&player);
+            assert!(
+                stall.y + half_height > ceiling - 0.3,
+                "setup should stall the climb under the ceiling: {stall:?}"
+            );
+            for _ in 0..30 {
+                world.update_with_facing(
+                    Vector3::new(0.0, 0.0, walk),
+                    Vector3::unit_x(),
+                    &mut player,
+                );
+            }
+            let end = world.get_player_translation(&player);
+            assert!(
+                stall.y - end.y < 0.3 && player.is_climbing(),
+                "phase {phase}: the strafe should keep the grip: {stall:?} -> {end:?}"
+            );
+        }
     }
 
     /// Deliberate deviation from the original (which only hangs): floor within
