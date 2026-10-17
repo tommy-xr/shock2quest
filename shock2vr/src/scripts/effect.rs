@@ -36,6 +36,8 @@ pub enum GlobalEffect {
     PlayerRadiationHit {
         damage: f32,
     },
+    /// Over-held psi charge: the view's rim flashes white.
+    PsiBurnout,
     // Save the game state to the given file_name
     Save {
         file_name: String,

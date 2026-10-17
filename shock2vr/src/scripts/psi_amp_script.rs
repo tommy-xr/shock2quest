@@ -323,6 +323,14 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
             entity_id: player_entity,
             delta: -damage,
         },
+        Effect::GlobalEffect(super::GlobalEffect::PsiBurnout),
+        // Retail's burnout sound, at the ears like the player's own grunt.
+        Effect::PlaySound {
+            handle: AudioHandle::new(),
+            name: "burnout".to_owned(),
+            source: Some(player_entity),
+            spatial: false,
+        },
     ])
 }
 
@@ -1033,6 +1041,8 @@ mod tests {
                 Effect::AdjustHitPoints { .. }
                     | Effect::SpendPsiPoints { .. }
                     | Effect::SetPsiCharge { .. }
+                    | Effect::GlobalEffect(super::super::GlobalEffect::PsiBurnout)
+                    | Effect::PlaySound { .. }
             )));
         }
     }

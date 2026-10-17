@@ -2812,6 +2812,9 @@ impl Game {
             GlobalEffect::PlayerRadiationHit { damage } => {
                 self.hit_feedback.trigger_radiation(damage);
             }
+            GlobalEffect::PsiBurnout => {
+                self.hit_feedback.trigger_burnout();
+            }
             GlobalEffect::PlayerHit { damage } => {
                 self.hit_feedback.trigger(damage);
             }
