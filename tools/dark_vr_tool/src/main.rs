@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, feature = "installer"), windows_subsystem = "windows")]
+
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use std::{
@@ -9,6 +11,14 @@ use std::{
 };
 
 mod dashboard;
+#[cfg(feature = "installer")]
+mod headset;
+#[cfg(feature = "installer")]
+mod installer;
+#[cfg(feature = "installer")]
+mod installer_ui;
+#[cfg(feature = "installer")]
+mod payload;
 // This module is std-only: share the runtime's boot contract without linking
 // the Android runtime (or the game/rendering dependency tree) into a host CLI.
 #[allow(dead_code)]
@@ -32,6 +42,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Action {
+    /// Graphical APK and game-file installer
+    #[cfg(feature = "installer")]
+    Ui(installer_ui::Options),
+    /// Run the same installation as the UI, without opening a window
+    #[cfg(feature = "installer")]
+    Install(installer::Options),
     /// Live device dashboard (also the default in a terminal)
     Tui,
     /// List attached devices, including unauthorized/offline devices
@@ -130,12 +146,25 @@ const GAME_ASSETS: [&str; 3] = ["sshock2.kpf", "mods", "cutscenes"];
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let action = cli.command.unwrap_or_else(|| {
+        #[cfg(feature = "installer")]
+        {
+            Action::Ui(installer_ui::Options::default())
+        }
+        #[cfg(not(feature = "installer"))]
         if io::stdin().is_terminal() && io::stdout().is_terminal() {
             Action::Tui
         } else {
             Action::Status
         }
     });
+    #[cfg(feature = "installer")]
+    match action {
+        Action::Ui(options) => return installer_ui::run(options, cli.serial),
+        Action::Install(options) => {
+            return installer::run(&options, cli.serial.as_deref(), |event| println!("{event}"));
+        }
+        _ => {}
+    }
     if matches!(action, Action::Devices) {
         print!("{}", output(Command::new("adb").args(["devices", "-l"]))?);
         return Ok(());
@@ -167,18 +196,7 @@ fn main() -> Result<()> {
         action: Assets::Copy { source } | Assets::Recopy { source },
     } = &action
     {
-        ensure!(
-            source.join(GAME_ASSETS[0]).is_file(),
-            "missing sshock2.kpf in {}",
-            source.display()
-        );
-        for name in &GAME_ASSETS[1..] {
-            ensure!(
-                source.join(name).is_dir(),
-                "missing {name}/ in {}",
-                source.display()
-            );
-        }
+        validate_assets(source)?;
     }
     let device = Device::resolve(cli.serial.as_deref())?;
     match action {
@@ -222,6 +240,8 @@ fn main() -> Result<()> {
         }
         Action::PullRecording { name, out } => device.pull_recording(name.as_deref(), &out)?,
         Action::Tui | Action::Devices | Action::Build => unreachable!(),
+        #[cfg(feature = "installer")]
+        Action::Ui(_) | Action::Install(_) => unreachable!(),
     }
     Ok(())
 }
@@ -276,52 +296,64 @@ fn select_serial(list: &str, requested: Option<&str>) -> Result<String> {
     Ok(devices[0].into())
 }
 
+fn select_transport(
+    list: &str,
+    serial: Option<&str>,
+    mut identify: impl FnMut(&str) -> Result<String>,
+) -> Result<String> {
+    let devices = authorized_serials(list);
+    if serial.is_none() && devices.len() > 1 {
+        // USB and TCP transports expose the same hardware serial. Never
+        // collapse devices by model: two Quest 3s must remain ambiguous.
+        let mut identity = None;
+        for serial in &devices {
+            let hardware = identify(serial)
+                .context("could not identify transports; pass --serial (cargo dvr devices)")?;
+            let hardware = hardware.trim();
+            ensure!(
+                !hardware.is_empty()
+                    && hardware != "unknown"
+                    && identity.as_deref().is_none_or(|id| id == hardware),
+                "multiple or unidentified headsets; pass --serial (cargo dvr devices)"
+            );
+            identity = Some(hardware.to_owned());
+        }
+        let preferred = devices
+            .iter()
+            .find(|serial| {
+                Some(**serial) == identity.as_deref()
+                    || list.lines().any(|line| {
+                        let mut fields = line.split_whitespace();
+                        fields.next() == Some(**serial) && fields.any(|f| f.starts_with("usb:"))
+                    })
+            })
+            .unwrap_or(&devices[0]);
+        return Ok((*preferred).into());
+    }
+    select_serial(list, serial)
+}
+
 struct Device {
     serial: String,
+    adb_path: PathBuf,
 }
 impl Device {
     fn resolve(serial: Option<&str>) -> Result<Self> {
-        let list = output(Command::new("adb").args(["devices", "-l"]))?;
-        let devices = authorized_serials(&list);
-        if serial.is_none() && devices.len() > 1 {
-            // USB and TCP transports expose the same hardware serial. Never
-            // collapse devices by model: two Quest 3s must remain ambiguous.
-            let mut identity = None;
-            for serial in &devices {
-                let hardware = Self {
-                    serial: (*serial).into(),
-                }
-                .shell("getprop ro.serialno")
-                .context("could not identify transports; pass --serial (cargo dvr devices)")?;
-                let hardware = hardware.trim();
-                ensure!(
-                    !hardware.is_empty()
-                        && hardware != "unknown"
-                        && identity.as_deref().is_none_or(|id| id == hardware),
-                    "multiple or unidentified headsets; pass --serial (cargo dvr devices)"
-                );
-                identity = Some(hardware.to_owned());
+        Self::resolve_with_adb(serial, PathBuf::from("adb"))
+    }
+    fn resolve_with_adb(serial: Option<&str>, adb_path: PathBuf) -> Result<Self> {
+        let list = output(command(&adb_path).args(["devices", "-l"]))?;
+        let serial = select_transport(&list, serial, |serial| {
+            Self {
+                serial: serial.into(),
+                adb_path: adb_path.clone(),
             }
-            let preferred = devices
-                .iter()
-                .find(|serial| {
-                    Some(**serial) == identity.as_deref()
-                        || list.lines().any(|line| {
-                            let mut fields = line.split_whitespace();
-                            fields.next() == Some(**serial) && fields.any(|f| f.starts_with("usb:"))
-                        })
-                })
-                .unwrap_or(&devices[0]);
-            return Ok(Self {
-                serial: (*preferred).into(),
-            });
-        }
-        Ok(Self {
-            serial: select_serial(&list, serial)?,
-        })
+            .shell("getprop ro.serialno")
+        })?;
+        Ok(Self { serial, adb_path })
     }
     fn adb(&self) -> Command {
-        let mut command = Command::new("adb");
+        let mut command = command(&self.adb_path);
         command.args(["-s", &self.serial]);
         command
     }
@@ -405,11 +437,11 @@ impl Device {
         let mut last = String::new();
         for _ in 0..5 {
             thread::sleep(Duration::from_secs(1));
-            last = match output(Command::new("adb").args(["connect", &target])) {
+            last = match output(command(&self.adb_path).args(["connect", &target])) {
                 Ok(message) => message,
                 Err(error) => error.to_string(),
             };
-            let state = output(Command::new("adb").args(["-s", &target, "get-state"]));
+            let state = output(command(&self.adb_path).args(["-s", &target, "get-state"]));
             if state.is_ok_and(|state| state.trim() == "device") {
                 println!(
                     "Connected: {target}\nUSB is preferred while attached; unplug to use Wi-Fi."
@@ -447,18 +479,26 @@ impl Device {
             println!("Removed sshock2.kpf, mods/ and cutscenes/ from {ROOT}");
         }
         if let Some(source) = source {
-            self.shell(&format!("mkdir -p {}", quote(ROOT)))?;
-            // Absolute paths cannot be mistaken for adb flags, even if the
-            // supplied relative directory starts with '-'.
-            for name in GAME_ASSETS {
-                inherit(
-                    self.adb()
-                        .arg("push")
-                        .arg(source.join(name))
-                        .arg(format!("{ROOT}/")),
-                )?;
-            }
+            self.copy_assets(&source, |_, command| inherit(command))?;
             println!("Copied assets to {ROOT}; launch the app when ready.");
+        }
+        Ok(())
+    }
+    fn copy_assets(
+        &self,
+        source: &std::path::Path,
+        mut run: impl FnMut(&str, &mut Command) -> Result<()>,
+    ) -> Result<()> {
+        self.shell(&format!("mkdir -p {}", quote(ROOT)))?;
+        let source = std::path::absolute(source)?;
+        for name in GAME_ASSETS {
+            run(
+                name,
+                self.adb()
+                    .arg("push")
+                    .arg(source.join(name))
+                    .arg(format!("{ROOT}/")),
+            )?;
         }
         Ok(())
     }
@@ -504,6 +544,34 @@ impl Device {
             "*:S",
         ]))
     }
+}
+
+fn validate_assets(source: &std::path::Path) -> Result<()> {
+    ensure!(
+        source.join(GAME_ASSETS[0]).is_file(),
+        "missing sshock2.kpf in {}",
+        source.display()
+    );
+    for name in &GAME_ASSETS[1..] {
+        ensure!(
+            source.join(name).is_dir(),
+            "missing {name}/ in {}",
+            source.display()
+        );
+    }
+    Ok(())
+}
+
+fn command(program: &std::path::Path) -> Command {
+    let command = Command::new(program);
+    #[cfg(windows)]
+    let command = {
+        use std::os::windows::process::CommandExt;
+        let mut command = command;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW: ADB is a GUI helper.
+        command
+    };
+    command
 }
 
 fn build_apk() -> Result<()> {
@@ -669,6 +737,7 @@ mod tests {
         let listing = format!("0\trec-11\t\n{listing}");
         assert_eq!(parse_recordings(&listing).len(), 2);
     }
+    #[cfg(unix)] // Exercises Android shell quoting through a local POSIX shell.
     #[test]
     fn shell_paths_are_literal() {
         let input = "a' b; $(echo unsafe)";
