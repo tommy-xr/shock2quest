@@ -590,7 +590,19 @@ fn a_swing_stopped_by_a_limb_reports_it_pointing_at_the_limb() {
 /// frame. Check starts, reversals and stops without a settling frame.
 #[test]
 fn held_targets_follow_the_pawn_frame_without_counting_walking_as_a_swing() {
+    walk_with_held_wrench(1.0);
+}
+
+/// Slowed world time steps the solver at a shorter dt, so the hand target's
+/// solver velocity is the walk over the scale; it must still read as the walk.
+#[test]
+fn walking_in_slowed_world_time_is_not_counted_as_a_swing() {
+    walk_with_held_wrench(0.5);
+}
+
+fn walk_with_held_wrench(world_time_scale: f32) {
     let (mut world, mut player) = world_with_floor();
+    world.set_world_time_scale(world_time_scale);
     world.set_player_translation(vec3(0.0, 1.2, 0.0), &mut player);
     let offset = vec3(0.7, 1.0, 0.0);
     let mut pawn = world.get_player_translation(&player);

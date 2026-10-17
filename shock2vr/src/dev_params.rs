@@ -614,6 +614,11 @@ dev_params! {
     /// stand-off firing delay and turret refire.
     /// Scripted sequences play at their authored rate.
     AI_DIFFICULTY_SPEED = Root::float("ai_difficulty_speed", "AI speed / difficulty", 0.15, 0.0, 0.5, 0.05),
+    /// How fast the world runs relative to the player: AI, scripts,
+    /// animations, particles, doors and loose physics advance at this rate
+    /// while locomotion, tracked hands, held items and weapon cadence stay at
+    /// full speed. 0.5 halves the world's speed. Hitscan shots stay instant.
+    WORLD_TIME_SCALE = Root::float("world_time_scale", "World time scale", 1.0, 0.1, 1.0, 0.05),
     /// The player loses no hit points from any source, so never shows the hit
     /// tint or dies - keeps deterministic captures from being spoiled by damage.
     CHEAT = Root::bool("cheat", "Cheat: invulnerable", false),

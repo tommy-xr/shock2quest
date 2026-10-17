@@ -82,7 +82,12 @@ impl Script for HeldMeleeWeapon {
         _physics: &PhysicsWorld,
         time: &crate::time::Time,
     ) -> Effect {
-        let elapsed = time.elapsed.as_secs_f32();
+        // Charge and cooldowns are the player's cadence: run them on the
+        // unscaled tick, not slowed world time.
+        let elapsed = world
+            .borrow::<shipyard::UniqueView<crate::time::PlayerTime>>()
+            .map_or(time.elapsed, |player| player.0.elapsed)
+            .as_secs_f32();
         self.free_swing_cooldowns.retain(|_, remaining| {
             *remaining -= elapsed;
             *remaining > 0.0
@@ -268,13 +273,19 @@ fn closing_speed(
     if let Some(speed) = contact.and_then(|contact| contact.closing_speed) {
         return speed;
     }
+    // Solver velocities are per world second; the swing is read in player
+    // time, like `player_velocity`, so slowed world time does not amplify it.
     let Some(contact) = contact else {
-        let weapon_velocity = physics
-            .get_velocity(weapon)
-            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
-        let victim_velocity = physics
-            .get_velocity(victim)
-            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
+        let weapon_velocity = physics.world_to_player_velocity(
+            physics
+                .get_velocity(weapon)
+                .unwrap_or_else(|| vec3(0.0, 0.0, 0.0)),
+        );
+        let victim_velocity = physics.world_to_player_velocity(
+            physics
+                .get_velocity(victim)
+                .unwrap_or_else(|| vec3(0.0, 0.0, 0.0)),
+        );
         return crate::physics::relative_swing_speed(
             weapon_velocity,
             player_velocity,
@@ -283,9 +294,11 @@ fn closing_speed(
         );
     };
     let at = |entity| {
-        physics
-            .velocity_at_point(entity, contact.point)
-            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0))
+        physics.world_to_player_velocity(
+            physics
+                .velocity_at_point(entity, contact.point)
+                .unwrap_or_else(|| vec3(0.0, 0.0, 0.0)),
+        )
     };
     let speed_of = |weapon_velocity| {
         crate::physics::relative_swing_speed(
@@ -532,6 +545,41 @@ mod tests {
         let victim = EntityId::from_inner(2).unwrap();
         let walking = vec3(10.0, 0.0, 0.0);
         moving_body(&mut physics, weapon, vec3(0.0, 0.0, 0.0), walking);
+        moving_body(
+            &mut physics,
+            victim,
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+        );
+
+        let speed = closing_speed(
+            weapon,
+            victim,
+            &physics,
+            head_on_contact(vec3(0.5, 0.0, 0.0)),
+            walking,
+        );
+
+        assert!(
+            speed < gate,
+            "a carried weapon must fall below the swing gate {gate}, read {speed}"
+        );
+    }
+
+    /// Slowed world time: a carried weapon's solver velocity is the walk
+    /// divided by the scale, while the player's own velocity is in player
+    /// time. Reading both in player time keeps the walk out of the swing.
+    ///
+    /// Negative-first: mixing the two frames reads the full walk here.
+    #[test]
+    fn walking_a_weapon_in_slowed_world_time_is_not_a_swing() {
+        let gate = crate::dev_params::spec(crate::dev_params::MELEE_FREE_SWING_SPEED).default;
+        let mut physics = PhysicsWorld::new();
+        physics.set_world_time_scale(0.5);
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        let walking = vec3(10.0, 0.0, 0.0);
+        moving_body(&mut physics, weapon, vec3(0.0, 0.0, 0.0), walking * 2.0);
         moving_body(
             &mut physics,
             victim,
