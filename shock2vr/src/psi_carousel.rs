@@ -27,7 +27,7 @@ pub(crate) struct Carousel {
     pub amp: EntityId,
     pub hand: Handedness,
     pub index: usize,
-    pub stick_latched: bool,
+    pub stick_latched: crate::scripts::gui::NavLatch,
     pub trigger_armed: bool,
     previous_index: usize,
     starts: Vec<(usize, f32, f32)>,
@@ -181,7 +181,7 @@ impl Carousel {
                 .map(|(i, r, s)| (i, r as f32, s as f32))
                 .collect(),
             transition: 1.0,
-            stick_latched: true,
+            stick_latched: crate::scripts::gui::NavLatch::Held(None),
             trigger_armed: false,
         })
     }
