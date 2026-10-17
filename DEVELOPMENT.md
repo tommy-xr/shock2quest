@@ -1388,6 +1388,16 @@ cargo dvr assets recopy           # replace retail assets; preserves saves/setti
 See [dark_vr_tool](tools/dark_vr_tool/README.md) for device selection, filesystem
 access, debug-port configuration, and the `ss2vr` shell alias.
 
+To try a PR without building, install the APK CI attached to its head commit
+(needs `gh`; defaults to `medsci1.mis`):
+
+```sh
+node .claude/skills/vr-device-loop/scripts/quest-device.mjs pr 1234 [--mission debug_gloves]
+```
+
+CI APKs carry the release signature, so replacing a local build uninstalls it
+first and deletes its saves (see [vr-device-loop](.claude/skills/vr-device-loop/SKILL.md#install-a-prs-ci-build)).
+
 ##### Saved games
 
 The pause menu's **Save Game** opens 12 manual slots, quicksave, and a disabled
