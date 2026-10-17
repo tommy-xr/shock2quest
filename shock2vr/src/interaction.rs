@@ -90,6 +90,12 @@ pub trait PlayerInteraction {
         Vec::new()
     }
 
+    /// Per hand (left, right): the held item and what releasing it now would
+    /// offer it to. Flatscreen has no hand release.
+    fn release_offers(&self) -> [Option<(EntityId, EntityId)>; 2] {
+        [None; 2]
+    }
+
     fn hand_feedback_diagnostics(&self) -> serde_json::Value {
         serde_json::Value::Null
     }
@@ -449,6 +455,10 @@ impl VrInteraction {
     }
 }
 
+/// How close an empty, squeezing hand must be to catch a released item.
+/// Matches the nearby tool-use reach.
+const HANDOFF_REACH: f32 = 0.3;
+
 impl Default for VrInteraction {
     fn default() -> Self {
         Self::new()
@@ -458,9 +468,8 @@ impl Default for VrInteraction {
 impl VrInteraction {
     /// Resolve a deliberate nearby catch before either hand can drop or ray-grab.
     fn try_handoff(&mut self, ctx: &InteractionContext) -> Option<Vec<VirtualHandEffect>> {
-        // Match the nearby tool-use reach. Use this frame's controller poses,
-        // not last frame's hands or a weapon displaced by world collision.
-        const HANDOFF_REACH: f32 = 0.3;
+        // Use this frame's controller poses, not last frame's hands or a
+        // weapon displaced by world collision.
         if ctx
             .input
             .pose_tracking
@@ -1580,6 +1589,19 @@ impl PlayerInteraction for VrInteraction {
             .into_iter()
             .filter_map(|hand| hand.maintenance_preview(world))
             .collect()
+    }
+
+    fn release_offers(&self) -> [Option<(EntityId, EntityId)>; 2] {
+        let hands = [&self.left_hand, &self.right_hand];
+        std::array::from_fn(|i| {
+            // A squeezing empty hand within reach catches the item instead
+            // (`try_handoff`), so nothing is offered to the target.
+            let other = hands[1 - i];
+            let handoff = other.get_held_entity().is_none()
+                && other.squeeze_value() > 0.5
+                && (hands[i].get_position() - other.get_position()).magnitude() <= HANDOFF_REACH;
+            hands[i].release_offer().filter(|_| !handoff)
+        })
     }
 
     fn hand_feedback_diagnostics(&self) -> serde_json::Value {

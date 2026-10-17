@@ -1698,7 +1698,7 @@ impl FlatUiHost {
     }
 
     /// The entity currently hidden from the strip because it is on the cursor.
-    fn held_entity(&self) -> Option<EntityId> {
+    pub(crate) fn held_entity(&self) -> Option<EntityId> {
         self.cursor_item.as_ref().map(|c| c.entity)
     }
 
