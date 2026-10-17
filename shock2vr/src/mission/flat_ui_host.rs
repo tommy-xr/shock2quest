@@ -314,6 +314,9 @@ pub struct FlatUiHost {
     pub(crate) utilities: super::mfd_utilities::MfdUtilities,
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
+    /// Each VR hand's canvas point this frame (both `None` on flat), so the
+    /// hover outline follows both rays, not only the summary cursor.
+    vr_hover: [Option<Vector2<f32>>; 2],
     last_pointer_pressed: bool,
     last_secondary_pressed: bool,
     vr_pointer_pressed: [bool; 2],
@@ -405,6 +408,7 @@ impl FlatUiHost {
             selected_ammo: None,
             utilities: Default::default(),
             cursor_canvas: None,
+            vr_hover: [None; 2],
             last_pointer_pressed: false,
             last_secondary_pressed: true,
             vr_pointer_pressed: [true; 2],
@@ -520,7 +524,10 @@ impl FlatUiHost {
                     Handedness::Left => "left".to_string(),
                     Handedness::Right => "right".to_string(),
                 }),
-                hovered: self.hovered_button().map(|r| [r.x, r.y, r.w, r.h]),
+                hovered: self
+                    .cursor_canvas
+                    .and_then(|point| self.button_at(point))
+                    .map(|r| [r.x, r.y, r.w, r.h]),
             })
     }
 
@@ -1048,18 +1055,24 @@ impl FlatUiHost {
         }
     }
 
-    /// The interface button under the pointer: the rects `update_canvas`
-    /// hit-tests, in its order (utilities, readouts, then the panel close).
-    fn hovered_button(&self) -> Option<Rect> {
-        let point = self.cursor_canvas?;
-        let utilities = (!self.software_missing && (self.strip.is_some() || self.device))
+    /// The interface button a click at `point` would reach: the rects
+    /// `update_canvas` hit-tests, in its order (utilities, readouts, then the
+    /// panel close).
+    fn button_at(&self, point: Vector2<f32>) -> Option<Rect> {
+        // Mid-drag and in query mode only the utilities and exit still answer.
+        let busy = self.cursor_item.is_some() || self.utilities.is_inspecting();
+        let utilities = (!self.software_missing && (self.strip_rect().is_some() || self.device))
             .then(|| self.utilities.control_rects())
             .into_iter()
             .flatten();
-        let readouts = self.readout_buttons().into_iter().map(|spec| spec.rect);
+        let readouts = self
+            .readout_buttons()
+            .into_iter()
+            .filter(|spec| !busy || spec.button == ReadoutButton::CloseUseMode)
+            .map(|spec| spec.rect);
         let close = self
             .panel_rect()
-            .filter(|_| !self.software_missing)
+            .filter(|_| !self.software_missing && !busy)
             .map(|panel| self.close_rect(panel));
         utilities
             .chain(readouts)
@@ -1071,17 +1084,26 @@ impl FlatUiHost {
     /// iface buttons (`IFBTNx2`) is exactly a 1 px cyan frame on the button's
     /// rect, so drawing that frame gives every button the same treatment.
     /// Retail's `*1` frames (`ML1`, `CLOSEON`, ...) are pressed art, not hover.
+    /// Both VR rays hit-test and click, so each one's button is outlined.
     fn emit_hover_outline(&self, canvas: &mut UiCanvas) {
-        let Some(r) = self.hovered_button() else {
-            return;
-        };
-        for edge in [
-            Rect::new(r.x, r.y, r.w, 1.0),
-            Rect::new(r.x, r.y + r.h - 1.0, r.w, 1.0),
-            Rect::new(r.x, r.y, 1.0, r.h),
-            Rect::new(r.x + r.w - 1.0, r.y, 1.0, r.h),
-        ] {
-            canvas.fill(edge, HOVER_OUTLINE);
+        let mut hovered: Vec<Rect> = Vec::new();
+        for point in std::iter::once(self.cursor_canvas)
+            .chain(self.vr_hover)
+            .flatten()
+        {
+            if let Some(r) = self.button_at(point).filter(|r| !hovered.contains(r)) {
+                hovered.push(r);
+            }
+        }
+        for r in hovered {
+            for edge in [
+                Rect::new(r.x, r.y, r.w, 1.0),
+                Rect::new(r.x, r.y + r.h - 1.0, r.w, 1.0),
+                Rect::new(r.x, r.y, 1.0, r.h),
+                Rect::new(r.x + r.w - 1.0, r.y, 1.0, r.h),
+            ] {
+                canvas.fill(edge, HOVER_OUTLINE);
+            }
         }
     }
 
@@ -1147,6 +1169,7 @@ impl FlatUiHost {
     ) -> (Vec<Message>, Vec<FlatUiDragAction>) {
         // Missing pointers and newly opened panels require a release before
         // another secondary gesture can reach a widget.
+        self.vr_hover = [None; 2];
         let secondary = pointer.is_none_or(|pointer| pointer.secondary);
         let secondary_edge = secondary && !self.last_secondary_pressed;
         self.last_secondary_pressed = secondary;
@@ -1210,6 +1233,7 @@ impl FlatUiHost {
         pointers: [CanvasPointer; 2],
     ) -> (Vec<Message>, Vec<FlatUiDragAction>) {
         let previous_grabs = self.last_pointer_grabbing;
+        self.vr_hover = pointers.map(|pointer| pointer.canvas_pos);
         let mut messages = Vec::new();
         let mut actions = Vec::new();
         for pointer in pointers {
@@ -4271,6 +4295,42 @@ mod tests {
             assert_eq!(hover(&mut host, rect.center()), Some(rect));
         }
         assert_eq!(hover(&mut host, vec2(300.0, 200.0)), None);
+
+        // Mid-drag a click on the system menu does nothing; exit still works.
+        host.cursor_item = Some(make_cursor_item(&world, _wrench));
+        assert_eq!(hover(&mut host, readouts::SYSTEM_BUTTON.center()), None);
+        let exit = readouts::exit_button().rect;
+        assert_eq!(hover(&mut host, exit.center()), Some(exit));
+    }
+
+    /// Both VR rays click, so each gets the outline - not only the summary
+    /// pointer (a squeezing gun hand wins the summary).
+    #[test]
+    fn each_vr_ray_outlines_its_own_button() {
+        let (world, mut host, _wrench, _inv) = drag_world();
+        host.set_readouts(Some(readout_fixture()));
+        let exit = readouts::exit_button().rect;
+        let menu = readouts::SYSTEM_BUTTON;
+        let left = vr_pointer(
+            Handedness::Left,
+            Some((exit.center().x, exit.center().y)),
+            0.0,
+            0.0,
+        );
+        let right = vr_pointer(
+            Handedness::Right,
+            Some((menu.center().x, menu.center().y)),
+            0.0,
+            1.0,
+        );
+        host.update_vr_canvas(&world, [left, right]);
+        let canvas = host.build_canvas_with(false).unwrap();
+        let fills = canvas
+            .elements()
+            .iter()
+            .filter(|e| matches!(e, UiElement::Fill { color, .. } if *color == HOVER_OUTLINE))
+            .count();
+        assert_eq!(fills, 8, "one 4-edge outline per hovered button");
     }
 
     #[test]
