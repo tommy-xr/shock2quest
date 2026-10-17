@@ -46,7 +46,28 @@ jobs:
 
       - uses: ./.github/actions/setup-android
 
-      # Actual build steps
+      # Dev profile, signed with the release key when the secrets exist (absent
+      # on forks: cargo-apk falls back to its debug key).
       - name: Build Android APK
-        run: cargo apk build
         working-directory: runtimes/oculus_runtime
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            umask 077
+            export CARGO_APK_DEV_KEYSTORE="$RUNNER_TEMP/release.keystore"
+            export CARGO_APK_DEV_KEYSTORE_PASSWORD="$KEYSTORE_PASSWORD"
+            trap 'rm -f "$CARGO_APK_DEV_KEYSTORE"' EXIT
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$CARGO_APK_DEV_KEYSTORE"
+          fi
+          cargo apk build
+          "$ANDROID_HOME/build-tools/33.0.0/apksigner" verify --print-certs ../../target/debug/apk/shock2quest.apk
+
+      # `quest-device.mjs pr` finds this by head SHA.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shock2quest-apk-${{ github.sha }}
+          path: target/debug/apk/shock2quest.apk
+          if-no-files-found: error
+          retention-days: 30
