@@ -91,12 +91,22 @@ impl AiMuzzle {
     }
 
     /// How far along the shooter's facing the visible muzzle sits from the
-    /// authored launch point. The hybrid's and midwife's launch joints are on
-    /// the weapon; the security droid's launch offset is its cannon's breech.
+    /// authored launch point, measured off the models: the hybrid's launch
+    /// joint is its shotgun's muzzle, the midwife's is her hand, and the
+    /// security droid's launch offset is its cannon's breech.
     pub fn barrel_reach(self) -> f32 {
         match self {
             Self::Slug | Self::Midwife => 0.0,
             Self::DroidLaser => 2.0,
+        }
+    }
+
+    /// Alpha multiplier over the player's profile: the laser's restrained
+    /// wisp needs more than the others to read at range.
+    fn smoke_density(self) -> f32 {
+        match self {
+            Self::Slug | Self::Midwife => 2.0,
+            Self::DroidLaser => 3.0,
         }
     }
 
@@ -113,9 +123,8 @@ impl AiMuzzle {
 }
 
 /// A creature's gun is full size and usually seen from across a room, so its
-/// exhaust is the player's profile scaled up and thickened to stay readable.
+/// exhaust is the player's profile scaled up to stay readable.
 const AI_SMOKE_SCALE: f32 = 5.0;
-const AI_SMOKE_DENSITY: f32 = 2.0;
 
 /// Flash (when not authored) and smoke for a creature's shot. `frame` is the
 /// launch frame: origin at the muzzle, +Z along the shot.
@@ -123,26 +132,27 @@ pub(crate) fn ai_muzzle_particles(
     kind: AiMuzzle,
     frame: Matrix4<f32>,
     assets: &mut AssetCache,
-) -> Vec<ParticleSystem> {
-    let smoke = particle_frames(assets, "NDsmk");
-    if smoke.is_empty() {
-        return vec![];
-    }
+) -> (Option<ParticleSystem>, Option<ParticleSystem>) {
     let profile = BarrelSmokeProfile::for_weapon(kind.smoke());
-    let mut systems = vec![
-        smoke_particles(kind.smoke(), AI_SMOKE_SCALE, smoke)
-            .with_alpha(profile.alpha * AI_SMOKE_DENSITY),
-    ];
-    if kind.authored_flash().is_none() {
-        let flash = particle_frames(assets, "NDsbll");
-        if !flash.is_empty() {
-            systems.push(flash_particles(profile.color, flash));
-        }
-    }
-    for system in &mut systems {
+    let launch = |mut system: ParticleSystem| {
         system.update(Duration::ZERO, frame);
-    }
-    systems
+        system
+    };
+    let smoke = Some(particle_frames(assets, "NDsmk"))
+        .filter(|frames| !frames.is_empty())
+        .map(|frames| {
+            launch(
+                smoke_particles(kind.smoke(), AI_SMOKE_SCALE, frames)
+                    .with_alpha(profile.alpha * kind.smoke_density()),
+            )
+        });
+    let flash = kind
+        .authored_flash()
+        .is_none()
+        .then(|| particle_frames(assets, "NDsbll"))
+        .filter(|frames| !frames.is_empty())
+        .map(|frames| launch(flash_particles(profile.color, frames)));
+    (smoke, flash)
 }
 
 /// One brief, bright, expanding sprite at the muzzle.
@@ -245,7 +255,8 @@ impl BarrelSmokeProfile {
     }
 }
 
-/// `scale` sizes the whole wisp - spread, drift and growth - not its timing.
+/// `scale` sizes the wisp's spread and growth, not its timing. Drift grows
+/// only with its square root, so a big wisp still hangs at the muzzle.
 fn smoke_particles(
     kind: crate::weapon_modification::Kind,
     scale: f32,
@@ -263,10 +274,10 @@ fn smoke_particles(
         .with_lifetime(profile.lifetime.0, profile.lifetime.1)
         .with_particle_size(profile.size.0 * scale, profile.size.1 * scale)
         .with_velocity(
-            vec3(-0.035, -0.015, profile.forward_speed.0) * scale,
-            vec3(0.035, 0.025, profile.forward_speed.1) * scale,
+            vec3(-0.035, -0.015, profile.forward_speed.0) * scale.sqrt(),
+            vec3(0.035, 0.025, profile.forward_speed.1) * scale.sqrt(),
         )
-        .with_acceleration(vec3(0.0, profile.rise * scale, 0.0))
+        .with_acceleration(vec3(0.0, profile.rise * scale.sqrt(), 0.0))
         .with_size_velocity(profile.growth * scale)
         .with_color(profile.color)
         .with_alpha(profile.alpha)
@@ -749,6 +760,7 @@ mod tests {
         assert_eq!(AiMuzzle::for_projectile(-1600, lookup), None);
         assert_eq!(AiMuzzle::Slug.authored_flash(), Some("slug flash"));
         assert_eq!(AiMuzzle::Midwife.authored_flash(), None);
+        assert_eq!(AiMuzzle::DroidLaser.authored_flash(), None);
         // The midwife's exhaust is green.
         let green = BarrelSmokeProfile::for_weapon(AiMuzzle::Midwife.smoke()).color;
         assert!(green.y > green.x && green.y > green.z, "{green:?}");

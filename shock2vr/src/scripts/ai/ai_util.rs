@@ -624,7 +624,7 @@ pub fn fire_ranged_projectile(
         // muzzle short of the target instead.
         let joint_position = transform.transform_point(position);
         let distance_to_target = (target_position - joint_position.to_vec()).magnitude();
-        let muzzle_offset = muzzle_offset_for_distance(distance_to_target);
+        let muzzle_offset = muzzle_offset_for_distance(MUZZLE_CLEARANCE, distance_to_target);
         let muzzle_transform =
             transform * Matrix4::from_translation((position + forward * muzzle_offset).to_vec());
         let muzzle_position = muzzle_transform.transform_point(point3(0.0, 0.0, 0.0));
@@ -640,12 +640,6 @@ pub fn fire_ranged_projectile(
         }
         let projectile_transform =
             projectile_transform_aimed_at_player(world, muzzle_position, muzzle_transform);
-        let launch = (
-            joint_position,
-            transform.transform_vector(forward).normalize(),
-            distance_to_target,
-        );
-
         Effect::combine(vec![
             Effect::CreateEntity {
                 template_id: projectile_id,
@@ -663,7 +657,9 @@ pub fn fire_ranged_projectile(
                 world,
                 entity_id,
                 projectile_id,
-                launch,
+                joint_position,
+                transform.transform_vector(forward).normalize(),
+                distance_to_target,
                 projectile_transform,
             ),
         ])
@@ -672,6 +668,11 @@ pub fn fire_ranged_projectile(
     }
 }
 
+/// `Slug Flash` (flash02) is centred on its origin. A turret buries its rear
+/// half in the barrel; over a hybrid's thin shotgun it would show, so the
+/// flash starts at the muzzle instead.
+const SLUG_FLASH_HALF_LENGTH: f32 = 0.706;
+
 /// The visible report of a creature's shot: at the weapon's muzzle, found
 /// from the authored launch point and the shooter's facing, oriented along
 /// the shot (`aim`, +Z forward). Unlisted rounds keep their bare launch.
@@ -679,7 +680,9 @@ fn muzzle_flash_and_smoke(
     world: &World,
     shooter: EntityId,
     projectile_template_id: i32,
-    (launch_point, facing, distance_to_target): (Point3<f32>, Vector3<f32>, f32),
+    launch_point: Point3<f32>,
+    facing: Vector3<f32>,
+    distance_to_target: f32,
     aim: Matrix4<f32>,
 ) -> Effect {
     let Ok(metadata) = world.borrow::<UniqueView<GlobalEntityMetadata>>() else {
@@ -690,14 +693,15 @@ fn muzzle_flash_and_smoke(
         return Effect::NoEffect;
     };
     let mut frame = aim;
-    frame.w =
-        (launch_point + facing * kind.barrel_reach().min(distance_to_target)).to_homogeneous();
+    frame.w = (launch_point
+        + facing * muzzle_offset_for_distance(kind.barrel_reach(), distance_to_target))
+    .to_homogeneous();
     let flash = kind
         .authored_flash()
         .and_then(lookup)
         .map(|template_id| Effect::CreateEntity {
             template_id,
-            position: point3(0.0, 0.0, 0.0),
+            position: point3(0.0, 0.0, SLUG_FLASH_HALF_LENGTH),
             // Flash meshes point down -X; turn that onto the shot.
             orientation: Quaternion::from_angle_y(Deg(90.0)),
             root_transform: frame,
@@ -798,11 +802,12 @@ const MUZZLE_CLEARANCE: f32 = 1.0;
 /// behind it.
 const MUZZLE_TARGET_MARGIN: f32 = 0.25;
 
-/// How far ahead of the firing joint to put the muzzle when the target is
-/// `distance_to_target` away: the full clearance normally, pulled in to stay
-/// short of the target at point-blank range, and never behind the shooter.
-fn muzzle_offset_for_distance(distance_to_target: f32) -> f32 {
-    MUZZLE_CLEARANCE.min((distance_to_target - MUZZLE_TARGET_MARGIN).max(0.0))
+/// How far ahead of the firing point to put something `reach` ahead (the
+/// shot's muzzle, the visible report) when the target is `distance_to_target`
+/// away: the full reach normally, pulled in to stay short of the target at
+/// point-blank range, and never behind the shooter.
+fn muzzle_offset_for_distance(reach: f32, distance_to_target: f32) -> f32 {
+    reach.min((distance_to_target - MUZZLE_TARGET_MARGIN).max(0.0))
 }
 
 ///
@@ -2615,7 +2620,10 @@ mod muzzle_tests {
     /// shot still leaves from in front of the shooter's own body.
     #[test]
     fn a_distant_target_gets_the_full_muzzle_clearance() {
-        assert_eq!(muzzle_offset_for_distance(10.0), MUZZLE_CLEARANCE);
+        assert_eq!(
+            muzzle_offset_for_distance(MUZZLE_CLEARANCE, 10.0),
+            MUZZLE_CLEARANCE
+        );
     }
 
     /// A melee-less gun AI fires at contact range. The muzzle must stay
@@ -2624,7 +2632,7 @@ mod muzzle_tests {
     #[test]
     fn a_point_blank_target_pulls_the_muzzle_in_short_of_it() {
         let distance = 0.8;
-        let offset = muzzle_offset_for_distance(distance);
+        let offset = muzzle_offset_for_distance(MUZZLE_CLEARANCE, distance);
         assert!(
             offset < distance,
             "muzzle {offset} reached past target at {distance}"
@@ -2636,8 +2644,8 @@ mod muzzle_tests {
     /// than reversing behind the shooter.
     #[test]
     fn a_target_inside_the_margin_never_puts_the_muzzle_behind_the_shooter() {
-        assert_eq!(muzzle_offset_for_distance(0.1), 0.0);
-        assert_eq!(muzzle_offset_for_distance(0.0), 0.0);
+        assert_eq!(muzzle_offset_for_distance(MUZZLE_CLEARANCE, 0.1), 0.0);
+        assert_eq!(muzzle_offset_for_distance(MUZZLE_CLEARANCE, 0.0), 0.0);
     }
 }
 

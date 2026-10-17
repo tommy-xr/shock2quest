@@ -3268,7 +3268,8 @@ pub struct MissionCore {
     immolate_flames: Option<ParticleSystem>,
     water_feedback: crate::swimming::WaterFeedback,
     held_recovery_particles: Vec<ParticleSystem>,
-    barrel_smoke: Vec<(EntityId, ParticleSystem)>,
+    /// (gun, sprite, particles): smoke, plus creature guns' brief flash sprites.
+    barrel_smoke: Vec<(EntityId, &'static str, ParticleSystem)>,
     #[allow(dead_code)]
     pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub template_name_to_template_id: HashMap<String, EntityMetadata>,
@@ -5888,7 +5889,7 @@ impl MissionCore {
             particles.update(tick.elapsed, Matrix4::identity());
             !particles.is_done()
         });
-        self.barrel_smoke.retain_mut(|(_, particles)| {
+        self.barrel_smoke.retain_mut(|(.., particles)| {
             particles.update(time.elapsed, Matrix4::identity());
             !particles.is_done()
         });
@@ -10431,14 +10432,14 @@ impl MissionCore {
         }
     }
 
-    /// Samples every projectile created in slow time into its trail, except
-    /// cosmetic launches (ejected brass, muzzle effects).
     /// Bound overlapping wisps per gun and across the mission.
     fn barrel_smoke_has_room(&self, gun: EntityId) -> bool {
         self.barrel_smoke.len() < 24
-            && self.barrel_smoke.iter().filter(|(g, _)| *g == gun).count() < 3
+            && self.barrel_smoke.iter().filter(|(g, ..)| *g == gun).count() < 3
     }
 
+    /// Samples every projectile created in slow time into its trail, except
+    /// cosmetic launches (ejected brass, muzzle effects).
     fn update_projectile_trails(&mut self, world_dt: f32) {
         let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let launched = self
@@ -14548,12 +14549,15 @@ impl MissionCore {
                     kind,
                     frame,
                 } => {
-                    if self.barrel_smoke_has_room(shooter) {
-                        for particles in
-                            crate::particle_effects::ai_muzzle_particles(kind, frame, asset_cache)
-                        {
-                            self.barrel_smoke.push((shooter, particles));
-                        }
+                    let (smoke, flash) =
+                        crate::particle_effects::ai_muzzle_particles(kind, frame, asset_cache);
+                    // Only the lingering smoke is budgeted; a flash lives a
+                    // tenth of a second, so every shot gets one.
+                    if let Some(smoke) = smoke.filter(|_| self.barrel_smoke_has_room(shooter)) {
+                        self.barrel_smoke.push((shooter, "NDsmk", smoke));
+                    }
+                    if let Some(flash) = flash {
+                        self.barrel_smoke.push((shooter, "NDsbll", flash));
                     }
                 }
                 Effect::WeaponRecoil { entity_id } => {
@@ -14564,7 +14568,7 @@ impl MissionCore {
                             entity_id,
                             asset_cache,
                         ) {
-                            self.barrel_smoke.push((entity_id, smoke));
+                            self.barrel_smoke.push((entity_id, "NDsmk", smoke));
                         }
                     }
                     self.flat_weapon_animation.fired(&self.world, entity_id);
@@ -18159,11 +18163,18 @@ impl MissionCore {
         }
         if options.render_particles {
             scene.extend(self.water_feedback.render());
-            for (weapon, particles) in &self.barrel_smoke {
+            for (weapon, sprite, particles) in &self.barrel_smoke {
                 let tag = Rc::new(engine::scene::SceneObjectDebugTag {
                     entity_id: Some(weapon.inner()),
-                    name: Some("Barrel smoke".to_owned()),
-                    model: Some("NDsmk".to_owned()),
+                    name: Some(
+                        if *sprite == "NDsmk" {
+                            "Barrel smoke"
+                        } else {
+                            "Muzzle flash"
+                        }
+                        .to_owned(),
+                    ),
+                    model: Some((*sprite).to_owned()),
                     source: Some("barrel_smoke".to_owned()),
                 });
                 for mut object in particles.render() {

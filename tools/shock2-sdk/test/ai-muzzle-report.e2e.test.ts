@@ -16,6 +16,10 @@ const ROUNDS: Record<string, string> = {
   Security: "Droid Laser Bolt",
 };
 
+function distance(a: [number, number, number], b: [number, number, number]): number {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
 for (const [shooterName, roundName] of Object.entries(ROUNDS)) {
   test(
     `${shooterName} fires with a muzzle flash and barrel smoke`,
@@ -34,45 +38,43 @@ for (const [shooterName, roundName] of Object.entries(ROUNDS)) {
       const rounds = new Set(all.filter((e) => e.name === roundName).map((e) => e.id));
 
       let firedAt: number | undefined;
-      let smoke = 0;
+      let roundToShooter: number | undefined;
       let slugFlashToShooter: number | undefined;
+      const sprites = new Set<string>();
       for (let frame = 0; frame < 600; frame++) {
         await game.step({ frames: 1 });
         const entities = (await game.entities.list({ limit: 400 })).entities;
-        if (
-          firedAt === undefined &&
-          entities.some((e) => e.name === roundName && !rounds.has(e.id))
-        ) {
+        const at = (await game.entities.detail(shooter.id)).position;
+        const round = entities.find((e) => e.name === roundName && !rounds.has(e.id));
+        if (firedAt === undefined && round) {
           firedAt = frame;
+          roundToShooter = distance(round.position, at);
         }
         const flash = entities.find((e) => e.name === "Slug Flash");
         if (flash && slugFlashToShooter === undefined) {
-          const at = (await game.entities.detail(shooter.id)).position;
-          slugFlashToShooter = Math.hypot(
-            flash.position[0] - at[0],
-            flash.position[1] - at[1],
-            flash.position[2] - at[2],
-          );
+          slugFlashToShooter = distance(flash.position, at);
         }
-        smoke = Math.max(
-          smoke,
-          (await game.scene.fromSource("barrel_smoke")).filter(
-            (o) => o.entity_id === shooter.id,
-          ).length,
-        );
+        for (const object of await game.scene.fromSource("barrel_smoke")) {
+          if (object.entity_id === shooter.id && object.model) sprites.add(object.model);
+        }
         if (firedAt !== undefined && frame > firedAt + 2) break;
       }
 
       assert.ok(firedAt !== undefined, `${shooterName} must fire within the window`);
-      assert.ok(smoke > 0, `${shooterName}'s shot must leave barrel smoke tagged to it`);
+      assert.ok(sprites.has("NDsmk"), `${shooterName}'s shot must leave barrel smoke`);
       if (shooterName === "OG-Shotgun") {
-        // At the hybrid's gun, short of where its round spawns.
+        // Ahead of the body at the gun, and short of where the round spawns
+        // (a clearance unit beyond the launch joint).
         assert.ok(
-          slugFlashToShooter !== undefined && slugFlashToShooter < 3.0,
-          `the hybrid's shot must spawn the authored Slug Flash at its gun (${slugFlashToShooter})`,
+          slugFlashToShooter !== undefined &&
+            slugFlashToShooter > 1.5 &&
+            slugFlashToShooter < roundToShooter!,
+          `the authored Slug Flash must sit at the hybrid's gun (flash ${slugFlashToShooter}, round ${roundToShooter})`,
         );
+        assert.ok(!sprites.has("NDsbll"), "an authored flash replaces the sprite flash");
       } else {
         assert.equal(slugFlashToShooter, undefined, "only the slug round has an authored flash");
+        assert.ok(sprites.has("NDsbll"), `${shooterName}'s shot must show a sprite flash`);
       }
     },
   );
