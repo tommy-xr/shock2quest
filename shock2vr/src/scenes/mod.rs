@@ -25,6 +25,7 @@ pub mod debrief;
 pub mod debug_annelid;
 pub mod debug_camera;
 pub mod debug_common;
+pub mod debug_gamepig;
 pub mod debug_gloves;
 pub mod debug_hand_poses;
 pub mod debug_hitbox;
@@ -194,6 +195,7 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     ),
     ("debug_annelid", create_debug_annelid_scene),
     ("debug_slot", debug_slot::create_debug_slot_scene),
+    ("debug_gamepig", debug_gamepig::create_debug_gamepig_scene),
     ("debug_camera", DebugCameraScene::new),
     ("debug_protocol_droid", DebugProtocolDroidScene::new),
     ("debug_turret", DebugTurretScene::new),
