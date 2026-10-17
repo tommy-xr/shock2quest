@@ -188,8 +188,7 @@ impl Uniforms {
                     ramp.bind1(context);
                     gl::Uniform1f(self.max_distance, *distance);
                 }
-                let eye = view.invert().unwrap_or_else(Matrix4::identity).w.truncate();
-                gl::Uniform3fv(self.eye, 1, eye.as_ptr());
+                crate::multiview::bind_eye(self.eye, view, context);
                 gl::Uniform1i(self.cube_enabled, i32::from(p.cube.is_some()));
                 if let Some(cube) = &p.cube {
                     cube.bind_to(7);

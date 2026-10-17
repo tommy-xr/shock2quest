@@ -380,12 +380,7 @@ impl SkinnedMaterial {
                 .unwrap_or(Vector3::new(-1.0, -1.0, -1.0));
             gl::Uniform3fv(uniforms.silhouette_color_loc, 1, color.as_ptr());
             if self.silhouette_color.is_some() {
-                let eye = view_matrix
-                    .invert()
-                    .unwrap_or_else(Matrix4::identity)
-                    .w
-                    .truncate();
-                gl::Uniform3fv(uniforms.eye_position_loc, 1, eye.as_ptr());
+                crate::multiview::bind_eye(uniforms.eye_position_loc, view_matrix, render_context);
             }
 
             // Set material properties

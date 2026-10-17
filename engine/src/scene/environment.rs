@@ -129,7 +129,6 @@ impl Material for EnvironmentPreviewMaterial {
         _lights: &crate::scene::light::LightArray,
     ) -> bool {
         let (program, uniforms) = SHADER_PROGRAM.get().expect("shader not compiled");
-        let eye = crate::scene::material::eye_position(view_matrix);
         unsafe {
             gl::UseProgram(program.gl_id);
             gl::UniformMatrix4fv(uniforms.world, 1, gl::FALSE, world_matrix.as_ptr());
@@ -141,7 +140,7 @@ impl Material for EnvironmentPreviewMaterial {
                 render_context,
                 true,
             );
-            gl::Uniform3fv(uniforms.eye, 1, eye.as_ptr());
+            crate::multiview::bind_eye(uniforms.eye, view_matrix, render_context);
             gl::Uniform1i(uniforms.environment, ENVIRONMENT_UNIT as i32);
             self.environment.bind_to(ENVIRONMENT_UNIT);
         }

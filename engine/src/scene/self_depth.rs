@@ -94,9 +94,12 @@ impl Uniforms {
             gl::Uniform1i(self.enabled, i32::from(mask.is_some()));
             // With no mask, point at diffuse unit 0, never at the texture being
             // rendered into. Even an untaken shader branch must avoid feedback.
+            // Under multiview the sampler is a sampler2DArray, and two sampler
+            // types on one unit fail every draw, so it keeps its own unit; the
+            // capture pass unbinds that unit, which avoids feedback instead.
             gl::Uniform1i(
                 self.texture,
-                if mask.is_some() {
+                if mask.is_some() || crate::multiview::is_enabled() {
                     TEXTURE_UNIT as i32
                 } else {
                     0

@@ -2,7 +2,7 @@
 //! submitted once and its vertex shader run per eye layer. Process-wide,
 //! because shader programs are compiled once and shared: enable it before the
 //! first draw. Off (the default) leaves shaders and uniforms exactly as before.
-use cgmath::{Matrix, Matrix4, SquareMatrix, vec4};
+use cgmath::{Array, Matrix, Matrix4, SquareMatrix, vec4};
 use gl::types::{GLenum, GLint, GLsizei, GLuint};
 use std::sync::OnceLock;
 
@@ -143,32 +143,33 @@ pub(crate) fn shader_header(vertex: bool) -> &'static str {
     }
 }
 
-/// Turn a shader's `uniform <precision> mat4 view;` / `projection;` into
-/// per-eye arrays (both stages: the vignette's fragment shader reads
-/// `projection` too, and linked declarations must match) indexed by `gl_ViewID_OVR`, leaving the body and the
-/// uniform's location name (`view` = `view[0]`) unchanged. A macro is not
-/// re-expanded inside its own replacement, so `view` maps to `view[...]` once.
+/// Uniforms that differ per eye: the camera matrices, and the eye position
+/// fragment lighting reads (`eye` is the environment preview's).
+const PER_EYE: [(&str, &str); 7] = [
+    ("mat4", "view"),
+    ("mat4", "projection"),
+    ("vec3", "shineEye"),
+    ("vec3", "incidenceEye"),
+    ("vec3", "materialPassEye"),
+    ("vec3", "eyePosition"),
+    ("vec3", "eye"),
+];
+
+/// Turn each `PER_EYE` declaration (`uniform [precision] type name;`) into a
+/// per-eye array indexed by `gl_ViewID_OVR`, in both stages (the vignette's
+/// fragment shader reads `projection`, and linked declarations must match).
+/// Bodies and uniform location names (`view` = `view[0]`) stay unchanged: a
+/// macro is not re-expanded inside its own replacement, so `view` maps to
+/// `view[gl_ViewID_OVR]` once.
 pub(crate) fn rewrite_view_uniforms(shader: &str) -> String {
-    let mut out = String::with_capacity(shader.len() + 128);
+    let mut out = String::with_capacity(shader.len() + 256);
     for line in shader.lines() {
         let decl = line.trim();
-        let name = ["view", "projection"].into_iter().find(|name| {
-            decl.strip_prefix("uniform ")
-                .and_then(|rest| rest.strip_suffix(';'))
-                .and_then(|rest| rest.trim_end().strip_suffix(name))
-                .is_some_and(|ty| matches!(ty.trim(), "mat4" | "highp mat4" | "mediump mat4"))
-        });
-        match name {
-            Some(name) => {
-                let ty = decl
-                    .trim_end_matches(';')
-                    .trim_end()
-                    .strip_suffix(name)
-                    .unwrap();
-                out.push_str(&format!(
-                    "{ty}{name}[{VIEW_COUNT}];\n#define {name} {name}[gl_ViewID_OVR]\n"
-                ));
-            }
+        match per_eye_name(decl) {
+            Some(name) => out.push_str(&format!(
+                "{}[{VIEW_COUNT}];\n#define {name} {name}[gl_ViewID_OVR]\n",
+                decl.trim_end_matches(';').trim_end()
+            )),
             None => {
                 out.push_str(line);
                 out.push('\n');
@@ -176,6 +177,39 @@ pub(crate) fn rewrite_view_uniforms(shader: &str) -> String {
         }
     }
     out
+}
+
+fn per_eye_name(decl: &str) -> Option<&str> {
+    let tokens: Vec<&str> = decl.strip_suffix(';')?.split_whitespace().collect();
+    let (ty, name) = match tokens.as_slice() {
+        ["uniform", ty, name] | ["uniform", "highp" | "mediump" | "lowp", ty, name] => (*ty, *name),
+        _ => return None,
+    };
+    PER_EYE
+        .iter()
+        .any(|&(t, n)| t == ty && n == name)
+        .then_some(name)
+}
+
+/// Upload the eye position derived from `view` (each eye's under multiview).
+///
+/// # Safety
+/// Requires a current GL context with the draw's program in use.
+pub(crate) unsafe fn bind_eye(
+    loc: GLint,
+    view: &Matrix4<f32>,
+    context: &crate::EngineRenderContext,
+) {
+    let eye = |v: &Matrix4<f32>| crate::scene::material::eye_position(v);
+    unsafe {
+        match context.multiview {
+            None => gl::Uniform3fv(loc, 1, eye(view).as_ptr()),
+            Some(views) => {
+                let eyes = views.eye_from_view.map(|e| eye(&(e * view)));
+                gl::Uniform3fv(loc, VIEW_COUNT as GLsizei, eyes.as_ptr().cast());
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -193,6 +227,18 @@ mod tests {
             "uniform mat4 projection[2];\n#define projection projection[gl_ViewID_OVR]\n"
         ));
         assert!(out.contains("gl_Position = projection * view * world[3];"));
+    }
+
+    #[test]
+    fn rewrites_fragment_eye_uniforms_but_not_lookalikes() {
+        let out = rewrite_view_uniforms(
+            "uniform vec3 shineEye;\nuniform vec3 shineTint;\nuniform float eye;",
+        );
+        assert!(
+            out.contains("uniform vec3 shineEye[2];\n#define shineEye shineEye[gl_ViewID_OVR]\n")
+        );
+        assert!(out.contains("uniform vec3 shineTint;\n"));
+        assert!(out.contains("uniform float eye;\n"));
     }
 
     #[test]
