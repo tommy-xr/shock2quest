@@ -1543,13 +1543,13 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        let supplies = "Supplies on BOTH floors! Search crates; security crates need hacking. Unclaimed drops expire in 90 seconds.";
-        // A run opens with the first supply drop as its only message.
+        let none = Vec::<String>::new();
+        // Opening a run posts nothing.
         assert_eq!(
             hud_text(tick(&mut HordeDirector::default(), &world, 0.1)),
-            [supplies]
+            none
         );
-        assert_eq!(hud_text(director.start_wave(&world)), Vec::<String>::new());
+        assert_eq!(hud_text(director.start_wave(&world)), none);
         assert_eq!(
             hud_text(tick(&mut director, &world, 6.0)),
             Vec::<String>::new()
@@ -1558,8 +1558,10 @@ mod tests {
             hud_text(director.clear_wave(&world)),
             ["Wave 3 cleared! +45 nanites, +14 cyber modules"]
         );
-        // The rest opens with the supply drop, which the screens do not show.
-        assert_eq!(hud_text(tick(&mut director, &world, 6.0)), [supplies]);
+        // Neither the rest's supply drop nor its expiry posts a message.
+        assert_eq!(hud_text(tick(&mut director, &world, 6.0)), none);
+        assert_eq!(hud_text(tick(&mut director, &world, 90.0)), none);
+        assert_eq!(director.phase, Phase::Rest);
         director.phase = Phase::Failed;
         assert_eq!(
             hud_text(director.status()),
