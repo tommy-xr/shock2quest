@@ -71,8 +71,10 @@ const CLOSE_BUTTON_MARGIN: Vector2<f32> = Vector2::new(25.0, 8.0);
 /// `CURSOR.PCX` native size.
 const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
 
-/// The colour of 25AE's `IFBTNx2` rollover frames.
-const HOVER_OUTLINE: [u8; 3] = [0, 255, 255];
+/// Hover outline colour and opacity. 25AE's `IFBTNx2` rollover frames are
+/// opaque `#00FFFF`; at full strength that reads as a neon border over the
+/// interface art, so it is drawn dimmer. Tune here.
+const HOVER_OUTLINE: ([u8; 3], f32) = ([0, 255, 255], 0.55);
 
 /// The HUD's data font, as the rest of this canvas uses.
 const NAME_STRIP_FONT: &str = "mainfont.fon";
@@ -1081,8 +1083,8 @@ impl FlatUiHost {
     }
 
     /// Every interface button's one hover cue: 25AE's rollover art for the
-    /// iface buttons (`IFBTNx2`) is exactly a 1 px cyan frame on the button's
-    /// rect, so drawing that frame gives every button the same treatment.
+    /// iface buttons (`IFBTNx2`) is a 1 px cyan frame on the button's rect,
+    /// so drawing that frame gives every button the same treatment.
     /// Retail's `*1` frames (`ML1`, `CLOSEON`, ...) are pressed art, not hover.
     /// Both VR rays hit-test and click, so each one's button is outlined.
     fn emit_hover_outline(&self, canvas: &mut UiCanvas) {
@@ -1102,7 +1104,7 @@ impl FlatUiHost {
                 Rect::new(r.x, r.y, 1.0, r.h),
                 Rect::new(r.x + r.w - 1.0, r.y, 1.0, r.h),
             ] {
-                canvas.fill(edge, HOVER_OUTLINE);
+                canvas.fill(edge, HOVER_OUTLINE.0).opacity(HOVER_OUTLINE.1);
             }
         }
     }
@@ -4254,7 +4256,7 @@ mod tests {
         let edges: Vec<Rect> = canvas
             .elements()
             .iter()
-            .filter(|e| matches!(e, UiElement::Fill { color, .. } if *color == HOVER_OUTLINE))
+            .filter(|e| matches!(e, UiElement::Fill { color, .. } if *color == HOVER_OUTLINE.0))
             .map(UiElement::rect)
             .collect();
         let first = *edges.first()?;
@@ -4328,7 +4330,7 @@ mod tests {
         let fills = canvas
             .elements()
             .iter()
-            .filter(|e| matches!(e, UiElement::Fill { color, .. } if *color == HOVER_OUTLINE))
+            .filter(|e| matches!(e, UiElement::Fill { color, .. } if *color == HOVER_OUTLINE.0))
             .count();
         assert_eq!(fills, 8, "one 4-edge outline per hovered button");
     }
