@@ -15,9 +15,11 @@ use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 use crate::{
     creature,
     mission::{
-        GlobalPathfinding, PlayerInfo, entity_creator::CreateEntityOptions,
-        mission_core::GlobalTemplateClassTags,
+        GlobalPathfinding, PlayerInfo,
+        entity_creator::CreateEntityOptions,
+        mission_core::{GlobalEntityMetadata, GlobalTemplateClassTags},
     },
+    particle_effects::AiMuzzle,
     pathfinding::MovementHold,
     physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropProxyEntity, RuntimePropTransform},
@@ -638,6 +640,11 @@ pub fn fire_ranged_projectile(
         }
         let projectile_transform =
             projectile_transform_aimed_at_player(world, muzzle_position, muzzle_transform);
+        let launch = (
+            joint_position,
+            transform.transform_vector(forward).normalize(),
+            distance_to_target,
+        );
 
         Effect::combine(vec![
             Effect::CreateEntity {
@@ -652,10 +659,59 @@ pub fn fire_ranged_projectile(
                 },
             },
             projectile_launch_sound(world, projectile_id, muzzle_position.to_vec()),
+            muzzle_flash_and_smoke(
+                world,
+                entity_id,
+                projectile_id,
+                launch,
+                projectile_transform,
+            ),
         ])
     } else {
         Effect::NoEffect
     }
+}
+
+/// The visible report of a creature's shot: at the weapon's muzzle, found
+/// from the authored launch point and the shooter's facing, oriented along
+/// the shot (`aim`, +Z forward). Unlisted rounds keep their bare launch.
+fn muzzle_flash_and_smoke(
+    world: &World,
+    shooter: EntityId,
+    projectile_template_id: i32,
+    (launch_point, facing, distance_to_target): (Point3<f32>, Vector3<f32>, f32),
+    aim: Matrix4<f32>,
+) -> Effect {
+    let Ok(metadata) = world.borrow::<UniqueView<GlobalEntityMetadata>>() else {
+        return Effect::NoEffect;
+    };
+    let lookup = |name: &str| metadata.0.get(name).map(|m| m.template_id);
+    let Some(kind) = AiMuzzle::for_projectile(projectile_template_id, lookup) else {
+        return Effect::NoEffect;
+    };
+    let mut frame = aim;
+    frame.w =
+        (launch_point + facing * kind.barrel_reach().min(distance_to_target)).to_homogeneous();
+    let flash = kind
+        .authored_flash()
+        .and_then(lookup)
+        .map(|template_id| Effect::CreateEntity {
+            template_id,
+            position: point3(0.0, 0.0, 0.0),
+            // Flash meshes point down -X; turn that onto the shot.
+            orientation: Quaternion::from_angle_y(Deg(90.0)),
+            root_transform: frame,
+            options: CreateEntityOptions::default(),
+        })
+        .unwrap_or(Effect::NoEffect);
+    Effect::combine(vec![
+        flash,
+        Effect::AiMuzzleParticles {
+            shooter,
+            kind,
+            frame,
+        },
+    ])
 }
 
 /// The report of an AI's weapon going off.
@@ -2440,6 +2496,119 @@ mod muzzle_tests {
             tags.contains(&("enemyammotype".to_owned(), "ogslug".to_owned())),
             "{tags:?}"
         );
+    }
+
+    /// A listed round reports at the weapon's muzzle: a launch joint is on the
+    /// weapon, a default launch offset is carried out by the round's barrel
+    /// reach. Only the slug has an authored flash entity.
+    #[test]
+    fn firing_reports_a_flash_and_smoke_at_the_weapon_muzzle() {
+        use crate::mission::mission_core::EntityMetadata;
+        let mut world = World::new();
+        let player = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 2.0, 10.0),
+            rotation: Quaternion::from_angle_y(Deg(0.0)),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: player,
+        });
+        let names = [
+            ("grunt shotgun slug", -676),
+            ("slug flash", -371),
+            ("droid laser bolt", -1501),
+        ];
+        world.add_unique(GlobalEntityMetadata(
+            names
+                .into_iter()
+                .map(|(name, template_id)| {
+                    (
+                        name.to_owned(),
+                        EntityMetadata {
+                            template_id,
+                            obj_icon: None,
+                            obj_short_name: None,
+                            obj_name: None,
+                        },
+                    )
+                })
+                .collect(),
+        ));
+        let mut pose = [Matrix4::identity(); 40];
+        pose[17] = Matrix4::from_translation(vec3(0.5, 0.5, 0.0));
+        let shooter = world.add_entity((
+            PropCreature(0),
+            PropPosition {
+                position: vec3(0.0, 2.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::from_angle_y(Deg(0.0)),
+            },
+            RuntimePropTransform(Matrix4::from_translation(vec3(0.0, 2.0, 0.0))),
+            RuntimePropJointTransforms(pose),
+            PropAIRangedShoot {
+                launch_offset: vec3(0.0, 0.5, 0.0),
+            },
+        ));
+        for (projectile, joint, expected) in [
+            (-676, 12, Some((AiMuzzle::Slug, point3(0.5, 2.5, 0.0)))),
+            (
+                -1501,
+                0,
+                Some((AiMuzzle::DroidLaser, point3(0.0, 2.5, 2.0))),
+            ),
+            (-4629, 0, None),
+        ] {
+            world.add_component(
+                shooter,
+                Links {
+                    to_links: vec![ToLink {
+                        to_template_id: projectile,
+                        to_entity_id: None,
+                        link: Link::AIProjectile(AIProjectileOptions {
+                            targeting_method: AITargetMethod::StraightLine,
+                            delay: 0.0,
+                            should_lead_target: false,
+                            ammo: 0,
+                            accuracy: 0,
+                            select_time: 0.0,
+                            joint,
+                            vhot: 0,
+                        }),
+                    }],
+                },
+            );
+            let effects = Effect::flatten(vec![fire_ranged_projectile(
+                &world,
+                &PhysicsWorld::new(),
+                shooter,
+            )]);
+            let particles = effects.iter().find_map(|effect| match effect {
+                Effect::AiMuzzleParticles {
+                    shooter: from,
+                    kind,
+                    frame,
+                } if *from == shooter => Some((*kind, Point3::from_homogeneous(frame.w))),
+                _ => None,
+            });
+            let flash = effects.iter().find_map(|effect| match effect {
+                Effect::CreateEntity {
+                    template_id: -371,
+                    root_transform,
+                    ..
+                } => Some(Point3::from_homogeneous(root_transform.w)),
+                _ => None,
+            });
+            match expected {
+                Some((kind, at)) => {
+                    let (got, origin) = particles.expect("listed round reports");
+                    assert_eq!(got, kind);
+                    assert!((origin - at).magnitude() < 1.0e-5, "{kind:?}: {origin:?}");
+                    assert_eq!(flash, kind.authored_flash().map(|_| origin));
+                }
+                None => assert!(particles.is_none() && flash.is_none()),
+            }
+        }
     }
 
     /// At ordinary firing range the muzzle keeps its full clearance, so the

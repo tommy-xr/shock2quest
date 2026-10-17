@@ -10433,6 +10433,12 @@ impl MissionCore {
 
     /// Samples every projectile created in slow time into its trail, except
     /// cosmetic launches (ejected brass, muzzle effects).
+    /// Bound overlapping wisps per gun and across the mission.
+    fn barrel_smoke_has_room(&self, gun: EntityId) -> bool {
+        self.barrel_smoke.len() < 24
+            && self.barrel_smoke.iter().filter(|(g, _)| *g == gun).count() < 3
+    }
+
     fn update_projectile_trails(&mut self, world_dt: f32) {
         let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let launched = self
@@ -14537,17 +14543,22 @@ impl MissionCore {
                     }
                     drop(quests);
                 }
+                Effect::AiMuzzleParticles {
+                    shooter,
+                    kind,
+                    frame,
+                } => {
+                    if self.barrel_smoke_has_room(shooter) {
+                        for particles in
+                            crate::particle_effects::ai_muzzle_particles(kind, frame, asset_cache)
+                        {
+                            self.barrel_smoke.push((shooter, particles));
+                        }
+                    }
+                }
                 Effect::WeaponRecoil { entity_id } => {
-                    // Bound overlapping wisps per gun and across the mission.
                     // Only accepted shots reach this effect (never dry fire).
-                    if self.barrel_smoke.len() < 24
-                        && self
-                            .barrel_smoke
-                            .iter()
-                            .filter(|(gun, _)| *gun == entity_id)
-                            .count()
-                            < 3
-                    {
+                    if self.barrel_smoke_has_room(entity_id) {
                         if let Some(smoke) = crate::particle_effects::barrel_smoke(
                             &self.world,
                             entity_id,
