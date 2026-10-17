@@ -51,11 +51,47 @@ if a[0] == 'push':
 if a[0] == 'tcpip':
     print('restarting in TCP mode port: ' + a[1]); sys.exit(0)
 if a[0] == 'install':
-    assert a[1] == '-r' and Path(a[2]).is_file()
+    assert a[1:3] == ['-r', '-g'] and Path(a[3]).is_file()
+    key = root / 'installed-key'
+    if key.exists() and key.read_text() != Path(a[3]).read_text():
+        print('adb: failed to install: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]', file=sys.stderr)
+        sys.exit(1)
+    key.write_text(Path(a[3]).read_text())
     print('Success'); sys.exit(0)
+if a == ['uninstall', 'com.tommybuilds.shock2quest']:
+    (root / 'installed-key').unlink(); print('Success'); sys.exit(0)
 raise RuntimeError(a)
 "#).unwrap();
         fs::set_permissions(adb, fs::Permissions::from_mode(0o755)).unwrap();
+        // A PR whose head commit has one Build Android run (DVR_TEST_RUN_STATUS).
+        let gh = dir.path().join("gh");
+        fs::write(
+            &gh,
+            r#"#!/usr/bin/env python3
+import os, sys, json
+from pathlib import Path
+root = Path(os.environ['DVR_TEST_ROOT'])
+a = sys.argv[1:]
+with (root / 'calls').open('a') as f: f.write(json.dumps(['gh'] + a) + '\n')
+sha = '0123456789abcdef0123456789abcdef01234567'
+if a[:3] == ['pr', 'view', '7']:
+    print(json.dumps({'headRefOid': sha, 'headRefName': 'feat/x'}))
+elif a[:2] == ['run', 'list']:
+    assert a[a.index('--commit') + 1] == sha
+    status = os.environ.get('DVR_TEST_RUN_STATUS', 'success')
+    done = status in ('success', 'failure')
+    print(json.dumps([{'databaseId': 42, 'status': 'completed' if done else status,
+                       'conclusion': status if done else '', 'url': 'https://runs/42'}]))
+elif a[:3] == ['run', 'download', '42']:
+    assert a[a.index('-n') + 1] == 'shock2quest-apk-' + sha
+    out = Path(a[a.index('-D') + 1]); out.mkdir(parents=True)
+    (out / 'shock2quest.apk').write_text('CI key')
+else:
+    raise RuntimeError(a)
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(gh, fs::Permissions::from_mode(0o755)).unwrap();
         // Intercept the Android build shell: no SDK, signing key or headset needed.
         for name in ["bash", "cargo"] {
             let path = dir.path().join(name);
@@ -84,6 +120,7 @@ else:
             .env_remove("ANDROID_SERIAL")
             .env_remove("DARK_ASSET_PATH")
             .env("DVR_TEST_ROOT", self.dir.path())
+            .env("TMPDIR", self.dir.path())
             .env(
                 "PATH",
                 format!(
@@ -376,5 +413,44 @@ fn wifi_fails_when_connected_transport_is_offline() {
     assert!(!out.status.success());
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("could not connect to 192.168.1.42:5555")
+    );
+}
+#[test]
+fn pr_refuses_unfinished_builds_before_touching_the_device() {
+    for status in ["in_progress", "failure"] {
+        let h = Harness::new();
+        let out = h
+            .command(&["pr", "7"])
+            .env("DVR_TEST_RUN_STATUS", status)
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("https://runs/42"));
+        let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+        assert!(!calls.contains("devices"));
+    }
+}
+#[test]
+fn pr_installs_ci_apk_and_uninstalls_a_local_build_only_when_allowed() {
+    let h = Harness::new();
+    fs::write(h.dir.path().join("installed-key"), "local key").unwrap();
+    let out = h.command(&["pr", "7"]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--allow-uninstall"));
+    let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+    assert!(!calls.contains("uninstall") && !calls.contains("am start"));
+
+    // The second run reuses the cached download.
+    h.run(&["pr", "7", "--allow-uninstall", "--mission", "earth.mis"]);
+    let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+    assert_eq!(calls.matches("\"download\"").count(), 1);
+    assert!(calls.find("uninstall").unwrap() < calls.find("am start").unwrap());
+    assert_eq!(
+        fs::read_to_string(h.dir.path().join("installed-key")).unwrap(),
+        "CI key"
+    );
+    assert_eq!(
+        fs::read_to_string(h.dir.path().join("data/vr-mission.txt")).unwrap(),
+        "earth.mis\n"
     );
 }

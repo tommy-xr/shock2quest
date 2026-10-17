@@ -84,6 +84,23 @@ Locate the emitted APK from the final `cargo apk` line instead of assuming the
 path when the local Cargo target directory differs. After any Oculus Rust or
 manifest change, rebuild and reinstall.
 
+### Install a PR's CI build
+
+Build Android uploads a dev-profile APK for every push, signed with the release
+key. `cargo dvr pr` (`ss2vr pr`) downloads the one for a PR's head commit
+(cached per SHA under the OS temp dir), installs it and launches:
+
+```sh
+cargo dvr pr 1234
+cargo dvr pr 1234 --mission debug_gloves   # also sets the startup mission
+```
+
+It refuses when the head commit's build is missing, running or failed. A local
+build carries another signature, so replacing it needs an uninstall: pass
+`--allow-uninstall`, which deletes the app-private saves (game data and settings
+under `/sdcard/shock2quest` survive). CI APKs (versionCode of 0.1.0) block
+installing an older release over them until uninstalled.
+
 ## Establish an unattended XR session
 
 Quest rendering cannot run as a normal background process: the activity must

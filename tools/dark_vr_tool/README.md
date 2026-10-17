@@ -16,6 +16,8 @@ cargo dvr run                       # release build, install, launch, follow log
 cargo dvr run --no-logcat           # return after launch
 cargo dvr deploy                    # release build + install; does not launch
 cargo dvr deploy --apk /path/to/shock2quest.apk
+cargo dvr pr 1234                   # install + launch PR #1234's CI APK (gh)
+cargo dvr pr 1234 --mission debug_gloves --allow-uninstall
 cargo dvr assets copy /path/to/remaster
 cargo dvr assets recopy /path/to/remaster  # delete old assets, then copy
 cargo dvr assets delete             # removes retail assets, including custom mods

@@ -1381,12 +1381,17 @@ cargo dvr mission unset           # return to main menu on next launch
 cargo dvr build                   # release APK, no headset required
 cargo dvr run                     # release build, install and launch
 cargo dvr deploy                  # release build and install only
+cargo dvr pr 1234                 # install and launch PR #1234's CI APK (needs gh)
 cargo dvr assets copy             # copy retail assets from DARK_ASSET_PATH
 cargo dvr assets recopy           # replace retail assets; preserves saves/settings
 ```
 
 See [dark_vr_tool](tools/dark_vr_tool/README.md) for device selection, filesystem
 access, debug-port configuration, and the `ss2vr` shell alias.
+
+`pr` installs the APK CI attached to the PR's head commit. CI APKs carry the
+release signature; replacing a local build needs `--allow-uninstall`, which
+deletes its saves (see [vr-device-loop](.claude/skills/vr-device-loop/SKILL.md#install-a-prs-ci-build)).
 
 ##### Saved games
 
