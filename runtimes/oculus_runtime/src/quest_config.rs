@@ -9,13 +9,25 @@ pub const MISSION_CONFIG_PATH: &str = "/sdcard/shock2quest/vr-mission.txt";
 // The host CLI shares this module's mission parser, but does not link the game.
 #[cfg(target_os = "android")]
 pub fn fixed_simulation_enabled() -> bool {
-    let path = shock2vr::paths::data_root().join("simulation-clock.txt");
+    read_switch("simulation-clock.txt", "fixed", "legacy", "SIMULATION")
+}
+
+/// Opt-in single-pass stereo (OVR_multiview2) for A/B profiling.
+#[cfg(target_os = "android")]
+pub fn multiview_requested() -> bool {
+    read_switch("multiview.txt", "on", "off", "MULTIVIEW")
+}
+
+/// A two-state data-root file: `on` -> true; missing, `off` or invalid -> false.
+#[cfg(target_os = "android")]
+fn read_switch(file: &str, on: &str, off: &str, tag: &str) -> bool {
+    let path = shock2vr::paths::data_root().join(file);
     match fs::read_to_string(path) {
-        Ok(raw) if raw.trim() == "fixed" => true,
-        Ok(raw) if raw.trim() == "legacy" => false,
+        Ok(raw) if raw.trim() == on => true,
+        Ok(raw) if raw.trim() == off => false,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         other => {
-            println!("SHOCK2QUEST_SIMULATION_CONFIG invalid={other:?} fallback=legacy");
+            println!("SHOCK2QUEST_{tag}_CONFIG invalid={other:?} fallback={off}");
             false
         }
     }

@@ -439,6 +439,7 @@ pub fn main() {
             head_rotation: orig_camera_rot,
             projection_matrix,
             screen_size: vec2(SCR_WIDTH as f32, SCR_HEIGHT as f32),
+            multiview: None,
         };
 
         let full_scene = Scene::from_objects(scene_objects);

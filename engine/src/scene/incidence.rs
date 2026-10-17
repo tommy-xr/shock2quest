@@ -63,8 +63,7 @@ impl IncidenceUniforms {
             gl::Uniform1i(self.ramp, 1);
             if let Some(pass) = pass {
                 pass.ramp.bind1(context);
-                let eye = view.invert().unwrap_or_else(Matrix4::identity).w.truncate();
-                gl::Uniform3fv(self.eye, 1, eye.as_ptr());
+                crate::multiview::bind_eye(self.eye, view, context);
                 gl::Uniform3fv(self.tint, 1, pass.tint.as_ptr());
                 gl::Uniform1i(self.unlit, i32::from(pass.unlit));
                 gl::Uniform1i(self.geometric_normal, i32::from(pass.geometric_normal));

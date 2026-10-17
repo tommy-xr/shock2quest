@@ -199,8 +199,14 @@ impl LaserMaterial {
 
             let projection = render_context.projection_matrix;
             gl::UniformMatrix4fv(uniforms.world_loc, 1, gl::FALSE, world_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.view_loc, 1, gl::FALSE, view_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
+            crate::multiview::bind_view_projection(
+                uniforms.view_loc,
+                uniforms.projection_loc,
+                &view_matrix,
+                &projection,
+                render_context,
+                true,
+            );
             gl::Uniform3fv(uniforms.color_loc, 1, self.color.as_ptr());
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
             gl::Uniform2f(uniforms.beam_loc, self.beam[0], self.beam[1]);

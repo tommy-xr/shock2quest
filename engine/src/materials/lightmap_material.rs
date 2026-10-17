@@ -283,8 +283,14 @@ impl LightmapMaterial {
 
             // Set basic transformation matrices
             gl::UniformMatrix4fv(uniforms.world_loc, 1, gl::FALSE, world_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.view_loc, 1, gl::FALSE, view_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
+            crate::multiview::bind_view_projection(
+                uniforms.view_loc,
+                uniforms.projection_loc,
+                &view_matrix,
+                &projection,
+                render_context,
+                true,
+            );
 
             // Set texture samplers
             gl::Uniform1i(uniforms.texture1_loc, 0); // lightmap

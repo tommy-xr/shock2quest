@@ -10,6 +10,7 @@ pub mod importers;
 pub mod logging;
 pub mod macros;
 pub mod materials;
+pub mod multiview;
 pub mod platform;
 pub mod scene;
 mod shader;

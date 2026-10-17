@@ -283,6 +283,8 @@ fn main() {
         gl::GetIntegerv(gl::MINOR_VERSION, &mut minor_version);
         println!("Major: {} Minor: {}", major_version, minor_version);
     }
+    // Before any shader compiles: programs are built once for the process.
+    let multiview = enable_multiview(&egl, quest_config::multiview_requested());
 
     let system_id = xr_instance
         .system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)
@@ -1337,7 +1339,14 @@ fn main() {
                 let width = views[0].recommended_image_rect_width;
                 let height = views[0].recommended_image_rect_height;
 
-                let pair = foveation::create(&session, &views, requested_ffr)?;
+                // Multiview: one swapchain whose two layers are the eyes.
+                let (swapchain_count, layers) = if multiview {
+                    (1, engine::multiview::VIEW_COUNT as u32)
+                } else {
+                    (views.len(), 1)
+                };
+                let pair =
+                    foveation::create(&session, &views[..swapchain_count], requested_ffr, layers)?;
                 effective_ffr = pair.effective;
                 let profile = pair.profile;
                 let swapchain_handles = views
@@ -1349,62 +1358,100 @@ fn main() {
                         let buffers = images
                             .into_iter()
                             .map(|image| {
+                                let target = if multiview {
+                                    gl::TEXTURE_2D_ARRAY
+                                } else {
+                                    gl::TEXTURE_2D
+                                };
                                 unsafe {
-                                    gl::BindTexture(gl::TEXTURE_2D, image);
+                                    gl::BindTexture(target, image);
                                     gl::TexParameteri(
-                                        gl::TEXTURE_2D,
+                                        target,
                                         gl::TEXTURE_WRAP_S,
                                         gl::CLAMP_TO_EDGE.try_into().unwrap(),
                                     );
                                     gl::TexParameteri(
-                                        gl::TEXTURE_2D,
+                                        target,
                                         gl::TEXTURE_WRAP_T,
                                         gl::CLAMP_TO_EDGE.try_into().unwrap(),
                                     );
                                     gl::TexParameteri(
-                                        gl::TEXTURE_2D,
+                                        target,
                                         gl::TEXTURE_MIN_FILTER,
                                         gl::LINEAR.try_into().unwrap(),
                                     );
                                     gl::TexParameteri(
-                                        gl::TEXTURE_2D,
+                                        target,
                                         gl::TEXTURE_MAG_FILTER,
                                         gl::LINEAR.try_into().unwrap(),
                                     );
-                                    gl::BindTexture(gl::TEXTURE_2D, 0);
+                                    gl::BindTexture(target, 0);
 
-                                    // Create a depth buffer
+                                    // Create a depth buffer: a renderbuffer, or under
+                                    // multiview a layer per eye (multiview attaches
+                                    // only array textures).
                                     let mut depth_buffer: gl::types::GLuint = 0;
-                                    gl::GenRenderbuffers(1, &mut depth_buffer);
-                                    gl::BindRenderbuffer(gl::RENDERBUFFER, depth_buffer);
-                                    gl::RenderbufferStorage(
-                                        gl::RENDERBUFFER,
-                                        gl::DEPTH_COMPONENT24,
-                                        width as i32,
-                                        height as i32,
-                                    );
-
-                                    gl::BindRenderbuffer(gl::RENDERBUFFER, 0);
-
-                                    // Create the frame buffer.
                                     let mut buffer: gl::types::GLuint = 0;
-                                    gl::GenFramebuffers(1, &mut buffer);
-                                    gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, buffer);
-                                    gl::FramebufferTexture2D(
-                                        gl::DRAW_FRAMEBUFFER,
-                                        gl::COLOR_ATTACHMENT0,
-                                        gl::TEXTURE_2D,
-                                        image,
-                                        0,
-                                    );
-                                    // Attach the depth buffer to the frame buffer
-                                    gl::FramebufferRenderbuffer(
-                                        gl::DRAW_FRAMEBUFFER,
-                                        gl::DEPTH_ATTACHMENT,
-                                        gl::RENDERBUFFER,
-                                        depth_buffer,
-                                    );
-                                    let _result = gl::CheckFramebufferStatus(gl::DRAW_FRAMEBUFFER);
+                                    if multiview {
+                                        gl::GenTextures(1, &mut depth_buffer);
+                                        gl::BindTexture(gl::TEXTURE_2D_ARRAY, depth_buffer);
+                                        gl::TexStorage3D(
+                                            gl::TEXTURE_2D_ARRAY,
+                                            1,
+                                            gl::DEPTH_COMPONENT24,
+                                            width as i32,
+                                            height as i32,
+                                            engine::multiview::VIEW_COUNT as i32,
+                                        );
+                                        gl::BindTexture(gl::TEXTURE_2D_ARRAY, 0);
+                                        gl::GenFramebuffers(1, &mut buffer);
+                                        gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, buffer);
+                                        engine::multiview::attach_layers(
+                                            gl::DRAW_FRAMEBUFFER,
+                                            gl::COLOR_ATTACHMENT0,
+                                            image,
+                                        );
+                                        engine::multiview::attach_layers(
+                                            gl::DRAW_FRAMEBUFFER,
+                                            gl::DEPTH_ATTACHMENT,
+                                            depth_buffer,
+                                        );
+                                    } else {
+                                        gl::GenRenderbuffers(1, &mut depth_buffer);
+                                        gl::BindRenderbuffer(gl::RENDERBUFFER, depth_buffer);
+                                        gl::RenderbufferStorage(
+                                            gl::RENDERBUFFER,
+                                            gl::DEPTH_COMPONENT24,
+                                            width as i32,
+                                            height as i32,
+                                        );
+
+                                        gl::BindRenderbuffer(gl::RENDERBUFFER, 0);
+
+                                        // Create the frame buffer.
+                                        gl::GenFramebuffers(1, &mut buffer);
+                                        gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, buffer);
+                                        gl::FramebufferTexture2D(
+                                            gl::DRAW_FRAMEBUFFER,
+                                            gl::COLOR_ATTACHMENT0,
+                                            target,
+                                            image,
+                                            0,
+                                        );
+                                        // Attach the depth buffer to the frame buffer
+                                        gl::FramebufferRenderbuffer(
+                                            gl::DRAW_FRAMEBUFFER,
+                                            gl::DEPTH_ATTACHMENT,
+                                            gl::RENDERBUFFER,
+                                            depth_buffer,
+                                        );
+                                    }
+                                    let status = gl::CheckFramebufferStatus(gl::DRAW_FRAMEBUFFER);
+                                    if status != gl::FRAMEBUFFER_COMPLETE {
+                                        println!(
+                                            "SHOCK2QUEST_FRAMEBUFFER_INCOMPLETE status={status:#x} multiview={multiview}"
+                                        );
+                                    }
                                     // This app was originally written with the presumption that
                                     // its swapchains and compositor front buffer were RGB.
                                     // In order to have the colors the same now that its compositing
@@ -1414,6 +1461,7 @@ fn main() {
                                     Framebuffer {
                                         image,
                                         depth_buffer,
+                                        depth_is_texture: multiview,
                                         gl_color_buffer: buffer,
                                     }
                                 }
@@ -1528,42 +1576,65 @@ fn main() {
 
         // Render to each eye
         let time = game.render_time();
-        let (left_eye_elapsed, _) = xr_try!(
-            "render_left_eye",
-            render_swapchain(
-                &mut game,
-                &engine,
-                camera_pos,
-                camera_rot,
-                &swapchain[0],
-                time,
-                &views[0],
-                head_centre_stage,
-                tracking,
-                true,
-                &scene,
-                benchmark_run.as_ref(),
-                false,
-            )
-        );
-        let (right_eye_elapsed, finish_elapsed) = xr_try!(
-            "render_right_eye",
-            render_swapchain(
-                &mut game,
-                &engine,
-                camera_pos,
-                camera_rot,
-                &swapchain[1],
-                time,
-                &views[1],
-                head_centre_stage,
-                tracking,
-                true,
-                &scene,
-                benchmark_run.as_ref(),
-                true,
-            )
-        );
+        // Multiview renders both eyes at once; the profiler reports it as the
+        // left eye.
+        let (left_eye_elapsed, right_eye_elapsed, finish_elapsed) = if multiview {
+            let (both_eyes_elapsed, finish_elapsed) = xr_try!(
+                "render_multiview",
+                render_multiview(
+                    &mut game,
+                    &engine,
+                    camera_pos,
+                    camera_rot,
+                    &swapchain[0],
+                    time,
+                    &views,
+                    head_centre_stage,
+                    tracking,
+                    &scene,
+                    benchmark_run.as_ref(),
+                )
+            );
+            (both_eyes_elapsed, Duration::ZERO, finish_elapsed)
+        } else {
+            let (left_eye_elapsed, _) = xr_try!(
+                "render_left_eye",
+                render_swapchain(
+                    &mut game,
+                    &engine,
+                    camera_pos,
+                    camera_rot,
+                    &swapchain[0],
+                    time,
+                    &views[0],
+                    head_centre_stage,
+                    tracking,
+                    true,
+                    &scene,
+                    benchmark_run.as_ref(),
+                    false,
+                )
+            );
+            let (right_eye_elapsed, finish_elapsed) = xr_try!(
+                "render_right_eye",
+                render_swapchain(
+                    &mut game,
+                    &engine,
+                    camera_pos,
+                    camera_rot,
+                    &swapchain[1],
+                    time,
+                    &views[1],
+                    head_centre_stage,
+                    tracking,
+                    true,
+                    &scene,
+                    benchmark_run.as_ref(),
+                    true,
+                )
+            );
+            (left_eye_elapsed, right_eye_elapsed, finish_elapsed)
+        };
 
         let swap1 = &swapchain[0].handle.borrow();
         let rect = xr::Rect2Di {
@@ -1579,10 +1650,12 @@ fn main() {
         let sub1 = xr::SwapchainSubImage::new()
             .swapchain(swap1)
             .image_rect(rect);
-        let swap2 = &swapchain[1].handle.borrow();
+        // Multiview: the right eye is layer 1 of the one swapchain.
+        let swap2 = &swapchain.last().unwrap().handle.borrow();
         let sub2 = xr::SwapchainSubImage::new()
             .swapchain(swap2)
-            .image_rect(rect);
+            .image_rect(rect)
+            .image_array_index(u32::from(multiview));
         let submit_started = Instant::now();
         // Never fatal: a rejected frame costs one dropped image, but a panic
         // here kills the render thread, and with it the per-frame drain of
@@ -1948,6 +2021,21 @@ fn android_pump_events() -> bool {
     false
 }
 
+/// Enable OVR_multiview2 when requested and the driver supports it.
+fn enable_multiview(egl: &egl::DynamicInstance<egl::EGL1_4>, requested: bool) -> bool {
+    let supported = foveation::has_gl_extension(b"GL_OVR_multiview2");
+    let attach = egl.get_proc_address("glFramebufferTextureMultiviewOVR");
+    let effective = requested && supported && attach.is_some();
+    if effective {
+        // SAFETY: the context's own glFramebufferTextureMultiviewOVR.
+        unsafe { engine::multiview::enable(attach.unwrap() as *const std::ffi::c_void) };
+    }
+    println!(
+        "SHOCK2QUEST_MULTIVIEW requested={requested} supported={supported} effective={effective}"
+    );
+    effective
+}
+
 /// The dev-params eye-height offset, in meters of STAGE space.
 fn stage_offset_meters() -> f32 {
     shock2vr::dev_params::get(shock2vr::dev_params::EYE_HEIGHT_OFFSET)
@@ -1980,44 +2068,136 @@ fn render_swapchain(
     let width = swapchain.width;
     let height = swapchain.height;
 
-    let head_offset = tracking.stage_to_pawn(vec3(
-        view.pose.position.x,
-        view.pose.position.y,
-        view.pose.position.z,
-    ));
-    let head_rotation = cgmath::Quaternion::new(
-        view.pose.orientation.w,
-        view.pose.orientation.x,
-        view.pose.orientation.y,
-        view.pose.orientation.z,
-    );
-    let projection_matrix =
-        create_projection_matrix(&view.fov, shock2vr::NEAR_PLANE, shock2vr::FAR_PLANE);
     let screen_size = vec2(width as f32, height as f32);
-    // Routed through `resolve_camera` rather than used directly: while the
-    // player is dying the game blends this tracked pose toward the fallen death
-    // pose, once, for every runtime (see `shock2vr::death_camera`) - so the fall
-    // reads the same in VR as it does flat. Alive, it hands back exactly what
-    // went in.
-    //
-    // Resolved from the HEAD CENTRE, not from this eye. The fallen target is a
-    // single eye-independent point, so resolving per eye would walk both eyes
-    // onto it and collapse the IPD to zero over the fall - a stereo view going
-    // monoscopic while the horizon rolls. Instead the eye's own displacement is
-    // re-applied afterwards, carried into the fallen camera's frame so the eyes
-    // roll with the new horizon rather than staying level with the room.
-    let head_centre_pawn = tracking.stage_to_pawn(head_centre_stage);
-    let camera = shock2vr::death_camera::reapply_eye_offset(
-        game.resolve_camera(camera_pos, camera_rot, head_centre_pawn, head_rotation),
-        head_offset - head_centre_pawn,
-        head_rotation,
+    let render_context = eye_render_context(
+        game,
+        camera_pos,
+        camera_rot,
+        time,
+        view,
+        head_centre_stage,
+        tracking,
+        screen_size,
     );
-    let render_context = camera.into_render_context(time, projection_matrix, screen_size);
+    let projection_matrix = render_context.projection_matrix;
 
     let view_matrix = engine::util::compute_view_matrix_from_render_context(&render_context);
     let mut all_scene_objs = game.render_per_eye(view_matrix, projection_matrix, screen_size);
     all_scene_objs.extend(scene.iter().cloned());
 
+    draw_into(
+        game,
+        engine,
+        framebuffer,
+        (width, height),
+        &render_context,
+        all_scene_objs,
+        benchmark,
+    );
+
+    let finish_elapsed = if is_last {
+        let finish_started = Instant::now();
+        game.finish_render(view_matrix, projection_matrix, screen_size);
+        finish_started.elapsed()
+    } else {
+        Duration::ZERO
+    };
+
+    lease.release(&mut *xr_swapchain)?;
+
+    Ok((
+        eye_started.elapsed().saturating_sub(finish_elapsed),
+        finish_elapsed,
+    ))
+}
+
+/// Both eyes in one multiview pass into the two layers of `swapchain`. Same
+/// composition as two `render_swapchain` calls: each eye's `render_per_eye`
+/// objects (drawn only in that eye), then the shared scene; `finish_render`
+/// with the right eye, as the last per-eye call does.
+fn render_multiview(
+    game: &mut App,
+    engine: &Box<dyn engine::Engine>,
+    camera_pos: Vector3<f32>,
+    camera_rot: Quaternion<f32>,
+    swapchain: &Swapchain,
+    time: f32,
+    views: &[xr::View],
+    head_centre_stage: Vector3<f32>,
+    tracking: shock2vr::vr_tracking::TrackingTransform,
+    scene: &Vec<SceneObject>,
+    benchmark: Option<&shock2vr::benchmark_scene::BenchmarkRun>,
+) -> xr::Result<(Duration, Duration)> {
+    let started = Instant::now();
+    let mut xr_swapchain = swapchain.handle.borrow_mut();
+    let mut lease = swapchain.lease.borrow_mut();
+    let image_index = lease.acquire(&mut *xr_swapchain)?;
+    let framebuffer = swapchain.framebuffers.get(image_index as usize).unwrap();
+    let (width, height) = (swapchain.width, swapchain.height);
+    let screen_size = vec2(width as f32, height as f32);
+
+    let contexts = [0, 1].map(|eye| {
+        eye_render_context(
+            game,
+            camera_pos,
+            camera_rot,
+            time,
+            &views[eye],
+            head_centre_stage,
+            tracking,
+            screen_size,
+        )
+    });
+    let view_matrices = contexts.map(|c| engine::util::compute_view_matrix_from_render_context(&c));
+    let projections = contexts.map(|c| c.projection_matrix);
+
+    let mut all_scene_objs = Vec::new();
+    for eye in 0..engine::multiview::VIEW_COUNT {
+        let mut objects = game.render_per_eye(view_matrices[eye], projections[eye], screen_size);
+        for object in &mut objects {
+            object.only_eye = Some(eye);
+        }
+        all_scene_objs.extend(objects);
+    }
+    all_scene_objs.extend(scene.iter().cloned());
+
+    // Materials receive eye 0's view; `Views` carries it into each eye.
+    let render_context = engine::EngineRenderContext {
+        multiview: Some(engine::multiview::Views::new(view_matrices, projections)),
+        ..contexts[0]
+    };
+    draw_into(
+        game,
+        engine,
+        framebuffer,
+        (width, height),
+        &render_context,
+        all_scene_objs,
+        benchmark,
+    );
+
+    let finish_started = Instant::now();
+    game.finish_render(view_matrices[1], projections[1], screen_size);
+    let finish_elapsed = finish_started.elapsed();
+
+    lease.release(&mut *xr_swapchain)?;
+
+    Ok((
+        started.elapsed().saturating_sub(finish_elapsed),
+        finish_elapsed,
+    ))
+}
+
+/// Render `objects` plus the hand lights into one swapchain image's framebuffer.
+fn draw_into(
+    game: &App,
+    engine: &Box<dyn engine::Engine>,
+    framebuffer: &Framebuffer,
+    (width, height): (i32, i32),
+    render_context: &engine::EngineRenderContext,
+    objects: Vec<SceneObject>,
+    benchmark: Option<&shock2vr::benchmark_scene::BenchmarkRun>,
+) {
     // SAFETY: This is only calling into OpenGL APIs and not copying memory
     unsafe {
         gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, framebuffer.gl_color_buffer);
@@ -2027,7 +2207,7 @@ fn render_swapchain(
         // gl::ClearColor(r, g, b, 1.0);
         // gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
-        let mut scene_for_render = Scene::from_objects(all_scene_objs);
+        let mut scene_for_render = Scene::from_objects(objects);
 
         // Add hand spotlights (`hand_spotlights` dev param)
         let hand_spotlights = if let Some(benchmark) = benchmark {
@@ -2046,7 +2226,7 @@ fn render_swapchain(
 
         profile!(
             "[oculus.engine.render]",
-            engine.render(&render_context, &scene_for_render)
+            engine.render(render_context, &scene_for_render)
         );
 
         // GL(glViewport(0, 0, frameBuffer->Width, frameBuffer->Height));
@@ -2056,21 +2236,53 @@ fn render_swapchain(
 
         gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, 0);
     }
+}
 
-    let finish_elapsed = if is_last {
-        let finish_started = Instant::now();
-        game.finish_render(view_matrix, projection_matrix, screen_size);
-        finish_started.elapsed()
-    } else {
-        Duration::ZERO
-    };
-
-    lease.release(&mut *xr_swapchain)?;
-
-    Ok((
-        eye_started.elapsed().saturating_sub(finish_elapsed),
-        finish_elapsed,
-    ))
+/// One eye's camera and render context.
+fn eye_render_context(
+    game: &App,
+    camera_pos: Vector3<f32>,
+    camera_rot: Quaternion<f32>,
+    time: f32,
+    view: &xr::View,
+    // Midpoint of the two eyes in STAGE space. The death camera resolves from
+    // the head centre, never per eye - see the comment on `camera` below.
+    head_centre_stage: Vector3<f32>,
+    tracking: shock2vr::vr_tracking::TrackingTransform,
+    screen_size: cgmath::Vector2<f32>,
+) -> engine::EngineRenderContext {
+    let head_offset = tracking.stage_to_pawn(vec3(
+        view.pose.position.x,
+        view.pose.position.y,
+        view.pose.position.z,
+    ));
+    let head_rotation = cgmath::Quaternion::new(
+        view.pose.orientation.w,
+        view.pose.orientation.x,
+        view.pose.orientation.y,
+        view.pose.orientation.z,
+    );
+    let projection_matrix =
+        create_projection_matrix(&view.fov, shock2vr::NEAR_PLANE, shock2vr::FAR_PLANE);
+    // Routed through `resolve_camera` rather than used directly: while the
+    // player is dying the game blends this tracked pose toward the fallen death
+    // pose, once, for every runtime (see `shock2vr::death_camera`) - so the fall
+    // reads the same in VR as it does flat. Alive, it hands back exactly what
+    // went in.
+    //
+    // Resolved from the HEAD CENTRE, not from this eye. The fallen target is a
+    // single eye-independent point, so resolving per eye would walk both eyes
+    // onto it and collapse the IPD to zero over the fall - a stereo view going
+    // monoscopic while the horizon rolls. Instead the eye's own displacement is
+    // re-applied afterwards, carried into the fallen camera's frame so the eyes
+    // roll with the new horizon rather than staying level with the room.
+    let head_centre_pawn = tracking.stage_to_pawn(head_centre_stage);
+    let camera = shock2vr::death_camera::reapply_eye_offset(
+        game.resolve_camera(camera_pos, camera_rot, head_centre_pawn, head_rotation),
+        head_offset - head_centre_pawn,
+        head_rotation,
+    );
+    camera.into_render_context(time, projection_matrix, screen_size)
 }
 
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
@@ -2095,6 +2307,7 @@ struct Swapchain {
 struct Framebuffer {
     image: u32,
     depth_buffer: gl::types::GLuint,
+    depth_is_texture: bool,
     gl_color_buffer: gl::types::GLuint,
 }
 
@@ -2150,7 +2363,11 @@ impl Drop for Swapchain {
             // The swapchain is owned by the render thread and dropped before EGL.
             unsafe {
                 gl::DeleteFramebuffers(1, &framebuffer.gl_color_buffer);
-                gl::DeleteRenderbuffers(1, &framebuffer.depth_buffer);
+                if framebuffer.depth_is_texture {
+                    gl::DeleteTextures(1, &framebuffer.depth_buffer);
+                } else {
+                    gl::DeleteRenderbuffers(1, &framebuffer.depth_buffer);
+                }
             }
         }
     }

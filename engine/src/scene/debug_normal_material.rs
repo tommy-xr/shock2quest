@@ -103,12 +103,13 @@ impl Material for DebugNormalMaterial {
                 gl::GetUniformLocation(shader.gl_id, c_str!("projection").as_ptr());
 
             gl::UniformMatrix4fv(world_loc, 1, gl::FALSE, world_matrix.as_ptr() as *const f32);
-            gl::UniformMatrix4fv(view_loc, 1, gl::FALSE, view_matrix.as_ptr() as *const f32);
-            gl::UniformMatrix4fv(
+            crate::multiview::bind_view_projection(
+                view_loc,
                 projection_loc,
-                1,
-                gl::FALSE,
-                render_context.projection_matrix.as_ptr() as *const f32,
+                &view_matrix,
+                &render_context.projection_matrix,
+                render_context,
+                true,
             );
 
             // Bind texture (even though we don't use it, keeps interface consistent)
@@ -225,12 +226,13 @@ impl Material for DebugNormalSkinnedMaterial {
                 gl::GetUniformLocation(shader.gl_id, c_str!("projection").as_ptr());
 
             gl::UniformMatrix4fv(world_loc, 1, gl::FALSE, world_matrix.as_ptr() as *const f32);
-            gl::UniformMatrix4fv(view_loc, 1, gl::FALSE, view_matrix.as_ptr() as *const f32);
-            gl::UniformMatrix4fv(
+            crate::multiview::bind_view_projection(
+                view_loc,
                 projection_loc,
-                1,
-                gl::FALSE,
-                render_context.projection_matrix.as_ptr() as *const f32,
+                &view_matrix,
+                &render_context.projection_matrix,
+                render_context,
+                true,
             );
 
             for i in 0..skinning_data.len() {

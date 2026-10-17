@@ -24,6 +24,9 @@ pub struct EngineRenderContext {
     pub projection_matrix: cgmath::Matrix4<f32>,
 
     pub screen_size: cgmath::Vector2<f32>,
+
+    /// Both eyes in one pass (Quest only); `None` renders the single view above.
+    pub multiview: Option<crate::multiview::Views>,
 }
 
 use crate::file_system::Storage;

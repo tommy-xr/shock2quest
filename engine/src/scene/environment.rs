@@ -45,10 +45,10 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
         in vec3 worldPos;
 
         uniform samplerCube environment;
-        uniform vec3 eye;
+        uniform vec3 environmentEye;
 
         void main() {
-            vec3 direction = environmentDirection(normalize(worldPos - eye));
+            vec3 direction = environmentDirection(normalize(worldPos - environmentEye));
             fragColor = vec4(textureLod(environment, direction, 0.0).rgb, 1.0);
         }
 "#;
@@ -112,7 +112,7 @@ impl Material for EnvironmentPreviewMaterial {
                     view: loc(c_str!("view")),
                     projection: loc(c_str!("projection")),
                     environment: loc(c_str!("environment")),
-                    eye: loc(c_str!("eye")),
+                    eye: loc(c_str!("environmentEye")),
                 };
                 (shader, uniforms)
             }
@@ -129,18 +129,18 @@ impl Material for EnvironmentPreviewMaterial {
         _lights: &crate::scene::light::LightArray,
     ) -> bool {
         let (program, uniforms) = SHADER_PROGRAM.get().expect("shader not compiled");
-        let eye = crate::scene::material::eye_position(view_matrix);
         unsafe {
             gl::UseProgram(program.gl_id);
             gl::UniformMatrix4fv(uniforms.world, 1, gl::FALSE, world_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.view, 1, gl::FALSE, view_matrix.as_ptr());
-            gl::UniformMatrix4fv(
+            crate::multiview::bind_view_projection(
+                uniforms.view,
                 uniforms.projection,
-                1,
-                gl::FALSE,
-                render_context.projection_matrix.as_ptr(),
+                &view_matrix,
+                &render_context.projection_matrix,
+                render_context,
+                true,
             );
-            gl::Uniform3fv(uniforms.eye, 1, eye.as_ptr());
+            crate::multiview::bind_eye(uniforms.eye, view_matrix, render_context);
             gl::Uniform1i(uniforms.environment, ENVIRONMENT_UNIT as i32);
             self.environment.bind_to(ENVIRONMENT_UNIT);
         }

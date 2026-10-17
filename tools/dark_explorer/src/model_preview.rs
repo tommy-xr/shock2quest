@@ -1183,6 +1183,7 @@ impl ModelPreview {
                 1000.0,
             ),
             screen_size: vec2(size[0] as f32, size[1] as f32),
+            multiview: None,
         };
 
         unsafe {
