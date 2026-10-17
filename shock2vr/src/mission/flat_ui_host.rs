@@ -72,9 +72,9 @@ const CLOSE_BUTTON_MARGIN: Vector2<f32> = Vector2::new(25.0, 8.0);
 const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
 
 /// Hover outline colour and opacity. 25AE's `IFBTNx2` rollover frames are
-/// opaque `#00FFFF`; at full strength that reads as a neon border over the
-/// interface art, so it is drawn dimmer. Tune here.
-const HOVER_OUTLINE: ([u8; 3], f32) = ([0, 255, 255], 0.55);
+/// opaque `#00FFFF`, which reads as a neon border over the interface art, so
+/// this draws a quieter teal (`#00BF8E`) at 50% opacity. Tune here.
+const HOVER_OUTLINE: ([u8; 3], f32) = ([0, 191, 142], 0.5);
 
 /// The HUD's data font, as the rest of this canvas uses.
 const NAME_STRIP_FONT: &str = "mainfont.fon";
