@@ -1,8 +1,11 @@
 // node --test website/test/*.test.js
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { FORMAT, buildExport, elementText, exportFilename, iou, normalizeRect, selectorFor } from "../shared/feedback-core.js";
+import {
+  FALLBACK_SRC, FORMAT, bookmarklet, buildExport, elementText, exportFilename, iou, normalizeRect, selectorFor,
+} from "../shared/feedback-core.js";
 
 // Minimal element chain: just what selectorFor reads.
 function el(tagName, { id = "", className = "", dataset = {} } = {}, parent = null) {
@@ -69,4 +72,29 @@ test("iou scores how well an element's rect matches a drawn box", () => {
   assert.equal(iou(box, { x: 20, y: 0, w: 10, h: 10 }), 0);
   assert.equal(iou(box, { x: 5, y: 0, w: 10, h: 10 }), 50 / 150);
   assert.equal(iou(box, { x: 0, y: 0, w: 0, h: 0 }), 0);
+});
+
+// Runs the bookmarklet's code against a stub DOM.
+function runBookmarklet(document, href) {
+  new Function("document", "location", bookmarklet().slice("javascript:".length))(document, { href });
+}
+
+test("the bookmarklet loads the page's own overlay, falling back to the CDN, once", () => {
+  assert.ok(bookmarklet().startsWith("javascript:"));
+  const added = [];
+  const document = { getElementById: () => null, createElement: () => ({}), head: { append: (s) => added.push(s) } };
+  runBookmarklet(document, "https://example.org/site/website/?x=1");
+  assert.equal(added.length, 1);
+  assert.equal(added[0].type, "module");
+  assert.equal(added[0].src, "https://example.org/site/website/shared/feedback.js");
+  added[0].onerror(); // not deployed alongside the page: retry from the CDN
+  assert.equal(added[1].src, FALLBACK_SRC);
+  assert.equal(FALLBACK_SRC, "https://cdn.jsdelivr.net/gh/tommy-xr/shock2quest@main/website/shared/feedback.js");
+  runBookmarklet({ ...document, getElementById: () => ({}) }, "https://example.org/"); // already open
+  assert.equal(added.length, 2);
+});
+
+test("website/README.md documents the current bookmarklet verbatim", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.ok(readme.includes(bookmarklet()), "paste bookmarklet() into the README");
 });

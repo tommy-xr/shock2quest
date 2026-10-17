@@ -2,6 +2,17 @@
 
 export const FORMAT = "shock2quest-website-feedback/1";
 
+// jsDelivr mirrors the repo with a JS content type; raw.githubusercontent.com serves
+// text/plain + nosniff, which browsers refuse to run as a module.
+export const FALLBACK_SRC = "https://cdn.jsdelivr.net/gh/tommy-xr/shock2quest@main/website/shared/feedback.js";
+
+// Bookmark URL that opens the overlay on any copy of the page: loads the overlay
+// deployed beside the page, else FALLBACK_SRC; does nothing if already open.
+export const bookmarklet = () =>
+  "javascript:(()=>{if(document.getElementById(\"fb-panel\"))return;" +
+  "const add=(src,onerror)=>{const s=document.createElement(\"script\");s.type=\"module\";s.src=src;s.onerror=onerror;document.head.append(s)};" +
+  `add(new URL("shared/feedback.js",location.href).href,()=>add("${FALLBACK_SRC}"))})()`;
+
 const SAFE_ID = /^[A-Za-z][\w-]*$/;
 const SAFE_CLASS = /^-?[_A-Za-z][\w-]*$/;
 

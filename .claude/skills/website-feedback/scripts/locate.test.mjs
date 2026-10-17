@@ -2,7 +2,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { locate, searchTerms } from "./locate.mjs";
+import { locate, newestExport, searchTerms } from "./locate.mjs";
+
+test("the default export is the newest by its own created time, whatever the file is named", () => {
+  const fb = (created) => ({ format: "shock2quest-website-feedback/1", created });
+  const files = [
+    { name: "feedback-2026-10-18T08-00-00-000Z.json", json: fb("2026-10-18T08:00:00.000Z") },
+    { name: "renamed.json", json: fb("2026-10-19T08:00:00.000Z") },
+    { name: "package.json", json: { name: "not feedback" } },
+  ];
+  assert.equal(newestExport(files), "renamed.json");
+  assert.equal(newestExport(files.slice(2)), undefined);
+});
 
 const files = [
   {
