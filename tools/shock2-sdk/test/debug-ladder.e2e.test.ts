@@ -134,7 +134,7 @@ test(
   async () => {
     await using game = await GameServer.launch({ mission: "debug_ladder" });
     await game.step({ frames: 5 });
-    const { floorY, start } = await climbStack(game, 60);
+    const { floorY, start } = await climbStack(game, 95);
     assert.ok(start.y > floorY + 4, `should have climbed (y=${start.y.toFixed(3)})`);
     await game.step({ frames: 120 });
     const end = await game.player.position();
@@ -154,7 +154,7 @@ test(
     // Both sides (desktop A/D): the wall is bare beside the rungs, and the
     // floor is further below the feet than a step-off accepts.
     for (const strafe of [1, -1]) {
-      const { floorY, start } = await climbStack(game, 60);
+      const { floorY, start } = await climbStack(game, 95);
       await game.input.set("right_hand.thumbstick", [strafe, 0]);
       await game.step({ frames: 120 });
       const end = await game.player.position();

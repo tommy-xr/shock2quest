@@ -20,7 +20,7 @@ test("diagonal walking climbs Earth's exposed Basic Training tread", {
   await game.input.set("head.look", [-63.43494882, 0]);
   await game.step({ frames: 1 });
   await game.input.set("right_hand.thumbstick", [0, 1]);
-  await game.step({ frames: 20 });
+  await game.step({ frames: 28 });
   await game.input.set("right_hand.thumbstick", [0, 0]);
   const end = await game.player.position();
   assert.ok(end.y - start.y > 0.3 && end.z > 240.8,

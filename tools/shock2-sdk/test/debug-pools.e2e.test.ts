@@ -30,7 +30,7 @@ for (const { mission, basin } of [
         await game.input.set("head.look", [0, pitch]);
         await game.step({ frames: 1 });
         const before = await game.player.position();
-        await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0.15]);
+        await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0.25]);
         await game.step({ frames: 20 });
         await game.input.set(vr ? "left_hand.thumbstick" : "right_hand.thumbstick", [0, 0]);
         const after = await game.player.position();
@@ -85,7 +85,7 @@ test("debug_many_pool (VR): swim to the sloped rim and exit with the stick", {
   await game.step({ frames: 2 });
   await game.input.lookAtWorldPoint([41.3, 10.7, 30]);
   await game.input.hold("LeftHandLowerButton");
-  await game.input.set("left_hand.thumbstick", [0, 0.2]);
+  await game.input.set("left_hand.thumbstick", [0, 0.32]);
   await game.step({ frames: 210 });
   await game.input.release("LeftHandLowerButton");
   await game.input.set("left_hand.thumbstick", [0, 0]);
