@@ -5070,7 +5070,7 @@ impl MissionCore {
                         .borrow::<UniqueView<PlayerPsiKnownPowers>>()
                         .unwrap();
                     let target = |index, step: crate::scripts::gui::NavStep| {
-                        let (axis, forward) = step.axis();
+                        let (axis, forward) = crate::psi_carousel::selection_step(step);
                         crate::psi::step_selection(&powers.0, &known.0, index, axis, forward)
                     };
                     if let Some(step) = step {

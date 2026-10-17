@@ -108,6 +108,17 @@ fn arc_position(row: f32, slot: f32) -> cgmath::Vector3<f32> {
     )
 }
 
+/// The selection a stick step moves to. The wheel turns with the push: right
+/// spins the cards right, bringing in the one on the left (the previous
+/// power); up and down pick the tier drawn on the pushed side.
+pub fn selection_step(step: crate::scripts::gui::NavStep) -> (crate::psi::PsiSelectionAxis, bool) {
+    use crate::psi::PsiSelectionAxis::Power;
+    match step.axis() {
+        (Power, forward) => (Power, !forward),
+        tier => tier,
+    }
+}
+
 /// Turns a card at `arc_position(row, slot)` to face radially outward, as if
 /// printed on the sphere.
 fn card_facing(row: f32, slot: f32) -> cgmath::Matrix4<f32> {
@@ -603,6 +614,28 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A push right spins the cards right: the one coming in is on the left.
+    #[test]
+    fn a_push_right_brings_in_the_card_on_the_left() {
+        let fixture = powers();
+        let powers: Vec<_> = (1..=5)
+            .map(|id| {
+                let mut p = fixture[0].clone();
+                p.template_id = -id;
+                p.power.power_id = id;
+                p
+            })
+            .collect();
+        let known: HashSet<_> = powers.iter().map(|p| p.template_id).collect();
+        let (axis, forward) = selection_step(crate::scripts::gui::NavStep::PowerNext);
+        let target = crate::psi::step_selection(&powers, &known, 2, axis, forward);
+        let (.., slot) = entries(&powers, &known, 2)
+            .into_iter()
+            .find(|(i, ..)| *i == target)
+            .unwrap();
+        assert_eq!(slot, -1);
     }
 
     #[test]
