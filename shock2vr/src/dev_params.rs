@@ -617,23 +617,16 @@ dev_params! {
     /// The player loses no hit points from any source, so never shows the hit
     /// tint or dies - keeps deterministic captures from being spoiled by damage.
     CHEAT = Root::bool("cheat", "Cheat: invulnerable", false),
-    /// Developer flight uses the established Agility-1 rate [`PLAYER_MOVE_SPEED`].
-    /// Stat upgrades do not change it. These are SS2 units, not world
-    /// units per second: the consumer divides by `dark::SCALE_FACTOR` (2.5)
-    /// exactly as the player's locomotion does, so the default 25 travels 10
-    /// world units a second, not 25. The range spans a crawl to a fast survey of a
-    /// deck; live-tunable because the right speed depends entirely on what is
-    /// being inspected.
-    ///
-    /// [`PLAYER_MOVE_SPEED`]: crate::mission::PLAYER_MOVE_SPEED
-    FREE_CAMERA_SPEED = Camera::float(
-        "free_camera_speed",
-        "Cam speed",
-        crate::mission::PLAYER_MOVE_SPEED,
-        5.0,
-        200.0,
-        5.0
-    ),
+    /// Multiplies the player's retail run speed (Agility included). 1.0 is
+    /// retail; the default runs a little faster for stick locomotion.
+    MOVE_SPEED_SCALE = Root::float("move_speed_scale", "Move speed (x retail)", 1.2, 1.0, 1.5, 0.05),
+    /// Developer flight speed. Stat upgrades do not change it. These are SS2
+    /// units, not world units per second: the consumer divides by
+    /// `dark::SCALE_FACTOR` (2.5) exactly as the player's locomotion does, so
+    /// the default 25 travels 10 world units a second, not 25. The range spans
+    /// a crawl to a fast survey of a deck; live-tunable because the right
+    /// speed depends entirely on what is being inspected.
+    FREE_CAMERA_SPEED = Camera::float("free_camera_speed", "Cam speed", 25.0, 5.0, 200.0, 5.0),
 }
 
 /// Every parameter with its id, in declaration order.
