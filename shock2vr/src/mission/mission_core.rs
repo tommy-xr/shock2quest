@@ -5053,7 +5053,7 @@ impl MissionCore {
                 let confirm = menu.trigger_armed && pressed;
                 menu.trigger_armed |= !pressed;
                 self.psi_carousel_swallow[hand_slot(menu.hand)] = pressed;
-                let stick = input.thumbstick;
+                let stick = crate::psi_carousel::view_stick(input.thumbstick);
                 let (step, latched) = crate::scripts::gui::stick_nav(
                     stick,
                     menu.stick_latched,
@@ -5070,7 +5070,7 @@ impl MissionCore {
                         .borrow::<UniqueView<PlayerPsiKnownPowers>>()
                         .unwrap();
                     let target = |index, step: crate::scripts::gui::NavStep| {
-                        let (axis, forward) = crate::psi_carousel::selection_step(step);
+                        let (axis, forward) = step.axis();
                         crate::psi::step_selection(&powers.0, &known.0, index, axis, forward)
                     };
                     if let Some(step) = step {

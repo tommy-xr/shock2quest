@@ -114,15 +114,10 @@ fn arc_position(row: f32, slot: f32) -> cgmath::Vector3<f32> {
     )
 }
 
-/// The selection a stick step moves to. The wheel turns with the push: right
-/// spins the cards right, bringing in the one on the left (the previous
-/// power); up and down pick the tier drawn on the pushed side.
-pub fn selection_step(step: crate::scripts::gui::NavStep) -> (crate::psi::PsiSelectionAxis, bool) {
-    use crate::psi::PsiSelectionAxis::Power;
-    match step.axis() {
-        (Power, forward) => (Power, !forward),
-        tier => tier,
-    }
+/// The stick in the wheel's view space, +x right. Runtimes report a push
+/// left as +x (the Quest runtime and desktop's A key both do).
+pub fn view_stick(thumbstick: cgmath::Vector2<f32>) -> cgmath::Vector2<f32> {
+    vec2(-thumbstick.x, thumbstick.y)
 }
 
 /// Turns a card at `arc_position(row, slot)` to face radially outward, as if
@@ -682,9 +677,9 @@ mod tests {
         }
     }
 
-    /// A push right spins the cards right: the one coming in is on the left.
+    /// A push right (reported as -x) selects the card drawn on the right.
     #[test]
-    fn a_push_right_brings_in_the_card_on_the_left() {
+    fn a_push_right_selects_the_card_on_the_right() {
         let fixture = powers();
         let powers: Vec<_> = (1..=5)
             .map(|id| {
@@ -695,13 +690,19 @@ mod tests {
             })
             .collect();
         let known: HashSet<_> = powers.iter().map(|p| p.template_id).collect();
-        let (axis, forward) = selection_step(crate::scripts::gui::NavStep::PowerNext);
+        let (step, _) = crate::scripts::gui::stick_nav(
+            view_stick(vec2(-1.0, 0.0)),
+            crate::scripts::gui::NavLatch::Free,
+            0.0,
+            &crate::scripts::gui::PSI_STICK_NAV,
+        );
+        let (axis, forward) = step.unwrap().axis();
         let target = crate::psi::step_selection(&powers, &known, 2, axis, forward);
         let (.., slot) = entries(&powers, &known, 2)
             .into_iter()
             .find(|(i, ..)| *i == target)
             .unwrap();
-        assert_eq!(slot, -1);
+        assert_eq!(slot, 1);
     }
 
     #[test]
