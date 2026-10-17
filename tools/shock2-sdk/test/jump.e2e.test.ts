@@ -222,6 +222,15 @@ test(
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
 
+    // Walk up to the crates first: a retail-height hop only mantles a ledge
+    // within reach of where it leaves the floor.
+    for (let frame = 0, last = before.z; frame < 120; frame += 10) {
+      await game.step({ frames: 10 });
+      const z = (await game.player.position()).z;
+      if (z - last < 0.01) break;
+      last = z;
+    }
+
     // The authentic stack is a two-hop route: the first jump reaches the
     // stable top of the small crates, replacing the unavailable one-shot
     // mantle the campaign player initially tried.

@@ -456,12 +456,17 @@ fn slope_ground_probe_distance(shape: &dyn Shape) -> Real {
 const PLAYER_STEP_HEIGHT: f32 = 2.0;
 
 /// Ordinary jump launch speed and downward acceleration, in SS2 feet per
-/// second(/squared). These produce a short, fixed-height hop while preserving
-/// the existing terminal fall speed. The authored shodan.mis final barrier is
-/// deliberately taller than the 2 ft stair probe and needs this separate
-/// player action to clear.
-const PLAYER_JUMP_SPEED: f32 = 28.0;
-const PLAYER_JUMP_GRAVITY: f32 = 40.0;
+/// second(/squared): the original engine's values, a ~3.1 ft hop with no
+/// Agility scaling. The authored shodan.mis final barrier is deliberately
+/// taller than the 2 ft stair probe and needs this separate player action to
+/// clear.
+const PLAYER_JUMP_SPEED: f32 = 14.0;
+const PLAYER_JUMP_GRAVITY: f32 = 32.0;
+/// Highest landing (SS2 ft above the feet) a jump can mantle onto. The
+/// original reaches past the hop itself: a held jump probes 3.5 ft above the
+/// head anywhere in the arc, so ledges up to ~11 ft. 9.8 ft keeps the reach
+/// the Engineering crate stack and SHODAN descent routes are validated at.
+const PLAYER_JUMP_MANTLE_RISE: f32 = 9.8;
 const PLAYER_MAX_FALL_SPEED: f32 = 30.0;
 /// Swimming: locomotion is scaled down and a held jump rises at 2.5 SS2
 /// feet per second, with neutral buoyancy (no gravity) otherwise.
@@ -1784,8 +1789,7 @@ fn plan_jump_mantle(
     let current_feet_y = pos.translation.vector.y - half_height;
     let head_offset = (body_height / 2.0 - body_radius) / SCALE_FACTOR;
     let head = pos.translation.vector + Vector::y() * head_offset;
-    let max_rise =
-        (PLAYER_JUMP_SPEED * PLAYER_JUMP_SPEED) / (2.0 * PLAYER_JUMP_GRAVITY * SCALE_FACTOR);
+    let max_rise = PLAYER_JUMP_MANTLE_RISE / SCALE_FACTOR;
     let minimum_forward = (2.0 * body_radius + 2.0 * PLAYER_CONTACT_OFFSET) / SCALE_FACTOR;
     let current_floor_tolerance = (PLAYER_STEP_HEIGHT + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR;
     // A stacked lower route must terminate at an exterior vertical void inside
@@ -1851,12 +1855,21 @@ fn plan_jump_mantle(
                             // The compressed body models Dark's discontinuous
                             // sphere stack crossing a terrain lip; it does not
                             // add vertical reach. Require the player's feet to
-                            // be able to reach the landing within the ordinary
-                            // ballistic apex. Otherwise an open lift shaft can
+                            // be able to reach the landing within the jump's
+                            // mantle reach. Otherwise an open lift shaft can
                             // turn the room ceiling ahead into an "elevated
                             // floor" and script the player onto its exterior
                             // roof (#744).
                             && rise <= max_rise
+                    })
+                    // The compressed body's underside must also pass: a probe
+                    // that only grazes an object's top would fail the route
+                    // preflight below, where a higher probe can still pass.
+                    // Terrain is exempt there, so it is here too.
+                    .filter(|_| {
+                        let drop =
+                            Vector::y() * ((body_radius + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR);
+                        ray_segment_is_clear(scripted_queries, raised - drop, raised_forward - drop)
                     });
                 // A same-height floor visible above the lower candidate is the
                 // stacked-terrain signature: the continuous capsule cannot
@@ -15578,7 +15591,7 @@ mod tests {
                 false,
             );
             // 2 world units == 5 SS2 ft: taller than the 2 ft stair probe but
-            // comfortably inside the ordinary jump arc.
+            // within the jump's mantle reach.
             world.add_kinematic(
                 EntityId::from_inner(1001).unwrap(),
                 vec3(0.0, 1.0, 0.0),
@@ -15747,11 +15760,11 @@ mod tests {
     }
 
     /// The compressed compatibility body may cross a local terrain lip, but it
-    /// must not add vertical reach beyond the ordinary ballistic jump. A roof
-    /// above that apex is not a mantle landing even when its top is visible to
-    /// the elevated-floor probe (#744).
+    /// must not add vertical reach beyond the jump's mantle reach. A roof
+    /// above that reach is not a mantle landing even when its top is visible
+    /// to the elevated-floor probe (#744).
     #[test]
-    fn jump_mantle_rejects_a_platform_above_the_ballistic_apex() {
+    fn jump_mantle_rejects_a_platform_above_the_mantle_reach() {
         let mut world = PhysicsWorld::new();
         world.add_collider(
             EntityId::from_inner(1000).unwrap(),
@@ -15760,7 +15773,7 @@ mod tests {
                 .build(),
         );
         // Top at y=4.5: 4.4 world units above the player's resting feet,
-        // beyond the 3.92-world-unit / 9.8-SS2-foot ballistic apex.
+        // beyond the 3.92-world-unit / 9.8-SS2-foot mantle reach.
         world.add_collider(
             EntityId::from_inner(1001).unwrap(),
             ColliderBuilder::cuboid(10.0, 2.25, 3.0)
@@ -15803,7 +15816,7 @@ mod tests {
                 .build(),
         );
         // Parentless room slab: underside y=3.6, exterior roof y=3.8. The roof
-        // is within the ballistic apex, so the vertical-clearance invariant is
+        // is within the mantle reach, so the vertical-clearance invariant is
         // what distinguishes it from a genuine elevated platform ahead.
         world.add_collider(
             EntityId::from_inner(1001).unwrap(),
@@ -15841,7 +15854,7 @@ mod tests {
         );
     }
 
-    /// A room's wall and ceiling meet below the jump apex. Empty space outside
+    /// A room's wall and ceiling meet below the mantle reach. Empty space outside
     /// the room is not a same-height mantle landing: reaching the clear forward
     /// probe above the wall would first carry the head through the ceiling.
     #[test]
@@ -15992,9 +16005,11 @@ mod tests {
         };
 
         let open_rise = run(false);
+        let apex =
+            PLAYER_JUMP_SPEED * PLAYER_JUMP_SPEED / (2.0 * PLAYER_JUMP_GRAVITY * SCALE_FACTOR);
         assert!(
-            open_rise > 2.0 && open_rise < 5.0,
-            "one held press should produce one bounded hop, rose {open_rise}"
+            (open_rise - apex).abs() < 0.1 * apex,
+            "one held press should produce one {apex} hop, rose {open_rise}"
         );
         let capped_rise = run(true);
         assert!(
@@ -16143,12 +16158,13 @@ mod tests {
             CollisionGroup::entity(),
             false,
         );
+        // 15 ft: beyond the jump's mantle reach, so the hop stays ballistic.
         world.add_kinematic(
             EntityId::from_inner(1001).unwrap(),
-            vec3(0.0, 1.0, 0.0),
+            vec3(0.0, 3.0, 0.0),
             identity_quat(),
             Vector3::new(0.0, 0.0, 0.0),
-            vec3(0.4, 2.0, 4.0),
+            vec3(0.4, 6.0, 4.0),
             CollisionGroup::entity(),
             false,
         );
