@@ -1018,7 +1018,7 @@ pub enum Effect {
     WeaponRecoil {
         entity_id: EntityId,
     },
-    /// A creature fired: spawn its muzzle flash sprite and smoke at `frame`
+    /// An AI (creature or turret) fired: spawn its muzzle flash sprite and smoke at `frame`
     /// (origin at the muzzle, +Z along the shot).
     AiMuzzleParticles {
         shooter: EntityId,

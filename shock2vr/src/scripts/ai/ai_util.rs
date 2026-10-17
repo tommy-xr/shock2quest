@@ -513,10 +513,18 @@ pub fn fire_ranged_weapon(
             // The gun authors its own flash (`GunFlash`, below), if any; the
             // round adds its smoke, and a sprite flash where it has one, at
             // the barrel tip rather than the vhot ahead of it.
-            if let Some(kind) = ai_muzzle_kind(world, projectile_template_id) {
+            let kind = world
+                .borrow::<UniqueView<GlobalEntityMetadata>>()
+                .ok()
+                .and_then(|metadata| {
+                    AiMuzzle::for_projectile(projectile_template_id, |name| {
+                        metadata.0.get(name).map(|m| m.template_id)
+                    })
+                });
+            if let Some(kind) = kind {
                 let mut frame = projectile_transform;
-                let shot = frame.z.truncate().normalize();
-                frame.w = (position - shot * TURRET_VHOT_LEAD).to_homogeneous();
+                let barrel = transformed_forward.normalize();
+                frame.w = (position - barrel * TURRET_VHOT_LEAD).to_homogeneous();
                 fire_effects.push(Effect::AiMuzzleParticles {
                     shooter: entity_id,
                     kind,
@@ -686,14 +694,6 @@ pub fn fire_ranged_projectile(
     }
 }
 
-/// The muzzle report profile for a round, if it has one.
-fn ai_muzzle_kind(world: &World, projectile_template_id: i32) -> Option<AiMuzzle> {
-    let metadata = world.borrow::<UniqueView<GlobalEntityMetadata>>().ok()?;
-    AiMuzzle::for_projectile(projectile_template_id, |name| {
-        metadata.0.get(name).map(|m| m.template_id)
-    })
-}
-
 /// The visible report of a creature's shot: at the weapon's muzzle, found
 /// from the authored launch point and the shooter's facing, oriented along
 /// the shot (`aim`, +Z forward). Unlisted rounds keep their bare launch.
@@ -706,11 +706,13 @@ fn muzzle_flash_and_smoke(
     distance_to_target: f32,
     aim: Matrix4<f32>,
 ) -> Effect {
-    let Some(kind) = ai_muzzle_kind(world, projectile_template_id) else {
+    let Ok(metadata) = world.borrow::<UniqueView<GlobalEntityMetadata>>() else {
         return Effect::NoEffect;
     };
-    let metadata = world.borrow::<UniqueView<GlobalEntityMetadata>>().unwrap();
     let lookup = |name: &str| metadata.0.get(name).map(|m| m.template_id);
+    let Some(kind) = AiMuzzle::for_projectile(projectile_template_id, lookup) else {
+        return Effect::NoEffect;
+    };
     let mut frame = aim;
     frame.w = (launch_point
         + facing * muzzle_offset_for_distance(kind.barrel_reach(), distance_to_target))
@@ -2678,7 +2680,8 @@ mod muzzle_tests {
             &world,
             turret,
             muzzle,
-            vec3(1.0, 2.0, 13.0),
+            // Above the barrel's line, so the aim and the barrel differ.
+            vec3(1.0, 12.0, 13.0),
         )]);
         let particles = effects.iter().find_map(|effect| match effect {
             Effect::AiMuzzleParticles {
@@ -2690,7 +2693,7 @@ mod muzzle_tests {
         });
         let (shooter, kind, at) = particles.expect("a listed round reports");
         assert_eq!((shooter, kind), (turret, AiMuzzle::Slug));
-        // At the barrel tip, behind the vhot along the shot (+Z).
+        // At the barrel tip, behind the vhot along the barrel (+Z), not the aim.
         let tip = point3(1.0, 2.0, 3.0 - TURRET_VHOT_LEAD);
         assert!((at - tip).magnitude() < 1.0e-5, "{at:?}");
     }

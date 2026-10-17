@@ -89,9 +89,9 @@ impl AiMuzzle {
         .find_map(|(name, kind)| (lookup(name) == Some(template)).then_some(kind))
     }
 
-    /// The hybrid's shotgun takes the player's shotgun flash, the 25AE additive
-    /// `assflash`. The slug turrets' classic `Slug Flash` renders lit and
-    /// alpha-blended, a dull ribbon rather than a flash.
+    /// The hybrid's shotgun takes the player's gun flash, `Assault Flash`.
+    /// The slug turrets' `Slug Flash` reads as a dull ribbon here: the
+    /// renderer ignores its FullBright render type.
     pub fn authored_flash(self) -> Option<&'static str> {
         matches!(self, Self::Slug).then_some("assault flash")
     }
@@ -805,14 +805,15 @@ mod tests {
         assert_eq!(AiMuzzle::Slug.authored_flash(), Some("assault flash"));
         assert_eq!(AiMuzzle::Midwife.authored_flash(), None);
         assert_eq!(AiMuzzle::DroidLaser.authored_flash(), None);
-        // The midwife's wisp is green, fainter and smaller than the droid's,
-        // which is quieter than the hybrid's; only the droid has a sprite.
+        // The midwife's wisp is green, fainter and sparser than the droid's,
+        // which is fainter than the hybrid's; only the droid has a sprite.
         let [slug, droid, midwife] =
             [AiMuzzle::Slug, AiMuzzle::DroidLaser, AiMuzzle::Midwife].map(AiMuzzle::report);
         let green = BarrelSmokeProfile::for_weapon(midwife.smoke).color;
         assert!(green.y > green.x && green.y > green.z, "{green:?}");
-        assert!(midwife.scale < droid.scale && droid.scale < slug.scale);
-        assert!(midwife.alpha < droid.alpha && droid.alpha < slug.alpha);
+        let alpha = |r: &AiReport| BarrelSmokeProfile::for_weapon(r.smoke).alpha * r.alpha;
+        assert!(alpha(&midwife) < alpha(&droid) && alpha(&droid) < alpha(&slug));
+        assert!(midwife.count < droid.count && droid.count < slug.count);
         assert!(midwife.sprite_flash.is_none() && slug.sprite_flash.is_none());
         assert!(droid.sprite_flash.is_some());
         // The laser turret's red bolt gets a red report.
