@@ -145,7 +145,7 @@ pub fn read_recording(path: &Path) -> io::Result<(RecordingHeader, Vec<RecordedF
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "recording version {} (expected {RECORDING_VERSION})",
+                "recording version {} (expected 1..={RECORDING_VERSION})",
                 header.version
             ),
         ));

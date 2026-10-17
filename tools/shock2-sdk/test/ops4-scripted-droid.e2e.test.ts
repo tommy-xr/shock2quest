@@ -97,8 +97,8 @@ test(
       const dz = -98 - p.z;
       const length = Math.hypot(dx, dz);
       await move(p.z < -90.5 && Math.abs(dx) > 0.2
-        ? [-Math.sign(dx) * 0.35, 0]
-        : [-dx / length, -dz / length], 6);
+        ? [Math.sign(dx) * 0.35, 0]
+        : [dx / length, -dz / length], 6);
     }
     await move([0, 0], 10);
     const player = (await game.info()).player;
