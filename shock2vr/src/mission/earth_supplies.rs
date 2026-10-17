@@ -138,7 +138,6 @@ impl SupplyDrops {
                 self.pending_fill[floor] = true;
             }
         }
-        effects.push(Effect::ShowMessage { text: "Supplies on BOTH floors! Search crates; security crates need hacking. Unclaimed drops expire in 90 seconds.".into() });
         effects
     }
 
@@ -170,11 +169,7 @@ impl SupplyDrops {
             if *remaining <= 0.0 {
                 self.remaining = None;
                 self.pending_fill = [false; 2];
-                let mut effects = Self::expire(world);
-                effects.push(Effect::ShowMessage {
-                    text: "Unclaimed supply drops expired.".into(),
-                });
-                return effects;
+                return Self::expire(world);
             }
         }
         let (tags, links) = world.borrow::<(View<PropEcoType>, View<Links>)>().unwrap();

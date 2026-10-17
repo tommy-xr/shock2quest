@@ -9,7 +9,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 use cgmath::{Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, vec3};
@@ -739,10 +738,6 @@ fn cleanup_enemies(world: &World, include_living: bool) -> Vec<Effect> {
         .collect()
 }
 
-/// How long a wave's opening card stays up. Shorter than the mission's own
-/// title card: it interrupts a fight that is already starting.
-const WAVE_CARD_DURATION: Duration = Duration::from_secs(3);
-
 // One song per authored level with a music bed, in deck progression order:
 // MedSci 1/2, Engineering 1/2, Hydroponics 1/2, Operations 2/3/4,
 // Recreation 1, Command 1/2, Rickenbacker 1 (their SONGPARAMS values).
@@ -946,15 +941,6 @@ impl HordeDirector {
         self.spawned = 0;
         self.clock = 0.0;
         self.next_spawn = 0.0;
-        self.next_status = 4.0;
-        // The wave card, on the same centered banner the Earth mission opens
-        // with - a wave boundary is the one moment in a run worth interrupting
-        // the view for. The periodic `status` line keeps reporting the wave on
-        // the message channel from four seconds in.
-        effects.push(Effect::ShowBanner {
-            text: format!("WAVE {} / ACTIVE", self.wave),
-            duration: WAVE_CARD_DURATION,
-        });
         effects.push(Effect::SetSurvivalStatus(self.screen_status()));
         Effect::Multiple(effects)
     }
@@ -980,19 +966,11 @@ impl HordeDirector {
         }
     }
 
+    /// The run's outcome summary. Rest and assault state is shown on the
+    /// status screens (`SurvivalStatus`) only, so those phases post nothing.
     fn status(&self) -> Effect {
         let text = match self.phase {
-            Phase::Rest => format!(
-                "Wave {} in {}s | Shops: street | Trainers: subway | OS: landing",
-                self.wave + 1,
-                self.clock.ceil() as u32
-            ),
-            Phase::Assault => format!(
-                "Wave {} | {} attackers left | {} arriving",
-                self.wave,
-                self.enemies.len(),
-                self.quota().saturating_sub(self.spawned)
-            ),
+            Phase::Rest | Phase::Assault => return Effect::NoEffect,
             Phase::Victory => format!(
                 "CONTAINMENT COMPLETE | {} kills | {}m {}s | Use READY for endless",
                 self.kills,
@@ -1020,14 +998,6 @@ impl HordeDirector {
             self.music(),
             wave_alarms(world, false),
             Effect::SetSurvivalStatus(self.screen_status()),
-            Effect::ShowBanner {
-                text: if self.phase == Phase::Victory {
-                    "CONTAINMENT COMPLETE".into()
-                } else {
-                    format!("WAVE {} CLEAR / REST", self.wave)
-                },
-                duration: WAVE_CARD_DURATION,
-            },
             Effect::AwardNanites {
                 amount: 30 + self.wave.min(20) as i32 * 5,
             },
@@ -1265,7 +1235,6 @@ impl Script for HordeDirector {
                 });
             }
             effects.extend(unlock_os_stations(world, self.wave + 1));
-            effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Trainers in subway; shops on street; OS bank at the stair landing: start / waves 3/6/9".into() });
         }
         if !self.music_synced {
             effects.push(self.music());
@@ -1555,25 +1524,49 @@ mod tests {
         }
     }
 
-    /// Each wave opens with the centered card, not just a status line.
+    /// Wave state lives on the status screens: no banner or message line
+    /// repeats it. Rewards and the run's outcome are not on the screens.
     #[test]
-    fn a_wave_opens_with_its_own_banner() {
+    fn wave_state_is_left_to_the_status_screens() {
         let world = World::new();
         let mut director = HordeDirector {
             initialized: true,
             wave: 2,
             ..Default::default()
         };
-        fn banner(effect: Effect) -> Option<(String, Duration)> {
-            match effect {
-                Effect::ShowBanner { text, duration } => Some((text, duration)),
-                Effect::Multiple(effects) => effects.into_iter().find_map(banner),
-                _ => None,
-            }
-        }
-        let (text, duration) = banner(director.start_wave(&world)).expect("a wave card");
-        assert_eq!(text, "WAVE 3 / ACTIVE");
-        assert_eq!(duration, WAVE_CARD_DURATION);
+        let hud_text = |effect| {
+            Effect::flatten(vec![effect])
+                .into_iter()
+                .filter_map(|effect| match effect {
+                    Effect::ShowBanner { text, .. } | Effect::ShowMessage { text } => Some(text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let none = Vec::<String>::new();
+        // Opening a run posts nothing.
+        assert_eq!(
+            hud_text(tick(&mut HordeDirector::default(), &world, 0.1)),
+            none
+        );
+        assert_eq!(hud_text(director.start_wave(&world)), none);
+        assert_eq!(
+            hud_text(tick(&mut director, &world, 6.0)),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            hud_text(director.clear_wave(&world)),
+            ["Wave 3 cleared! +45 nanites, +14 cyber modules"]
+        );
+        // Neither the rest's supply drop nor its expiry posts a message.
+        assert_eq!(hud_text(tick(&mut director, &world, 6.0)), none);
+        assert_eq!(hud_text(tick(&mut director, &world, 90.0)), none);
+        assert_eq!(director.phase, Phase::Rest);
+        director.phase = Phase::Failed;
+        assert_eq!(
+            hud_text(director.status()),
+            ["Containment lost - wave 3 | 0 kills"]
+        );
     }
 
     #[test]
