@@ -230,7 +230,7 @@ test(
     await game.input.set("head.look", [180, 0]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
     try {
-      await game.step({ frames: 24 });
+      await game.step({ frames: 36 });
     } finally {
       await game.input.set("right_hand.thumbstick", [0, 0]);
     }

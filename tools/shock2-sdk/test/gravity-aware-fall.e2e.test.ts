@@ -12,7 +12,7 @@ export async function verifyGravityAwareChute(game: Game, roundtrip = false): Pr
   let reloaded = false;
   let arrived = false;
   let previousY = -30;
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 200; i++) {
     // Observe the authored transfer promptly as the player enters the arena.
     await game.step({ frames: previousY < -310 ? 1 : 30 });
     const { player } = await game.info();

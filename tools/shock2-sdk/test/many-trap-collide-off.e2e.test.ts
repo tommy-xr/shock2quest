@@ -15,7 +15,7 @@ test("many: real cluster destruction opens the sphincter to movement across save
     await game.step({ frames: 30 });
     await game.input.lookAtWorldPoint([11.5, 2.8, 40]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
-    await game.step({ frames: 45 });
+    await game.step({ frames: 60 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
     return (await game.player.position()).z;
   };

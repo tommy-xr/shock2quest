@@ -14,8 +14,9 @@ const close = (actual: number, expected: number, description: string) =>
   );
 
 // The shipped GAMEPARAM speed table is [1.2,1.3,1.4,1.5,1.6,1.7,1.85,2].
-// The port's Agility 1 input pace is 25 Dark units/s = 10 world units/s.
-// Negative-first: the baseline moves 10 world units at both Agility 1 and 6.
+// Retail runs 11 Dark units/s x speed[AGI-1]; the default move_speed_scale
+// dev param adds 1.2x. World units are Dark units / 2.5.
+const RUN = (11 * 1.2) / 2.5;
 for (const vr of [false, true]) {
   test(
     `Agility changes shared ${vr ? "VR" : "flat"} movement, without scaling turn or developer flight`,
@@ -76,20 +77,20 @@ for (const vr of [false, true]) {
       const middle = await travel(2, false, [0, 1]);
       close(
         await travel(2, true, [1, 0]),
-        (10 * 1.3) / 1.2,
-        "crouched strafe keeps Agility scaling",
+        RUN * 1.3 * 0.7,
+        "crouched strafe keeps Agility scaling at retail sidestep speed",
       );
       close(
         await travel(2, false, [0, -0.5]),
-        (5 * 1.3) / 1.2,
-        "partial reverse stays proportional",
+        RUN * 1.3 * 0.5 * 0.5,
+        "partial reverse stays proportional at retail backing speed",
       );
       await game.player.applyStatModifier({ source: "test:agility", stat: "agility", delta: 2, duration_secs: 10 });
-      close(await travel(2, false, [0, 1]), 10 * 1.5 / 1.2,
+      close(await travel(2, false, [0, 1]), RUN * 1.5,
         "movement consumes effective Agility, not just the trained stat");
       assert.equal((await game.info()).player.stats!.agility, 2);
       await game.player.applyStatModifier({ source: "test:agility", stat: "agility", delta: 2, duration_secs: 0 });
-      close(await travel(2, false, [0, 1]), 10 * 1.3 / 1.2, "removing a modifier restores the trained pace");
+      close(await travel(2, false, [0, 1]), RUN * 1.3, "removing a modifier restores the trained pace");
       const high = await travel(6, false, [0, 1]);
       const upgraded = await independentMotion();
       console.info("Measured Agility movement", {
@@ -98,9 +99,9 @@ for (const vr of [false, true]) {
         level2: middle,
         level6: high,
       });
-      close(low, 10, "established Agility1 pace");
+      close(low, RUN * 1.2, "retail Agility1 pace");
       close(middle / low, 1.3 / 1.2, "Agility2 authored ratio");
-      close(high, (10 * 1.7) / 1.2, "Agility6 pace");
+      close(high, RUN * 1.7, "Agility6 pace");
       close(initial.turn, 0.5, "ordinary turn rate");
       close(upgraded.turn, initial.turn, "Agility leaves turn unchanged");
       close(initial.flight, 10, "developer flight retains its pace");
@@ -137,7 +138,7 @@ test(
         player.position[1] + player.camera_offset[1],
         player.position[2] + 10,
       ]);
-      await game.input.set("right_hand.thumbstick", [0, 0.1]);
+      await game.input.set("right_hand.thumbstick", [0, 0.16]);
       await game.step({ frames: 1 });
       const before = (await game.info()).player.position;
       await game.step({ frames: 12 });
@@ -145,7 +146,7 @@ test(
       return planar(before, (await game.info()).player.position);
     };
     const baseMoved = await measure();
-    close(baseMoved, 0.2, "level-1 movement before the native purchase");
+    close(baseMoved, RUN * 1.2 * 0.032, "level-1 movement before the native purchase");
     await teleportVerified(game, { x, y: y + 0.5, z: z + 1.2 });
     await game.step({ frames: 30 });
     await game.entities.sendMessage(trainer.id, { type: "Frob" });
@@ -174,7 +175,7 @@ test(
     );
     close(
       moved,
-      (0.2 * 1.3) / 1.2,
+      RUN * 1.3 * 0.032,
       "purchased Agility changes actual movement",
     );
     await game.step({ frames: 10 });

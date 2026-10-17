@@ -3210,11 +3210,12 @@ struct FailedAnimationGuard {
 /// both, rather than the two silently drifting apart.
 pub const PLAYER_TURN_RATE: f32 = 2.0;
 
-/// Established Agility-1 movement rate, in SS2 units/second at full
-/// deflection (divided by `dark::SCALE_FACTOR` at the point of use). Ordinary
-/// locomotion applies authored Agility ratios here; the free camera keeps
-/// this unmodified rate as its developer speed default.
-pub const PLAYER_MOVE_SPEED: f32 = 25.0;
+/// Retail forward run speed before Agility, in SS2 units/second at full
+/// deflection (divided by `dark::SCALE_FACTOR` at the point of use).
+/// Sidestepping runs at 0.7x and backing up at 0.5x of it, as in retail.
+pub const PLAYER_RUN_SPEED: f32 = 11.0;
+const PLAYER_SIDESTEP_SCALE: f32 = 0.7;
+const PLAYER_BACK_SCALE: f32 = 0.5;
 
 pub struct MissionCore {
     /// Derives world time from the player's tick (`world_time_scale`).
@@ -5219,8 +5220,9 @@ impl MissionCore {
         // Apply once to ordinary stick movement, before collision/flat ladder
         // redirection. Hand pulls, turn, jump launch and free-camera flight
         // have their own paths and do not gain an Agility multiplier.
-        let move_speed = PLAYER_MOVE_SPEED
+        let move_speed = PLAYER_RUN_SPEED
             * movement_scale
+            * crate::dev_params::get(crate::dev_params::MOVE_SPEED_SCALE)
             * self
                 .world
                 .borrow::<UniqueView<QuestInfo>>()
@@ -5234,10 +5236,16 @@ impl MissionCore {
                     }
                 })
                 .unwrap_or(1.0);
+        let back_scale = if move_thumbstick_value.y < 0.0 {
+            PLAYER_BACK_SCALE
+        } else {
+            1.0
+        };
         let forward = dir.rotate_vector(cgmath::vec3(
-            -delta_time * move_thumbstick_value.x * move_speed / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.x * PLAYER_SIDESTEP_SCALE * move_speed
+                / dark::SCALE_FACTOR,
             0.0,
-            -delta_time * move_thumbstick_value.y * move_speed / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.y * back_scale * move_speed / dark::SCALE_FACTOR,
         ));
 
         let up_value = turn_thumbstick_value.y / dark::SCALE_FACTOR;

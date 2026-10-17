@@ -258,29 +258,22 @@ impl Default for PlayerStats {
     }
 }
 
-/// Normalize the retail Agility speed table at the port's existing level-1
-/// locomotion boundary. This preserves the established starting pace while
-/// applying authored relative progression; it is not retail absolute speed.
-///
-/// `ShockPlayer::RecalcData` selects GAMEPARAM.speed[AGI-1], replacing zero
-/// with 1. A missing table or negative/nonfinite entries use the shipped
+/// The shipped GAMEPARAM Agility speed table, used when the gamesys's is unusable.
+pub(crate) const RETAIL_AGILITY_SPEED: [f32; 8] = [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.85, 2.0];
+
+/// Retail's Agility run-speed multiplier: GAMEPARAM.speed[AGI-1], with zero
+/// meaning 1. A missing table or negative/nonfinite entries use the shipped
 /// table; valid custom tables (including equal levels and zero entries) win.
 /// The caller supplies effective Agility, including active modifiers and implants.
 /// Fall vulnerability and weapon handling are independent of this scale.
 pub fn agility_movement_scale(agility: i32, params: Option<&dark::gamesys::GameParams>) -> f32 {
-    const RETAIL_SPEED: [f32; 8] = [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.85, 2.0];
     let authored = params
         .map(|params| &params.speed)
         .filter(|speed| speed.iter().all(|value| value.is_finite() && *value >= 0.0))
-        .unwrap_or(&RETAIL_SPEED);
-    let retail_zero = |value: f32| if value == 0.0 { 1.0 } else { value };
-    let index = (agility.clamp(1, 8) - 1) as usize;
-    let scale = retail_zero(authored[index]) / retail_zero(authored[0]);
-    // A finite but tiny custom baseline can overflow the ratio.
-    if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        RETAIL_SPEED[index] / RETAIL_SPEED[0]
+        .unwrap_or(&RETAIL_AGILITY_SPEED);
+    match authored[(agility.clamp(1, 8) - 1) as usize] {
+        0.0 => 1.0,
+        value => value,
     }
 }
 
@@ -982,16 +975,16 @@ mod agility_tests {
         }
     }
     #[test]
-    fn agility_normalizes_at_level_one_and_uses_every_authored_entry() {
+    fn agility_uses_every_authored_entry_as_an_absolute_scale() {
         let authored = params([2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
         for level in 1..=8 {
             assert_eq!(
                 agility_movement_scale(level, Some(&authored)),
-                (level + 1) as f32 / 2.0
+                (level + 1) as f32
             );
         }
-        assert_eq!(agility_movement_scale(i32::MIN, Some(&authored)), 1.0);
-        assert_eq!(agility_movement_scale(i32::MAX, Some(&authored)), 4.5);
+        assert_eq!(agility_movement_scale(i32::MIN, Some(&authored)), 2.0);
+        assert_eq!(agility_movement_scale(i32::MAX, Some(&authored)), 9.0);
     }
     #[test]
     fn agility_keeps_retail_zero_semantics_and_falls_back_only_for_unusable_tables() {
@@ -1001,15 +994,11 @@ mod agility_tests {
         assert_eq!(agility_movement_scale(2, Some(&authored)), 2.0);
         authored.speed = [2.0; 8];
         authored.speed[1] = 0.0;
-        assert_eq!(agility_movement_scale(2, Some(&authored)), 0.5);
+        assert_eq!(agility_movement_scale(2, Some(&authored)), 1.0);
         for invalid in [-1.0, f32::NAN, f32::INFINITY] {
             authored.speed[7] = invalid;
-            assert_eq!(agility_movement_scale(2, Some(&authored)), 1.3 / 1.2);
+            assert_eq!(agility_movement_scale(2, Some(&authored)), 1.3);
         }
-        assert_eq!(agility_movement_scale(6, None), 1.7 / 1.2);
-        authored.speed = [1.0; 8];
-        authored.speed[0] = f32::MIN_POSITIVE;
-        authored.speed[1] = f32::MAX;
-        assert_eq!(agility_movement_scale(2, Some(&authored)), 1.3 / 1.2);
+        assert_eq!(agility_movement_scale(6, None), 1.7);
     }
 }

@@ -399,7 +399,9 @@ test(
     // hook a rail of the far ladder just under its cap.
     await game.input.lookAtWorldPoint([-20, landed[1] + 1, ARCH]);
     await game.input.set("left_hand.thumbstick", [0, 1]);
-    for (let f = 0; f < 120 && (await player(game)).position[0] > -8.6; f += 1) {
+    // Stop far enough out that, down the far ladder, the body clears the
+    // arch to stand up again.
+    for (let f = 0; f < 120 && (await player(game)).position[0] > -8.7; f += 1) {
       await game.step({ frames: 1 });
     }
     await game.input.set("left_hand.thumbstick", [0, 0]);

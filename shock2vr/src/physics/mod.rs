@@ -1840,6 +1840,13 @@ fn plan_jump_mantle(
                 ray_segment_is_clear(scripted_queries, raised, raised_forward);
             let validation_probe_clear =
                 ray_segment_is_clear(validation_queries, raised, raised_forward);
+            // The compressed body's underside must also pass: a probe that
+            // only grazes an object's top would fail the route preflight
+            // below, where a higher probe can still pass. Terrain is exempt
+            // there, so it is here too.
+            let drop = Vector::y() * ((body_radius + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR);
+            let body_clears_objects =
+                ray_segment_is_clear(scripted_queries, raised - drop, raised_forward - drop);
             if scripted_probe_clear {
                 // A platform above the current floor is a genuine mantle even
                 // when its underside has no blocking vertical face.
@@ -1863,15 +1870,7 @@ fn plan_jump_mantle(
                             // roof (#744).
                             && rise <= max_rise
                     })
-                    // The compressed body's underside must also pass: a probe
-                    // that only grazes an object's top would fail the route
-                    // preflight below, where a higher probe can still pass.
-                    // Terrain is exempt there, so it is here too.
-                    .filter(|_| {
-                        let drop =
-                            Vector::y() * ((body_radius + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR);
-                        ray_segment_is_clear(scripted_queries, raised - drop, raised_forward - drop)
-                    });
+                    .filter(|_| body_clears_objects);
                 // A same-height floor visible above the lower candidate is the
                 // stacked-terrain signature: the continuous capsule cannot
                 // descend without first clearing that overhang. An ordinary
@@ -1967,13 +1966,14 @@ fn plan_jump_mantle(
                 // pose beyond it. That destination may itself open over a
                 // drop, as SHODAN's initial final-descent barrier does; do not
                 // skip that normal crossing in favor of a deeper landing.
-                let same_height_standing = (walk_blocked && validation_probe_clear)
-                    .then(|| pos.translation.vector + direction * forward)
-                    .filter(|target| {
-                        !level_bounds.is_some_and(|bounds| {
-                            bounds.is_beneath_floor(validation_queries, *target)
-                        })
-                    });
+                let same_height_standing =
+                    (walk_blocked && validation_probe_clear && body_clears_objects)
+                        .then(|| pos.translation.vector + direction * forward)
+                        .filter(|target| {
+                            !level_bounds.is_some_and(|bounds| {
+                                bounds.is_beneath_floor(validation_queries, *target)
+                            })
+                        });
                 if let Some(final_standing) = elevated_standing.or(same_height_standing) {
                     if !shape_intersects(validation_queries, final_standing, &final_shape) {
                         transition = Some((raised, raised_forward, final_standing));
@@ -15717,6 +15717,53 @@ mod tests {
         assert!(
             end.x > 0.0 && end.y > 4.4,
             "jump should mantle onto the elevated platform, ended {end:?}"
+        );
+    }
+
+    /// Pressed against a crate with open floor behind it, a jump mantles onto
+    /// the crate. A probe that grazes its top must not instead pick the
+    /// same-height crossing to the floor behind, which the object then blocks.
+    #[test]
+    fn jump_against_a_crate_mantles_onto_it_not_past_it() {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(1000).unwrap(),
+            vec3(0.0, -0.5, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(20.0, 1.0, 20.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        // 8 ft tall, 4 ft deep: within mantle reach, short enough to cross.
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(0.0, 1.6, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(1.6, 3.2, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player = world.create_player(
+            vec3(-2.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+        let mut highest = f32::MIN;
+        for frame in 0..180 {
+            world.update_with_facing_and_jump(
+                vec3(0.1, 0.0, 0.0),
+                Vector3::unit_x(),
+                frame == 60,
+                &mut player,
+            );
+            highest = highest.max(world.get_player_translation(&player).y);
+        }
+        // Held input walks off the far side afterwards; the top is what counts.
+        assert!(
+            highest > 3.2 + PLAYER_HALF_HEIGHT - 0.1,
+            "jump should mantle onto the crate top, peaked at y={highest}"
         );
     }
 

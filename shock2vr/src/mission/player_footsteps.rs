@@ -26,20 +26,23 @@ use cgmath::{InnerSpace, Vector3};
 use dark::SCALE_FACTOR;
 use engine::audio::AudioHandle;
 
-use crate::{mission::PLAYER_MOVE_SPEED, scripts::Effect, scripts::script_util};
+use crate::{mission::PLAYER_RUN_SPEED, scripts::Effect, scripts::script_util};
 
-/// Footsteps per second the stride below is calibrated for, at unobstructed
-/// full-speed movement. The port's player travels ~9.7 world units/second
-/// (measured walking medsci1 in the open), which is a run rather than a walk,
-/// so this matches the ~3.5/s the creature half measured for a jogging hybrid
-/// rather than a strolling pace.
+/// Footsteps per second the stride below is calibrated for, at an Agility-1
+/// retail run. That is a run rather than a walk, so this matches the ~3.5/s
+/// the creature half measured for a jogging hybrid rather than a strolling
+/// pace.
 const TARGET_FOOTSTEPS_PER_SECOND: f32 = 3.5;
 
 /// How far the player walks per footstep, in world units. Derived from the
 /// movement speed so the cadence cannot drift if that is retuned; a player
 /// moving at any other speed simply steps proportionally more or less often,
 /// which is the whole point of pacing on distance.
-const STRIDE_DISTANCE: f32 = PLAYER_MOVE_SPEED / SCALE_FACTOR / TARGET_FOOTSTEPS_PER_SECOND;
+const STRIDE_DISTANCE: f32 = AGILITY_1_RUN_SPEED / TARGET_FOOTSTEPS_PER_SECOND;
+
+/// Agility-1 retail run speed, in world units/second.
+const AGILITY_1_RUN_SPEED: f32 =
+    PLAYER_RUN_SPEED * crate::player_stats::RETAIL_AGILITY_SPEED[0] / SCALE_FACTOR;
 
 /// Crouched stride multiplier. Crouching does not slow the player down in this
 /// port, and the schema authors no quieter crouch sample (and volume is
@@ -322,7 +325,7 @@ mod tests {
         // The absolute check: one second of unobstructed full-speed movement,
         // fed frame by frame exactly as `MissionCore::update` builds it.
         let mut footsteps = PlayerFootsteps::new();
-        let per_frame = PLAYER_MOVE_SPEED / SCALE_FACTOR / 60.0;
+        let per_frame = AGILITY_1_RUN_SPEED / 60.0;
         let steps = count_steps(&mut footsteps, 60, per_frame);
         assert!(
             (3..=4).contains(&steps),

@@ -215,7 +215,7 @@ test(
     // Keep the same ordinary forward input held. The scripted rise must clear
     // the wall before the crossing, then fully expand and restore ordinary
     // walking beyond the ladder's geometry-derived exit. Scripted mantle
-    // substeps are capped at 0.067 world units/frame; the first >0.1 projected
+    // substeps are capped at 0.067 world units/frame; the first >0.075 projected
     // frame therefore proves the standing capsule and regular locomotion were
     // restored before input release.
     const cap = lastBeforeForward;
@@ -231,7 +231,7 @@ test(
       const beyondLip =
         cleared.x > ladder.x + 1 &&
         cleared.z > ladder.z + 0.35;
-      regularWalkResumed = beyondLip && forwardDelta > 0.1;
+      regularWalkResumed = beyondLip && forwardDelta > 0.075;
       previousHeld = cleared;
       if (regularWalkResumed) {
         break;
