@@ -1,6 +1,8 @@
 //! Muzzle geometry in the rendered weapon's local frame. Authored ID 0 wins;
 //! missing points use the barrel end of the visible gun, excluding its arms.
-use cgmath::{EuclideanSpace, InnerSpace, Matrix4, Point3, Transform, Vector3, point3, vec3};
+use cgmath::{
+    EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Transform, Vector3, point3, vec3,
+};
 use collision::{Aabb, Aabb3};
 use dark::{
     importers::{GLOVE_WEAPON_IMPORTER, GRIP_SURFACE_IMPORTER},
@@ -9,7 +11,10 @@ use dark::{
 use engine::assets::asset_cache::AssetCache;
 use shipyard::{Component, EntityId, Get, View, World};
 
-use crate::{physics::PhysicsWorld, runtime_props::RuntimePropVhots};
+use crate::{
+    mission::entity_creator::CreateEntityOptions, physics::PhysicsWorld,
+    runtime_props::RuntimePropVhots, scripts::Effect,
+};
 
 #[derive(Component, Clone, Copy, Debug)]
 pub(crate) struct MuzzleFallback {
@@ -155,6 +160,25 @@ pub(crate) fn clamp_projectile_spawn(
                 point_vs_terrain,
                 can_hit,
             )
+}
+
+/// A gun flash entity at `position` in `root_transform`'s space, its mesh
+/// turned onto `axis` (the shot direction in that space). Flash meshes are
+/// authored along -X, like held gun barrels.
+pub(crate) fn flash_entity(
+    template_id: i32,
+    root_transform: Matrix4<f32>,
+    position: Point3<f32>,
+    axis: Vector3<f32>,
+    options: CreateEntityOptions,
+) -> Effect {
+    Effect::CreateEntity {
+        template_id,
+        position,
+        orientation: Quaternion::from_arc(vec3(-1.0, 0.0, 0.0), axis, None),
+        root_transform,
+        options,
+    }
 }
 
 #[cfg(test)]

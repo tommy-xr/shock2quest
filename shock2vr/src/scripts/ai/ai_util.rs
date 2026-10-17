@@ -535,13 +535,13 @@ pub fn fire_ranged_weapon(
         );
 
         if let Some((muzzle_flash_template_id, _muzzle_flash_options)) = maybe_muzzle_flash {
-            fire_effects.push(Effect::CreateEntity {
-                template_id: muzzle_flash_template_id,
-                position: point3(0.0, 0.0, 0.0),
-                orientation: Quaternion::from_angle_y(Deg(90.0)),
-                root_transform: muzzle_transform,
-                options: CreateEntityOptions::default(),
-            })
+            fire_effects.push(crate::weapon_muzzle::flash_entity(
+                muzzle_flash_template_id,
+                muzzle_transform,
+                point3(0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, 1.0),
+                CreateEntityOptions::default(),
+            ))
         }
 
         Effect::combine(fire_effects)
@@ -718,13 +718,14 @@ fn muzzle_flash_and_smoke(
     let flash = kind
         .authored_flash()
         .and_then(lookup)
-        .map(|template_id| Effect::CreateEntity {
-            template_id,
-            position: point3(0.0, 0.0, 0.0),
-            // Flash meshes point down -X; turn that onto the shot.
-            orientation: Quaternion::from_angle_y(Deg(90.0)),
-            root_transform: frame,
-            options: CreateEntityOptions::default(),
+        .map(|template_id| {
+            crate::weapon_muzzle::flash_entity(
+                template_id,
+                frame,
+                point3(0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, 1.0),
+                CreateEntityOptions::default(),
+            )
         })
         .unwrap_or(Effect::NoEffect);
     Effect::combine(vec![

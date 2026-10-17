@@ -966,25 +966,19 @@ pub(super) fn create_muzzle_flash(
         };
     }
 
-    // Flash meshes are authored along -X, just like held gun barrels. The old
-    // inverse grip adjustment turned them 180 degrees, putting their one-sided
-    // faces away from the shooter and the cone back inside the gun.
-    let axis = crate::weapon_muzzle::resolve(world, entity_id).axis;
-    let orientation = Quaternion::from_arc(cgmath::vec3(-1.0, 0.0, 0.0), axis, None);
-
-    Effect::CreateEntity {
-        template_id: muzzle_flash_template_id,
-        position: vhot_offset,
-        orientation,
-        root_transform: transform.0,
-        // Bolt the flash to the firing weapon so it tracks the (per-frame
-        // re-placed) first-person viewmodel during its brief lifetime instead of
-        // staying pinned at the fire-time pose.
-        options: CreateEntityOptions {
+    // Bolt the flash to the firing weapon so it tracks the (per-frame
+    // re-placed) first-person viewmodel during its brief lifetime instead of
+    // staying pinned at the fire-time pose.
+    crate::weapon_muzzle::flash_entity(
+        muzzle_flash_template_id,
+        transform.0,
+        vhot_offset,
+        crate::weapon_muzzle::resolve(world, entity_id).axis,
+        CreateEntityOptions {
             attach_to: Some(entity_id),
             ..CreateEntityOptions::default()
         },
-    }
+    )
 }
 
 /// Spawn a shot from a weapon **the player is firing**.
