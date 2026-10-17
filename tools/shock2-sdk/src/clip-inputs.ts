@@ -138,9 +138,7 @@ export class ClipInputRecorder {
     }
     const part = channelPart(channel);
     if (!part) return;
-    // The Quest runtime negates stick x into the game's channel; undo it so the
-    // replay tilts the stick the way the player's thumb did.
-    this.level(part, Array.isArray(value) ? [-Number(value[0]) || 0, Number(value[1])] : Number(value));
+    this.level(part, Array.isArray(value) ? [Number(value[0]), Number(value[1])] : Number(value));
   }
 
   private track(part: string): InputKeyframe[] {
