@@ -668,11 +668,6 @@ pub fn fire_ranged_projectile(
     }
 }
 
-/// `Slug Flash` (flash02) is centred on its origin. A turret buries its rear
-/// half in the barrel; over a hybrid's thin shotgun it would show, so the
-/// flash starts at the muzzle instead.
-const SLUG_FLASH_HALF_LENGTH: f32 = 0.706;
-
 /// The visible report of a creature's shot: at the weapon's muzzle, found
 /// from the authored launch point and the shooter's facing, oriented along
 /// the shot (`aim`, +Z forward). Unlisted rounds keep their bare launch.
@@ -701,7 +696,7 @@ fn muzzle_flash_and_smoke(
         .and_then(lookup)
         .map(|template_id| Effect::CreateEntity {
             template_id,
-            position: point3(0.0, 0.0, SLUG_FLASH_HALF_LENGTH),
+            position: point3(0.0, 0.0, 0.0),
             // Flash meshes point down -X; turn that onto the shot.
             orientation: Quaternion::from_angle_y(Deg(90.0)),
             root_transform: frame,
@@ -2521,7 +2516,7 @@ mod muzzle_tests {
         });
         let names = [
             ("grunt shotgun slug", -676),
-            ("slug flash", -371),
+            ("assault flash", -2653),
             ("droid laser bolt", -1501),
         ];
         world.add_unique(GlobalEntityMetadata(
@@ -2598,7 +2593,7 @@ mod muzzle_tests {
             });
             let flash = effects.iter().find_map(|effect| match effect {
                 Effect::CreateEntity {
-                    template_id: -371,
+                    template_id: -2653,
                     root_transform,
                     ..
                 } => Some(Point3::from_homogeneous(root_transform.w)),
