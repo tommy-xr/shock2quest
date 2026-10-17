@@ -6,24 +6,14 @@ import { beforeEach, test } from "node:test";
 
 import {
   MISSION_CONFIG,
-  apkArtifactName,
-  installApk,
-  isSignatureMismatch,
   missionSelection,
   restoreMissionSelection,
-  selectBuildRun,
   selectMission,
 } from "./quest-device.mjs";
 
 let device;
 beforeEach((t) => {
-  device = {
-    exists: false,
-    contents: Buffer.alloc(0),
-    failure: null,
-    installedKey: "debug",
-    uninstalls: 0,
-  };
+  device = { exists: false, contents: Buffer.alloc(0), failure: null };
   t.mock.method(childProcess, "execFileSync", (command, args, options) => {
     assert.equal(command, "adb");
     assert.deepEqual(args.slice(0, 2), ["-s", "test-device"]);
@@ -50,17 +40,6 @@ beforeEach((t) => {
       assert.equal(values[1], MISSION_CONFIG);
       device.contents = readFileSync(values[0]);
       device.exists = true;
-    } else if (operation === "install") {
-      if (device.installedKey === "debug") {
-        const error = new Error("Command failed: adb install");
-        error.stderr =
-          "adb: failed to install x.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]";
-        throw error;
-      }
-      device.installedKey = "release";
-    } else if (operation === "uninstall") {
-      device.installedKey = null;
-      device.uninstalls += 1;
     } else if (operation === "shell" && values[0] === "rm") {
       assert.deepEqual(values, ["rm", "-f", MISSION_CONFIG]);
       device.exists = false;
@@ -120,65 +99,4 @@ test("read errors abort the snapshot instead of reporting absence", () => {
 test("unexpected probe output cannot be treated as an absent selector", () => {
   device.failure = "probe";
   assert.throws(() => missionSelection("test-device"), /mission selector/);
-});
-
-const SHA = "0123456789abcdef0123456789abcdef01234567";
-const run = (databaseId, status, conclusion) => ({
-  databaseId,
-  status,
-  conclusion,
-  url: `https://example.test/runs/${databaseId}`,
-});
-
-test("artifact name carries the full head SHA", () => {
-  assert.equal(apkArtifactName(SHA), `shock2quest-apk-${SHA}`);
-});
-
-test("picks a successful run for the SHA", () => {
-  const runs = [run(2, "completed", "failure"), run(1, "completed", "success")];
-  assert.equal(selectBuildRun(runs, SHA).databaseId, 1);
-});
-
-test("refuses when the SHA has no run", () => {
-  assert.throws(
-    () => selectBuildRun([], SHA, "feat/x"),
-    /no Build Android run.*--ref feat\/x/,
-  );
-});
-
-test("refuses an in-progress run and names its URL", () => {
-  assert.throws(
-    () => selectBuildRun([run(3, "in_progress", "")], SHA),
-    /still in_progress: https:\/\/example.test\/runs\/3/,
-  );
-});
-
-test("refuses a failed run and names its URL", () => {
-  assert.throws(
-    () => selectBuildRun([run(4, "completed", "failure")], SHA),
-    /failure: https:\/\/example.test\/runs\/4/,
-  );
-});
-
-test("only a signature mismatch triggers the uninstall fallback", () => {
-  assert.ok(
-    isSignatureMismatch(
-      "adb: failed to install x.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package signatures do not match newer version; ignoring!]",
-    ),
-  );
-  assert.equal(
-    isSignatureMismatch("Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]"),
-    false,
-  );
-});
-
-test("a signature change refuses to uninstall unless allowed", () => {
-  assert.throws(
-    () => installApk("test-device", "x.apk"),
-    /--allow-uninstall/,
-  );
-  assert.equal(device.uninstalls, 0);
-  installApk("test-device", "x.apk", { allowUninstall: true });
-  assert.equal(device.uninstalls, 1);
-  assert.equal(device.installedKey, "release");
 });

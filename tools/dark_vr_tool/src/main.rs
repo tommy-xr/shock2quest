@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use std::{
     io::{self, IsTerminal},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     thread,
     time::Duration,
@@ -66,6 +66,16 @@ enum Action {
     Deploy {
         #[arg(long)]
         apk: Option<PathBuf>,
+    },
+    /// Install and launch the APK CI built for a PR's head commit (needs gh)
+    Pr {
+        number: u32,
+        /// Also set the startup mission, as `mission set` does
+        #[arg(long)]
+        mission: Option<String>,
+        /// Replace an install signed with another key; deletes its saves
+        #[arg(long)]
+        allow_uninstall: bool,
     },
     /// Switch the USB-attached headset to ADB over Wi-Fi (lasts until reboot)
     Wifi {
@@ -154,6 +164,14 @@ fn main() -> Result<()> {
             Some(apk_path()?)
         }
         Action::Deploy { apk: Some(path) } => Some(path.clone()),
+        Action::Pr {
+            number, mission, ..
+        } => {
+            if let Some(mission) = mission {
+                validate_setting(mission, true)?;
+            }
+            Some(fetch_pr_apk(*number)?)
+        }
         _ => None,
     };
     if let Some(path) = &apk {
@@ -188,8 +206,23 @@ fn main() -> Result<()> {
             device.setting(quest_config::MISSION_CONFIG_PATH, action, true)?
         }
         Action::DebugPort { action } => device.setting(DEBUG_PORT, action, false)?,
+        Action::Pr {
+            mission,
+            allow_uninstall,
+            ..
+        } => {
+            device.install(&apk.unwrap(), allow_uninstall)?;
+            if let Some(value) = mission {
+                device.setting(
+                    quest_config::MISSION_CONFIG_PATH,
+                    Setting::Set { value },
+                    true,
+                )?;
+            }
+            device.launch()?;
+        }
         Action::Run { .. } | Action::Deploy { .. } => {
-            inherit(device.adb().args(["install", "-r"]).arg(apk.unwrap()))?;
+            device.install(&apk.unwrap(), false)?;
             if let Action::Run { no_logcat } = action {
                 device.launch()?;
                 if !no_logcat {
@@ -422,6 +455,22 @@ impl Device {
             last.trim()
         )
     }
+    fn install(&self, apk: &Path, allow_uninstall: bool) -> Result<()> {
+        // -g grants storage up front; a fresh install would otherwise prompt.
+        let install = || output(self.adb().args(["install", "-r", "-g"]).arg(apk));
+        let installed = match install() {
+            Err(error) if uninstall_before_retry(&error.to_string(), allow_uninstall)? => {
+                eprintln!(
+                    "Installed app has another signing key; uninstalling it (deletes its saves)"
+                );
+                output(self.adb().args(["uninstall", PACKAGE]))?;
+                install()?
+            }
+            result => result?,
+        };
+        print!("{installed}");
+        Ok(())
+    }
     fn launch(&self) -> Result<()> {
         let result = self.shell(&format!(
             "am start -S -W -n {PACKAGE}/android.app.NativeActivity"
@@ -595,6 +644,141 @@ fn validate_setting(value: &str, mission: bool) -> Result<Option<String>> {
     Ok(Some(port.to_string()))
 }
 
+/// Uploaded by `.github/workflows/build-android.yml`.
+fn apk_artifact_name(sha: &str) -> String {
+    format!("shock2quest-apk-{sha}")
+}
+
+#[derive(Debug)]
+struct BuildRun {
+    id: u64,
+    status: String,
+    conclusion: String,
+    url: String,
+}
+
+/// `gh run list --json databaseId,status,conclusion,url` output.
+fn parse_runs(json: &str) -> Result<Vec<BuildRun>> {
+    let runs: Vec<serde_json::Value> = serde_json::from_str(json)?;
+    runs.iter()
+        .map(|run| {
+            let text = |key: &str| run[key].as_str().unwrap_or_default().to_owned();
+            Ok(BuildRun {
+                id: run["databaseId"]
+                    .as_u64()
+                    .context("run without databaseId")?,
+                status: text("status"),
+                conclusion: text("conclusion"),
+                url: text("url"),
+            })
+        })
+        .collect()
+}
+
+/// A successful run of the head commit's build (runs newest first); anything
+/// else is refused, so a stale APK is never installed.
+fn select_build_run<'a>(runs: &'a [BuildRun], sha: &str, branch: &str) -> Result<&'a BuildRun> {
+    if let Some(run) = runs
+        .iter()
+        .find(|run| run.status == "completed" && run.conclusion == "success")
+    {
+        return Ok(run);
+    }
+    let Some(latest) = runs.first() else {
+        bail!(
+            "no Build Android run for {sha} (paths-ignored pushes skip it); start one: gh workflow run build-android.yml --ref {branch}"
+        )
+    };
+    if latest.status != "completed" {
+        bail!(
+            "Build Android for {sha} is still {}: {}",
+            latest.status,
+            latest.url
+        );
+    }
+    bail!(
+        "Build Android for {sha} ended {}: {}",
+        latest.conclusion,
+        latest.url
+    )
+}
+
+/// Whether a failed `adb install` is retried after an uninstall. Only a
+/// signing-key change qualifies (a CI APK over a local build, or back), and
+/// since uninstalling deletes the app-private saves it must be opted into.
+fn uninstall_before_retry(install_error: &str, allow_uninstall: bool) -> Result<bool> {
+    if !install_error.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+        return Ok(false);
+    }
+    ensure!(
+        allow_uninstall,
+        "installed app has another signing key; replacing it uninstalls it and deletes its saves (pr --allow-uninstall, or adb uninstall {PACKAGE})"
+    );
+    Ok(true)
+}
+
+fn gh(args: &[&str]) -> Result<String> {
+    output(Command::new("gh").current_dir(repo_root()).args(args))
+}
+
+/// Downloads PR `number`'s CI APK into a per-commit temp cache.
+fn fetch_pr_apk(number: u32) -> Result<PathBuf> {
+    let pr: serde_json::Value = serde_json::from_str(&gh(&[
+        "pr",
+        "view",
+        &number.to_string(),
+        "--json",
+        "headRefOid,headRefName",
+    ])?)?;
+    let (Some(sha), Some(branch)) = (pr["headRefOid"].as_str(), pr["headRefName"].as_str()) else {
+        bail!("gh pr view {number} reported no head commit")
+    };
+    ensure!(
+        sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+        "unexpected head SHA {sha:?}"
+    );
+    println!("PR #{number} {branch} @ {sha}");
+    let cache = std::env::temp_dir().join("shock2quest-pr-apk").join(sha);
+    let apk = cache.join("shock2quest.apk");
+    // One commit is one build, so a cached APK cannot be stale.
+    if apk.is_file() {
+        return Ok(apk);
+    }
+    let runs = parse_runs(&gh(&[
+        "run",
+        "list",
+        "--workflow",
+        "build-android.yml",
+        "--commit",
+        sha,
+        "--json",
+        "databaseId,status,conclusion,url",
+    ])?)?;
+    let run = select_build_run(&runs, sha, branch)?;
+    // Stage per process so an interrupted or concurrent download is never reused.
+    let staging = cache.with_extension(format!("partial-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    let downloaded = gh(&[
+        "run",
+        "download",
+        &run.id.to_string(),
+        "-n",
+        &apk_artifact_name(sha),
+        "-D",
+        &staging.to_string_lossy(),
+    ]);
+    if let Err(error) = downloaded {
+        let _ = std::fs::remove_dir_all(&staging);
+        bail!(
+            "{} has no APK artifact (built before CI uploaded one, or older than 30 days): {error}",
+            run.url
+        );
+    }
+    let _ = std::fs::remove_dir_all(&cache);
+    std::fs::rename(&staging, &cache)?;
+    Ok(apk)
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -668,6 +852,48 @@ mod tests {
         // An unflushed recording (no header yet) is skipped, not fatal.
         let listing = format!("0\trec-11\t\n{listing}");
         assert_eq!(parse_recordings(&listing).len(), 2);
+    }
+    fn run(id: u64, status: &str, conclusion: &str) -> BuildRun {
+        BuildRun {
+            id,
+            status: status.into(),
+            conclusion: conclusion.into(),
+            url: format!("https://example.test/runs/{id}"),
+        }
+    }
+    #[test]
+    fn pr_build_selection_never_installs_a_stale_apk() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(apk_artifact_name(sha), format!("shock2quest-apk-{sha}"));
+        let runs = parse_runs(
+            r#"[{"databaseId":2,"status":"completed","conclusion":"failure","url":"u2"},
+                {"databaseId":1,"status":"completed","conclusion":"success","url":"u1"}]"#,
+        )
+        .unwrap();
+        assert_eq!(select_build_run(&runs, sha, "b").unwrap().id, 1);
+        let error = |runs: &[BuildRun]| {
+            select_build_run(runs, sha, "feat/x")
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(error(&[]).contains("--ref feat/x"));
+        assert!(
+            error(&[run(3, "in_progress", "")])
+                .contains("still in_progress: https://example.test/runs/3")
+        );
+        assert!(
+            error(&[run(4, "completed", "failure")])
+                .contains("failure: https://example.test/runs/4")
+        );
+    }
+    #[test]
+    fn only_an_allowed_signature_change_uninstalls() {
+        let mismatch = "adb: failed to install x.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]";
+        assert!(uninstall_before_retry(mismatch, false).is_err());
+        assert!(uninstall_before_retry(mismatch, true).unwrap());
+        let other = "Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]";
+        assert!(!uninstall_before_retry(other, true).unwrap());
+        assert!(!uninstall_before_retry(other, false).unwrap());
     }
     #[test]
     fn shell_paths_are_literal() {
