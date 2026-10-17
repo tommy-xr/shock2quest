@@ -1086,26 +1086,26 @@ mod tests {
 
     #[test]
     fn a_release_throws_the_body_against_the_pull() {
-        // A hand hauled down 0.1 wu per frame throws the body up at 6 wu/s.
-        let velocity = release_velocity(&[vec3(0.0, -0.1, 0.0); 4], DT)
+        // A hand hauled down 0.08 wu per frame throws the body up at 4.8 wu/s.
+        let velocity = release_velocity(&[vec3(0.0, -0.08, 0.0); 4], DT)
             .expect("a real pull should throw the body");
         assert!(
-            (velocity - vec3(0.0, 6.0, 0.0)).magnitude() < 1.0e-4,
+            (velocity - vec3(0.0, 4.8, 0.0)).magnitude() < 1.0e-4,
             "{velocity:?}"
         );
 
         // The mean is what counts: one frame of tracking noise cannot double it.
         let averaged = release_velocity(
             &[
-                vec3(0.0, -0.1, 0.0),
-                vec3(0.0, -0.3, 0.0),
-                vec3(0.0, -0.1, 0.0),
-                vec3(0.0, 0.1, 0.0),
+                vec3(0.0, -0.08, 0.0),
+                vec3(0.0, -0.24, 0.0),
+                vec3(0.0, -0.08, 0.0),
+                vec3(0.0, 0.08, 0.0),
             ],
             DT,
         )
         .expect("a real pull should throw the body");
-        assert!((averaged.y - 6.0).abs() < 1.0e-4, "{averaged:?}");
+        assert!((averaged.y - 4.8).abs() < 1.0e-4, "{averaged:?}");
     }
 
     #[test]
@@ -1182,17 +1182,17 @@ mod tests {
 
     #[test]
     fn letting_go_of_the_last_hold_launches_the_body() {
-        // A quick haul: 0.1 wu of hand travel per frame, let go mid-pull.
-        let released = pull_and_finish(4, vec3(0.0, -0.1, 0.0), |climb, at| {
-            open_the_hand(climb, at + vec3(0.0, -0.1, 0.0))
+        // A quick haul: 0.08 wu of hand travel per frame, let go mid-pull.
+        let released = pull_and_finish(4, vec3(0.0, -0.08, 0.0), |climb, at| {
+            open_the_hand(climb, at + vec3(0.0, -0.08, 0.0))
         });
         let launch = released.launch.expect("a quick pull should launch");
-        assert!((launch.y - 6.0).abs() < 0.1, "{launch:?}");
+        assert!((launch.y - 4.8).abs() < 0.1, "{launch:?}");
         assert_eq!(released.translation, None);
 
         // Stopping the hand before opening it is part of the pull: the same
         // haul, released from rest, throws proportionally less.
-        let stopped = pull_and_finish(4, vec3(0.0, -0.1, 0.0), open_the_hand);
+        let stopped = pull_and_finish(4, vec3(0.0, -0.08, 0.0), open_the_hand);
         let stopped = stopped.launch.expect("a quick pull should launch");
         assert!(stopped.y > 0.0 && stopped.y < launch.y, "{stopped:?}");
     }
