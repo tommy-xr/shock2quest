@@ -877,6 +877,12 @@ pub enum Effect {
         from: Vector3<f32>,
         to: Vector3<f32>,
     },
+    /// Where a traveling shot struck, so its trail reaches the impact: the
+    /// shot is destroyed before its trail would sample it there.
+    ProjectileTrailEnd {
+        entity_id: EntityId,
+        point: Vector3<f32>,
+    },
 
     DrawDebugLines {
         lines: Vec<(Point3<f32>, Point3<f32>, Vector4<f32>)>,

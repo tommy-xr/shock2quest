@@ -3229,6 +3229,7 @@ pub struct MissionCore {
     pub rag_doll_manager: RagDollManager,
     pub debug_lines: Vec<DebugLine>,
     psi_drain_trails: Vec<crate::psi_visuals::DrainTrail>,
+    projectile_trails: crate::projectile_trail::ProjectileTrails,
     psi_pull: Option<crate::psi_pull::Flight>,
     healing_pulses: HashMap<EntityId, f32>,
     /// Seconds since each amp's overload cast, while its red flash lasts.
@@ -4373,6 +4374,7 @@ impl MissionCore {
             spatial_data: abstract_mission.spatial_data,
             debug_lines: Vec::new(),
             psi_drain_trails: Vec::new(),
+            projectile_trails: Default::default(),
             psi_pull: None,
             healing_pulses: HashMap::new(),
             overload_glows: HashMap::new(),
@@ -5869,6 +5871,7 @@ impl MissionCore {
         });
         self.psi_drain_trails
             .retain_mut(|trail| trail.advance(time.elapsed));
+        self.update_projectile_trails(time.elapsed.as_secs_f32());
         self.held_recovery_particles.retain_mut(|particles| {
             particles.update(tick.elapsed, Matrix4::identity());
             !particles.is_done()
@@ -10337,6 +10340,39 @@ impl MissionCore {
         }
     }
 
+    /// Samples every launched or player-fired projectile into its trail,
+    /// except cosmetic launches (ejected brass, muzzle effects).
+    fn update_projectile_trails(&mut self, world_dt: f32) {
+        let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+        let launched = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropLaunchedProjectile>>()
+            .unwrap();
+        let player_fired = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
+            .unwrap();
+        let cosmetic = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropTransientFx>>()
+            .unwrap();
+        let live = launched
+            .iter()
+            .ids()
+            .chain(
+                player_fired
+                    .iter()
+                    .ids()
+                    .filter(|entity| !launched.contains(*entity)),
+            )
+            .filter(|entity| !cosmetic.contains(*entity))
+            .filter_map(|entity| {
+                let transform = transforms.get(entity).ok()?;
+                Some((entity, transform.0.w.truncate()))
+            });
+        self.projectile_trails.update(world_dt, live);
+    }
+
     /// Launch speed (Dark units/s) above which a projectile is resolved by
     /// raycast instead of simulated: a bullet crosses a room inside one frame,
     /// so stepping it as a physics body tunnels it through walls.
@@ -10422,11 +10458,28 @@ impl MissionCore {
             let mag = initial_velocity.magnitude();
             let x_velocity = root_transform.transform_vector(vec3(0.0, 0.0, mag * modifiers.speed));
             if mag > Self::FAST_PROJECTILE_SPEED {
-                // Use raycast strategy for fast moving objects
-                script_world.add_entity2(
-                    created_entity.entity_id,
-                    Box::new(InternalFastProjectileScript::new(x_velocity)),
+                // Use raycast strategy for fast moving objects: one ray at
+                // full world speed, a swept traveling shot while it is slowed.
+                let script = InternalFastProjectileScript::for_launch(
+                    x_velocity,
+                    crate::dev_params::get(crate::dev_params::WORLD_TIME_SCALE),
+                    crate::dev_params::get(crate::dev_params::SLOW_TIME_SHOT_SPEED),
                 );
+                if script.is_traveling() {
+                    // Its flight lives only in the script, so a save cannot
+                    // restore it: drop it from saves rather than reload a shot
+                    // that would re-pick its mode.
+                    world.run(
+                        |entities: EntitiesView, mut skip: ViewMut<RuntimePropDoNotSerialize>| {
+                            entities.add_component(
+                                created_entity.entity_id,
+                                &mut skip,
+                                RuntimePropDoNotSerialize {},
+                            );
+                        },
+                    );
+                }
+                script_world.add_entity2(created_entity.entity_id, Box::new(script));
                 // HACK: Don't use physics for these entities...
                 physics.remove(created_entity.entity_id);
             } else {
@@ -13247,6 +13300,9 @@ impl MissionCore {
                     ));
                 }
 
+                Effect::ProjectileTrailEnd { entity_id, point } => {
+                    self.projectile_trails.end(entity_id, point);
+                }
                 Effect::PsiDrainVisual { from, to } => {
                     if self.psi_drain_trails.len() < 8 {
                         self.psi_drain_trails
@@ -17980,6 +18036,7 @@ impl MissionCore {
         for trail in &self.psi_drain_trails {
             scene.extend(trail.render());
         }
+        scene.extend(self.projectile_trails.render());
         // Render particle systems
         if options.render_particles {
             for (particle_entity_id, particle_system) in &self.id_to_particle_system {
