@@ -64,7 +64,7 @@ export async function turnPawnToward(game: Game, target: Vec3, toleranceDeg = 5)
     }
     // Stick x > 0 turns left (positive yaw); ease off near the target.
     const push = Math.min(1, Math.max(0.2, Math.abs(error)));
-    await game.input.set("right_hand.thumbstick", [error > 0 ? push : -push, 0]);
+    await game.input.set("right_hand.thumbstick", [error > 0 ? -push : push, 0]);
     await game.step({ frames: 1 });
   }
   await game.input.set("right_hand.thumbstick", [0, 0]);

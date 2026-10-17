@@ -15,7 +15,7 @@ test("a recorded session replays from its start save", { skip: !enabled, timeout
     await game.step({ frames: 1 });
     // Walk and turn: position depends on every recorded frame.
     await game.input.set("left_hand.thumbstick", [0, 1]);
-    await game.input.set("right_hand.thumbstick", [0.5, 0]);
+    await game.input.set("right_hand.thumbstick", [-0.5, 0]);
     await game.step({ frames: 45 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await game.step({ frames: 30 });

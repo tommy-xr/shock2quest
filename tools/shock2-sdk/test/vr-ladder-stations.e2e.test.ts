@@ -447,7 +447,7 @@ for (const face of ["near", "far"] as const) {
       if (face === "far") {
         // Snap turning is edge-triggered: six 30-degree flicks face +X.
         for (let turn = 0; turn < 6; turn++) {
-          await game.input.set("right_hand.thumbstick", [1, 0]);
+          await game.input.set("right_hand.thumbstick", [-1, 0]);
           await game.step({ frames: 1 });
           await game.input.set("right_hand.thumbstick", [0, 0]);
           await game.step({ frames: 1 });

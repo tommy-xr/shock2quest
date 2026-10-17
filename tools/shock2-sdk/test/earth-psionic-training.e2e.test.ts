@@ -105,7 +105,7 @@ async function aimAtEntity(
       stillSupported,
     })}`,
   );
-  await game.input.set("left_hand.thumbstick", [0.75, 0]);
+  await game.input.set("left_hand.thumbstick", [-0.75, 0]);
   await game.step({ frames: 20 });
   await game.input.set("left_hand.thumbstick", [0, 0]);
   await game.save("world-aim-rotated");

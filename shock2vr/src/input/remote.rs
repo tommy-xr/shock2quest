@@ -42,7 +42,7 @@ pub fn input_channels_help() -> &'static str {
      head.position [x,y,z] (pawn-local), \
      pointer.position [x,y] in [0,1] (origin top-left; null clears), pointer.pressed 0|1, pointer.secondary 0|1, \
      {left,right}_hand.{trigger,squeeze,a} <number 0..1>, \
-     {left,right}_hand.thumbstick [x,y], \
+     {left,right}_hand.thumbstick [x,y] (+x right, +y forward), \
      {left,right}_hand.position [x,y,z] (pawn-local), \
      {left,right}_hand.rotation [x,y,z,w], \
      {left,right}_hand.world_target [x,y,z] world, VR, within arm reach (debug runtime only; null clears), \

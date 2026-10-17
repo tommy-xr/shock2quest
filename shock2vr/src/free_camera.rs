@@ -149,7 +149,7 @@ impl FreeCamera {
 
         let (move_thumbstick, turn_thumbstick) =
             input_context.locomotion_sticks(presentation, true);
-        let turn = turn_thumbstick.x * delta_time * PLAYER_TURN_RATE;
+        let turn = -turn_thumbstick.x * delta_time * PLAYER_TURN_RATE;
         let rotation =
             rotation * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), cgmath::Rad(turn));
 
@@ -162,7 +162,7 @@ impl FreeCamera {
         let step = delta_time * speed;
         let position = position
             + facing.rotate_vector(vec3(
-                -step * move_thumbstick.x,
+                step * move_thumbstick.x,
                 0.0,
                 -step * move_thumbstick.y,
             ))
