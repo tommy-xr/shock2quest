@@ -177,12 +177,35 @@ pub(crate) fn laser_trace(
     ))
 }
 
+/// Beam radii/colours, dot size/colour and debug-tag sources for one sight.
+struct LaserStyle {
+    halo: (f32, Vector3<f32>),
+    core: (f32, Vector3<f32>),
+    dot: (f32, Vector3<f32>),
+    sources: [&'static str; 3],
+}
+
+const WEAPON_LASER: LaserStyle = LaserStyle {
+    halo: (0.018, Vector3::new(1.0, 0.01, 0.005)),
+    core: (0.0025, Vector3::new(1.0, 0.08, 0.025)),
+    dot: (0.11, Vector3::new(1.0, 0.015, 0.01)),
+    sources: ["weapon_laser_halo", "weapon_laser_core", "weapon_laser_dot"],
+};
+
+/// The psi amp's always-on pointer: a thinner, dimmer blue beam, since the
+/// amp's muzzle axis is not where a VR hand seems to point.
+const AMP_POINTER: LaserStyle = LaserStyle {
+    halo: (0.008, Vector3::new(0.02, 0.12, 0.45)),
+    core: (0.0012, Vector3::new(0.15, 0.45, 1.0)),
+    dot: (0.06, Vector3::new(0.1, 0.35, 1.0)),
+    sources: ["amp_pointer_halo", "amp_pointer_core", "amp_pointer_dot"],
+};
+
 pub(crate) fn render_lasers(
     world: &World,
     physics: &crate::physics::PhysicsWorld,
+    amp_pointer: bool,
 ) -> Vec<engine::scene::SceneObject> {
-    use cgmath::{Matrix4, vec3};
-    use engine::scene::{SceneObject, SceneObjectDebugTag};
     let mut objects = Vec::new();
     let seconds = world
         .borrow::<shipyard::UniqueView<crate::time::PlayerTime>>()
@@ -192,62 +215,106 @@ pub(crate) fn render_lasers(
         .into_iter()
         .filter_map(|hand| crate::wielded_weapon::weapon_in_hand(world, hand))
     {
-        let Some(trace) = laser_trace(world, physics, weapon) else {
-            continue;
-        };
-        if (trace.end - trace.origin).magnitude2() < 1.0e-8 {
-            continue;
-        }
-        let beams = engine::scene::laser_material::beam(
-            trace.origin.to_vec(),
-            trace.end - trace.origin,
-            (0.018, vec3(1.0, 0.01, 0.005)),
-            (0.0025, vec3(1.0, 0.08, 0.025)),
-            seconds,
-        );
-        for (mut beam, source) in beams
-            .into_iter()
-            .zip(["weapon_laser_halo", "weapon_laser_core"])
+        if let Some(trace) = laser_trace(world, physics, weapon) {
+            push_laser(&mut objects, weapon, &trace, &WEAPON_LASER, seconds);
+        } else if amp_pointer
+            && crate::wielded_weapon::is_psi_amp(world, weapon)
+            && let Some(trace) = amp_pointer_trace(world, physics, weapon)
         {
-            beam.set_debug_tag(Some(std::rc::Rc::new(SceneObjectDebugTag {
-                entity_id: Some(weapon.inner()),
-                source: Some(source.into()),
-                ..Default::default()
-            })));
-            objects.push(beam);
+            push_laser(&mut objects, weapon, &trace, &AMP_POINTER, seconds);
         }
-        let Some(normal) = trace.normal.filter(|n| n.magnitude2() > 1.0e-8) else {
-            continue;
-        };
-        let normal = normal.normalize();
-        let tangent = if normal.y.abs() < 0.9 {
-            vec3(0.0, 1.0, 0.0)
-        } else {
-            vec3(1.0, 0.0, 0.0)
-        };
-        let right = tangent.cross(normal).normalize();
-        // Surface-aligned, fixed world size: never a HUD marker or a billboard
-        // that can poke through a nearby surface when the head moves.
-        let mut dot = SceneObject::new(
-            engine::scene::laser_material::create(vec3(1.0, 0.015, 0.01)),
-            Box::new(engine::scene::quad::create()),
-        );
-        dot.set_transform(Matrix4::from_cols(
-            (right * 0.11).extend(0.0),
-            (normal.cross(right) * 0.11).extend(0.0),
-            normal.extend(0.0),
-            (trace.end + normal * 0.001).to_homogeneous(),
-        ));
-        dot.set_depth_write(false);
-        dot.set_backface_culling(None);
-        dot.set_debug_tag(Some(std::rc::Rc::new(SceneObjectDebugTag {
-            entity_id: Some(weapon.inner()),
-            source: Some("weapon_laser_dot".into()),
-            ..Default::default()
-        })));
-        objects.push(dot);
     }
     objects
+}
+
+/// The amp's cast ray, stopped at the first thing a cast would hit.
+fn amp_pointer_trace(
+    world: &World,
+    physics: &crate::physics::PhysicsWorld,
+    amp: EntityId,
+) -> Option<LaserTrace> {
+    use crate::physics::InternalCollisionGroups;
+    let (origin, direction) = crate::scripts::amp_aim_ray(world, amp)?;
+    let player = world
+        .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
+        .ok()?;
+    let hit = physics.ray_cast2_with_entity_filter(
+        origin,
+        direction,
+        LASER_RANGE,
+        InternalCollisionGroups::WORLD
+            | InternalCollisionGroups::ENTITIES
+            | InternalCollisionGroups::HITBOX
+            | InternalCollisionGroups::SELECTABLE,
+        Some(amp),
+        true,
+        &|entity| entity != player.entity_id && !crate::wielded_weapon::held_in_hand(world, entity),
+    );
+    Some(LaserTrace {
+        origin,
+        end: hit
+            .as_ref()
+            .map_or(origin + direction * LASER_RANGE, |hit| hit.hit_point),
+        normal: hit.map(|hit| hit.hit_normal),
+    })
+}
+
+fn push_laser(
+    objects: &mut Vec<engine::scene::SceneObject>,
+    entity: EntityId,
+    trace: &LaserTrace,
+    style: &LaserStyle,
+    seconds: f32,
+) {
+    use cgmath::{Matrix4, vec3};
+    use engine::scene::{SceneObject, SceneObjectDebugTag};
+    if (trace.end - trace.origin).magnitude2() < 1.0e-8 {
+        return;
+    }
+    let tag = |source: &str| {
+        Some(std::rc::Rc::new(SceneObjectDebugTag {
+            entity_id: Some(entity.inner()),
+            source: Some(source.into()),
+            ..Default::default()
+        }))
+    };
+    let beams = engine::scene::laser_material::beam(
+        trace.origin.to_vec(),
+        trace.end - trace.origin,
+        style.halo,
+        style.core,
+        seconds,
+    );
+    for (mut beam, source) in beams.into_iter().zip(&style.sources[..2]) {
+        beam.set_debug_tag(tag(source));
+        objects.push(beam);
+    }
+    let Some(normal) = trace.normal.filter(|n| n.magnitude2() > 1.0e-8) else {
+        return;
+    };
+    let normal = normal.normalize();
+    let tangent = if normal.y.abs() < 0.9 {
+        vec3(0.0, 1.0, 0.0)
+    } else {
+        vec3(1.0, 0.0, 0.0)
+    };
+    let right = tangent.cross(normal).normalize();
+    // Surface-aligned, fixed world size: never a HUD marker or a billboard
+    // that can poke through a nearby surface when the head moves.
+    let mut dot = SceneObject::new(
+        engine::scene::laser_material::create(style.dot.1),
+        Box::new(engine::scene::quad::create()),
+    );
+    dot.set_transform(Matrix4::from_cols(
+        (right * style.dot.0).extend(0.0),
+        (normal.cross(right) * style.dot.0).extend(0.0),
+        normal.extend(0.0),
+        (trace.end + normal * 0.001).to_homogeneous(),
+    ));
+    dot.set_depth_write(false);
+    dot.set_backface_culling(None);
+    dot.set_debug_tag(tag(style.sources[2]));
+    objects.push(dot);
 }
 
 pub(crate) fn set_enabled(
@@ -396,7 +463,7 @@ mod tests {
             trace.end
         );
         assert!(trace.normal.is_some());
-        let rendered = render_lasers(&world, &physics);
+        let rendered = render_lasers(&world, &physics, false);
         assert_eq!(rendered.len(), 3, "one core, one halo, one dot");
         for beam in &rendered[..2] {
             use cgmath::Transform;

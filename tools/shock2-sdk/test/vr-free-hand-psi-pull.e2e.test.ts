@@ -20,7 +20,8 @@ for (const ampHand of ["left", "right"] as const) {
     await aimVrHandAt(game, item.position, 3, 0, 0, { hand: freeHand });
     await game.step({ frames: 3 });
     const before = (await game.info()).player.psi_points!;
-    // Default-off negative case: the empty trigger does not spend psi.
+    // Disabled negative case: the empty trigger does not spend psi.
+    await game.devParams.set("vr_free_hand_psi_pull", 0);
     await game.input.set(`${freeHand}_hand.trigger`, 1);
     await game.step({ frames: 10 });
     assert.equal((await game.info()).player.psi_points, before);

@@ -3232,6 +3232,7 @@ pub struct MissionCore {
     projectile_trails: crate::projectile_trail::ProjectileTrails,
     psi_pull: Option<crate::psi_pull::Flight>,
     free_hand_psi_pull: crate::vr_psi_pull::FreeHandPull,
+    psi_pull_aim: Vec<EntityId>,
     healing_pulses: HashMap<EntityId, f32>,
     /// Seconds since each amp's overload cast, while its red flash lasts.
     overload_glows: HashMap<EntityId, f32>,
@@ -4380,6 +4381,7 @@ impl MissionCore {
             ),
             psi_pull: None,
             free_hand_psi_pull: Default::default(),
+            psi_pull_aim: Vec::new(),
             healing_pulses: HashMap::new(),
             overload_glows: HashMap::new(),
             gui: GuiManager::new(),
@@ -7588,6 +7590,7 @@ impl MissionCore {
         }
         effects.extend(self.process_virtual_hand_effects(asset_cache, interaction_msgs));
         effects.extend(self.update_psi_pull(time.elapsed));
+        self.psi_pull_aim = self.psi_pull_aim_targets();
         self.physics
             .set_held_target_frame(player_pos, player_rot, hands_input.tracking);
         // Remember only successful shoulder deposits, after the shared storage
@@ -9739,6 +9742,37 @@ impl MissionCore {
         }
         self.world.add_component(entity_id, data);
         true
+    }
+
+    /// What a Kinetic Redirection cast would pull right now, from the amp's own
+    /// aim (power selected) or a free hand's. Bracketed so a dead trigger reads
+    /// as "nothing in the sights" rather than a silent failure.
+    fn psi_pull_aim_targets(&self) -> Vec<EntityId> {
+        if self.psi_pull.is_some() {
+            return vec![];
+        }
+        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+        let held = [player.left_hand_entity_id, player.right_hand_entity_id];
+        drop(player);
+        let mut targets = Vec::new();
+        for (hand, amp) in held.into_iter().enumerate() {
+            let Some(amp) = amp else { continue };
+            if crate::psi_amp_selection::selected_power(&self.world, amp)
+                .is_some_and(|p| p.template_id == crate::psi_pull::POWER)
+            {
+                targets.extend(crate::psi_pull::resolve(&self.world, &self.physics, amp));
+            }
+            if let Some((position, forward)) = self.free_hand_psi_pull.source(1 - hand, amp) {
+                targets.extend(crate::psi_pull::resolve_ray(
+                    &self.world,
+                    &self.physics,
+                    amp,
+                    Point3::new(position.x, position.y, position.z),
+                    forward,
+                ));
+            }
+        }
+        targets
     }
 
     /// Fly the loose body toward the visible amp; catching remains an ordinary
@@ -16998,6 +17032,13 @@ impl MissionCore {
         if !options.debug_show_ids {
             highlighted.retain(|e| is_hud_selectable(&self.world, *e));
         }
+        // A pull target is bracketed past the gate: the brackets are the
+        // cast's aim readout, and every pullable item is a loose grabbable.
+        for target in &self.psi_pull_aim {
+            if !highlighted.contains(target) {
+                highlighted.push(*target);
+            }
+        }
         // Flat only: VR names objects solely in the inventory bar's frame. While
         // the bar is up (use mode) it owns the readout in both presentations.
         if options.presentation_mode != crate::PresentationMode::Vr
@@ -17725,9 +17766,12 @@ impl MissionCore {
             &self.world,
             asset_cache,
         ));
+        // Flat aims the amp with the crosshair; only a hand needs its beam.
         scene.extend(crate::weapon_attachments::render_lasers(
             &self.world,
             &self.physics,
+            options.presentation_mode == crate::PresentationMode::Vr
+                && crate::user_settings::get().vr.psi_pointer,
         ));
         {
             let blades = self

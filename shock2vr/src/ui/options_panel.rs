@@ -96,7 +96,7 @@ impl OptionsPanel {
                 return Some(OptionsEvent::Tab(i));
             }
         }
-        let count = if self.tab == 0 { ROWS.len() } else { 4 };
+        let count = if self.tab == 0 { ROWS.len() } else { 5 };
         for (i, rect) in layout.rows.iter().take(count).enumerate() {
             if rect.contains(point) {
                 return Some(OptionsEvent::Row(i));
@@ -149,7 +149,8 @@ impl OptionsPanel {
             }
             (1, 1) => vr.snap_angle = cycle(vr.snap_angle, &[30.0, 45.0, 60.0]),
             (1, 2) => vr.smooth_speed = cycle(vr.smooth_speed, &[45.0, 60.0, 90.0, 120.0, 180.0]),
-            (1, 3) => {
+            (1, 3) => vr.psi_pointer = !vr.psi_pointer,
+            (1, 4) => {
                 vr.turning = defaults.turning;
                 vr.snap_angle = defaults.snap_angle;
                 vr.smooth_speed = defaults.smooth_speed;
@@ -211,6 +212,7 @@ impl OptionsPanel {
                 ),
                 format!("Snap angle: {} degrees", settings.snap_angle),
                 format!("Smooth speed: {} degrees/sec", settings.smooth_speed),
+                format!("Psi pointer: {}", on_off(settings.psi_pointer)),
                 "Reset turning defaults".to_owned(),
             ]
         };
@@ -297,5 +299,25 @@ mod tests {
             panel.hit(&layout, vec2(320.0, 80.0)),
             Some(OptionsEvent::Row(0))
         );
+    }
+
+    #[test]
+    fn controls_toggle_the_psi_pointer_and_reset_stays_turning_only() {
+        let panel = OptionsPanel {
+            tab: 1,
+            error: false,
+        };
+        let layout = OptionsLayout::default();
+        let reset = layout.rows[4];
+        assert_eq!(
+            panel.hit(&layout, vec2(reset.x + 1.0, reset.y + 1.0)),
+            Some(OptionsEvent::Row(4))
+        );
+        let mut settings = UserSettings::default();
+        assert!(settings.vr.psi_pointer, "on by default");
+        panel.change(&mut settings, 3);
+        assert!(!settings.vr.psi_pointer);
+        panel.change(&mut settings, 4);
+        assert!(!settings.vr.psi_pointer);
     }
 }

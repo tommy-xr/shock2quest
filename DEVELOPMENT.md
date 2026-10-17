@@ -693,8 +693,8 @@ save on another deck. Carried inventory travels separately from those snapshots.
 
 ### Free-hand Kinetic Redirection
 
-Enable **Developer options → Weapons → Free-hand psi pull**
-(`vr_free_hand_psi_pull`, off by default). Hold a psi amp in one hand and aim the
+**Developer options → Weapons → Free-hand psi pull**
+(`vr_free_hand_psi_pull`, on by default) toggles it. Hold a psi amp in one hand and aim the
 empty hand at a loose, pullable item; pull that hand's trigger to bring it to you.
 Kinetic Redirection must be trained, but need not be selected on the amp. A valid
 cast spends the power's authored psi cost once. Walls and ineligible objects
