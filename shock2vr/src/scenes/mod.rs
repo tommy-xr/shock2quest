@@ -22,6 +22,7 @@ use crate::{
 pub mod cutscene_player;
 pub mod cutscene_skip;
 pub mod debrief;
+pub mod debug_ai_ranged;
 pub mod debug_annelid;
 pub mod debug_camera;
 pub mod debug_common;
@@ -176,6 +177,10 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     }),
     ("debug_weapons", create_debug_weapons_scene),
     ("debug_melee", create_debug_melee_scene),
+    (
+        "debug_ai_ranged",
+        debug_ai_ranged::create_debug_ai_ranged_scene,
+    ),
     (
         "debug_interactions",
         debug_interactions::create_debug_interactions_scene,
