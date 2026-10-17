@@ -5091,6 +5091,7 @@ impl MissionCore {
                         &crate::scripts::gui::PSI_STICK_NAV,
                     )
                     .map(|(step, amount)| (target(menu.index, step), amount));
+                    menu.stick = (stick, lean.is_some());
                     menu.lean_toward(lean, &powers.0, &known.0);
                 }
                 menu.update(tick.elapsed.as_secs_f32());

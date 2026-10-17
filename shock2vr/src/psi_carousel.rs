@@ -28,6 +28,8 @@ pub(crate) struct Carousel {
     pub hand: Handedness,
     pub index: usize,
     pub stick_latched: crate::scripts::gui::NavLatch,
+    /// The raw stick, and whether it aims at a step, for the stick readout.
+    pub stick: (cgmath::Vector2<f32>, bool),
     pub trigger_armed: bool,
     previous_index: usize,
     starts: Vec<(usize, f32, f32)>,
@@ -96,6 +98,8 @@ const BALL_RADII_PER_UNIT: f32 = 3.4;
 const FOCUS_LIFT: f32 = 0.045;
 /// A push about to step leans the sphere this fraction of the way to its target.
 const MAX_LEAN: f32 = 0.3;
+/// How far out from the focal card a fully pushed stick's readout dot sits.
+const STICK_READOUT_RADIUS: f32 = 0.13;
 
 /// Rows climb: the next tier (a push up) is drawn above, the previous below.
 fn arc_position(row: f32, slot: f32) -> cgmath::Vector3<f32> {
@@ -208,6 +212,7 @@ impl Carousel {
             transition: 1.0,
             lean: (0.0, 0.0),
             stick_latched: crate::scripts::gui::NavLatch::Held(None),
+            stick: (vec2(0.0, 0.0), false),
             trigger_armed: false,
         })
     }
@@ -413,6 +418,7 @@ impl Carousel {
             None,
             0.001,
         ));
+        objects.extend(self.stick_readout(assets, root));
         let mut details = UiCanvas::new(vec2(440.0, 26.0));
         if let Some(p) = powers
             .0
@@ -450,6 +456,37 @@ impl Carousel {
         for object in &mut objects {
             object.set_depth_write(false);
         }
+        objects
+    }
+
+    /// A line out from the focal card to a dot where the stick is, so a push
+    /// shows where it is heading; bright once it aims at a step.
+    fn stick_readout(
+        &self,
+        assets: &mut engine::assets::asset_cache::AssetCache,
+        root: cgmath::Matrix4<f32>,
+    ) -> Vec<engine::scene::SceneObject> {
+        use cgmath::{InnerSpace, Matrix4, Rad, vec3};
+        let (stick, aimed) = self.stick;
+        let length = stick.magnitude().min(1.0) * STICK_READOUT_RADIUS;
+        if length < 0.005 {
+            return vec![];
+        }
+        let angle = Rad(stick.y.atan2(stick.x));
+        let mut mark = UiCanvas::new(vec2(1.0, 1.0));
+        mark.fill(Rect::new(0.0, 0.0, 1.0, 1.0), [90, 226, 255])
+            .opacity(if aimed { 1.0 } else { 0.45 });
+        let along = |distance: f32| {
+            root * Matrix4::from_translation(vec3(0.0, 0.0, FOCUS_LIFT + 0.03))
+                * Matrix4::from_angle_z(angle)
+                * Matrix4::from_translation(vec3(distance, 0.0, 0.0))
+        };
+        let line = along(length / 2.0) * Matrix4::from_nonuniform_scale(length, 0.006, 1.0);
+        let dot = along(length)
+            * Matrix4::from_angle_z(Rad(std::f32::consts::FRAC_PI_4))
+            * Matrix4::from_scale(0.02);
+        let mut objects = mark.render_world_space(assets, line, None, None, 0.001);
+        objects.extend(mark.render_world_space(assets, dot, None, None, 0.001));
         objects
     }
 }
