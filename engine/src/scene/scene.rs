@@ -1,5 +1,23 @@
 pub use crate::scene::scene_object::SceneObject;
-use crate::scene::{RenderLayer, light::LightArray};
+use crate::scene::{
+    RenderLayer, light::LightArray, pass_focus::PassFocus, render_target::RenderTarget,
+};
+use cgmath::Vector3;
+use std::rc::Rc;
+
+/// A second view of the world drawn into `target` before the main scene, for
+/// a material to sample this frame. It is lit by the scene's lights. It reuses
+/// the rendering camera's head pose (each eye's in `render`, the head centre's
+/// in `render_offscreen_passes`), with the projection narrowed to `focus`.
+/// While `focus` is off-screen it is not drawn.
+pub struct OffscreenPass {
+    pub target: Rc<RenderTarget>,
+    /// Added to the camera's `camera_offset`, so the pass eye follows the
+    /// tracked head at a fixed displacement.
+    pub camera_translation: Vector3<f32>,
+    pub focus: PassFocus,
+    pub objects: Vec<SceneObject>,
+}
 
 /// Legacy scene type - simple vector of scene objects
 pub type LegacyScene = Vec<SceneObject>;
@@ -13,6 +31,9 @@ pub struct Scene {
 
     /// Light array for single-pass rendering (up to 6 spotlights)
     pub lights: LightArray,
+
+    /// Rendered before the main scene each `Engine::render`.
+    pub offscreen_passes: Vec<Rc<OffscreenPass>>,
 }
 
 impl Scene {
@@ -21,6 +42,7 @@ impl Scene {
         Self {
             objects: Vec::new(),
             lights: LightArray::new(),
+            offscreen_passes: Vec::new(),
         }
     }
 
@@ -29,6 +51,7 @@ impl Scene {
         Self {
             objects,
             lights: LightArray::new(),
+            offscreen_passes: Vec::new(),
         }
     }
 
@@ -65,10 +88,11 @@ impl Scene {
         &mut self.lights
     }
 
-    /// Clear all objects and lights from the scene
+    /// Clear all objects, lights and offscreen passes from the scene
     pub fn clear(&mut self) {
         self.objects.clear();
         self.lights.clear();
+        self.offscreen_passes.clear();
     }
 
     /// Get the total number of scene objects
