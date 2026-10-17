@@ -21,6 +21,7 @@ pub mod mission_core;
 mod moving_terrain;
 pub mod pathfinding_debug;
 pub mod pathfinding_test;
+mod pda_list;
 pub mod player_footsteps;
 pub mod player_trail;
 pub(crate) mod projectile_spray;

@@ -13,6 +13,7 @@ use crate::{
 const PANEL: Rect = Rect::new(2.0, 124.0, 188.0, 296.0);
 const QUERY_BODY: Rect = Rect::new(17.0, 277.0, 123.0, 132.0);
 use super::character_sheet::{CharacterSheet, PANEL as CHARACTER_PANEL};
+use super::pda_list::PdaAction;
 const FONT: &str = "mainfont.fon";
 const PAGE_LINES: usize = 16;
 
@@ -34,7 +35,8 @@ enum Control {
 pub(crate) struct MfdUtilities {
     inspecting: bool,
     research: bool,
-    empty_logs: bool,
+    logs: Option<super::pda_list::PdaList>,
+    pda_request: Option<crate::quest_info::PdaEntry>,
     character: bool,
     character_sheet: CharacterSheet,
     access_cards: bool,
@@ -68,15 +70,26 @@ impl MfdUtilities {
     }
 
     pub(crate) fn has_left_panel(&self) -> bool {
-        self.research || self.empty_logs || self.access_cards || self.selected.is_some()
+        self.research || self.logs.is_some() || self.access_cards || self.selected.is_some()
     }
-    pub(crate) fn show_empty_logs(&mut self) {
+    /// The LOGS MFD: `kind` on `deck`, keeping `focus` (the entry the reader
+    /// returns from) in view.
+    pub(crate) fn open_logs(
+        &mut self,
+        kind: crate::quest_info::PdaKind,
+        deck: u32,
+        focus: Option<u32>,
+        quests: &crate::quest_info::QuestInfo,
+    ) {
         *self = Self::default();
-        self.empty_logs = true;
-        self.set_content("LOGS".into(), "No collected logs.".into());
+        self.logs = Some(super::pda_list::PdaList::open(kind, deck, focus, quests));
     }
-    pub(crate) fn is_empty_logs(&self) -> bool {
-        self.empty_logs
+    pub(crate) fn is_logs(&self) -> bool {
+        self.logs.is_some()
+    }
+    /// An entry picked from the list, for the host to open in the reader.
+    pub(crate) fn take_pda_request(&mut self) -> Option<crate::quest_info::PdaEntry> {
+        self.pda_request.take()
     }
     pub(crate) fn open_research(&mut self, template: Option<i32>) {
         *self = Self::default();
@@ -89,7 +102,7 @@ impl MfdUtilities {
         self.inspecting
             || self.selected.is_some()
             || self.research
-            || self.empty_logs
+            || self.logs.is_some()
             || self.character
             || self.access_cards
     }
@@ -128,7 +141,7 @@ impl MfdUtilities {
         if self.character {
             controls.push((Control::Close, Rect::new(455.0, 132.0, 20.0, 21.0), ""));
         }
-        if self.empty_logs || self.access_cards {
+        if self.access_cards {
             controls.push((Control::Close, Rect::new(165.0, 132.0, 20.0, 21.0), ""));
         }
         if self.selected.is_some() {
@@ -198,7 +211,7 @@ impl MfdUtilities {
                     Control::Research if self.research => "iface/ifbtn41.pcx",
                     Control::Research => "iface/ifbtn40.pcx",
                     Control::Map => "iface/ifbtn50.pcx",
-                    Control::Close if self.empty_logs || self.access_cards => "iface/closeoff.pcx",
+                    Control::Close if self.access_cards => "iface/closeoff.pcx",
                     _ => "IFBTN00.PCX",
                 };
                 (control, rect, label, texture)
@@ -273,7 +286,7 @@ impl MfdUtilities {
                 self.selected = Some(entity);
                 self.inspecting = false;
                 self.research = false;
-                self.empty_logs = false;
+                self.logs = None;
                 self.character = false;
                 self.access_cards = false;
                 self.query_offset = 0;
@@ -285,7 +298,18 @@ impl MfdUtilities {
             self.character_sheet.update(point, pressed);
             return CHARACTER_PANEL.contains(point);
         }
-        if self.empty_logs || self.access_cards {
+        if let Some(list) = &mut self.logs {
+            let consumed = list.contains(point);
+            match list.update(point, pressed) {
+                PdaAction::None => {}
+                PdaAction::Close => *self = Self::default(),
+                // The list stays until the reader binds (`FlatUiHost::open`
+                // clears it), so an entry that cannot open leaves it up.
+                PdaAction::Open(entry) => self.pda_request = Some(entry),
+            }
+            return consumed;
+        }
+        if self.access_cards {
             return Rect::new(2.0, 124.0, 188.0, 296.0).contains(point);
         }
         if self.research {
@@ -356,6 +380,10 @@ impl MfdUtilities {
                 .min(self.lines.len().saturating_sub(1) / PAGE_LINES);
             return;
         }
+        if let Some(list) = &mut self.logs {
+            list.refresh(world, assets);
+            return;
+        }
         if self.research {
             self.research_catalog.refresh(world, assets, info);
             return;
@@ -381,15 +409,8 @@ impl MfdUtilities {
         if self.character {
             self.character_sheet.draw(canvas);
         }
-        if self.empty_logs || self.access_cards {
-            canvas.image(
-                Rect::new(2.0, 124.0, 188.0, 296.0),
-                if self.access_cards {
-                    "iface/security.pcx"
-                } else {
-                    "iface/pda.pcx"
-                },
-            );
+        if self.access_cards {
+            canvas.image(Rect::new(2.0, 124.0, 188.0, 296.0), "iface/security.pcx");
             canvas.text_native_fit(
                 Rect::new(17.0, 136.0, 139.0, 12.0),
                 &self.title,
@@ -400,6 +421,9 @@ impl MfdUtilities {
             for (rect, line) in self.visible_lines() {
                 canvas.text_native_fit(rect, line, crate::ui::MFD_FONT, HAlign::Left, VAlign::Top);
             }
+        }
+        if let Some(list) = &self.logs {
+            list.draw(canvas);
         }
         if self.research {
             self.research_catalog.draw(canvas);
@@ -461,7 +485,7 @@ impl MfdUtilities {
             })
             .enumerate()
             .map(|(i, line)| {
-                let rect = if self.empty_logs || self.access_cards {
+                let rect = if self.access_cards {
                     Rect::new(17.0, 170.0 + i as f32 * 12.0, 139.0, 12.0)
                 } else {
                     Rect::new(
@@ -516,6 +540,7 @@ impl MfdUtilities {
             } else {
                 Vec::new()
             })
+            .chain(self.logs.iter().flat_map(|list| list.elements()))
             .chain(if self.research {
                 self.research_catalog.elements()
             } else {

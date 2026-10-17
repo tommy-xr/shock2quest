@@ -14,7 +14,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use super::PanelText;
 use crate::gui::{self, Gui, GuiComponent, GuiConfig, GuiCursor};
-use crate::quest_info::QuestInfo;
+use crate::quest_info::{PdaEntry, PdaKind, QuestInfo};
 use crate::runtime_props::RuntimePropLogData;
 use crate::ui::Rect;
 
@@ -62,6 +62,42 @@ pub enum MediaGuiMsg {
     PageUp,
     PageDown,
     LineDown,
+    /// The return (enter-key) button: back to the LOGS list.
+    Return,
+}
+
+/// The `PropLog` the reader is bound with for `entry`: an email sets `email`
+/// and leaves `log` unset, an audio log the reverse. [`shown_entry`] reads it back.
+pub(crate) fn reader_prop_log(entry: PdaEntry) -> PropLog {
+    let (email, log) = match entry.kind {
+        PdaKind::Log => (LOG_UNSET, entry.index),
+        PdaKind::Email => (entry.index, LOG_UNSET),
+    };
+    PropLog {
+        deck: entry.deck,
+        email,
+        log,
+        note: 0,
+        video: 0,
+    }
+}
+
+/// The PDA entry the reader shows, from its [`reader_prop_log`].
+fn shown_entry(world: &World, entity_id: EntityId) -> Option<PdaEntry> {
+    let v_log = world.borrow::<View<PropLog>>().unwrap();
+    let log = v_log.get(entity_id).ok()?;
+    let (kind, index) = if log.log != LOG_UNSET {
+        (PdaKind::Log, log.log)
+    } else if log.email != LOG_UNSET {
+        (PdaKind::Email, log.email)
+    } else {
+        return None;
+    };
+    Some(PdaEntry {
+        kind,
+        deck: log.deck,
+        index,
+    })
 }
 
 /// Greedy word-wrap that honors explicit `\n` paragraph breaks. A single word
@@ -165,6 +201,17 @@ fn page_lines(world: &World) -> usize {
     (TEXT_H / PanelText::line_height(world)).floor().max(1.0) as usize
 }
 
+/// Retail's reader frame per entry kind: `EMAIL.PCX` or `LOG.PCX`.
+fn backdrop(world: &World, entity_id: EntityId) -> &'static str {
+    match shown_entry(world, entity_id) {
+        Some(PdaEntry {
+            kind: PdaKind::Email,
+            ..
+        }) => "iface/email.pcx",
+        _ => "iface/log.pcx",
+    }
+}
+
 impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
     fn get_components(
         &self,
@@ -177,7 +224,7 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
             // Archive-qualified: obj.crf also ships a 64x64 model texture named
             // LOG.PCX (the floppy disc art) and its mount wins the plain name -
             // "iface/" pins the 188x296 MFD frame from the interface archive.
-            gui::image("iface/log.pcx")
+            gui::image(backdrop(world, entity_id))
                 .with_position(vec2(0.0, 0.0))
                 .with_size(vec2(PANEL_W, PANEL_H))
                 .with_alpha(1.0),
@@ -223,6 +270,7 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
             (MediaGuiMsg::PageUp, "pgup", "Previous page", PGUP_Y, 26.0),
             (MediaGuiMsg::PageDown, "pgdn", "Next page", PGDN_Y, 26.0),
             (MediaGuiMsg::LineDown, "down", "Next line", 232.0, 17.0),
+            (MediaGuiMsg::Return, "return", "Return to list", 252.0, 34.0),
         ] {
             components.push(
                 gui::button(msg)
@@ -259,6 +307,11 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
             .len()
             .saturating_sub(page_lines(world));
         let scroll = match msg {
+            MediaGuiMsg::Return => {
+                let effect =
+                    shown_entry(world, entity_id).map_or(Effect::NoEffect, Effect::ReturnToPda);
+                return (state.clone(), effect);
+            }
             MediaGuiMsg::LineUp => state.scroll.saturating_sub(1),
             MediaGuiMsg::PageUp => state.scroll.saturating_sub(page_lines(world)),
             MediaGuiMsg::PageDown => (state.scroll + page_lines(world)).min(max_scroll),
@@ -593,6 +646,44 @@ mod tests {
         // 27 lines: full second page at 13, then clamp at 27 - 13 = 14.
         assert_eq!(scroll_after(27, 1), 13);
         assert_eq!(scroll_after(27, 2), 14);
+    }
+
+    /// The return button goes back to the list on the shown entry's deck and
+    /// tab; an email also gets the email backdrop.
+    #[test]
+    fn return_reopens_the_list_at_the_shown_entry() {
+        let mut world = World::new();
+        let entry = |kind, deck, index| PdaEntry { kind, deck, index };
+        let audio = world.add_entity(reader_prop_log(entry(PdaKind::Log, 2, 20)));
+        let email = world.add_entity(reader_prop_log(entry(PdaKind::Email, 4, 7)));
+        let gui = MediaGui;
+        let state = MediaGuiState::default();
+        let returned = |entity| match gui
+            .handle_msg(entity, &world, &state, &MediaGuiMsg::Return)
+            .1
+        {
+            Effect::ReturnToPda(entry) => entry,
+            other => panic!("expected ReturnToPda, got {other:?}"),
+        };
+
+        assert_eq!(
+            returned(audio),
+            PdaEntry {
+                kind: PdaKind::Log,
+                deck: 2,
+                index: 20
+            }
+        );
+        assert_eq!(
+            returned(email),
+            PdaEntry {
+                kind: PdaKind::Email,
+                deck: 4,
+                index: 7
+            }
+        );
+        assert_eq!(backdrop(&world, email), "iface/email.pcx");
+        assert_eq!(backdrop(&world, audio), "iface/log.pcx");
     }
 
     /// Discs whose `log` field is the 33 "not set" sentinel (an empty bitmask -

@@ -521,6 +521,11 @@ pub enum Effect {
     /// interface anchor, which tracks the live head pose rather than a
     /// rotation sampled at the input edge.
     ReadLastUnreadLog,
+    /// Open one PDA entry (picked from the LOGS list) in the same reader.
+    ReadPdaEntry(crate::quest_info::PdaEntry),
+    /// The reader's return button: close it and show the LOGS list on the
+    /// entry's deck and tab.
+    ReturnToPda(crate::quest_info::PdaEntry),
 
     /// Apply a completed tap/hold only while this exact gun remains in this hand.
     PsiAmpButton {

@@ -88,7 +88,7 @@ use crate::{
     inventory::PlayerInventoryEntity,
     mission::{SpatialQueryEngine, entity_populator::EntityPopulator},
     physics::{self, CollisionGroup, PlayerHandle},
-    quest_info::QuestInfo,
+    quest_info::{PdaEntry, PdaKind, QuestInfo},
     runtime_props::{
         RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDeathPose,
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
@@ -9710,10 +9710,14 @@ impl MissionCore {
     fn attach_log_reader_strings(
         &mut self,
         entity_id: EntityId,
-        deck: u32,
-        log: u32,
+        entry: PdaEntry,
         asset_cache: &mut AssetCache,
     ) -> bool {
+        let PdaEntry { kind, deck, index } = entry;
+        let prefix = match kind {
+            PdaKind::Email => "email",
+            PdaKind::Log => "log",
+        };
         let level_file = format!("level{deck:02}.str");
         let Some(strings) = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, &level_file)
         else {
@@ -9722,27 +9726,27 @@ impl MissionCore {
         // The .str values carry literal backslash-n escapes ("AMANPOUR
         // 07.JUL.14\nre: New code\n"); unescape them into real line breaks so
         // the reader never draws "\n".
-        let get = |prefix: &str| {
+        let get = |field: &str| {
             strings
-                .get(&format!("{prefix}{log}"))
+                .get(&format!("{prefix}{field}{index}"))
                 .map(|s| s.replace("\\n", "\n"))
         };
         let data = crate::runtime_props::RuntimePropLogData {
-            name: get("logname"),
-            text: get("logtext"),
+            name: get("name"),
+            text: get("text"),
             portrait: resolve_optional_log_art_texture(
                 asset_cache,
                 deck,
-                log,
+                index,
                 "portrait",
-                get("logportrait"),
+                get("portrait"),
             ),
             icon: resolve_optional_log_art_texture(
                 asset_cache,
                 deck,
-                log,
+                index,
                 "deck icon",
-                get("logicon"),
+                get("icon"),
             ),
         };
         if data.text.as_deref().is_none_or(str::is_empty) {
@@ -9940,6 +9944,7 @@ impl MissionCore {
                 }]
             }
             FlatUiDragAction::ToggleMap => vec![Effect::ToggleMap],
+            FlatUiDragAction::OpenPdaEntry(entry) => vec![Effect::ReadPdaEntry(entry)],
             FlatUiDragAction::Place(entity_id) => vec![crate::scripts::script_util::announce(
                 entity_id,
                 "place_item",
@@ -9988,34 +9993,24 @@ impl MissionCore {
                 match button {
                     // Selection is owned by FlatUiHost, before world actions.
                     ReadoutButton::SelectLeftHand | ReadoutButton::SelectRightHand => Vec::new(),
+                    // Retail's logs button toggles the PDA list, which takes
+                    // the left MFD from any panel (the reader included).
                     ReadoutButton::Logs => {
-                        if self.flat_ui.utilities.is_empty_logs() {
+                        if self.flat_ui.utilities.is_logs() {
                             self.flat_ui.utilities = Default::default();
                             return Vec::new();
                         }
-                        let has_logs = self
-                            .world
-                            .borrow::<UniqueView<QuestInfo>>()
-                            .is_ok_and(|quests| quests.logs_for_reader().next().is_some());
-                        if !has_logs {
-                            self.flat_ui.close();
-                            self.flat_ui.utilities.show_empty_logs();
-                            return Vec::new();
+                        self.flat_ui.close();
+                        // The list is part of the interface, as after Return.
+                        if self.use_mode_shortcut == Some(UseModeShortcut::LogReader) {
+                            self.use_mode_shortcut = None;
                         }
-                        let panel = self
-                            .world
-                            .borrow::<UniqueView<MediaPanelEntity>>()
-                            .ok()
-                            .map(|panel| panel.0);
-                        if panel.is_some() && self.flat_ui.active_panel() == panel {
-                            // This button lives inside the interface: dismiss only
-                            // its reader, even if a controller shortcut opened it.
-                            self.flat_ui.close();
-                            Vec::new()
-                        } else {
-                            self.flat_ui.utilities = Default::default();
-                            vec![Effect::ReadLastUnreadLog]
+                        if let Ok(quests) = self.world.borrow::<UniqueView<QuestInfo>>() {
+                            let (kind, deck) =
+                                quests.pda_default_view().unwrap_or((PdaKind::Log, 1));
+                            self.flat_ui.utilities.open_logs(kind, deck, None, &quests);
                         }
+                        Vec::new()
                     }
                     ReadoutButton::CloseUseMode => vec![self.leave_use_mode()],
                     ReadoutButton::CycleAmmo => vec![Effect::CycleAmmo { weapon }],
@@ -12390,7 +12385,12 @@ impl MissionCore {
                     self.consume_log_pickup(entity_id);
                 }
 
-                Effect::ReadLastUnreadLog => {
+                read @ (Effect::ReadLastUnreadLog | Effect::ReadPdaEntry(_)) => {
+                    // A list pick names its entry; the shortcut picks one below.
+                    let requested = match read {
+                        Effect::ReadPdaEntry(entry) => Some(entry),
+                        _ => None,
+                    };
                     let panel_entity = self
                         .world
                         .borrow::<UniqueView<MediaPanelEntity>>()
@@ -12411,7 +12411,10 @@ impl MissionCore {
                     // whole interface when it opened it, just the reader
                     // (leaving the inventory strip) when the player was
                     // already inside.
-                    if is_vr && self.flat_ui.active_panel() == Some(panel_entity) {
+                    if requested.is_none()
+                        && is_vr
+                        && self.flat_ui.active_panel() == Some(panel_entity)
+                    {
                         if self.use_mode_shortcut == Some(UseModeShortcut::LogReader) {
                             effects.push_front(self.leave_use_mode());
                         } else {
@@ -12442,42 +12445,41 @@ impl MissionCore {
                     // one that actually resolves - taking only the front entry
                     // would let one unresolvable log wedge the control forever
                     // (it is never marked read, so it stays at the front).
-                    let candidates: Vec<(u32, u32)> = self
-                        .world
-                        .borrow::<UniqueView<QuestInfo>>()
-                        .map(|quests| {
-                            quests
-                                .logs_for_reader()
-                                .map(|entry| (entry.deck, entry.log))
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                    let candidates: Vec<PdaEntry> = match requested {
+                        Some(entry) => vec![entry],
+                        None => self
+                            .world
+                            .borrow::<UniqueView<QuestInfo>>()
+                            .map(|quests| {
+                                quests
+                                    .logs_for_reader()
+                                    .map(|entry| PdaEntry {
+                                        kind: PdaKind::Log,
+                                        deck: entry.deck,
+                                        index: entry.log,
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    };
                     if candidates.is_empty() {
                         effects.push_back(Effect::ShowMessage {
                             text: "No collected audio logs.".into(),
                         });
                         continue;
                     }
-                    let resolved = candidates.into_iter().find(|(deck, log)| {
-                        self.attach_log_reader_strings(panel_entity, *deck, *log, asset_cache)
+                    let resolved = candidates.into_iter().find(|entry| {
+                        self.attach_log_reader_strings(panel_entity, *entry, asset_cache)
                     });
-                    let Some((deck, log)) = resolved else {
+                    let Some(entry) = resolved else {
                         game_log!(
                             WARN,
                             "unable to open audio log reader: no collected log has a localized transcript here"
                         );
                         continue;
                     };
-                    self.world.add_component(
-                        panel_entity,
-                        dark::properties::PropLog {
-                            deck,
-                            email: 33,
-                            log,
-                            note: 0,
-                            video: 0,
-                        },
-                    );
+                    self.world
+                        .add_component(panel_entity, crate::scripts::gui::reader_prop_log(entry));
                     self.script_world.dispatch(Message {
                         to: panel_entity,
                         payload: MessagePayload::PanelOpened,
@@ -12518,15 +12520,57 @@ impl MissionCore {
 
                     // Only after a localized reader is bound to the active
                     // presentation do read state and audio advance together.
-                    if let Ok(mut quest_info) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
-                        quest_info.mark_log_read(deck, log);
+                    let PdaEntry { deck, index, .. } = entry;
+                    match entry.kind {
+                        PdaKind::Log => {
+                            if let Ok(mut quest_info) =
+                                self.world.borrow::<UniqueViewMut<QuestInfo>>()
+                            {
+                                quest_info.mark_log_read(deck, index);
+                            }
+                            effects.push_front(Effect::PlaySound {
+                                handle: AudioHandle::new(),
+                                source: None,
+                                name: format!("LOG{deck:02}{index:02}"),
+                                spatial: false,
+                            });
+                        }
+                        // Retail replays an email's audio each time it is read.
+                        PdaKind::Email => effects.push_front(Effect::PlayEmail {
+                            deck,
+                            email: index,
+                            force: true,
+                        }),
                     }
-                    effects.push_front(Effect::PlaySound {
-                        handle: AudioHandle::new(),
-                        source: None,
-                        name: format!("LOG{deck:02}{log:02}"),
-                        spatial: false,
-                    });
+                }
+
+                Effect::ReturnToPda(entry) => {
+                    // Retail's return button closes the reader and reopens the
+                    // list; inside the interface it is no longer a shortcut.
+                    self.flat_ui.close();
+                    if self.use_mode_shortcut == Some(UseModeShortcut::LogReader) {
+                        self.use_mode_shortcut = None;
+                    }
+                    // A flat reader can be up outside the interface, which is
+                    // the only place the list draws.
+                    if !self.use_mode && !self.flat_ui.device {
+                        effects.push_front(
+                            self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT),
+                        );
+                    }
+                    if let Ok(quests) = self.world.borrow::<UniqueView<QuestInfo>>() {
+                        self.flat_ui.utilities.open_logs(
+                            entry.kind,
+                            entry.deck,
+                            Some(entry.index),
+                            &quests,
+                        );
+                    }
+                    // Effects run after the regular utility refresh. Fill the
+                    // list before this frame renders it.
+                    self.flat_ui
+                        .utilities
+                        .refresh(&self.world, asset_cache, &self.entity_info);
                 }
 
                 Effect::ToggleMap => {
