@@ -20,14 +20,12 @@ impl Script for SpeedPatch {
         if !matches!(msg, MessagePayload::Frob) {
             return Effect::NoEffect;
         }
-        let duration = if super::healing_item::HealingItemScript::pharmo_friendly(world) {
-            crate::speed_boost::HYPO_DURATION * 6 / 5
-        } else {
-            crate::speed_boost::HYPO_DURATION
-        };
         Effect::UseSpeedBoost {
             entity_id,
-            duration,
+            duration: super::healing_item::HealingItemScript::retail_duration(
+                world,
+                crate::speed_boost::HYPO_DURATION,
+            ),
         }
     }
 }

@@ -1013,15 +1013,6 @@ fn apply_stat_booster_use(
     })
 }
 
-/// Reusing the hypo restarts its timer rather than adding to it.
-fn apply_speed_boost_use(
-    world: &World,
-    entity_id: EntityId,
-    duration: std::time::Duration,
-) -> ConsumableUseOutcome {
-    consume_carried_booster(world, entity_id, |stats| stats.speed_boost = duration)
-}
-
 /// Apply a carried hypo to the player and use one unit of its stack.
 fn consume_carried_booster(
     world: &World,
@@ -4605,7 +4596,9 @@ impl MissionCore {
             .clear();
 
         self.world.run(|mut quests: UniqueViewMut<QuestInfo>| {
-            quests.player_stats_mut().modifiers.clear();
+            let stats = quests.player_stats_mut();
+            stats.modifiers.clear();
+            stats.speed_boost = std::time::Duration::ZERO;
         });
         self.refresh_implant_effects();
         self.death_camera = Some(self.begin_death_camera());
@@ -4845,8 +4838,6 @@ impl MissionCore {
         crate::perf::scene_update(tick.elapsed);
         let _ = self.world.remove_unique::<Time>();
         self.world.add_unique(time.clone());
-        let _ = self.world.remove_unique::<crate::time::WorldTimeScale>();
-        self.world.add_unique(crate::time::WorldTimeScale(scale));
         let _ = self.world.remove_unique::<crate::time::PlayerTime>();
         self.world.add_unique(crate::time::PlayerTime(tick.clone()));
         if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
@@ -10647,9 +10638,7 @@ impl MissionCore {
         // Decided once at creation from the world scale then; a projectile in
         // flight keeps it, across a load too (its marker is saved).
         let slow_time = crate::scripts::internal_fast_projectile::launched_in_slow_time(
-            world
-                .borrow::<UniqueView<crate::time::WorldTimeScale>>()
-                .map_or(1.0, |scale| scale.0),
+            physics.world_time_scale(),
             crate::dev_params::get(crate::dev_params::SLOW_TIME_SHOT_THRESHOLD),
         );
         let is_projectile = world
@@ -13063,8 +13052,9 @@ impl MissionCore {
                 | Effect::UseStatBooster { entity_id, .. }
                 | Effect::UseSpeedBoost { entity_id, .. }) => {
                     // This mutation and the consumption below happen while
-                    // processing one effect against live state. Two boosters
-                    // used in the same update therefore add independently;
+                    // processing one effect against live state. Two stat
+                    // boosters used in the same update therefore add
+                    // independently (a second speed boost restarts its timer);
                     // a duplicate use of an already-destroyed booster no-ops.
                     let outcome = match &effect {
                         Effect::UsePsiKit { amount, .. } => {
@@ -13073,8 +13063,11 @@ impl MissionCore {
                         Effect::UseStatBooster {
                             boosts, duration, ..
                         } => apply_stat_booster_use(&self.world, entity_id, boosts, *duration),
+                        // Reusing the hypo restarts its timer rather than adding to it.
                         Effect::UseSpeedBoost { duration, .. } => {
-                            apply_speed_boost_use(&self.world, entity_id, *duration)
+                            consume_carried_booster(&self.world, entity_id, |stats| {
+                                stats.speed_boost = *duration
+                            })
                         }
                         _ => unreachable!(),
                     };
@@ -24904,9 +24897,7 @@ impl crate::game_scene::GameScene for MissionCore {
     }
 
     fn world_time_scale(&self) -> f32 {
-        self.world
-            .borrow::<UniqueView<crate::time::WorldTimeScale>>()
-            .map_or(1.0, |scale| scale.0)
+        self.physics.world_time_scale()
     }
 
     fn update(

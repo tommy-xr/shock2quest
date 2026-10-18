@@ -51,6 +51,15 @@ impl HealingItemScript {
             .is_ok_and(|quests| quests.player_stats().has_os_trait(TRAIT_PHARMO_FRIENDLY))
     }
 
+    /// A drug's duration: 1.2x with Pharmo-Friendly.
+    pub(crate) fn retail_duration(world: &World, base: std::time::Duration) -> std::time::Duration {
+        if Self::pharmo_friendly(world) {
+            base * 6 / 5
+        } else {
+            base
+        }
+    }
+
     /// The original multiplies both values by 1.2 and converts back to an
     /// integer. Integer arithmetic preserves that truncation exactly.
     pub(crate) fn retail_amount(base: i32, pharmo_friendly: bool) -> i32 {

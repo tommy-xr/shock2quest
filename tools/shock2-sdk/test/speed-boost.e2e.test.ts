@@ -68,3 +68,20 @@ for (const mode of ["SlowWorld", "Classic"] as const) {
     }
   });
 }
+
+test("dying ends the speed boost", { skip: !e2eEnabled, timeout: 600_000 }, async () => {
+  await using game = await GameServer.launch({ mission: "debug_minimal" });
+  await game.step({ frames: 10 });
+  const hypo = await game.player.spawnItem(SPEED_BOOST);
+  await game.entities.sendMessage(hypo.entity_id, { type: "Frob" });
+  await game.step({ frames: 1 });
+  const worldSeconds = async (frames: number) => {
+    const before = (await game.step({ frames: 1 })).render_time;
+    return (await game.step({ frames })).render_time - before;
+  };
+  assert.ok(Math.abs((await worldSeconds(60)) - 0.5) < 1e-3, "the boost slows the world");
+  await game.entities.sendMessage((await game.info()).player.entity_id!, { type: "Damage", amount: 1000 });
+  await game.step({ frames: 2 });
+  assert.notEqual((await game.info()).player.life_state, "alive");
+  assert.ok(Math.abs((await worldSeconds(60)) - 1) < 1e-3, "death ends the boost");
+});

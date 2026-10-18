@@ -54,12 +54,7 @@ impl Script for StatBooster {
             .zip(stats)
             .filter(|(_, delta)| *delta != 0)
             .collect();
-        // Pharmo-Friendly's 1.2x, as for the other medical items.
-        let duration = if super::healing_item::HealingItemScript::pharmo_friendly(world) {
-            DURATION * 6 / 5
-        } else {
-            DURATION
-        };
+        let duration = super::healing_item::HealingItemScript::retail_duration(world, DURATION);
         Effect::UseStatBooster {
             entity_id,
             boosts,
