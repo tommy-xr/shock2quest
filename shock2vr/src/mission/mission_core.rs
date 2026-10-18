@@ -5493,7 +5493,8 @@ impl MissionCore {
             );
             // Sample after stance and turn-origin corrections, around the
             // actual physics step, so passive platform carry is included while
-            // physical tracking and pose conversion cannot activate the grid.
+            // physical tracking and pose conversion cannot activate the grid
+            // or vignette.
             let before_move = self.physics.get_player_translation(&self.player_handle);
             let moved = profile!(
                 "shock2.update.physics",
@@ -5508,9 +5509,15 @@ impl MissionCore {
             moved
         };
 
+        // A hand climb moves the body by the player's own arms, which, like
+        // roomscale walking, must never restrict the view.
         self.vr_comfort.update_vignette(
             move_thumbstick_value,
-            comfort_displacement,
+            if hand_climb.translation.is_some() {
+                vec3(0.0, 0.0, 0.0)
+            } else {
+                comfort_displacement
+            },
             turn_radians,
             delta_time,
             vr_settings,

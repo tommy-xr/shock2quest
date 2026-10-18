@@ -91,6 +91,7 @@ impl VrComfort {
     ) {
         if settings.vignette == VignetteStrength::Off {
             self.vignette.snap_closed();
+            self.travel = SustainedTravel::default();
             return;
         }
         if !dt.is_finite() || dt <= 0.0 {
