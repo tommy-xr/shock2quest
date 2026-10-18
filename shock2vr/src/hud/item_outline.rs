@@ -1,4 +1,4 @@
-use cgmath::{Matrix4, Vector2, point2, vec2, vec3};
+use cgmath::{Matrix4, Vector2, Vector4, point2, vec2, vec3, vec4};
 use collision::{Aabb2, Aabb3};
 use dark::{
     importers::{
@@ -495,6 +495,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn only_a_tool_ready_target_gets_the_accepts_style() {
+        let target = EntityId::new_from_index_and_gen(1, 0);
+        let other = EntityId::new_from_index_and_gen(2, 0);
+        assert_eq!(
+            BracketStyle::for_entity(target, &[None, Some(target)]),
+            BracketStyle::AcceptsHeldItem
+        );
+        assert_eq!(
+            BracketStyle::for_entity(other, &[None, Some(target)]),
+            BracketStyle::Selected
+        );
+        assert_eq!(
+            BracketStyle::for_entity(target, &[None, None]),
+            BracketStyle::Selected
+        );
+        // Ordinary selection keeps the authored art untouched.
+        assert_eq!(BracketStyle::Selected.tint(), vec4(1.0, 1.0, 1.0, 1.0));
+        assert_ne!(
+            BracketStyle::AcceptsHeldItem.tint(),
+            BracketStyle::Selected.tint()
+        );
+    }
+
     /// The false positive this gate removes, and the invariant that makes it
     /// safe: an object can be frobbable and still not highlightable. A `Tech`
     /// console keeps working when you use it, it just stops drawing brackets.
@@ -926,10 +950,38 @@ fn hud_use_position(extents: Aabb2<f32>, text_width: f32, screen_width: f32) -> 
     )
 }
 
+/// How an object's corner brackets are drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BracketStyle {
+    Selected,
+    /// The held item would be taken by this object if released (or applied) now.
+    AcceptsHeldItem,
+}
+
+impl BracketStyle {
+    pub fn for_entity(entity_id: EntityId, tool_ready: &[Option<EntityId>]) -> Self {
+        if tool_ready.contains(&Some(entity_id)) {
+            BracketStyle::AcceptsHeldItem
+        } else {
+            BracketStyle::Selected
+        }
+    }
+
+    /// Multiplied into the bracket art. The art has no red channel (retail
+    /// 0,255,191 green), so a tint can only move it toward blue.
+    fn tint(self) -> Vector4<f32> {
+        match self {
+            BracketStyle::Selected => vec4(1.0, 1.0, 1.0, 1.0),
+            BracketStyle::AcceptsHeldItem => vec4(1.0, 0.6, 1.4, 1.0),
+        }
+    }
+}
+
 pub fn draw_item_outline(
     asset_cache: &mut AssetCache,
     bounds: Aabb3<f32>,
     entity_id: EntityId,
+    style: BracketStyle,
     world: &World,
     view: Matrix4<f32>,
     projection: Matrix4<f32>,
@@ -955,17 +1007,13 @@ pub fn draw_item_outline(
         screen_size,
         size.x,
     );
-    let top_left_brack_obj =
-        SceneObject::screen_space_quad(top_left_brack, vec2(extents.min.x, extents.min.y), size);
-    let top_right_brack_obj =
-        SceneObject::screen_space_quad(top_right_brack, vec2(extents.max.x, extents.min.y), size);
-    let bottom_left_brack_obj =
-        SceneObject::screen_space_quad(bottom_left_brack, vec2(extents.min.x, extents.max.y), size);
-    let bottom_right_brack_obj = SceneObject::screen_space_quad(
-        bottom_right_brack,
-        vec2(extents.max.x, extents.max.y),
-        size,
-    );
+    let tint = style.tint();
+    let bracket =
+        |texture, position| SceneObject::screen_space_tinted_quad(texture, position, size, tint);
+    let top_left_brack_obj = bracket(top_left_brack, vec2(extents.min.x, extents.min.y));
+    let top_right_brack_obj = bracket(top_right_brack, vec2(extents.max.x, extents.min.y));
+    let bottom_left_brack_obj = bracket(bottom_left_brack, vec2(extents.min.x, extents.max.y));
+    let bottom_right_brack_obj = bracket(bottom_right_brack, vec2(extents.max.x, extents.max.y));
     let mut objects = vec![
         top_left_brack_obj,
         bottom_left_brack_obj,

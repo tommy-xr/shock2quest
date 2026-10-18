@@ -68,6 +68,8 @@ pub struct VirtualHand {
     handedness: Handedness,
     feedback: HandFeedback,
     maintenance_target: Option<EntityId>,
+    /// What opening the hand now would offer the held item to.
+    release_target: Option<EntityId>,
     motion: crate::throwing::HandMotion,
 }
 
@@ -195,6 +197,7 @@ impl VirtualHand {
             handedness,
             feedback: HandFeedback::default(),
             maintenance_target: None,
+            release_target: None,
             motion: Default::default(),
         }
     }
@@ -254,6 +257,10 @@ impl VirtualHand {
         self.rotation
     }
 
+    pub(crate) fn squeeze_value(&self) -> f32 {
+        self.squeeze_value
+    }
+
     pub(crate) fn get_trigger_value(&self) -> f32 {
         self.trigger_value
     }
@@ -307,6 +314,7 @@ impl VirtualHand {
             restored_grip_pending: false,
             feedback: HandFeedback::default(),
             maintenance_target: None,
+            release_target: None,
             ..self.clone()
         }
     }
@@ -385,6 +393,16 @@ impl VirtualHand {
                 })
         });
 
+        // Opening the hand offers the held item here; resolved once for the
+        // release itself and for the cue that predicts it.
+        let release_target = prev.get_held_entity().and_then(|held| {
+            if crate::item_tools::is_tool(world, held) {
+                maintenance_target
+            } else {
+                result.as_ref().and_then(|hit| hit.maybe_entity_id)
+            }
+        });
+
         let (mut hand, mut effs) = match prev.hand_state {
             HandState::Grabbing { entity_id } => {
                 // See what we're hitting
@@ -397,13 +415,7 @@ impl VirtualHand {
                         motion: release,
                     }];
 
-                    let is_maintenance = crate::item_tools::is_tool(world, entity_id);
-                    let target = if is_maintenance {
-                        maintenance_target
-                    } else {
-                        result.as_ref().and_then(|hit| hit.maybe_entity_id)
-                    };
-                    if let Some(target) = target {
+                    if let Some(target) = release_target {
                         msgs.push(VirtualHandEffect::OutMessage {
                             message: Message {
                                 to: target,
@@ -426,6 +438,7 @@ impl VirtualHand {
                         handedness,
                         feedback: HandFeedback::default(),
                         maintenance_target: None,
+                        release_target: None,
                         motion: Default::default(),
                     };
                     (updated_hand, msgs)
@@ -488,6 +501,7 @@ impl VirtualHand {
                         handedness,
                         feedback: HandFeedback::default(),
                         maintenance_target: None,
+                        release_target: None,
                         motion: Default::default(),
                     };
                     (updated_hand, msgs)
@@ -506,6 +520,7 @@ impl VirtualHand {
         };
 
         hand.maintenance_target = hand.get_held_entity().and(maintenance_target);
+        hand.release_target = hand.get_held_entity().and(release_target);
         let observed = if let Some(target) = hand.maintenance_target {
             if hand
                 .get_held_entity()
@@ -642,6 +657,11 @@ impl VirtualHand {
         self.feedback.observed
     }
 
+    /// The held item and the target a release this frame would offer it to.
+    pub(crate) fn release_offer(&self) -> Option<(EntityId, EntityId)> {
+        self.get_held_entity().zip(self.release_target)
+    }
+
     pub(crate) fn maintenance_preview(&self, world: &World) -> Option<String> {
         let tool = self.get_held_entity()?;
         let target = self.maintenance_target?;
@@ -775,6 +795,7 @@ fn handle_empty_hand_state(
         handedness,
         feedback,
         maintenance_target: None,
+        release_target: None,
         motion: Default::default(),
     };
     (updated_hand, msgs)
@@ -1212,6 +1233,49 @@ mod tests {
             0,
             "tracking recovery must not synthesize a press"
         );
+    }
+
+    #[test]
+    fn release_offer_predicts_the_release_and_clears_once_released() {
+        let mut world = World::new();
+        let tool = world.add_entity((dark::properties::PropScripts {
+            scripts: vec!["Wrench".into()],
+            inherits: true,
+        },));
+        let gun = world.add_entity((dark::properties::PropGunState {
+            ammo: 1,
+            condition: 40.0,
+            setting: 0,
+            modification: 0,
+            silence_value: 0.0,
+        },));
+        let physics = PhysicsWorld::new();
+        let update = |prev: &VirtualHand, squeeze_value| {
+            let input = Hand {
+                squeeze_value,
+                ..Hand::default()
+            };
+            VirtualHand::update(
+                prev,
+                &physics,
+                &world,
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                &input,
+                Some(gun),
+                input.position,
+                1.0 / 60.0,
+            )
+        };
+        let hand = VirtualHand::new(Handedness::Right).grab_entity(&world, tool);
+        let (held, _) = update(&hand, 1.0);
+        assert_eq!(held.release_offer(), Some((tool, gun)));
+
+        let (released, effects) = update(&held, 0.0);
+        assert!(effects.iter().any(|effect| matches!(effect,
+            VirtualHandEffect::OutMessage { message: Message { to, payload: MessagePayload::ProvideForConsumption { entity } } }
+                if *to == gun && *entity == tool)));
+        assert_eq!(released.release_offer(), None);
     }
 
     fn player_gun() -> PropPlayerGun {
