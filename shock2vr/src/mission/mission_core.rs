@@ -3364,10 +3364,10 @@ pub struct MissionCore {
     psi_carousel: Option<crate::psi_carousel::Carousel>,
     psi_carousel_swallow: [bool; 2],
 
-    /// Whether the psi MFD's captured thumbstick is currently pushed past the
-    /// step threshold. Edge state for [`crate::scripts::gui::stick_nav`], so a
-    /// held stick steps once rather than every frame.
-    psi_nav_latched: bool,
+    /// The psi MFD's captured thumbstick latch. Edge state for
+    /// [`crate::scripts::gui::stick_nav`], so a held stick steps once rather
+    /// than every frame.
+    psi_nav_latched: crate::scripts::gui::NavLatch,
 
     /// A discrete [`Effect::Jump`] waiting for the next movement pass. One
     /// frame of the held jump channel; see where it is consumed in `update`.
@@ -4413,7 +4413,7 @@ impl MissionCore {
             psi_carousel: None,
             psi_carousel_swallow: [false; 2],
             psi_powers_open: false,
-            psi_nav_latched: false,
+            psi_nav_latched: Default::default(),
             button_jump: false,
             button_jump_held: false,
             use_mode_shortcut: None,
@@ -5053,8 +5053,12 @@ impl MissionCore {
                 let confirm = menu.trigger_armed && pressed;
                 menu.trigger_armed |= !pressed;
                 self.psi_carousel_swallow[hand_slot(menu.hand)] = pressed;
-                let (step, latched) =
-                    crate::scripts::gui::stick_nav(input.thumbstick, menu.stick_latched);
+                let (step, latched) = crate::scripts::gui::stick_nav(
+                    input.thumbstick,
+                    menu.stick_latched,
+                    tick.elapsed.as_secs_f32(),
+                    &crate::scripts::gui::PSI_STICK_NAV,
+                );
                 menu.stick_latched = latched;
                 input.thumbstick = cgmath::vec2(0.0, 0.0);
                 input.trigger_value = 0.0;
@@ -5126,7 +5130,12 @@ impl MissionCore {
                 crate::vr_config::Handedness::Left => input_context.left_hand.thumbstick,
                 crate::vr_config::Handedness::Right => input_context.right_hand.thumbstick,
             };
-            let (step, latched) = crate::scripts::gui::stick_nav(stick, self.psi_nav_latched);
+            let (step, latched) = crate::scripts::gui::stick_nav(
+                stick,
+                self.psi_nav_latched,
+                delta_time,
+                &crate::scripts::gui::PSI_STICK_NAV,
+            );
             self.psi_nav_latched = latched;
             if let Some(step) = step {
                 effects.push(step.effect());
@@ -5143,7 +5152,7 @@ impl MissionCore {
             captured_context = withheld;
             &captured_context
         } else {
-            self.psi_nav_latched = false;
+            self.psi_nav_latched = Default::default();
             input_context
         };
 

@@ -5,7 +5,7 @@ use crate::{
     input_context::InputContext,
     scripts::{
         Effect, Message, MessagePayload,
-        gui::{NavStep, stick_nav},
+        gui::{HANDHELD_STICK_NAV, NavLatch, NavStep, stick_nav},
     },
 };
 use cgmath::vec2;
@@ -35,7 +35,7 @@ struct HandCapture {
     upper: MenuHold,
     blocked_buttons: [bool; 2],
     blocked_stick: bool,
-    stick_latched: bool,
+    stick_latched: NavLatch,
 }
 
 #[derive(Default)]
@@ -53,7 +53,7 @@ impl HandheldInput {
                 hand.blocked_stick = true;
             }
             hand.upper.cancel();
-            hand.stick_latched = false;
+            hand.stick_latched = NavLatch::default();
         }
     }
 
@@ -106,7 +106,7 @@ impl HandheldInput {
                     actions.is_held(action) && (owner.is_some() || !actions.just_triggered(action))
                 });
                 capture.blocked_stick = stick.x.abs().max(stick.y.abs()) >= 0.3;
-                capture.stick_latched = false;
+                capture.stick_latched = NavLatch::default();
             }
             for (button, action) in [lower, upper].into_iter().enumerate() {
                 if !actions.is_held(action) && !actions.just_triggered(action) {
@@ -140,7 +140,12 @@ impl HandheldInput {
                             y: stick.y,
                         }));
                     }
-                    let (step, latch) = stick_nav(stick, capture.stick_latched);
+                    let (step, latch) = stick_nav(
+                        stick,
+                        capture.stick_latched,
+                        elapsed.as_secs_f32(),
+                        &HANDHELD_STICK_NAV,
+                    );
                     capture.stick_latched = latch;
                     if let Some(step) = step {
                         let (x, y) = match step {
