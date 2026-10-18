@@ -196,6 +196,12 @@ pub trait GameScene {
         None
     }
 
+    /// The world clock's current scale (1.0 = real time) - the developer knob
+    /// and any speed boost, resolved. World audio plays at this rate.
+    fn world_time_scale(&self) -> f32 {
+        1.0
+    }
+
     /// Whether the player's collider is currently crouched (the *actual*
     /// physics state - stand-up can be refused for lack of headroom). Drives
     /// the crouch-aware camera height; non-mission scenes have no player.

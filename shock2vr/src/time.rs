@@ -13,6 +13,11 @@ pub struct Time {
 #[derive(Unique, Clone, Debug, Default)]
 pub struct PlayerTime(pub Time);
 
+/// This update's world time scale (developer knob and speed boosts resolved),
+/// published beside [`Time`] for code that must agree with the world clock.
+#[derive(Unique, Clone, Copy, Debug)]
+pub struct WorldTimeScale(pub f32);
+
 /// Derives world time from the player's gameplay tick, so the world can run
 /// slower than the player (`world_time_scale`). Accumulates the time the world
 /// skipped rather than multiplying totals, so changing the scale never moves

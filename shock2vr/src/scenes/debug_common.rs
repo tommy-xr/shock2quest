@@ -303,6 +303,10 @@ impl GameScene for DebugScene {
         self.core.world_time()
     }
 
+    fn world_time_scale(&self) -> f32 {
+        self.core.world_time_scale()
+    }
+
     fn update(
         &mut self,
         time: &Time,
@@ -531,6 +535,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn world_time(&self) -> Option<std::time::Duration> {
         self.core.world_time()
+    }
+
+    fn world_time_scale(&self) -> f32 {
+        self.core.world_time_scale()
     }
 
     fn update(

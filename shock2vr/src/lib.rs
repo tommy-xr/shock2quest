@@ -101,6 +101,7 @@ pub mod quest_info;
 pub mod research;
 mod runtime_props;
 mod scripts;
+mod speed_boost;
 pub use scripts::{ScriptSupport, script_support};
 mod security_alarm;
 pub mod string_table;
@@ -2028,10 +2029,10 @@ impl Game {
         );
 
         let audio_profile = perf::scope(perf::Phase::Audio);
-        // `time` is the player's clock; `MissionCore::update` derives the
-        // slowed world clock from the same dev param. World sounds follow it.
+        // `time` is the player's clock; world sounds follow the scene's
+        // slowed world clock.
         let audio_rate = time::world_audio_rate(
-            dev_params::get(dev_params::WORLD_TIME_SCALE),
+            self.active_game_scene.world_time_scale(),
             dev_params::get(dev_params::SLOW_TIME_AUDIO_FLOOR),
         );
         self.audio_context.set_world_rate(audio_rate);

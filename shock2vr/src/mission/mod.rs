@@ -237,6 +237,10 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.world_time()
     }
 
+    fn world_time_scale(&self) -> f32 {
+        self.mission_core.world_time_scale()
+    }
+
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
         self.mission_core.on_exit(audio_context);
     }
