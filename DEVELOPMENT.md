@@ -1389,9 +1389,9 @@ cargo dvr assets recopy           # replace retail assets; preserves saves/setti
 See [dark_vr_tool](tools/dark_vr_tool/README.md) for device selection, filesystem
 access, debug-port configuration, and the `ss2vr` shell alias.
 
-`pr` installs the APK CI attached to the PR's head commit. CI APKs carry the
-release signature; replacing a local build needs `--allow-uninstall`, which
-deletes its saves (see [vr-device-loop](.claude/skills/vr-device-loop/SKILL.md#install-a-prs-ci-build)).
+`pr` installs the APK CI attached to the PR's head commit. CI APKs are signed
+with a dedicated dev key and versioned 0.0.0, below every release; replacing a
+local build or a release needs `--allow-uninstall`, which deletes its saves (see [vr-device-loop](.claude/skills/vr-device-loop/SKILL.md#install-a-prs-ci-build)).
 
 ##### Saved games
 

@@ -48,28 +48,43 @@ jobs:
 
       - uses: ./.github/actions/setup-android
 
-      # Dev profile, signed with the release key. Forks lack the secrets, so
-      # cargo-apk falls back to its debug key there.
+      # Versioned below every release so a dev APK never upgrades one. The
+      # in-game label stays `dev | <sha7>` (no SHOCK2QUEST_RELEASE_VERSION).
+      - name: Stamp dev version
+        id: version
+        run: python3 .github/scripts/prepare-release.py --dev
+
+      # Dev profile, signed with the dedicated dev key (never the release key).
+      # Forks lack the secrets, so cargo-apk falls back to its debug key there.
       - name: Build Android APK
         working-directory: runtimes/oculus_runtime
         env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_DEV_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_DEV_KEYSTORE_PASSWORD }}
           IS_FORK: ${{ github.event.repository.fork }}
+          VERSION_NAME: ${{ steps.version.outputs.version }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
-            test "$IS_FORK" = true || { echo 'Release signing secrets are missing.'; exit 1; }
+            test "$IS_FORK" = true || { echo 'Dev signing secrets are missing.'; exit 1; }
           else
             umask 077
-            export CARGO_APK_DEV_KEYSTORE="$RUNNER_TEMP/release.keystore"
+            export CARGO_APK_DEV_KEYSTORE="$RUNNER_TEMP/dev.keystore"
             export CARGO_APK_DEV_KEYSTORE_PASSWORD="$KEYSTORE_PASSWORD"
             trap 'rm -f "$CARGO_APK_DEV_KEYSTORE"' EXIT
             printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$CARGO_APK_DEV_KEYSTORE"
           fi
           cargo apk build
-          "$ANDROID_HOME/build-tools/33.0.0/apksigner" verify --print-certs ../../target/debug/apk/shock2quest.apk
+          apk=../../target/debug/apk/shock2quest.apk
+          build_tools="$ANDROID_HOME/build-tools/33.0.0"
+          "$build_tools/apksigner" verify --print-certs "$apk" | tee "$RUNNER_TEMP/apk-certs"
+          if [ "$IS_FORK" != true ]; then
+            grep -F 'Signer #1 certificate DN: CN=Shock2Quest Dev (CI)' "$RUNNER_TEMP/apk-certs"
+          fi
+          "$build_tools/aapt" dump badging "$apk" > "$RUNNER_TEMP/apk-badging"
+          grep -F "package: name='com.tommybuilds.shock2quest' versionCode='$VERSION_CODE' versionName='$VERSION_NAME'" "$RUNNER_TEMP/apk-badging"
 
-      # `quest-device.mjs pr` finds this by head SHA.
+      # `cargo dvr pr` finds this by head SHA.
       - uses: actions/upload-artifact@v4
         with:
           name: shock2quest-apk-${{ github.sha }}

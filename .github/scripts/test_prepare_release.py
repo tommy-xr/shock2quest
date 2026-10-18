@@ -58,6 +58,19 @@ class ReleaseVersionTests(unittest.TestCase):
             self.assertGreater(release.prepare_release(root, "0.1.0"), code)
             self.assertGreater(release.prepare_release(root, "1.0.0"), 16777472)
 
+    def test_dev_stamp_sorts_below_every_release(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.checkout(root)
+            code = release.prepare_dev(root)
+            self.assertEqual(code, 16777216)
+            manifest = tomllib.loads((root / "runtimes/oculus_runtime/Cargo.toml").read_text())
+            self.assertEqual(manifest["package"]["version"], "0.0.0")
+            lock = tomllib.loads((root / "Cargo.lock").read_text())
+            self.assertEqual([p["version"] for p in lock["package"] if p["name"] == "shock2quest"],
+                             ["0.0.0"])
+            self.assertLess(code, release.version_code(release.parse_release_version("0.0.1")))
+
     def test_rejects_invalid_versions_without_touching_files(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

@@ -32,10 +32,12 @@ def check_published_releases(version: str, releases: list[dict]) -> None:
             raise ValueError(f"Version {version} must exceed published release {tag}")
 
 
-def prepare_release(root: Path, version: str) -> int:
-    parts = parse_release_version(version)
+def version_code(parts: tuple[int, int, int]) -> int:
     # cargo-apk 0.9.7 / ndk-build 0.9.0 uses APK ID 1 and three u8 components.
-    code = (1 << 24) | (parts[0] << 16) | (parts[1] << 8) | parts[2]
+    return (1 << 24) | (parts[0] << 16) | (parts[1] << 8) | parts[2]
+
+
+def stamp(root: Path, version: str) -> None:
     manifest = root / "runtimes/oculus_runtime/Cargo.toml"
     lockfile = root / "Cargo.lock"
     original = manifest.read_text()
@@ -53,16 +55,39 @@ def prepare_release(root: Path, version: str) -> int:
         raise ValueError("Expected exactly one matching Android package and lock entry")
     manifest.write_text(stamped)
     lockfile.write_text(locked)
-    return code
+
+
+def prepare_release(root: Path, version: str) -> int:
+    parts = parse_release_version(version)
+    stamp(root, version)
+    return version_code(parts)
+
+
+# CI dev APKs sort below every release (which must exceed 0.0.0), so a dev APK
+# never installs as an upgrade over one.
+DEV_VERSION = "0.0.0"
+
+
+def prepare_dev(root: Path) -> int:
+    stamp(root, DEV_VERSION)
+    return version_code((0, 0, 0))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("version")
+    parser.add_argument("version", nargs="?")
+    parser.add_argument("--dev", action="store_true",
+                        help=f"Stamp a CI dev build as {DEV_VERSION}; takes no version")
     parser.add_argument("--published-releases", type=Path,
                         help="Validate against gh api --paginate --slurp release pages; do not stamp")
     args = parser.parse_args()
-    if args.published_releases:
+    if args.dev != (args.version is None):
+        parser.error("pass a version or --dev")
+    if args.dev:
+        code = prepare_dev(Path.cwd())
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            output.write(f"version={DEV_VERSION}\nversion_code={code}\n")
+    elif args.published_releases:
         pages = json.loads(args.published_releases.read_text())
         check_published_releases(args.version, [release for page in pages for release in page])
     else:

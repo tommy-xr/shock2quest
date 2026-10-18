@@ -73,7 +73,8 @@ enum Action {
         /// Also set the startup mission, as `mission set` does
         #[arg(long)]
         mission: Option<String>,
-        /// Replace an install signed with another key; deletes its saves
+        /// Replace an install signed with another key or versioned above the
+        /// CI APK (a local build or a release); deletes its saves
         #[arg(long)]
         allow_uninstall: bool,
     },
@@ -461,7 +462,7 @@ impl Device {
         let installed = match install() {
             Err(error) if uninstall_before_retry(&error.to_string(), allow_uninstall)? => {
                 eprintln!(
-                    "Installed app has another signing key; uninstalling it (deletes its saves)"
+                    "Installed app cannot be replaced in place; uninstalling it (deletes its saves)"
                 );
                 output(self.adb().args(["uninstall", PACKAGE]))?;
                 install()?
@@ -704,15 +705,20 @@ fn select_build_run<'a>(runs: &'a [BuildRun], sha: &str, branch: &str) -> Result
 }
 
 /// Whether a failed `adb install` is retried after an uninstall. Only a
-/// signing-key change qualifies (a CI APK over a local build, or back), and
-/// since uninstalling deletes the app-private saves it must be opted into.
+/// signing-key change or a downgrade qualifies (a CI APK, versioned 0.0.0,
+/// over a local 0.1.0 build or a release), and since uninstalling deletes the
+/// app-private saves it must be opted into.
 fn uninstall_before_retry(install_error: &str, allow_uninstall: bool) -> Result<bool> {
-    if !install_error.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+    let reason = if install_error.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+        "installed app has another signing key"
+    } else if install_error.contains("INSTALL_FAILED_VERSION_DOWNGRADE") {
+        "installed app has a higher versionCode"
+    } else {
         return Ok(false);
-    }
+    };
     ensure!(
         allow_uninstall,
-        "installed app has another signing key; replacing it uninstalls it and deletes its saves (cargo dvr pr <n> --allow-uninstall, or adb uninstall {PACKAGE})"
+        "{reason}; replacing it uninstalls it and deletes its saves (cargo dvr pr <n> --allow-uninstall, or adb uninstall {PACKAGE})"
     );
     Ok(true)
 }
@@ -890,10 +896,14 @@ mod tests {
         );
     }
     #[test]
-    fn only_an_allowed_signature_change_uninstalls() {
-        let mismatch = "adb: failed to install x.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]";
-        assert!(uninstall_before_retry(mismatch, false).is_err());
-        assert!(uninstall_before_retry(mismatch, true).unwrap());
+    fn only_an_allowed_signature_change_or_downgrade_uninstalls() {
+        for blocked in [
+            "adb: failed to install x.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]",
+            "adb: failed to install x.apk: Failure [INSTALL_FAILED_VERSION_DOWNGRADE]",
+        ] {
+            assert!(uninstall_before_retry(blocked, false).is_err());
+            assert!(uninstall_before_retry(blocked, true).unwrap());
+        }
         let other = "Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]";
         assert!(!uninstall_before_retry(other, true).unwrap());
         assert!(!uninstall_before_retry(other, false).unwrap());

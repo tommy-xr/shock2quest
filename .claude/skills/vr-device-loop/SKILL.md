@@ -86,8 +86,9 @@ manifest change, rebuild and reinstall.
 
 ### Install a PR's CI build
 
-Build Android uploads a dev-profile APK for every push, signed with the release
-key. `cargo dvr pr` (`ss2vr pr`) downloads the one for a PR's head commit
+Build Android uploads a dev-profile APK for every push, signed with a dedicated
+dev key (`CN=Shock2Quest Dev (CI)`) and versioned 0.0.0 so it sorts below every
+release. `cargo dvr pr` (`ss2vr pr`) downloads the one for a PR's head commit
 (cached per SHA under the OS temp dir), installs it and launches:
 
 ```sh
@@ -96,10 +97,11 @@ cargo dvr pr 1234 --mission debug_gloves   # also sets the startup mission
 ```
 
 It refuses when the head commit's build is missing, running or failed. A local
-build carries another signature, so replacing it needs an uninstall: pass
-`--allow-uninstall`, which deletes the app-private saves (game data and settings
-under `/sdcard/shock2quest` survive). CI APKs (versionCode of 0.1.0) block
-installing an older release over them until uninstalled.
+build or a release carries another key or a higher versionCode, so replacing it
+needs an uninstall: pass `--allow-uninstall`, which deletes the app-private saves
+(game data and settings under `/sdcard/shock2quest` survive). A local build
+signed with the same dev key installs over a CI APK in place; see
+[dark_vr_tool](../../../tools/dark_vr_tool/README.md) for sharing the key.
 
 ## Establish an unattended XR session
 
