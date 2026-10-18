@@ -155,7 +155,7 @@ test(
     // floor is further below the feet than a step-off accepts.
     for (const strafe of [1, -1]) {
       const { floorY, start } = await climbStack(game, 95);
-      await game.input.set("right_hand.thumbstick", [strafe, 0]);
+      await game.input.set("right_hand.thumbstick", [-strafe, 0]);
       await game.step({ frames: 120 });
       const end = await game.player.position();
       await game.input.set("right_hand.thumbstick", [0, 0]);

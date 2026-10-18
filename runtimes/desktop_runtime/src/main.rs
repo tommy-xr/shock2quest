@@ -740,11 +740,11 @@ fn process_events(
     }
 
     if window.get_key(Key::A) == Action::Press && !is_alt_pressed {
-        right_thumbstick_value += vec2(1.0, 0.0);
+        right_thumbstick_value += vec2(-1.0, 0.0);
     }
 
     if window.get_key(Key::D) == Action::Press && !is_alt_pressed {
-        right_thumbstick_value += vec2(-1.0, 0.0);
+        right_thumbstick_value += vec2(1.0, 0.0);
     }
 
     if window.get_key(Key::Up) == Action::Press {
@@ -756,11 +756,11 @@ fn process_events(
     }
 
     if window.get_key(Key::Left) == Action::Press {
-        left_thumbstick_value += vec2(1.0, 0.0);
+        left_thumbstick_value += vec2(-1.0, 0.0);
     }
 
     if window.get_key(Key::Right) == Action::Press {
-        left_thumbstick_value += vec2(-1.0, 0.0);
+        left_thumbstick_value += vec2(1.0, 0.0);
     }
 
     if window.get_key(Key::LeftShift) == Action::Press
