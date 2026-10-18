@@ -82,7 +82,10 @@ use crate::{
     game_scene::AmbientAudioState,
     game_scene::PlayerSavePoseError,
     gui::GuiManager,
-    hud::{DamageFlash, draw_health_bar, draw_item_name, draw_item_outline, is_hud_selectable},
+    hud::{
+        BracketStyle, DamageFlash, draw_health_bar, draw_item_name, draw_item_outline,
+        is_hud_selectable,
+    },
     input_context::{self, InputContext},
     interaction::{FlatInteraction, InteractionContext, PlayerInteraction, VrInteraction},
     inventory::PlayerInventoryEntity,
@@ -17190,7 +17193,13 @@ impl MissionCore {
         }
         // A pull target is bracketed past the gate: the brackets are the
         // cast's aim readout, and every pullable item is a loose grabbable.
-        for target in &self.psi_pull_aim {
+        // So is a target that will take the held item: its accepts-style
+        // brackets are the release cue.
+        for target in self
+            .psi_pull_aim
+            .iter()
+            .chain(self.tool_ready.iter().flatten())
+        {
             if !highlighted.contains(target) {
                 highlighted.push(*target);
             }
@@ -17222,6 +17231,7 @@ impl MissionCore {
                 asset_cache,
                 bounds,
                 hit_entity,
+                BracketStyle::for_entity(hit_entity, &self.tool_ready),
                 &self.world,
                 view,
                 projection,
