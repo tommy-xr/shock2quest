@@ -277,5 +277,9 @@ tabs.addEventListener("keydown", (e) => {
   tabs.children[cur].focus();
 });
 </script>
+<script type="module">
+// Review overlay for collecting page feedback; see website/README.md.
+if (new URLSearchParams(location.search).get("feedback") === "1") import("./shared/feedback.js");
+</script>
 </body>
 </html>
