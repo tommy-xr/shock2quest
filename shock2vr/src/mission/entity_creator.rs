@@ -266,6 +266,10 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, surface);
     }
 
+    if additional_options.double_sided {
+        world.add_component(entity_id, crate::runtime_props::RuntimePropDoubleSided);
+    }
+
     if let Some(origin) = additional_options.projectile_raycast_origin {
         world.add_component(entity_id, RuntimePropProjectileRayOrigin(origin));
     }
@@ -2224,6 +2228,8 @@ pub struct CreateEntityOptions {
     /// impact spangs so they don't accumulate at every bullet hole. Cosmetic
     /// transients are excluded from saves rather than replayed after loading.
     pub transient_fx: bool,
+    /// Draw without backface culling (`RuntimePropDoubleSided`).
+    pub double_sided: bool,
     /// Cosmetic material recipe for a ballistic impact host.
     pub impact_appearance: Option<crate::particle_effects::ImpactAppearance>,
     /// Override the collision-ray origin when this entity resolves as a fast
@@ -2269,6 +2275,7 @@ impl Default for CreateEntityOptions {
             ecology_type: None,
             attach_to: None,
             transient_fx: false,
+            double_sided: false,
             impact_appearance: None,
             projectile_raycast_origin: None,
             projectile_launch_origin: None,

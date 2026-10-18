@@ -3268,7 +3268,8 @@ pub struct MissionCore {
     immolate_flames: Option<ParticleSystem>,
     water_feedback: crate::swimming::WaterFeedback,
     held_recovery_particles: Vec<ParticleSystem>,
-    barrel_smoke: Vec<(EntityId, ParticleSystem)>,
+    /// (gun, sprite, particles): smoke, plus creature guns' brief flash sprites.
+    barrel_smoke: Vec<(EntityId, &'static str, ParticleSystem)>,
     #[allow(dead_code)]
     pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub template_name_to_template_id: HashMap<String, EntityMetadata>,
@@ -5914,7 +5915,7 @@ impl MissionCore {
             particles.update(tick.elapsed, Matrix4::identity());
             !particles.is_done()
         });
-        self.barrel_smoke.retain_mut(|(_, particles)| {
+        self.barrel_smoke.retain_mut(|(.., particles)| {
             particles.update(time.elapsed, Matrix4::identity());
             !particles.is_done()
         });
@@ -10472,6 +10473,13 @@ impl MissionCore {
         }
     }
 
+    /// Bound overlapping wisps per gun and across the mission.
+    /// Flash sprites are not counted.
+    fn barrel_smoke_has_room(&self, gun: EntityId) -> bool {
+        let smoke = || self.barrel_smoke.iter().filter(|(_, s, _)| *s == "NDsmk");
+        smoke().count() < 24 && smoke().filter(|(g, ..)| *g == gun).count() < 3
+    }
+
     /// Samples every projectile created in slow time into its trail, except
     /// cosmetic launches (ejected brass, muzzle effects).
     fn update_projectile_trails(&mut self, world_dt: f32) {
@@ -14627,23 +14635,31 @@ impl MissionCore {
                     }
                     drop(quests);
                 }
+                Effect::AiMuzzleParticles {
+                    shooter,
+                    kind,
+                    frame,
+                } => {
+                    let (smoke, flash) =
+                        crate::particle_effects::ai_muzzle_particles(kind, frame, asset_cache);
+                    // Only the lingering smoke is budgeted; a flash lives a
+                    // tenth of a second, so every shot gets one.
+                    if let Some(smoke) = smoke.filter(|_| self.barrel_smoke_has_room(shooter)) {
+                        self.barrel_smoke.push((shooter, "NDsmk", smoke));
+                    }
+                    if let Some(flash) = flash {
+                        self.barrel_smoke.push((shooter, "NDsbll", flash));
+                    }
+                }
                 Effect::WeaponRecoil { entity_id } => {
-                    // Bound overlapping wisps per gun and across the mission.
                     // Only accepted shots reach this effect (never dry fire).
-                    if self.barrel_smoke.len() < 24
-                        && self
-                            .barrel_smoke
-                            .iter()
-                            .filter(|(gun, _)| *gun == entity_id)
-                            .count()
-                            < 3
-                    {
+                    if self.barrel_smoke_has_room(entity_id) {
                         if let Some(smoke) = crate::particle_effects::barrel_smoke(
                             &self.world,
                             entity_id,
                             asset_cache,
                         ) {
-                            self.barrel_smoke.push((entity_id, smoke));
+                            self.barrel_smoke.push((entity_id, "NDsmk", smoke));
                         }
                     }
                     self.flat_weapon_animation.fired(&self.world, entity_id);
@@ -17857,6 +17873,10 @@ impl MissionCore {
             .world
             .borrow::<View<RuntimePropJointTransforms>>()
             .unwrap();
+        let v_double_sided = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropDoubleSided>>()
+            .unwrap();
 
         // Start with built in scene objects
         let mut scene = self.scene_objects.clone();
@@ -18153,6 +18173,9 @@ impl MissionCore {
                     xformed_obj.set_lights(entity_lights.clone());
                     xformed_obj.self_depth_group = self_depth_group;
                     xformed_obj.set_emissivity_scale(emissivity_scale);
+                    if v_double_sided.contains(*entity_id) {
+                        xformed_obj.set_backface_culling(None);
+                    }
                     xformed_obj.set_glow(heat.and_then(|heat| {
                         crate::psi_overload_glow::glow(heat, xformed_obj.material_name.as_deref())
                     }));
@@ -18238,11 +18261,18 @@ impl MissionCore {
         }
         if options.render_particles {
             scene.extend(self.water_feedback.render());
-            for (weapon, particles) in &self.barrel_smoke {
+            for (weapon, sprite, particles) in &self.barrel_smoke {
                 let tag = Rc::new(engine::scene::SceneObjectDebugTag {
                     entity_id: Some(weapon.inner()),
-                    name: Some("Barrel smoke".to_owned()),
-                    model: Some("NDsmk".to_owned()),
+                    name: Some(
+                        if *sprite == "NDsmk" {
+                            "Barrel smoke"
+                        } else {
+                            "Muzzle flash"
+                        }
+                        .to_owned(),
+                    ),
+                    model: Some((*sprite).to_owned()),
                     source: Some("barrel_smoke".to_owned()),
                 });
                 for mut object in particles.render() {
