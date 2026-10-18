@@ -5240,13 +5240,6 @@ impl MissionCore {
             }
         }
 
-        self.vr_comfort.update_vignette(
-            move_thumbstick_value,
-            turn_radians,
-            delta_time,
-            vr_settings,
-        );
-
         let dir = new_rotation * input_context.head.rotation;
         let facing = dir.rotate_vector(cgmath::vec3(0.0, 0.0, -1.0));
         let movement_scale = {
@@ -5500,7 +5493,8 @@ impl MissionCore {
             );
             // Sample after stance and turn-origin corrections, around the
             // actual physics step, so passive platform carry is included while
-            // physical tracking and pose conversion cannot activate the grid.
+            // physical tracking and pose conversion cannot activate the grid
+            // or vignette.
             let before_move = self.physics.get_player_translation(&self.player_handle);
             let moved = profile!(
                 "shock2.update.physics",
@@ -5515,6 +5509,19 @@ impl MissionCore {
             moved
         };
 
+        // A hand climb moves the body by the player's own arms, which, like
+        // roomscale walking, must never restrict the view.
+        self.vr_comfort.update_vignette(
+            move_thumbstick_value,
+            if hand_climb.translation.is_some() {
+                vec3(0.0, 0.0, 0.0)
+            } else {
+                comfort_displacement
+            },
+            turn_radians,
+            delta_time,
+            vr_settings,
+        );
         self.reference_grid.update(
             comfort_displacement,
             move_thumbstick_value.magnitude() > 0.15
