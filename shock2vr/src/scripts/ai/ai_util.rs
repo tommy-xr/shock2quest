@@ -582,6 +582,61 @@ fn find_first_entity_by_template_id(world: &World, ranged_weapon: i32) -> Option
     None
 }
 
+/// The frame a creature launches from and the launch point in it: the
+/// authored launch joint's position in the root frame, or the yaw-relative
+/// launch offset when no joint is authored.
+fn launch_frame(
+    world: &World,
+    entity_id: EntityId,
+    launch_joint: u32,
+) -> (Matrix4<f32>, Point3<f32>) {
+    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
+    let v_joint_transforms = world.borrow::<View<RuntimePropJointTransforms>>().unwrap();
+    let v_creature = world.borrow::<View<PropCreature>>().unwrap();
+    let root_transform = v_transform.get(entity_id).unwrap();
+    let forward = vec3(0.0, 0.0, 1.0);
+
+    let creature_type = v_creature.get(entity_id).unwrap();
+    // Launch joint 0 means the object's default launch position, not
+    // skeleton joint 0 (usually a foot). Dark's cAILaunchAction only
+    // resolves a creature joint for positive launch-joint values.
+    // Security/assault droids and SHODAN author 0; using their foot bone
+    // put shots into the floor or failed the muzzle line-of-fire check.
+    let joint_transform = creature::get_creature_definition(creature_type.0)
+        .filter(|_| launch_joint > 0)
+        .and_then(|def| def.get_mapped_joint(launch_joint))
+        .and_then(|joint| {
+            v_joint_transforms
+                .get(entity_id)
+                .ok()
+                .and_then(|pose| pose.0.get(joint as usize))
+                .copied()
+        });
+    if let Some(joint) = joint_transform {
+        (
+            root_transform.0,
+            joint.transform_point(point3(0.0, 0.0, 0.0)),
+        )
+    } else {
+        let offset = world
+            .borrow::<View<PropAIRangedShoot>>()
+            .unwrap()
+            .get(entity_id)
+            .map(|p| p.launch_offset)
+            .unwrap_or(vec3(0.0, 0.0, 0.0));
+        let positions = world.borrow::<View<PropPosition>>().unwrap();
+        let position = positions.get(entity_id).unwrap();
+        // Authored offsets are world-sized and yaw-relative, independent
+        // of the rendered model's scale, pitch and roll (AIGetLaunchOffset).
+        let facing = position.rotation.rotate_vector(forward);
+        let yaw = Rad(facing.x.atan2(facing.z));
+        (
+            Matrix4::from_translation(position.position) * Matrix4::from_angle_y(yaw),
+            point3(offset.x, offset.y, offset.z),
+        )
+    }
+}
+
 ///
 /// Fire Ranged Projectile
 ///
@@ -599,53 +654,9 @@ pub fn fire_ranged_projectile(
             _ => None,
         });
 
-    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
-    let v_joint_transforms = world.borrow::<View<RuntimePropJointTransforms>>().unwrap();
-
-    let v_creature = world.borrow::<View<PropCreature>>().unwrap();
     if let Some((projectile_id, options)) = maybe_projectile {
-        let root_transform = v_transform.get(entity_id).unwrap();
         let forward = vec3(0.0, 0.0, 1.0);
-
-        let creature_type = v_creature.get(entity_id).unwrap();
-        // Launch joint 0 means the object's default launch position, not
-        // skeleton joint 0 (usually a foot). Dark's cAILaunchAction only
-        // resolves a creature joint for positive launch-joint values.
-        // Security/assault droids and SHODAN author 0; using their foot bone
-        // put shots into the floor or failed the muzzle line-of-fire check.
-        let joint_transform = creature::get_creature_definition(creature_type.0)
-            .filter(|_| options.joint > 0)
-            .and_then(|def| def.get_mapped_joint(options.joint))
-            .and_then(|joint| {
-                v_joint_transforms
-                    .get(entity_id)
-                    .ok()
-                    .and_then(|pose| pose.0.get(joint as usize))
-                    .copied()
-            });
-        let (transform, position) = if let Some(joint) = joint_transform {
-            (
-                root_transform.0,
-                joint.transform_point(point3(0.0, 0.0, 0.0)),
-            )
-        } else {
-            let offset = world
-                .borrow::<View<PropAIRangedShoot>>()
-                .unwrap()
-                .get(entity_id)
-                .map(|p| p.launch_offset)
-                .unwrap_or(vec3(0.0, 0.0, 0.0));
-            let positions = world.borrow::<View<PropPosition>>().unwrap();
-            let position = positions.get(entity_id).unwrap();
-            // Authored offsets are world-sized and yaw-relative, independent
-            // of the rendered model's scale, pitch and roll (AIGetLaunchOffset).
-            let facing = position.rotation.rotate_vector(forward);
-            let yaw = Rad(facing.x.atan2(facing.z));
-            (
-                Matrix4::from_translation(position.position) * Matrix4::from_angle_y(yaw),
-                point3(offset.x, offset.y, offset.z),
-            )
-        };
+        let (transform, position) = launch_frame(world, entity_id, options.joint);
         let Some((target_entity, target_position)) = combat_target(world, physics, entity_id)
         else {
             return Effect::NoEffect;
@@ -701,6 +712,41 @@ pub fn fire_ranged_projectile(
     } else {
         Effect::NoEffect
     }
+}
+
+/// A creature's fire flag inside a scripted sequence (e.g. an AIWatchObj
+/// `Play`): the gunshot, flash and smoke along its facing, and no round. The
+/// original only launches from a ranged attack, so a scripted shot can never
+/// hit anything (medsci1's crawl-scene hybrid).
+pub fn fire_scripted_report(world: &World, entity_id: EntityId) -> Effect {
+    let Some((projectile_id, options)) =
+        get_first_link_with_template_and_data(world, entity_id, |link| match link {
+            Link::AIProjectile(data) => Some(*data),
+            _ => None,
+        })
+    else {
+        return Effect::NoEffect;
+    };
+    let (transform, position) = launch_frame(world, entity_id, options.joint);
+    let forward = vec3(0.0, 0.0, 1.0);
+    let launch_point = transform.transform_point(position);
+    // Where a combat shot's muzzle would be, at full clearance.
+    let muzzle = transform.transform_point(position + forward * MUZZLE_CLEARANCE);
+    let facing = transform.transform_vector(forward).normalize();
+    // `muzzle_flash_and_smoke` places the report; the aim is only a rotation.
+    let aim = Matrix4::from(crate::util::get_rotation_from_forward_vector(facing));
+    Effect::combine(vec![
+        projectile_launch_sound(world, projectile_id, muzzle.to_vec()),
+        muzzle_flash_and_smoke(
+            world,
+            entity_id,
+            projectile_id,
+            launch_point,
+            facing,
+            f32::INFINITY,
+            aim,
+        ),
+    ])
 }
 
 /// The visible report of a creature's shot: at the weapon's muzzle, found
@@ -2642,6 +2688,110 @@ mod muzzle_tests {
                 None => assert!(particles.is_none() && flash.is_none()),
             }
         }
+    }
+
+    /// A scripted shot reports along the shooter's facing, with no target in
+    /// sight (no player at all here), and never launches a round.
+    #[test]
+    fn a_scripted_shot_reports_along_the_facing_without_a_round() {
+        use crate::mission::mission_core::{EntityMetadata, GlobalTemplateClassTags};
+        let mut world = World::new();
+        world.add_unique(GlobalEntityMetadata(
+            [("grunt shotgun slug", -676), ("assault flash", -2653)]
+                .into_iter()
+                .map(|(name, template_id)| {
+                    (
+                        name.to_owned(),
+                        EntityMetadata {
+                            template_id,
+                            obj_icon: None,
+                            obj_short_name: None,
+                            obj_name: None,
+                        },
+                    )
+                })
+                .collect(),
+        ));
+        world.add_unique(GlobalTemplateClassTags(
+            [(
+                -676,
+                [("enemyammotype".to_owned(), "slug".to_owned())]
+                    .into_iter()
+                    .collect(),
+            )]
+            .into_iter()
+            .collect(),
+        ));
+        // Facing +X.
+        let rotation = Quaternion::from_angle_y(Deg(90.0));
+        let shooter = world.add_entity((
+            PropCreature(0),
+            PropPosition {
+                position: vec3(0.0, 2.0, 0.0),
+                cell: 0,
+                rotation,
+            },
+            RuntimePropTransform(
+                Matrix4::from_translation(vec3(0.0, 2.0, 0.0)) * Matrix4::from(rotation),
+            ),
+            PropAIRangedShoot {
+                launch_offset: vec3(0.0, 0.5, 0.0),
+            },
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: -676,
+                    to_entity_id: None,
+                    link: Link::AIProjectile(AIProjectileOptions {
+                        targeting_method: AITargetMethod::StraightLine,
+                        delay: 0.0,
+                        should_lead_target: false,
+                        ammo: 0,
+                        accuracy: 0,
+                        select_time: 0.0,
+                        joint: 0,
+                        vhot: 0,
+                    }),
+                }],
+            },
+        ));
+        let effects = Effect::flatten(vec![fire_scripted_report(&world, shooter)]);
+        assert!(
+            !effects.iter().any(|effect| matches!(
+                effect,
+                Effect::CreateEntity {
+                    template_id: -676,
+                    ..
+                }
+            )),
+            "a scripted shot launches no round"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::PlayEnvironmentalSound { .. })),
+            "a scripted shot plays its gunshot"
+        );
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::CreateEntity {
+                template_id: -2653,
+                ..
+            }
+        )));
+        let frame = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::AiMuzzleParticles { frame, .. } => Some(*frame),
+                _ => None,
+            })
+            .expect("a scripted shot leaves smoke");
+        let at = Point3::from_homogeneous(frame.w);
+        assert!((at - point3(0.0, 2.5, 0.0)).magnitude() < 1.0e-5, "{at:?}");
+        let along = frame.z.truncate().normalize();
+        assert!(
+            (along - vec3(1.0, 0.0, 0.0)).magnitude() < 1.0e-4,
+            "{along:?}"
+        );
     }
 
     /// A turret fires through its gun proxy; a listed round adds its smoke at

@@ -2676,10 +2676,13 @@ impl Script for AnimatedMonsterAI {
                 // the death is processed - don't let it fire or connect.
                 let can_act = !(self.is_dead || is_killed(entity_id, world));
 
-                let fired = if motion_flags.contains(MotionFlags::FIRE) && can_act {
-                    fire_ranged_projectile(world, physics, entity_id)
-                } else {
+                let fired = if !(motion_flags.contains(MotionFlags::FIRE) && can_act) {
                     Effect::NoEffect
+                } else if self.current_behavior.borrow().scripted_state() == ScriptedState::Running
+                {
+                    super::ai_util::fire_scripted_report(world, entity_id)
+                } else {
+                    fire_ranged_projectile(world, physics, entity_id)
                 };
                 let connected = if motion_flags.contains(MotionFlags::MELEE_CONTACT_START)
                     && can_act
@@ -5002,6 +5005,37 @@ mod tests {
                 "the foot plant survives both guards"
             );
         }
+
+        // A fire flag inside a scripted performance reports, never launches.
+        monster.is_dead = false;
+        monster.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
+            &world,
+            entity,
+            None,
+            vec![dark::properties::AIScriptedAction {
+                action_type: dark::properties::AIScriptedActionType::Wait(
+                    std::time::Duration::from_secs(10),
+                ),
+            }],
+        )));
+        let effect = monster.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::AnimationFlagTriggered {
+                motion_flags: MotionFlags::FIRE,
+            },
+        );
+        assert!(
+            !Effect::flatten(vec![effect]).iter().any(|e| matches!(
+                e,
+                Effect::CreateEntity {
+                    template_id: -30,
+                    ..
+                }
+            )),
+            "a scripted shot launches no round"
+        );
     }
 
     /// The shipped locomotion clips are per-half-step and author exactly one
