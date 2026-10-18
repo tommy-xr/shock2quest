@@ -568,6 +568,8 @@ export interface SceneObjectSummary {
   render_layer: "world" | "scene_overlay" | "scene_ui" | "system_overlay";
   /** True only for the first submitted object in a depth-cleared layer. */
   clear_depth: boolean;
+  /** Drawn unlit at full texture intensity (FullBright render type). */
+  full_bright: boolean;
   /** Front-face winding used for culling, or null when double-sided. */
   backface_culling: string | null;
   /** Null unless experimental object lighting resolved a set for this object. */

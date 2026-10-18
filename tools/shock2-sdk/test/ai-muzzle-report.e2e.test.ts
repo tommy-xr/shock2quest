@@ -103,3 +103,40 @@ for (const [shooterName, [roundName, gunshot]] of Object.entries(ROUNDS)) {
     },
   );
 }
+
+// The slug turret's own flash is authored FullBright: drawn unlit at full
+// intensity, not a dull lit ribbon.
+test(
+  "Slug Turret's flash draws full bright",
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ai_ranged" });
+    await game.devParams.set("cheat", 1);
+    await game.step({ frames: 2 });
+    for (const other of (await game.entities.list({ limit: 400 })).entities) {
+      if (other.name in ROUNDS) {
+        await game.entities.sendMessage(other.id, {
+          type: "Damage",
+          amount: 10_000,
+        });
+      }
+    }
+
+    let fullBright: boolean[] | undefined;
+    for (let frame = 0; frame < 600 && fullBright === undefined; frame++) {
+      await game.step({ frames: 1 });
+      const [flash] = (await game.entities.list({ filter: "Slug Flash" }))
+        .entities;
+      if (flash) {
+        const { objects } = await game.scene.objects({ entityId: flash.id });
+        fullBright = objects.map((object) => object.full_bright);
+      }
+    }
+
+    assert.ok(fullBright?.length, "the slug turret must fire its Slug Flash");
+    assert.ok(
+      fullBright.every(Boolean),
+      `Slug Flash must draw full bright (${fullBright})`,
+    );
+  },
+);

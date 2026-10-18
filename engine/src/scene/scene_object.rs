@@ -163,6 +163,9 @@ pub struct SceneObject {
     /// Per-object emissivity multiplier, scoped to this draw like
     /// `transparency_override` (e.g. a psi amp's glow tracking psi points).
     emissivity_scale: Option<f32>,
+    /// Drawn at full texture intensity, unlit (Dark's FullBright render
+    /// type), scoped to this draw like `emissivity_scale`.
+    full_bright: bool,
     /// Glow added over lighting (e.g. an overloaded psi amp).
     glow: Option<super::material::Glow>,
     /// Authored SRC_COLOR/ONE light accumulation, scoped to this draw.
@@ -434,6 +437,7 @@ impl SceneObject {
             only_eye: None,
             transparency_override: None,
             emissivity_scale: None,
+            full_bright: false,
             glow: None,
             blend_mode: BlendMode::Alpha,
             debug_tag: None,
@@ -540,6 +544,9 @@ impl SceneObject {
         if let Some(scale) = self.emissivity_scale {
             self.material.borrow_mut().set_emissivity_scale(scale);
         }
+        if self.full_bright {
+            self.material.borrow_mut().set_full_bright(true);
+        }
         if let Some(glow) = self.glow {
             self.material.borrow_mut().set_glow(glow);
         }
@@ -564,6 +571,9 @@ impl SceneObject {
         }
         if self.emissivity_scale.is_some() {
             self.material.borrow_mut().set_emissivity_scale(1.0);
+        }
+        if self.full_bright {
+            self.material.borrow_mut().set_full_bright(false);
         }
         if self.glow.is_some() {
             self.material
@@ -602,6 +612,9 @@ impl SceneObject {
         if let Some(scale) = self.emissivity_scale {
             self.material.borrow_mut().set_emissivity_scale(scale);
         }
+        if self.full_bright {
+            self.material.borrow_mut().set_full_bright(true);
+        }
         if let Some(glow) = self.glow {
             self.material.borrow_mut().set_glow(glow);
         }
@@ -627,6 +640,9 @@ impl SceneObject {
         }
         if self.emissivity_scale.is_some() {
             self.material.borrow_mut().set_emissivity_scale(1.0);
+        }
+        if self.full_bright {
+            self.material.borrow_mut().set_full_bright(false);
         }
         if self.glow.is_some() {
             self.material
@@ -656,6 +672,7 @@ impl SceneObject {
             }
             material.set_transparency_override(transparency);
             material.set_emissivity_scale(self.emissivity_scale.unwrap_or(1.0));
+            material.set_full_bright(self.full_bright);
             material.set_glow(self.glow.unwrap_or(super::material::Glow::NONE));
             let xform = self.transform * self.local_transform;
             let prepared = material.draw_opaque(context, view, &xform, &self.skinning_data, lights)
@@ -672,6 +689,7 @@ impl SceneObject {
             }
             material.set_transparency_override(None);
             material.set_emissivity_scale(1.0);
+            material.set_full_bright(false);
             material.set_glow(super::material::Glow::NONE);
         }
         unsafe {
@@ -743,6 +761,7 @@ impl SceneObject {
             only_eye: None,
             transparency_override: None,
             emissivity_scale: None,
+            full_bright: false,
             glow: None,
             blend_mode: BlendMode::Alpha,
             debug_tag: None,
@@ -771,6 +790,7 @@ impl SceneObject {
             only_eye: self.only_eye,
             transparency_override: self.transparency_override,
             emissivity_scale: self.emissivity_scale,
+            full_bright: self.full_bright,
             glow: self.glow,
             blend_mode: self.blend_mode,
             debug_tag: self.debug_tag.clone(),
@@ -941,6 +961,15 @@ impl SceneObject {
     /// Scale this object's authored emissivity, or restore it with `None`.
     pub fn set_emissivity_scale(&mut self, scale: Option<f32>) {
         self.emissivity_scale = scale;
+    }
+
+    /// Draw at full texture intensity, ignoring scene lighting.
+    pub fn set_full_bright(&mut self, full_bright: bool) {
+        self.full_bright = full_bright;
+    }
+
+    pub fn full_bright(&self) -> bool {
+        self.full_bright
     }
 
     /// Add a glow over lighting, or remove it with `None`.
