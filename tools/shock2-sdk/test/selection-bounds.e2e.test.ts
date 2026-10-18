@@ -122,3 +122,38 @@ test(
     assert.ok(height > 0.25, `expected a body-scale frame, got ${height.toFixed(2)} tall`);
   },
 );
+
+// A security crate's authored collision box (P$PhysDims) matches its model
+// header's bounding box: 2.27 deep, against a mesh only 1.26 deep. The
+// highlight frames the drawn mesh, not that box (#2350).
+test(
+  "a security crate is framed by its visible mesh, not its authored collision box",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "medsci1.mis" });
+    await game.step({ frames: 10 });
+
+    const crates = (await game.entities.list()).entities.filter(
+      (entity) => entity.name === "Hackable Crate",
+    );
+    assert.ok(crates.length > 0, "expected a Hackable Crate in medsci1");
+    for (const crate of crates) {
+      const detail = await game.entities.detail(crate.id);
+      const bounds = detail.selection_bounds;
+      assert.ok(bounds, `crate ${crate.id} should report bounds`);
+      const [min, max] = bounds;
+      for (let axis = 0; axis < 3; axis++) {
+        assert.ok(
+          detail.position[axis] >= min[axis] && detail.position[axis] <= max[axis],
+          `the frame should contain the crate on axis ${axis}: ${JSON.stringify(bounds)}`,
+        );
+      }
+      // Negative-first: the collision box spans ~2.4 horizontally.
+      const width = Math.max(max[0] - min[0], max[2] - min[2]);
+      assert.ok(
+        width > 1.0 && width < 1.7,
+        `expected a crate-sized frame, got ${width.toFixed(2)} across: ${JSON.stringify(bounds)}`,
+      );
+    }
+  },
+);

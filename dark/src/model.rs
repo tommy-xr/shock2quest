@@ -289,6 +289,19 @@ pub enum InnerModel {
     Animated(AnimatedModel),
 }
 
+fn triangle_bounds(triangles: &[[Vector3<f32>; 3]]) -> Option<Aabb3<f32>> {
+    triangles
+        .iter()
+        .flatten()
+        .map(|vertex| Point3::from_vec(*vertex))
+        .fold(None, |bounds: Option<Aabb3<f32>>, point| {
+            Some(match bounds {
+                None => Aabb3::new(point, point),
+                Some(bounds) => bounds.grow(point),
+            })
+        })
+}
+
 /// Resolve the static object's authored sub-object transform just as rendering does.
 fn object_interaction_triangles(mesh: &SystemShock2ObjectMesh) -> Vec<[Vector3<f32>; 3]> {
     let transforms = ss2_bin_obj_loader::sub_object_transforms(mesh);
@@ -664,6 +677,15 @@ impl Model {
         }
     }
 
+    /// Model-space bounds of the visible surface, `interaction_triangles`.
+    /// Unlike `bounding_box`, which for an object model is the .bin header's
+    /// box, this is the geometry drawn in the bind pose - the security crate's
+    /// header box is nearly twice its mesh deep (#2350). `None` for a model
+    /// with no interaction surface (creatures, glb).
+    pub fn surface_bounds(&self) -> Option<Aabb3<f32>> {
+        triangle_bounds(&self.interaction_triangles())
+    }
+
     pub fn get_transform(&self) -> Matrix4<f32> {
         self.transform
     }
@@ -1035,5 +1057,26 @@ mod object_parameter_tests {
         assert!((radius - 0.075).abs() < 1e-6);
         assert_eq!(a.y, 0.0);
         assert_eq!(b.z, 0.0);
+    }
+
+    #[test]
+    fn triangle_bounds_span_every_vertex() {
+        use cgmath::{point3, vec3};
+        assert!(triangle_bounds(&[]).is_none());
+        let bounds = triangle_bounds(&[
+            [
+                vec3(-0.5, 0.0, 0.0),
+                vec3(0.0, 1.0, 0.0),
+                vec3(0.0, 0.0, 0.6),
+            ],
+            [
+                vec3(0.5, -1.0, 0.0),
+                vec3(0.0, 0.0, -0.6),
+                vec3(0.0, 0.0, 0.0),
+            ],
+        ])
+        .unwrap();
+        assert_eq!(bounds.min, point3(-0.5, -1.0, -0.6));
+        assert_eq!(bounds.max, point3(0.5, 1.0, 0.6));
     }
 }
