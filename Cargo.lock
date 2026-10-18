@@ -1598,6 +1598,7 @@ version = "0.1.0"
 dependencies = [
  "c_string",
  "cgmath",
+ "collision",
  "fbxcel-dom",
  "gl",
  "image 0.24.7",
