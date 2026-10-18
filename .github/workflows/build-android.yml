@@ -7,6 +7,8 @@ on:
       - '**/*.md'
       - 'tools/shock2-sdk/**'
       - '.github/workflows/sdk-tests.yml'
+  # Builds an APK for a head commit that paths-ignore skipped.
+  workflow_dispatch:
   # Not needed with wildcard branches
   # pull_request:
   #   branches: ["main"]
@@ -46,7 +48,44 @@ jobs:
 
       - uses: ./.github/actions/setup-android
 
-      # Actual build steps
+      # Dev profile, signed with the dedicated dev key (never the release key).
+      # Forks lack the secrets, so cargo-apk falls back to its debug key there.
       - name: Build Android APK
-        run: cargo apk build
         working-directory: runtimes/oculus_runtime
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_DEV_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_DEV_KEYSTORE_PASSWORD }}
+          IS_FORK: ${{ github.event.repository.fork }}
+          # In-game label `pr | <sha7>`.
+          SHOCK2QUEST_BUILD_CHANNEL: pr
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            test "$IS_FORK" = true || { echo 'Dev signing secrets are missing.'; exit 1; }
+          else
+            umask 077
+            export CARGO_APK_DEV_KEYSTORE="$RUNNER_TEMP/dev.keystore"
+            export CARGO_APK_DEV_KEYSTORE_PASSWORD="$KEYSTORE_PASSWORD"
+            trap 'rm -f "$CARGO_APK_DEV_KEYSTORE"' EXIT
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$CARGO_APK_DEV_KEYSTORE"
+          fi
+          cargo apk build
+          apk=../../target/debug/apk/shock2quest.apk
+          build_tools="$ANDROID_HOME/build-tools/33.0.0"
+          "$build_tools/apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/apk-certs"
+          cat "$RUNNER_TEMP/apk-certs"
+          if [ "$IS_FORK" != true ]; then
+            grep -F 'Signer #1 certificate DN: CN=Shock2Quest Dev (CI)' "$RUNNER_TEMP/apk-certs"
+          fi
+          # The checked-in 0.0.0 sorts below every release, so a dev APK never upgrades one.
+          "$build_tools/aapt" dump badging "$apk" > "$RUNNER_TEMP/apk-badging"
+          grep -F "package: name='com.tommybuilds.shock2quest' versionCode='16777216' versionName='0.0.0'" "$RUNNER_TEMP/apk-badging"
+          # A modified checkout would stamp the build as dirty.
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      # `cargo dvr pr` finds this by head SHA.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shock2quest-apk-${{ github.sha }}
+          path: target/debug/apk/shock2quest.apk
+          if-no-files-found: error
+          retention-days: 30

@@ -27,12 +27,14 @@ class BuildVersionTests(unittest.TestCase):
             (crate / "src/main.rs").write_text('''fn main() {
                 println!("{}|{}|{}", env!("SHOCK2QUEST_BUILD_VERSION"),
                     env!("SHOCK2QUEST_BUILD_COMMIT"), env!("SHOCK2QUEST_BUILD_DIRTY"));
+                println!("{}", env!("SHOCK2QUEST_BUILD_LABEL"));
             }''')
             # A tracked input outside this crate must also invalidate the stamp.
             (root / "asset.txt").write_text("original")
             (root / ".gitignore").write_text("target/\nCargo.lock\n")
             env = os.environ.copy()
-            for key in ("SHOCK2QUEST_RELEASE_VERSION", "SHOCK2QUEST_GIT_SHA", "CARGO_TARGET_DIR"):
+            for key in ("SHOCK2QUEST_RELEASE_VERSION", "SHOCK2QUEST_GIT_SHA",
+                        "SHOCK2QUEST_BUILD_CHANNEL", "CARGO_TARGET_DIR"):
                 env.pop(key, None)
 
             def run(*args, overrides=None, cwd=None):
@@ -41,8 +43,14 @@ class BuildVersionTests(unittest.TestCase):
                     stderr=subprocess.PIPE,
                 ).strip()
 
+            def stamp(**overrides):
+                return run("cargo", "run", "--quiet", overrides=overrides, cwd=crate).split("\n")
+
             def build(**overrides):
-                return run("cargo", "run", "--quiet", overrides=overrides, cwd=crate).split("|")
+                return stamp(**overrides)[0].split("|")
+
+            def label(**overrides):
+                return stamp(**overrides)[1]
 
             self.assertEqual(build(), ["dev", "unknown", "unknown"])
             run("git", "init", "-q")
@@ -70,6 +78,14 @@ class BuildVersionTests(unittest.TestCase):
                                    SHOCK2QUEST_GIT_SHA="a" * 40),
                              ["0.2.0", "a" * 40, "false"])
             self.assertEqual(build(), ["dev", commit, "false"])
+            self.assertEqual(label(), f"dev | {commit[:7]}")
+            # CI APKs name their channel; a release version overrides it.
+            self.assertEqual(build(SHOCK2QUEST_BUILD_CHANNEL="pr"), ["pr", commit, "false"])
+            self.assertEqual(label(SHOCK2QUEST_BUILD_CHANNEL="pr"), f"pr | {commit[:7]}")
+            self.assertEqual(label(SHOCK2QUEST_BUILD_CHANNEL="pr",
+                                   SHOCK2QUEST_RELEASE_VERSION="0.2.0",
+                                   SHOCK2QUEST_GIT_SHA="a" * 40), "v0.2.0 | aaaaaaa")
+            self.assertEqual(label(), f"dev | {commit[:7]}")
             # Source archives retain CI provenance even without a Git checkout.
             (root / ".git").rename(root / "archived-git")
             self.assertEqual(build(SHOCK2QUEST_RELEASE_VERSION="0.3.0",
