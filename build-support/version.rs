@@ -14,6 +14,7 @@ pub fn emit_build_label() {
     println!("cargo:rerun-if-changed=../../build-support/version.rs");
     println!("cargo:rerun-if-env-changed=SHOCK2QUEST_RELEASE_VERSION");
     println!("cargo:rerun-if-env-changed=SHOCK2QUEST_GIT_SHA");
+    println!("cargo:rerun-if-env-changed=SHOCK2QUEST_BUILD_CHANNEL");
     // Follow the actual git paths: .git can be a file in a linked worktree.
     let mut refs = vec!["HEAD".to_owned(), "packed-refs".to_owned()];
     if let Some(branch) = git(&["symbolic-ref", "--quiet", "HEAD"]) {
@@ -58,17 +59,22 @@ pub fn emit_build_label() {
         .filter(|value| !value.is_empty())
         .or_else(|| git(&["rev-parse", "HEAD"]))
         .unwrap_or_else(|| "unknown".to_owned());
-    let version = env::var("SHOCK2QUEST_RELEASE_VERSION")
+    let release = env::var("SHOCK2QUEST_RELEASE_VERSION")
         .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "dev".to_owned());
+        .filter(|value| !value.is_empty());
+    // Unreleased builds are named by channel: `dev` locally, `pr` for CI APKs.
+    let version = release.clone().unwrap_or_else(|| {
+        env::var("SHOCK2QUEST_BUILD_CHANNEL")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "dev".to_owned())
+    });
     println!("cargo:rustc-env=SHOCK2QUEST_BUILD_VERSION={version}");
     println!("cargo:rustc-env=SHOCK2QUEST_BUILD_COMMIT={commit}");
     println!("cargo:rustc-env=SHOCK2QUEST_BUILD_DIRTY={dirty}");
-    let label = if version == "dev" {
-        version
-    } else {
-        format!("v{version}")
+    let label = match release {
+        Some(release) => format!("v{release}"),
+        None => version,
     };
     let short_commit: String = commit.chars().take(7).collect();
     println!("cargo:rustc-env=SHOCK2QUEST_BUILD_LABEL={label} | {short_commit}");

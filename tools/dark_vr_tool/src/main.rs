@@ -74,7 +74,7 @@ enum Action {
         #[arg(long)]
         mission: Option<String>,
         /// Replace an install signed with another key or versioned above the
-        /// CI APK (a local build or a release); deletes its saves
+        /// CI APK (a release, or an older 0.1.0 build); deletes its saves
         #[arg(long)]
         allow_uninstall: bool,
     },
@@ -706,8 +706,8 @@ fn select_build_run<'a>(runs: &'a [BuildRun], sha: &str, branch: &str) -> Result
 
 /// Whether a failed `adb install` is retried after an uninstall. Only a
 /// signing-key change or a downgrade qualifies (a CI APK, versioned 0.0.0,
-/// over a local 0.1.0 build or a release), and since uninstalling deletes the
-/// app-private saves it must be opted into.
+/// over a release, a build signed with another key, or an older 0.1.0 build),
+/// and since uninstalling deletes the app-private saves it must be opted into.
 fn uninstall_before_retry(install_error: &str, allow_uninstall: bool) -> Result<bool> {
     let reason = if install_error.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
         "installed app has another signing key"

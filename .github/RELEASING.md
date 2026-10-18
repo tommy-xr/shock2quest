@@ -40,8 +40,9 @@ gh secret set ANDROID_RELEASE_KEYSTORE_PASSWORD --repo tommy-xr/shock2quest
 ```
 
 To preserve upgrades from an existing build, use its keystore instead. A build
-signed with a different key requires uninstalling the old app first. Existing
-0.1.0 development builds also have a higher version code than release 0.0.1.
+signed with a different key requires uninstalling the old app first. Development
+builds are versioned 0.0.0, below every release; ones built before that reset
+(0.1.0) have a higher version code than release 0.0.1.
 
 ## Run a release
 

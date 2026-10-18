@@ -45,19 +45,19 @@ a reboot returns it to USB-only. While USB and Wi-Fi are both attached, the tool
 matches transports by hardware serial and prefers USB. Pass `--serial IP:PORT`
 to force Wi-Fi. Different headsets still require an explicit selection.
 
-`pr` installs the APK CI built for the PR's head commit. CI signs it with a
-dedicated dev key (`CN=Shock2Quest Dev (CI)`, not the release key) and versions it
-0.0.0, below every release, so it never installs as an update over one. Replacing
-an install it cannot update (another key, or a higher versionCode: a local 0.1.0
-build or a release) needs `--allow-uninstall`, which deletes the app's saves.
+`pr` installs the APK CI built for the PR's head commit (in-game label
+`pr | <sha7>`). CI signs it with a dedicated dev key (`CN=Shock2Quest Dev (CI)`,
+not the release key). Local and CI builds share the checked-in version 0.0.0,
+below every release, so neither installs as an update over a release.
 
-To sign local builds with the same dev key, get the keystore and password from
-the owner and point cargo-apk at them: `CARGO_APK_RELEASE_KEYSTORE` /
-`CARGO_APK_RELEASE_KEYSTORE_PASSWORD` for `cargo dvr build`/`run`/`deploy` (release
-profile), or `CARGO_APK_DEV_KEYSTORE` / `CARGO_APK_DEV_KEYSTORE_PASSWORD` for a
-plain `cargo apk build`. A local build then installs over a CI APK in place,
-keeping saves; `pr` over a local build is still a downgrade and needs
-`--allow-uninstall`.
+Sign local builds with the same dev key and `pr` replaces them in place, keeping
+saves: get the keystore and password from the owner and point cargo-apk at them,
+`CARGO_APK_RELEASE_KEYSTORE` / `CARGO_APK_RELEASE_KEYSTORE_PASSWORD` for
+`cargo dvr build`/`run`/`deploy` (release profile), or `CARGO_APK_DEV_KEYSTORE` /
+`CARGO_APK_DEV_KEYSTORE_PASSWORD` for a plain `cargo apk build`. Replacing an
+install signed with another key, or versioned above 0.0.0 (a release, or a build
+from before the version reset), needs `--allow-uninstall`, which deletes the
+app's saves.
 
 `assets copy` transfers `sshock2.kpf`, `mods/`, and `cutscenes/` into
 `/sdcard/shock2quest`, merging existing directories. `assets recopy` deletes those

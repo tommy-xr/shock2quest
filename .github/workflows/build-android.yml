@@ -48,12 +48,6 @@ jobs:
 
       - uses: ./.github/actions/setup-android
 
-      # Versioned below every release so a dev APK never upgrades one. The
-      # in-game label stays `dev | <sha7>` (no SHOCK2QUEST_RELEASE_VERSION).
-      - name: Stamp dev version
-        id: version
-        run: python3 .github/scripts/prepare-release.py --dev
-
       # Dev profile, signed with the dedicated dev key (never the release key).
       # Forks lack the secrets, so cargo-apk falls back to its debug key there.
       - name: Build Android APK
@@ -62,8 +56,8 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_DEV_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_DEV_KEYSTORE_PASSWORD }}
           IS_FORK: ${{ github.event.repository.fork }}
-          VERSION_NAME: ${{ steps.version.outputs.version }}
-          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          # In-game label `pr | <sha7>`.
+          SHOCK2QUEST_BUILD_CHANNEL: pr
         run: |
           if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
             test "$IS_FORK" = true || { echo 'Dev signing secrets are missing.'; exit 1; }
@@ -82,8 +76,11 @@ jobs:
           if [ "$IS_FORK" != true ]; then
             grep -F 'Signer #1 certificate DN: CN=Shock2Quest Dev (CI)' "$RUNNER_TEMP/apk-certs"
           fi
+          # The checked-in 0.0.0 sorts below every release, so a dev APK never upgrades one.
           "$build_tools/aapt" dump badging "$apk" > "$RUNNER_TEMP/apk-badging"
-          grep -F "package: name='com.tommybuilds.shock2quest' versionCode='$VERSION_CODE' versionName='$VERSION_NAME'" "$RUNNER_TEMP/apk-badging"
+          grep -F "package: name='com.tommybuilds.shock2quest' versionCode='16777216' versionName='0.0.0'" "$RUNNER_TEMP/apk-badging"
+          # A modified checkout would stamp the build as dirty.
+          test -z "$(git status --porcelain --untracked-files=no)"
 
       # `cargo dvr pr` finds this by head SHA.
       - uses: actions/upload-artifact@v4

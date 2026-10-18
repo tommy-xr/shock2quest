@@ -107,7 +107,8 @@ commits). Bypass in a pinch with `git push --no-verify`.
 
 The desktop, debug, and Quest runtimes stamp their build label and pass it to
 `shock2vr` through `GameOptions::build_label`. Git commits and the release
-overrides (`SHOCK2QUEST_RELEASE_VERSION` / `SHOCK2QUEST_GIT_SHA`) rebuild the
+overrides (`SHOCK2QUEST_RELEASE_VERSION` / `SHOCK2QUEST_GIT_SHA`, and
+`SHOCK2QUEST_BUILD_CHANNEL`, which names unreleased builds) rebuild the
 runtime without invalidating the gameplay library. The shared build-script
 helper lives in `build-support/version.rs`; tools and tests use `dev | unknown`
 unless they supply a label.
@@ -837,8 +838,8 @@ selected flesh surfaces using their own texture as a provisional mask; it does
 not add authored normal maps or reflections. Benchmark fixtures explicitly
 select their wetness, so classic and dry upgraded comparisons remain dry.
 
-The main menu's bottom-left build label shows `dev | <commit>` for local builds
-and `v<version> | <commit>` for release builds. Click it three times to enable
+The main menu's bottom-left build label shows `dev | <commit>` for local builds,
+`pr | <commit>` for CI APKs, and `v<version> | <commit>` for release builds. Click it three times to enable
 Developer. In VR, point at the label and press/release the trigger three times.
 The extra bottom-left Developer button then appears; the pause menu's Developer
 entry is enabled too. The build label moves into the Developer menu UI while
@@ -1390,8 +1391,9 @@ See [dark_vr_tool](tools/dark_vr_tool/README.md) for device selection, filesyste
 access, debug-port configuration, and the `ss2vr` shell alias.
 
 `pr` installs the APK CI attached to the PR's head commit. CI APKs are signed
-with a dedicated dev key and versioned 0.0.0, below every release; replacing a
-local build or a release needs `--allow-uninstall`, which deletes its saves (see [vr-device-loop](.claude/skills/vr-device-loop/SKILL.md#install-a-prs-ci-build)).
+with a dedicated dev key and, like local builds, versioned 0.0.0, below every
+release. A local build signed with the same key is replaced in place; one with
+another key, or a release, needs `--allow-uninstall`, which deletes its saves (see [vr-device-loop](.claude/skills/vr-device-loop/SKILL.md#install-a-prs-ci-build)).
 
 ##### Saved games
 
