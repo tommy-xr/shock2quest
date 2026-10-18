@@ -1,5 +1,7 @@
 use cgmath::{Vector3, vec3};
 
+use crate::ss2_common::read_vec3;
+
 /// CELL_MOTION stores 256 packed PortalCellMotion records (21 bytes), then
 /// 256 packed medium-motion records (14 bytes). Translation is a velocity in
 /// original Z-up units; the trailing u16 is angular texture motion, not a
@@ -12,17 +14,9 @@ pub(super) fn read_water_currents(bytes: &[u8]) -> Vec<Vector3<f32>> {
         return currents;
     }
     for (index, current) in currents.iter_mut().enumerate().skip(1) {
-        let start = PREFIX + index * 14;
-        let read = |offset| {
-            f32::from_le_bytes(
-                bytes[start + offset..start + offset + 4]
-                    .try_into()
-                    .unwrap(),
-            )
-        };
-        let (x, y, z) = (read(0), read(4), read(8));
-        if x.is_finite() && y.is_finite() && z.is_finite() {
-            *current = vec3(-x, z, y) / crate::SCALE_FACTOR;
+        let flow = read_vec3(&mut &bytes[PREFIX + index * 14..]);
+        if flow.x.is_finite() && flow.y.is_finite() && flow.z.is_finite() {
+            *current = flow / crate::SCALE_FACTOR;
         }
     }
     currents
