@@ -19,19 +19,22 @@ pub fn quickness_world_scale(psi: i32) -> f32 {
 }
 
 /// The world's time scale: the developer knob, slowed further by active
-/// boosts in Slow world mode. The slowest wins; they do not multiply.
-/// `quickness_psi` is the player's PSI while Quickness is active.
+/// boosts. The slowest wins; they do not multiply. The hypo slows the world
+/// in Slow world mode; `bullet_time_psi` is the player's PSI while a Quickness
+/// cast as bullet time is active (decided at cast, so changing the mode
+/// mid-power neither doubles nor cancels it).
 pub fn world_time_scale(
     dev_scale: f32,
     hypo_active: bool,
-    quickness_psi: Option<i32>,
+    bullet_time_psi: Option<i32>,
     mode: SpeedBoostMode,
 ) -> f32 {
-    if mode == SpeedBoostMode::Classic {
-        return dev_scale;
-    }
-    let hypo = if hypo_active { 1.0 / HYPO_SPEED } else { 1.0 };
-    let quickness = quickness_psi.map_or(1.0, quickness_world_scale);
+    let hypo = if hypo_active && mode == SpeedBoostMode::SlowWorld {
+        1.0 / HYPO_SPEED
+    } else {
+        1.0
+    };
+    let quickness = bullet_time_psi.map_or(1.0, quickness_world_scale);
     dev_scale.min(hypo).min(quickness)
 }
 
@@ -61,7 +64,7 @@ mod tests {
     #[test]
     fn classic_doubles_the_player_and_leaves_the_world() {
         let mode = SpeedBoostMode::Classic;
-        assert_eq!(world_time_scale(1.0, true, Some(8), mode), 1.0);
+        assert_eq!(world_time_scale(1.0, true, None, mode), 1.0);
         assert_eq!(player_speed_scale(true, mode), 2.0);
         assert_eq!(player_speed_scale(false, mode), 1.0);
     }

@@ -2200,6 +2200,7 @@ mod tests {
                 template_id: crate::psi::STABILITY_TEMPLATE_ID,
                 name: "Stability".into(),
                 remaining_secs: 130.0,
+                bullet_time: false,
             },
         ]));
         assert!(roll_for_breakage(&world, gun).is_none());

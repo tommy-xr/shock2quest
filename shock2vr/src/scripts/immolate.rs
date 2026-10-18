@@ -172,6 +172,7 @@ mod tests {
                 template_id: IMMOLATE_TEMPLATE_ID,
                 name: "Immolate".to_string(),
                 remaining_secs: 30.0,
+                bullet_time: false,
             }]
         } else {
             Vec::new()

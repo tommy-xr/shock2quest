@@ -149,6 +149,7 @@ mod tests {
                 template_id: BERSERK_TEMPLATE_ID,
                 name: "Berserk".to_owned(),
                 remaining_secs: remaining,
+                bullet_time: false,
             });
         }
         world.add_unique(powers);

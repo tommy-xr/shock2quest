@@ -146,6 +146,7 @@ mod tests {
             template_id: POWER,
             name: "AntiPsi".into(),
             remaining_secs: 120.0,
+            bullet_time: false,
         }]));
         world.add_unique(PowerReceptrons(vec![(POWER, authored())]));
         (world, player, other)
@@ -226,6 +227,7 @@ mod tests {
                         template_id: id,
                         name: "fixture".into(),
                         remaining_secs: 30.0,
+                        bullet_time: false,
                     }
                 }),
             );
@@ -283,6 +285,7 @@ mod tests {
             template_id: PSYCHO_REFLECTIVE_AURA_TEMPLATE_ID,
             name: "PsiShield".into(),
             remaining_secs: 1.0,
+            bullet_time: false,
         }];
         for stim in covered.into_iter().chain([-374, -389, -386]) {
             let mut responses = active_receptrons(&world, player);

@@ -4827,19 +4827,15 @@ impl MissionCore {
             .borrow::<UniqueView<QuestInfo>>()
             .is_ok_and(|quests| !quests.player_stats().speed_boost.is_zero());
         let speed_boost_mode = crate::user_settings::get().vr.speed_boosts;
-        let quickness_psi = self
+        let bullet_time_psi = self
             .world
             .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
-            .is_ok_and(|active| active.is_active(crate::psi::QUICKNESS_TEMPLATE_ID))
-            .then(|| {
-                crate::implants::effective_stats(&self.world)
-                    .unwrap_or_default()
-                    .psionic_ability
-            });
+            .is_ok_and(|active| active.0.iter().any(|power| power.bullet_time))
+            .then(|| crate::scripts::psi_amp_script::player_psi_stat(&self.world));
         let scale = crate::speed_boost::world_time_scale(
             crate::dev_params::get(crate::dev_params::WORLD_TIME_SCALE),
             speed_boost_active,
-            quickness_psi,
+            bullet_time_psi,
             speed_boost_mode,
         );
         let world_time = self.world_clock.advance(tick, scale);
@@ -5880,9 +5876,9 @@ impl MissionCore {
                 .run(|mut active: UniqueViewMut<crate::psi::ActivePsiPowers>| {
                     let mut expired_sources = Vec::new();
                     active.0.retain_mut(|power| {
-                        // Quickness lasts its duration on the player's clock,
-                        // however slow the world it makes.
-                        let dt = if power.template_id == crate::psi::QUICKNESS_TEMPLATE_ID {
+                        // Bullet time lasts its duration on the player's
+                        // clock, however slow the world it makes.
+                        let dt = if power.bullet_time {
                             tick.elapsed
                         } else {
                             time.elapsed
@@ -13344,6 +13340,11 @@ impl MissionCore {
                     name,
                     duration_secs,
                 } => {
+                    // In Slow world mode Quickness is bullet time instead of
+                    // its Agility bonus.
+                    let bullet_time = template_id == crate::psi::QUICKNESS_TEMPLATE_ID
+                        && crate::user_settings::get().vr.speed_boosts
+                            == crate::user_settings::SpeedBoostMode::SlowWorld;
                     let mut active = self
                         .world
                         .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
@@ -13352,24 +13353,29 @@ impl MissionCore {
                         active.0.iter_mut().find(|p| p.template_id == template_id)
                     {
                         existing.remaining_secs = duration_secs;
+                        existing.bullet_time = bullet_time;
                         game_log!(INFO, "Psi power refreshed: {} ({}s)", name, duration_secs);
                     } else {
                         active.0.push(crate::psi::ActivePsiPower {
                             template_id,
                             name: name.clone(),
                             remaining_secs: duration_secs,
+                            bullet_time,
                         });
                         game_log!(INFO, "Psi power active: {} ({}s)", name, duration_secs);
                     }
                     drop(active);
-                    // In Slow world mode Quickness is bullet time instead of
-                    // its Agility bonus.
-                    let bullet_time = template_id == crate::psi::QUICKNESS_TEMPLATE_ID
-                        && crate::user_settings::get().vr.speed_boosts
-                            == crate::user_settings::SpeedBoostMode::SlowWorld;
-                    if let Some((source, stat)) =
-                        crate::psi::stat_modifier(template_id).filter(|_| !bullet_time)
-                    {
+                    let modifier = crate::psi::stat_modifier(template_id);
+                    if let Some((source, _)) = modifier.filter(|_| bullet_time) {
+                        // A recast over a Classic cast drops its Agility bonus.
+                        self.world
+                            .borrow::<UniqueViewMut<QuestInfo>>()
+                            .unwrap()
+                            .player_stats_mut()
+                            .modifiers
+                            .retain(|m| m.source != source);
+                        self.refresh_implant_effects();
+                    } else if let Some((source, stat)) = modifier {
                         let delta = self
                             .world
                             .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()

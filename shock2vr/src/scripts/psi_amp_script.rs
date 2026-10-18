@@ -43,7 +43,7 @@ use super::{
 /// `QuestInfo` (a bare debug scene) - logged, because the same borrow also
 /// fails if something else holds `QuestInfo` mutably, and a silent fallback
 /// would cast at the wrong tier.
-fn player_psi_stat(world: &World) -> i32 {
+pub(crate) fn player_psi_stat(world: &World) -> i32 {
     match world.borrow::<UniqueView<crate::quest_info::QuestInfo>>() {
         Ok(quests) => crate::implants::effective_stats(world)
             .unwrap_or_else(|| quests.player_stats().clone())

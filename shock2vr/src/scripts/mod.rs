@@ -78,7 +78,7 @@ mod once_router;
 mod overlord;
 mod picture_swap;
 pub mod player_script;
-mod psi_amp_script;
+pub(crate) mod psi_amp_script;
 pub(crate) use psi_amp_script::{amp_aim_ray, player_psi_points};
 pub(crate) mod force_wall;
 mod psi_kit;

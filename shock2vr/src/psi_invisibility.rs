@@ -66,6 +66,7 @@ mod tests {
                 template_id: crate::psi::INVISO_TEMPLATE_ID,
                 name: "Inviso".into(),
                 remaining_secs: 20.0,
+                bullet_time: false,
             },
         ]));
         assert!(matches!(

@@ -128,6 +128,7 @@ mod tests {
             template_id: POWER,
             name: "Radar".into(),
             remaining_secs: 180.0,
+            bullet_time: false,
         }]));
         world.add_unique(Radar::default());
         let enemy = world.add_entity((

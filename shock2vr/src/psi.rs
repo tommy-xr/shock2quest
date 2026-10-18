@@ -510,6 +510,10 @@ pub struct ActivePsiPower {
     /// The gamesys symbolic name (e.g. "Inviso").
     pub name: String,
     pub remaining_secs: f32,
+    /// Quickness cast in the Slow world speed-boost mode: it slows the world
+    /// (counting down on the player's clock) instead of granting Agility.
+    #[serde(default)]
+    pub bullet_time: bool,
 }
 
 /// The player's active sustained psi powers, ticked down each frame by
