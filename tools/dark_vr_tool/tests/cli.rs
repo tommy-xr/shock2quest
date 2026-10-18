@@ -89,6 +89,11 @@ elif a[:3] == ['run', 'download', '42']:
     assert a[a.index('-n') + 1] == 'shock2quest-apk-' + sha
     out = Path(a[a.index('-D') + 1]); out.mkdir(parents=True)
     (out / 'shock2quest.apk').write_text('CI key')
+elif a[:2] == ['release', 'download']:
+    assert a[3:5] == ['-p', '*.apk']
+    if a[2] != 'v0.0.3': print('release not found', file=sys.stderr); sys.exit(1)
+    out = Path(a[a.index('-D') + 1]); out.mkdir(parents=True)
+    (out / 'shock2quest-0.0.3.apk').write_text('release key')
 else:
     raise RuntimeError(a)
 "#,
@@ -452,14 +457,16 @@ fn uninstall_removes_the_package_and_warns_for_app_private_saves() {
 }
 #[test]
 fn pr_never_uninstalls_a_build_with_app_private_saves() {
-    let h = Harness::new();
-    fs::write(h.dir.path().join("installed-key"), "release key").unwrap();
-    fs::write(h.dir.path().join("installed-version"), "0.0.4").unwrap();
-    let out = h.command(&["pr", "7"]).output().unwrap();
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("0.0.4"));
-    let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
-    assert!(!calls.contains("uninstall") && !calls.contains("am start"));
+    for version in ["0.0.4", "0.0.5"] {
+        let h = Harness::new();
+        fs::write(h.dir.path().join("installed-key"), "release key").unwrap();
+        fs::write(h.dir.path().join("installed-version"), version).unwrap();
+        let out = h.command(&["pr", "7"]).output().unwrap();
+        assert!(!out.status.success());
+        assert!(String::from_utf8_lossy(&out.stderr).contains(version));
+        let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+        assert!(!calls.contains("uninstall") && !calls.contains("am start"));
+    }
 }
 #[test]
 fn pr_replaces_a_local_build_unless_told_not_to_uninstall() {
@@ -484,6 +491,41 @@ fn pr_replaces_a_local_build_unless_told_not_to_uninstall() {
     assert_eq!(
         fs::read_to_string(h.dir.path().join("installed-key")).unwrap(),
         "CI key"
+    );
+    assert_eq!(
+        fs::read_to_string(h.dir.path().join("data/vr-mission.txt")).unwrap(),
+        "earth.mis\n"
+    );
+}
+#[test]
+fn release_replaces_a_dev_build_and_refuses_unknown_versions() {
+    let h = Harness::new();
+    fs::write(h.dir.path().join("installed-key"), "CI key").unwrap();
+    let out = h.command(&["release", "0.0.9"]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("v0.0.9"));
+    let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+    assert!(!calls.contains("devices"));
+
+    // The second run reuses the cached download.
+    for version in ["0.0.3", "v0.0.3"] {
+        let out = h
+            .command(&["release", version, "--mission", "earth.mis"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+    assert_eq!(calls.matches("\"download\"").count(), 2);
+    assert_eq!(calls.matches("\"uninstall\"").count(), 1);
+    assert!(calls.find("uninstall").unwrap() < calls.find("am start").unwrap());
+    assert_eq!(
+        fs::read_to_string(h.dir.path().join("installed-key")).unwrap(),
+        "release key"
     );
     assert_eq!(
         fs::read_to_string(h.dir.path().join("data/vr-mission.txt")).unwrap(),
