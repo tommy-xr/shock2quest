@@ -2928,17 +2928,27 @@ pub enum PlayerMedium {
     WaterSurface,
 }
 
-/// Kinematic counterpart of Dark phcore.cpp's underwater current force:
-/// acceleration is 2*flow (8*flow downward), gated at 0.8*flow. The original
-/// subsequently applies dynamic-body friction. Here the existing controller
-/// resolves collisions and swim input separately; clamp the drift at that
-/// gate rather than overshooting/oscillating without the original drag pass.
-/// No inertia is retained on a zero-flow axis or outside water.
+/// Exponential fade rate (1/s) of current drift in still water: a full-speed
+/// 8 wu/s drift coasts about 8/2 = 4 wu before it is negligible.
+const STILL_WATER_DRIFT_DRAG: Real = 2.0;
+/// Drift below this speed (wu/s) is treated as stopped.
+const STILL_WATER_DRIFT_REST: Real = 0.05;
+
+/// Kinematic counterpart of Dark's underwater current force: acceleration is
+/// 2*flow (8*flow downward), gated at 0.8*flow. The original subsequently
+/// applies dynamic-body friction. Here the existing controller resolves
+/// collisions and swim input separately; clamp the drift at that gate rather
+/// than overshooting/oscillating without the original drag pass.
+/// A zero-flow axis keeps its drift and lets it fade, so a swimmer coasts
+/// through still water between authored currents instead of stopping dead.
 fn advance_water_current(mut velocity: Vector<Real>, flow: Vector<Real>, dt: Real) -> Vector<Real> {
     for axis in 0..3 {
         let target = flow[axis] * 0.8;
         if !target.is_finite() || target == 0.0 {
-            velocity[axis] = 0.0;
+            velocity[axis] *= (-STILL_WATER_DRIFT_DRAG * dt).exp();
+            if velocity[axis].abs() < STILL_WATER_DRIFT_REST {
+                velocity[axis] = 0.0;
+            }
             continue;
         }
         let acceleration = flow[axis].abs()
@@ -11173,9 +11183,48 @@ mod tests {
         assert!((v.y + 0.8).abs() < 1e-6);
         let cap = advance_water_current(Vector::zeros(), vector![10.0, -10.0, 0.0], 2.0);
         assert_eq!(cap, vector![8.0, -8.0, 0.0]);
-        assert_eq!(
-            advance_water_current(cap, Vector::zeros(), 0.01),
-            Vector::zeros()
+    }
+
+    #[test]
+    fn current_drift_coasts_into_still_water_and_fades() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 10.0, 0.0), EntityId::from_inner(1205).unwrap());
+        for _ in 0..60 {
+            current_step(
+                &mut world,
+                &mut player,
+                vec3(0.0, 0.0, 10.0),
+                vec3(0.0, 0.0, 0.0),
+                PlayerMedium::Water,
+            );
+        }
+        let entered = world.get_player_translation(&player);
+        current_step(
+            &mut world,
+            &mut player,
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            PlayerMedium::Water,
+        );
+        assert!(
+            world.get_player_translation(&player).z > entered.z + 0.05,
+            "still water must not stop current drift dead"
+        );
+        for _ in 0..600 {
+            current_step(
+                &mut world,
+                &mut player,
+                vec3(0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, 0.0),
+                PlayerMedium::Water,
+            );
+        }
+        assert_eq!(player.water_current_velocity, Vector::zeros());
+        let coasted = world.get_player_translation(&player).z - entered.z;
+        assert!(
+            coasted > 1.0 && coasted < 8.0,
+            "drift fades over a few units: {coasted}"
         );
     }
 

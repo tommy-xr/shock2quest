@@ -1,9 +1,9 @@
 use cgmath::{Vector3, vec3};
 
 /// CELL_MOTION stores 256 packed PortalCellMotion records (21 bytes), then
-/// 256 packed sMedMoCellMotion records (14 bytes). See Dark wrloop.cpp's
-/// ReadWriteWaterMotion. Translation is a velocity in original Z-up units;
-/// the trailing u16 is angular texture motion, not a translational current.
+/// 256 packed medium-motion records (14 bytes). Translation is a velocity in
+/// original Z-up units; the trailing u16 is angular texture motion, not a
+/// translational current.
 pub(super) fn read_water_currents(bytes: &[u8]) -> Vec<Vector3<f32>> {
     const COUNT: usize = 256;
     const PREFIX: usize = COUNT * 21;
