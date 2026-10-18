@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GameServer } from "../src/index.js";
+import { launchWithSettings } from "./helpers/settings.js";
 import { selectPsiPower } from "./helpers/psi.js";
 import { pullTrigger } from "./helpers/weapon.js";
 
 test("psi casts use authored activation sounds and sustained expiry plays deactivation once", {
   skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000,
-}, async () => {
-  await using game = await GameServer.launch({ mission: "debug_psi" });
+}, async (t) => {
+  // Classic: the expiry below is timed off Quickness's Agility modifier.
+  await using game = await launchWithSettings(t, { vr: { speed_boosts: "Classic" } }, { mission: "debug_psi" });
   await game.step({ frames: 10 });
   await selectPsiPower(game, "Quickness");
   await pullTrigger(game);
@@ -33,8 +34,9 @@ test("psi casts use authored activation sounds and sustained expiry plays deacti
 
 test("an attack cancels Invisibility with its deactivation schema only once", {
   skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000,
-}, async () => {
-  await using game = await GameServer.launch({ mission: "debug_psi" });
+}, async (t) => {
+  // Classic: the expiry below is timed off Quickness's Agility modifier.
+  await using game = await launchWithSettings(t, { vr: { speed_boosts: "Classic" } }, { mission: "debug_psi" });
   await game.step({ frames: 10 });
   await selectPsiPower(game, "Inviso");
   await pullTrigger(game);
