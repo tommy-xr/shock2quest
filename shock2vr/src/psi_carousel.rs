@@ -28,10 +28,16 @@ pub(crate) struct Carousel {
     pub hand: Handedness,
     pub index: usize,
     pub stick_latched: crate::scripts::gui::NavLatch,
+    /// The raw stick, and whether it aims at a step, for the stick readout.
+    pub stick: (cgmath::Vector2<f32>, bool),
     pub trigger_armed: bool,
     previous_index: usize,
     starts: Vec<(usize, f32, f32)>,
     transition: f32,
+    /// (row, slot) the sphere leans ahead of a step the stick is heading for.
+    lean: (f32, f32),
+    /// The power that step selects, and how far the push is toward it (0..1).
+    target: Option<(usize, f32)>,
 }
 
 /// A sparse set of purchased powers on the selected tier and its trained
@@ -57,6 +63,8 @@ fn entries(
     let rows: &[i32] = match tiers.len() {
         0 => &[],
         1 => &[0],
+        // The lone neighbour is both next and previous; it sits above, where
+        // a push up reaches it, so a push down also lands on the card above.
         2 => &[0, 1],
         _ => &[-1, 0, 1],
     };
@@ -90,15 +98,33 @@ const ROW_ANGLE: f32 = 0.34;
 const BALL_RADII_PER_UNIT: f32 = 3.4;
 /// How far the focal card lifts off the sphere, in carousel-local units.
 const FOCUS_LIFT: f32 = 0.045;
+/// A push about to step leans the sphere this fraction of the way to its target.
+const MAX_LEAN: f32 = 0.3;
+/// How far out from the focal card a fully pushed stick's readout dot sits.
+const STICK_READOUT_RADIUS: f32 = 0.13;
 
+/// Rows climb: the next tier (a push up) is drawn above, the previous below.
 fn arc_position(row: f32, slot: f32) -> cgmath::Vector3<f32> {
     let yaw = slot * SLOT_ANGLE;
     let pitch = row * ROW_ANGLE;
     cgmath::vec3(
         SPHERE_RADIUS * yaw.sin() * pitch.cos(),
-        -SPHERE_RADIUS * pitch.sin(),
+        SPHERE_RADIUS * pitch.sin(),
         SPHERE_RADIUS * (yaw.cos() * pitch.cos() - 1.0),
     )
+}
+
+/// The stick in the wheel's view space, +x right. Runtimes report a push
+/// left as +x (the Quest runtime and desktop's A key both do).
+pub fn view_stick(thumbstick: cgmath::Vector2<f32>) -> cgmath::Vector2<f32> {
+    vec2(-thumbstick.x, thumbstick.y)
+}
+
+/// Turns a card at `arc_position(row, slot)` to face radially outward, as if
+/// printed on the sphere.
+fn card_facing(row: f32, slot: f32) -> cgmath::Matrix4<f32> {
+    use cgmath::{Matrix4, Rad};
+    Matrix4::from_angle_y(Rad(slot * SLOT_ANGLE)) * Matrix4::from_angle_x(Rad(-row * ROW_ANGLE))
 }
 
 /// One shared front-facing arc for every latitude, including sparse tiers.
@@ -181,7 +207,10 @@ impl Carousel {
                 .map(|(i, r, s)| (i, r as f32, s as f32))
                 .collect(),
             transition: 1.0,
+            lean: (0.0, 0.0),
+            target: None,
             stick_latched: crate::scripts::gui::NavLatch::Held(None),
+            stick: (vec2(0.0, 0.0), false),
             trigger_armed: false,
         })
     }
@@ -200,8 +229,66 @@ impl Carousel {
             self.previous_index = self.index;
             self.index = index;
             self.transition = 0.0;
+            self.lean = (0.0, 0.0);
         }
     }
+
+    /// Lean `amount` (0..1) of [`MAX_LEAN`] toward `target`'s card, so the
+    /// step a push is heading for shows before it fires. The step's own turn
+    /// then starts from the leaned sphere.
+    pub fn lean_toward(
+        &mut self,
+        target: Option<(usize, f32)>,
+        powers: &[crate::psi::PsiPowerInfo],
+        known: &std::collections::HashSet<i32>,
+    ) {
+        // Toward where the target is drawn, unleaned: after earlier turns that
+        // can differ from its canonical slot (a 2-power tier's -1 drawn at +1).
+        self.lean = (0.0, 0.0);
+        self.target = target;
+        let drawn = target.and_then(|(target, amount)| {
+            let (.., row, slot) = self
+                .positions(powers, known)
+                .into_iter()
+                .find(|(i, ..)| *i == target)?;
+            let amount = amount * MAX_LEAN;
+            Some((row * amount, visible_slot(slot) * amount))
+        });
+        self.lean = drawn.unwrap_or((0.0, 0.0));
+    }
+    /// The power a stick step selects. Up and down go straight up and down:
+    /// of the tier they reach, the card drawn nearest the centre column.
+    pub fn step_target(
+        &self,
+        step: crate::scripts::gui::NavStep,
+        powers: &[crate::psi::PsiPowerInfo],
+        known: &std::collections::HashSet<i32>,
+    ) -> usize {
+        let (axis, forward) = step.axis();
+        let next = crate::psi::step_selection(powers, known, self.index, axis, forward);
+        if axis != crate::psi::PsiSelectionAxis::Tier {
+            return next;
+        }
+        let tier = powers[next].tier();
+        // Unleaned, so a lean in progress cannot change which card is above.
+        self.positions(powers, known)
+            .into_iter()
+            .filter(|(i, ..)| powers[*i].tier() == tier)
+            .min_by(|a, b| {
+                let column = |slot: f32| visible_slot(slot + self.lean.1).abs();
+                column(a.4).total_cmp(&column(b.4))
+            })
+            .map_or(next, |(i, ..)| i)
+    }
+
+    /// How solid the frame on `index`'s card is: dim as a push starts toward
+    /// it, solid as the push reaches the step. `None` for every other card.
+    fn frame_strength(&self, index: usize) -> Option<f32> {
+        self.target
+            .filter(|(target, _)| *target == index && index != self.index)
+            .map(|(_, amount)| 0.2 + 0.8 * amount)
+    }
+
     pub fn update(&mut self, dt: f32) {
         self.transition = (self.transition + dt / 0.25).min(1.0);
     }
@@ -240,8 +327,8 @@ impl Carousel {
                     index,
                     row,
                     slot,
-                    start.0 + (row as f32 - start.0) * eased,
-                    slot_position,
+                    start.0 + (row as f32 - start.0) * eased - self.lean.0,
+                    slot_position - self.lean.1,
                 )
             })
             .collect()
@@ -253,7 +340,7 @@ impl Carousel {
         assets: &mut engine::assets::asset_cache::AssetCache,
         eye: cgmath::Vector3<f32>,
     ) -> Vec<engine::scene::SceneObject> {
-        use cgmath::{Matrix4, Rad, vec3};
+        use cgmath::{Matrix4, vec3};
         // Attach to the synchronized physical amp, not a raw controller pose:
         // the card sphere is centred on the amp's ball. The projection stays
         // upright and faces the viewer as the amp moves.
@@ -297,6 +384,17 @@ impl Carousel {
                 &icon(p.power.power_id),
                 alpha,
             );
+            if let Some(strength) = self.frame_strength(index) {
+                for edge_rect in [
+                    Rect::new(0.0, 0.0, 48.0, 2.0),
+                    Rect::new(0.0, 46.0, 48.0, 2.0),
+                    Rect::new(0.0, 2.0, 2.0, 44.0),
+                    Rect::new(46.0, 2.0, 2.0, 44.0),
+                ] {
+                    card.fill(edge_rect, [90, 226, 255])
+                        .opacity(strength * edge);
+                }
+            }
             if let Some(label) = pair.and_then(|pair| {
                 if pair.current == p.template_id {
                     Some("C")
@@ -322,9 +420,7 @@ impl Carousel {
             }
             let transform = root
                 * Matrix4::from_translation(position)
-                // Face radially outward, as if printed on the sphere.
-                * Matrix4::from_angle_y(Rad(slot_position * SLOT_ANGLE))
-                * Matrix4::from_angle_x(Rad(row_position * ROW_ANGLE))
+                * card_facing(row_position, slot_position)
                 * Matrix4::from_scale(size);
             objects.extend(card.render_world_space(assets, transform, None, None, 0.001));
             if drawn_tiers.insert(p.tier()) {
@@ -365,6 +461,7 @@ impl Carousel {
             None,
             0.001,
         ));
+        objects.extend(self.stick_readout(assets, root));
         let mut details = UiCanvas::new(vec2(440.0, 26.0));
         if let Some(p) = powers
             .0
@@ -402,6 +499,37 @@ impl Carousel {
         for object in &mut objects {
             object.set_depth_write(false);
         }
+        objects
+    }
+
+    /// A line out from the focal card to a dot where the stick is, so a push
+    /// shows where it is heading; bright once it aims at a step.
+    fn stick_readout(
+        &self,
+        assets: &mut engine::assets::asset_cache::AssetCache,
+        root: cgmath::Matrix4<f32>,
+    ) -> Vec<engine::scene::SceneObject> {
+        use cgmath::{InnerSpace, Matrix4, Rad, vec3};
+        let (stick, aimed) = self.stick;
+        let length = stick.magnitude().min(1.0) * STICK_READOUT_RADIUS;
+        if length < 0.005 {
+            return vec![];
+        }
+        let angle = Rad(stick.y.atan2(stick.x));
+        let mut mark = UiCanvas::new(vec2(1.0, 1.0));
+        mark.fill(Rect::new(0.0, 0.0, 1.0, 1.0), [90, 226, 255])
+            .opacity(if aimed { 1.0 } else { 0.45 });
+        let along = |distance: f32| {
+            root * Matrix4::from_translation(vec3(0.0, 0.0, FOCUS_LIFT + 0.03))
+                * Matrix4::from_angle_z(angle)
+                * Matrix4::from_translation(vec3(distance, 0.0, 0.0))
+        };
+        let line = along(length / 2.0) * Matrix4::from_nonuniform_scale(length, 0.006, 1.0);
+        let dot = along(length)
+            * Matrix4::from_angle_z(Rad(std::f32::consts::FRAC_PI_4))
+            * Matrix4::from_scale(0.02);
+        let mut objects = mark.render_world_space(assets, line, None, None, 0.001);
+        objects.extend(mark.render_world_space(assets, dot, None, None, 0.001));
         objects
     }
 }
@@ -498,6 +626,49 @@ mod tests {
         assert_eq!((focus.3, focus.4), (0.0, 0.0));
     }
 
+    /// Leaning brings the target toward focus, and the step that follows
+    /// turns on from the leaned position rather than snapping back first.
+    #[test]
+    fn a_lean_previews_the_target_and_the_step_continues_from_it() {
+        let powers = powers();
+        let known = HashSet::from([-1, -2]);
+        let mut world = World::new();
+        let amp = world.add_entity(());
+        world.add_unique(GlobalPsiPowers(powers.clone()));
+        world.add_unique(PlayerPsiKnownPowers(known.clone()));
+        let mut menu = Carousel::new(&world, amp, Handedness::Right).unwrap();
+        let slot_of = |menu: &Carousel, index| {
+            menu.positions(&powers, &known)
+                .into_iter()
+                .find(|(i, _, _, _, _)| *i == index)
+                .unwrap()
+                .4
+        };
+        let start = slot_of(&menu, 1);
+        assert_ne!(start, 0.0);
+        // The target's frame firms up as the push nears the step.
+        menu.lean_toward(Some((1, 0.25)), &powers, &known);
+        let faint = menu.frame_strength(1).unwrap();
+        menu.lean_toward(Some((1, 1.0)), &powers, &known);
+        assert!(menu.frame_strength(1).unwrap() > faint);
+        assert_eq!(menu.frame_strength(0), None);
+        let leaned = slot_of(&menu, 1);
+        assert!((leaned - start * (1.0 - MAX_LEAN)).abs() < 1e-6);
+        menu.preview(1, &powers, &known);
+        assert!((slot_of(&menu, 1) - leaned).abs() < 1e-6);
+        menu.update(0.25);
+        assert_eq!(slot_of(&menu, 1), 0.0);
+        // Nothing to lean toward: the sphere sits square, and no card is framed.
+        menu.lean_toward(None, &powers, &known);
+        assert_eq!(slot_of(&menu, 1), 0.0);
+        assert_eq!(menu.frame_strength(0), None);
+        // Back toward the first power, now drawn on the other side: the lean
+        // still brings it toward focus.
+        let start = slot_of(&menu, 0);
+        menu.lean_toward(Some((0, 1.0)), &powers, &known);
+        assert!(slot_of(&menu, 0).abs() < start.abs());
+    }
+
     #[test]
     fn a_full_rotation_keeps_sparse_neighbouring_tiers_on_the_visible_arc() {
         let fixture = powers();
@@ -531,6 +702,71 @@ mod tests {
         }
     }
 
+    /// Up and down go straight up and down: a tier step lands on the card
+    /// drawn directly above, however far the sphere has turned.
+    #[test]
+    fn a_tier_step_lands_on_the_card_drawn_directly_above() {
+        use crate::scripts::gui::NavStep;
+        let fixture = powers();
+        let powers: Vec<_> = (1..=5)
+            .chain(9..=13)
+            .map(|id| {
+                let mut p = fixture[0].clone();
+                p.template_id = -id;
+                p.power.power_id = id;
+                p
+            })
+            .collect();
+        assert_ne!(powers[0].tier(), powers[5].tier());
+        let known: HashSet<_> = powers.iter().map(|p| p.template_id).collect();
+        let mut world = World::new();
+        let amp = world.add_entity(());
+        world.add_unique(GlobalPsiPowers(powers.clone()));
+        world.add_unique(PlayerPsiKnownPowers(known.clone()));
+        let mut menu = Carousel::new(&world, amp, Handedness::Right).unwrap();
+        for _ in 0..2 {
+            let next = menu.step_target(NavStep::PowerNext, &powers, &known);
+            menu.preview(next, &powers, &known);
+            menu.update(0.25);
+        }
+        let above = menu.step_target(NavStep::TierNext, &powers, &known);
+        assert_eq!(powers[above].tier(), powers[5].tier());
+        let (.., slot) = menu
+            .positions(&powers, &known)
+            .into_iter()
+            .find(|(i, ..)| *i == above)
+            .unwrap();
+        assert!(visible_slot(slot).abs() < 0.5, "drawn at slot {slot}");
+    }
+
+    /// A push right (reported as -x) selects the card drawn on the right.
+    #[test]
+    fn a_push_right_selects_the_card_on_the_right() {
+        let fixture = powers();
+        let powers: Vec<_> = (1..=5)
+            .map(|id| {
+                let mut p = fixture[0].clone();
+                p.template_id = -id;
+                p.power.power_id = id;
+                p
+            })
+            .collect();
+        let known: HashSet<_> = powers.iter().map(|p| p.template_id).collect();
+        let (step, _) = crate::scripts::gui::stick_nav(
+            view_stick(vec2(-1.0, 0.0)),
+            crate::scripts::gui::NavLatch::Free,
+            0.0,
+            &crate::scripts::gui::PSI_STICK_NAV,
+        );
+        let (axis, forward) = step.unwrap().axis();
+        let target = crate::psi::step_selection(&powers, &known, 2, axis, forward);
+        let (.., slot) = entries(&powers, &known, 2)
+            .into_iter()
+            .find(|(i, ..)| *i == target)
+            .unwrap();
+        assert_eq!(slot, 1);
+    }
+
     #[test]
     fn cards_ride_a_sphere_centred_on_the_ball() {
         let ball = vec3(0.3, 1.1, -0.5);
@@ -540,6 +776,19 @@ mod tests {
             let expected = SPHERE_RADIUS * 0.1 * BALL_RADII_PER_UNIT;
             assert!(((card - ball).magnitude() - expected).abs() < 1e-5);
         }
+    }
+
+    /// Pushing up steps to the next tier, so it is drawn above, its card
+    /// facing out from the sphere's centre like every other.
+    #[test]
+    fn the_next_tier_is_drawn_above_and_faces_out() {
+        let card = arc_position(1.0, 0.5);
+        assert!(card.y > 0.0);
+        let normal = (card_facing(1.0, 0.5) * vec3(0.0, 0.0, 1.0).extend(0.0))
+            .truncate()
+            .normalize();
+        let radial = (card - vec3(0.0, 0.0, -SPHERE_RADIUS)).normalize();
+        assert!((normal - radial).magnitude() < 1e-5);
     }
 
     #[test]

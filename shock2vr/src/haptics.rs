@@ -7,6 +7,12 @@ pub struct HapticPulse {
     pub duration_ms: u32,
 }
 
+/// One psi selector step: a light detent, like a notched dial.
+pub const PSI_NAV_TICK: HapticPulse = HapticPulse {
+    amplitude: 0.25,
+    duration_ms: 12,
+};
+
 pub const SHOULDER_READY: HapticPulse = HapticPulse {
     amplitude: 0.45,
     duration_ms: 60,
