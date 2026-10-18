@@ -155,9 +155,14 @@ for (const toolHand of ["right", "left"] as const) {
       await game.step({ frames: 3 });
       return before;
     }
+    const sparkles = async () => (await game.entities.byTemplate(-2914)).length; // RechargeFX
+    const idle = await sparkles();
     let psi = await cast("ElectroPsi");
     assert.equal(await property(game, implant.id, "Energy"), 160);
     assert.equal((await game.info()).player.psi_points, psi - 3);
+    assert.equal(await sparkles(), idle + 1, "the recharge station's sparkle plays on the target");
+    await game.step({ duration: "3s" });
+    assert.equal(await sparkles(), idle, "and expires");
     psi = await cast("ElectroPsi");
     assert.equal((await game.info()).player.psi_points, psi, "full target costs nothing");
     await game.input.set(`${targetHand}_hand.squeeze`, 0); await game.step({ frames: 3 });
