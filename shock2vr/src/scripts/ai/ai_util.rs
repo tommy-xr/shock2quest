@@ -543,17 +543,26 @@ pub fn fire_ranged_weapon(
         );
 
         if let Some((muzzle_flash_template_id, _muzzle_flash_options)) = maybe_muzzle_flash {
-            fire_effects.push(crate::weapon_muzzle::flash_entity(
-                muzzle_flash_template_id,
-                muzzle_transform,
-                point3(0.0, 0.0, 0.0),
-                vec3(0.0, 0.0, 1.0),
-                CreateEntityOptions::default(),
-            ))
+            fire_effects.push(ai_flash(muzzle_flash_template_id, muzzle_transform))
         }
 
         Effect::combine(fire_effects)
     }
+}
+
+/// An AI gun's flash at `frame`'s origin, along its +Z. Flash meshes face
+/// their shooter, but this one is seen by the target, so it draws double-sided.
+fn ai_flash(template_id: i32, frame: Matrix4<f32>) -> Effect {
+    crate::weapon_muzzle::flash_entity(
+        template_id,
+        frame,
+        point3(0.0, 0.0, 0.0),
+        vec3(0.0, 0.0, 1.0),
+        CreateEntityOptions {
+            double_sided: true,
+            ..CreateEntityOptions::default()
+        },
+    )
 }
 
 /// How far a turret's muzzle vhot sits ahead of its barrel tip, read off the
@@ -720,15 +729,7 @@ fn muzzle_flash_and_smoke(
     let flash = kind
         .authored_flash()
         .and_then(lookup)
-        .map(|template_id| {
-            crate::weapon_muzzle::flash_entity(
-                template_id,
-                frame,
-                point3(0.0, 0.0, 0.0),
-                vec3(0.0, 0.0, 1.0),
-                CreateEntityOptions::default(),
-            )
-        })
+        .map(|template_id| ai_flash(template_id, frame))
         .unwrap_or(Effect::NoEffect);
     Effect::combine(vec![
         flash,
@@ -2622,8 +2623,13 @@ mod muzzle_tests {
                 Effect::CreateEntity {
                     template_id: -2653,
                     root_transform,
+                    options,
                     ..
-                } => Some(Point3::from_homogeneous(root_transform.w)),
+                } => {
+                    // The target sees the flash's back, so it must draw double-sided.
+                    assert!(options.double_sided, "AI flash must draw double-sided");
+                    Some(Point3::from_homogeneous(root_transform.w))
+                }
                 _ => None,
             });
             match expected {

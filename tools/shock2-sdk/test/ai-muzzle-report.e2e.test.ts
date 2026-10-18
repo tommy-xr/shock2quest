@@ -43,6 +43,7 @@ for (const [shooterName, [roundName, gunshot]] of Object.entries(ROUNDS)) {
       let firedAt: number | undefined;
       let roundToShooter: number | undefined;
       let flashToShooter: number | undefined;
+      let flashCulling: string | null | undefined;
       const sprites = new Set<string>();
       for (let frame = 0; frame < 600; frame++) {
         await game.step({ frames: 1 });
@@ -56,6 +57,8 @@ for (const [shooterName, [roundName, gunshot]] of Object.entries(ROUNDS)) {
         const flash = entities.find((e) => e.name === "Assault Flash");
         if (flash && flashToShooter === undefined) {
           flashToShooter = distance(flash.position, at);
+          const { objects } = await game.scene.objects({ entityId: flash.id });
+          flashCulling = objects[0]?.backface_culling;
         }
         for (const object of await game.scene.fromSource("barrel_smoke")) {
           if (object.entity_id === shooter.id && object.model) sprites.add(object.model);
@@ -81,6 +84,8 @@ for (const [shooterName, [roundName, gunshot]] of Object.entries(ROUNDS)) {
             flashToShooter < roundToShooter!,
           `the hybrid's Assault Flash must sit at its gun (flash ${flashToShooter}, round ${roundToShooter})`,
         );
+        // The flash mesh faces its shooter; culled, the player would never see it.
+        assert.equal(flashCulling, null, "the hybrid's flash must draw double-sided");
         assert.ok(!sprites.has("NDsbll"), "an authored flash replaces the sprite flash");
       } else {
         assert.equal(flashToShooter, undefined, "only the hybrid's shot spawns a flash entity");

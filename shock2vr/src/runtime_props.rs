@@ -176,6 +176,11 @@ pub struct RuntimePropRestoredPosition;
 #[derive(Component)]
 pub struct RuntimePropDoNotSerialize;
 
+/// Drawn without backface culling: a one-sided effect mesh that must read
+/// from any side (an AI's muzzle flash faces its shooter, not its target).
+#[derive(Component)]
+pub struct RuntimePropDoubleSided;
+
 /// Cosmetic child owned by the StunFX lifecycle; recreated from saved AI state.
 #[derive(Component)]
 pub struct RuntimePropStunFx;

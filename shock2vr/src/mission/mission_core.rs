@@ -17783,6 +17783,10 @@ impl MissionCore {
             .world
             .borrow::<View<RuntimePropJointTransforms>>()
             .unwrap();
+        let v_double_sided = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropDoubleSided>>()
+            .unwrap();
 
         // Start with built in scene objects
         let mut scene = self.scene_objects.clone();
@@ -18079,6 +18083,9 @@ impl MissionCore {
                     xformed_obj.set_lights(entity_lights.clone());
                     xformed_obj.self_depth_group = self_depth_group;
                     xformed_obj.set_emissivity_scale(emissivity_scale);
+                    if v_double_sided.contains(*entity_id) {
+                        xformed_obj.set_backface_culling(None);
+                    }
                     xformed_obj.set_glow(heat.and_then(|heat| {
                         crate::psi_overload_glow::glow(heat, xformed_obj.material_name.as_deref())
                     }));
