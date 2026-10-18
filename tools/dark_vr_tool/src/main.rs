@@ -17,6 +17,9 @@ mod quest_config;
 
 const ROOT: &str = "/sdcard/shock2quest";
 const PACKAGE: &str = "com.tommybuilds.shock2quest";
+/// Builds that kept saves in app-private storage, which an uninstall deletes:
+/// releases v0.0.3 and v0.0.4, and dev builds before the 0.0.0 version reset.
+const APP_PRIVATE_SAVE_VERSIONS: [&str; 3] = ["0.0.3", "0.0.4", "0.1.0"];
 const DEBUG_PORT: &str = "/sdcard/shock2quest/debug-port.txt";
 const RECORDINGS: &str = "/sdcard/shock2quest/recordings";
 
@@ -73,10 +76,10 @@ enum Action {
         /// Also set the startup mission, as `mission set` does
         #[arg(long)]
         mission: Option<String>,
-        /// Replace an install signed with another key or versioned above the
-        /// CI APK (a release, or an older 0.1.0 build); deletes its saves
+        /// Fail instead of uninstalling an install that cannot be replaced in
+        /// place (another key, or a release or older build versioned above it)
         #[arg(long)]
-        allow_uninstall: bool,
+        no_uninstall: bool,
     },
     /// Switch the USB-attached headset to ADB over Wi-Fi (lasts until reboot)
     Wifi {
@@ -209,10 +212,10 @@ fn main() -> Result<()> {
         Action::DebugPort { action } => device.setting(DEBUG_PORT, action, false)?,
         Action::Pr {
             mission,
-            allow_uninstall,
+            no_uninstall,
             ..
         } => {
-            device.install(&apk.unwrap(), allow_uninstall)?;
+            device.install(&apk.unwrap(), !no_uninstall)?;
             if let Some(value) = mission {
                 device.setting(
                     quest_config::MISSION_CONFIG_PATH,
@@ -223,7 +226,7 @@ fn main() -> Result<()> {
             device.launch()?;
         }
         Action::Run { .. } | Action::Deploy { .. } => {
-            device.install(&apk.unwrap(), false)?;
+            device.install(&apk.unwrap(), true)?;
             if let Action::Run { no_logcat } = action {
                 device.launch()?;
                 if !no_logcat {
@@ -456,18 +459,35 @@ impl Device {
             last.trim()
         )
     }
-    fn install(&self, apk: &Path, allow_uninstall: bool) -> Result<()> {
+    fn install(&self, apk: &Path, uninstall: bool) -> Result<()> {
         // -g grants storage up front; a fresh install would otherwise prompt.
         let install = || output(self.adb().args(["install", "-r", "-g"]).arg(apk));
         let installed = match install() {
-            Err(error) if uninstall_before_retry(&error.to_string(), allow_uninstall)? => {
+            Err(error) => {
+                let Some(reason) = replace_blocker(&error.to_string()) else {
+                    return Err(error);
+                };
+                ensure!(
+                    uninstall,
+                    "installed build has {reason}; replacing it needs an uninstall (drop --no-uninstall, or adb uninstall {PACKAGE})"
+                );
+                let dump = self.shell(&format!("dumpsys package {PACKAGE}"))?;
+                let Some(version) = version_name(&dump) else {
+                    bail!(
+                        "installed build has {reason}, and its version (so where it keeps saves) could not be read; replace it yourself"
+                    );
+                };
+                ensure!(
+                    !APP_PRIVATE_SAVE_VERSIONS.contains(&version),
+                    "installed build {version} has {reason} and keeps its saves in app-private storage, which an uninstall deletes. To keep them, first install a build with shared-storage saves over it in place (same key, equal or higher version) and launch it once; otherwise uninstall it yourself (adb uninstall {PACKAGE})"
+                );
                 eprintln!(
-                    "Installed app cannot be replaced in place; uninstalling it (deletes its saves)"
+                    "Replacing the installed build ({reason}): uninstalling it first. Saves and game data under {ROOT} survive."
                 );
                 output(self.adb().args(["uninstall", PACKAGE]))?;
                 install()?
             }
-            result => result?,
+            Ok(installed) => installed,
         };
         print!("{installed}");
         Ok(())
@@ -704,23 +724,26 @@ fn select_build_run<'a>(runs: &'a [BuildRun], sha: &str, branch: &str) -> Result
     )
 }
 
-/// Whether a failed `adb install` is retried after an uninstall. Only a
-/// signing-key change or a downgrade qualifies (a CI APK, versioned 0.0.0,
-/// over a release, a build signed with another key, or an older 0.1.0 build),
-/// and since uninstalling deletes the app-private saves it must be opted into.
-fn uninstall_before_retry(install_error: &str, allow_uninstall: bool) -> Result<bool> {
-    let reason = if install_error.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
-        "installed app has another signing key"
+/// The installed `versionName` from `dumpsys package` output.
+fn version_name(dumpsys: &str) -> Option<&str> {
+    dumpsys
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("versionName="))
+        .filter(|version| !version.is_empty())
+}
+
+/// Why a failed `adb install` can only succeed after an uninstall: a
+/// signing-key change or a downgrade (a 0.0.0 dev APK over a release, a build
+/// signed with another key, or an older 0.1.0 build). Saves live under
+/// [`ROOT`], so an uninstall keeps them.
+fn replace_blocker(install_error: &str) -> Option<&'static str> {
+    if install_error.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+        Some("another signing key")
     } else if install_error.contains("INSTALL_FAILED_VERSION_DOWNGRADE") {
-        "installed app has a higher versionCode"
+        Some("a higher versionCode")
     } else {
-        return Ok(false);
-    };
-    ensure!(
-        allow_uninstall,
-        "{reason}; replacing it uninstalls it and deletes its saves (cargo dvr pr <n> --allow-uninstall, or adb uninstall {PACKAGE})"
-    );
-    Ok(true)
+        None
+    }
 }
 
 fn gh(args: &[&str]) -> Result<String> {
@@ -896,17 +919,30 @@ mod tests {
         );
     }
     #[test]
-    fn only_an_allowed_signature_change_or_downgrade_uninstalls() {
-        for blocked in [
-            "adb: failed to install x.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]",
-            "adb: failed to install x.apk: Failure [INSTALL_FAILED_VERSION_DOWNGRADE]",
-        ] {
-            assert!(uninstall_before_retry(blocked, false).is_err());
-            assert!(uninstall_before_retry(blocked, true).unwrap());
-        }
-        let other = "Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]";
-        assert!(!uninstall_before_retry(other, true).unwrap());
-        assert!(!uninstall_before_retry(other, false).unwrap());
+    fn version_name_reads_dumpsys() {
+        let dump = "Packages:\n  Package [com.tommybuilds.shock2quest] (1a2b):\n    versionCode=16777220 minSdk=26 targetSdk=26\n    versionName=0.0.4\n";
+        assert_eq!(version_name(dump), Some("0.0.4"));
+        assert_eq!(version_name("Unable to find package"), None);
+        assert_eq!(version_name("    versionName="), None);
+    }
+    #[test]
+    fn only_a_signature_change_or_downgrade_needs_an_uninstall() {
+        assert_eq!(
+            replace_blocker(
+                "adb: failed to install x.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]"
+            ),
+            Some("another signing key")
+        );
+        assert_eq!(
+            replace_blocker(
+                "adb: failed to install x.apk: Failure [INSTALL_FAILED_VERSION_DOWNGRADE]"
+            ),
+            Some("a higher versionCode")
+        );
+        assert_eq!(
+            replace_blocker("Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]"),
+            None
+        );
     }
     #[test]
     fn shell_paths_are_literal() {

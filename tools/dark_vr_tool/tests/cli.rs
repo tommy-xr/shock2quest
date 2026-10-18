@@ -37,6 +37,9 @@ if a[0] == 'shell' and len(a) == 2:
     script = a[1].replace('/sdcard/shock2quest', str(root / 'data'))
     if script.startswith('am start'): print('Status: ok'); sys.exit(0)
     if script.startswith('am force-stop'): sys.exit(0)
+    if script.startswith('dumpsys package'):
+        version = root / 'installed-version'
+        print('    versionName=' + (version.read_text() if version.exists() else '0.0.0')); sys.exit(0)
     if script.startswith('ip '): print('    inet 192.168.1.42/24 brd 192.168.1.255 scope global wlan0'); sys.exit(0)
     sys.exit(subprocess.call(['sh', '-c', script]))
 if a[0] == 'pull':
@@ -431,17 +434,33 @@ fn pr_refuses_unfinished_builds_before_touching_the_device() {
     }
 }
 #[test]
-fn pr_installs_ci_apk_and_uninstalls_a_local_build_only_when_allowed() {
+fn pr_never_uninstalls_a_build_with_app_private_saves() {
     let h = Harness::new();
-    fs::write(h.dir.path().join("installed-key"), "local key").unwrap();
+    fs::write(h.dir.path().join("installed-key"), "release key").unwrap();
+    fs::write(h.dir.path().join("installed-version"), "0.0.4").unwrap();
     let out = h.command(&["pr", "7"]).output().unwrap();
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("--allow-uninstall"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("0.0.4"));
+    let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+    assert!(!calls.contains("uninstall") && !calls.contains("am start"));
+}
+#[test]
+fn pr_replaces_a_local_build_unless_told_not_to_uninstall() {
+    let h = Harness::new();
+    fs::write(h.dir.path().join("installed-key"), "local key").unwrap();
+    let out = h.command(&["pr", "7", "--no-uninstall"]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("another signing key"));
     let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
     assert!(!calls.contains("uninstall") && !calls.contains("am start"));
 
     // The second run reuses the cached download.
-    h.run(&["pr", "7", "--allow-uninstall", "--mission", "earth.mis"]);
+    let out = h
+        .command(&["pr", "7", "--mission", "earth.mis"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("under /sdcard/shock2quest survive"));
     let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
     assert_eq!(calls.matches("\"download\"").count(), 1);
     assert!(calls.find("uninstall").unwrap() < calls.find("am start").unwrap());

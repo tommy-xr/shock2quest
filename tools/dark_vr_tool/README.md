@@ -17,7 +17,7 @@ cargo dvr run --no-logcat           # return after launch
 cargo dvr deploy                    # release build + install; does not launch
 cargo dvr deploy --apk /path/to/shock2quest.apk
 cargo dvr pr 1234                   # install + launch PR #1234's CI APK (gh)
-cargo dvr pr 1234 --mission debug_gloves --allow-uninstall
+cargo dvr pr 1234 --mission debug_gloves --no-uninstall
 cargo dvr assets copy /path/to/remaster
 cargo dvr assets recopy /path/to/remaster  # delete old assets, then copy
 cargo dvr assets delete             # removes retail assets, including custom mods
@@ -50,14 +50,19 @@ to force Wi-Fi. Different headsets still require an explicit selection.
 not the release key). Local and CI builds share the checked-in version 0.0.0,
 below every release, so neither installs as an update over a release.
 
-Sign local builds with the same dev key and `pr` replaces them in place, keeping
-saves: get the keystore and password from the owner and point cargo-apk at them,
+Sign local builds with the same dev key and `pr` replaces them in place: get the
+keystore and password from the owner and point cargo-apk at them,
 `CARGO_APK_RELEASE_KEYSTORE` / `CARGO_APK_RELEASE_KEYSTORE_PASSWORD` for
 `cargo dvr build`/`run`/`deploy` (release profile), or `CARGO_APK_DEV_KEYSTORE` /
-`CARGO_APK_DEV_KEYSTORE_PASSWORD` for a plain `cargo apk build`. Replacing an
-install signed with another key, or versioned above 0.0.0 (a release, or a build
-from before the version reset), needs `--allow-uninstall`, which deletes the
-app's saves.
+`CARGO_APK_DEV_KEYSTORE_PASSWORD` for a plain `cargo apk build`. An install
+signed with another key, or versioned above 0.0.0 (a release, or a build from
+before the version reset), is uninstalled first; `--no-uninstall` refuses
+instead. Saves live under `/sdcard/shock2quest`, so an uninstall keeps them.
+Builds that kept saves in app-private storage (releases v0.0.3/v0.0.4, 0.1.0 dev
+builds) are never uninstalled by the tool, nor is one whose version cannot be
+read. A later release installed over v0.0.3/v0.0.4 in place moves their saves
+on first launch; 0.1.0 builds have no in-place path, so uninstalling one (by
+hand) deletes its saves.
 
 `assets copy` transfers `sshock2.kpf`, `mods/`, and `cutscenes/` into
 `/sdcard/shock2quest`, merging existing directories. `assets recopy` deletes those

@@ -12,21 +12,24 @@ pub fn data_root() -> &'static Path {
 #[cfg(target_os = "android")]
 static ANDROID_SAVE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
-/// Set Android's app-private files directory before constructing the game.
+/// Point Android saves at shared storage before constructing the game, after
+/// storage permission is granted; legacy saves are then migrated into it (see
+/// [`crate::save_load::migrate_legacy_saves`]).
 #[cfg(target_os = "android")]
-pub fn init_android_save_root(files_directory: &Path) {
+pub fn init_android_save_root() {
     ANDROID_SAVE_ROOT
-        .set(files_directory.to_path_buf())
+        .set(data_root().to_path_buf())
         .expect("Android save root was already initialized");
 }
 
-/// Parent of the saves directory; Android keeps saves separate from retail assets.
+/// Parent of the saves directory: the data root, which on Android is shared
+/// storage, so saves survive an uninstall.
 pub fn save_root() -> &'static Path {
     #[cfg(target_os = "android")]
     {
         ANDROID_SAVE_ROOT
             .get()
-            .expect("Initialize Android app-private save root before accessing saves")
+            .expect("Initialize the Android save root before accessing saves")
             .as_path()
     }
     #[cfg(not(target_os = "android"))]

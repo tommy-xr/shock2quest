@@ -1393,7 +1393,8 @@ access, debug-port configuration, and the `ss2vr` shell alias.
 `pr` installs the APK CI attached to the PR's head commit. CI APKs are signed
 with a dedicated dev key and, like local builds, versioned 0.0.0, below every
 release. A local build signed with the same key is replaced in place; one with
-another key, or a release, needs `--allow-uninstall`, which deletes its saves (see [vr-device-loop](.claude/skills/vr-device-loop/SKILL.md#install-a-prs-ci-build)).
+another key, or a release, is uninstalled first (`--no-uninstall` refuses
+instead). Saves survive either way (see [vr-device-loop](.claude/skills/vr-device-loop/SKILL.md#install-a-prs-ci-build)).
 
 ##### Saved games
 
@@ -1416,12 +1417,17 @@ Writes replace the selected slot only after the temporary file is complete.
 `SHOCK2QUEST_SAVE`, `SHOCK2QUEST_LOAD`, and `SHOCK2QUEST_LOAD_COMPLETE` log the
 actual file paths and successful operations.
 
-Quest saves live in `saves/` under Android's app-private files directory,
-resolved from the native activity at startup. Logcat records the actual path
-as `SHOCK2QUEST_SAVE_DIRECTORY path=...`. Saving needs no storage permission;
-retail assets still load from `/sdcard/shock2quest`. Clearing app data or
-uninstalling removes these saves. Existing saves on shared storage are not
-migrated. Desktop saves remain in `<data_root>/saves/`.
+Quest saves live in `/sdcard/shock2quest/saves/`, beside the retail assets and
+under the same storage permission, so uninstalling, replacing a build or
+clearing app data keeps them. Logcat records the actual path as
+`SHOCK2QUEST_SAVE_DIRECTORY path=...`. Releases v0.0.3 and v0.0.4 kept saves in
+Android's app-private files directory. At startup the game moves those `.sav`
+files over one at a time, logging `SHOCK2QUEST_SAVE_MIGRATED from=... to=...`.
+It never overwrites a shared save: a clashing name (e.g. an older `slot01.sav`
+from v0.0.2) lands as `slot01-legacy.sav`, listed with the imported saves. A
+failure (`SHOCK2QUEST_SAVE_MIGRATION_FAILED`) leaves the rest in place for the
+next launch. Uninstalling one of those builds before a shared-storage build has
+run still deletes its saves. Desktop saves remain in `<data_root>/saves/`.
 
 ##### Save format and build provenance
 
