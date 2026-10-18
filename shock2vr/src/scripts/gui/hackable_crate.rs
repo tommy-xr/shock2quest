@@ -130,8 +130,22 @@ pub(super) fn crate_hack_critical_failure(entity_id: EntityId, _world: &World) -
 
 /// Whether `entity_id` is an ICE Pick - an object the data marks with the
 /// `FreeHack` script.
-fn is_free_hack_tool(world: &World, entity_id: EntityId) -> bool {
+pub(crate) fn is_free_hack_tool(world: &World, entity_id: EntityId) -> bool {
     crate::scripts::script_util::entity_has_script(world, entity_id, FREE_HACK_SCRIPT)
+}
+
+/// MISC.STR key for an ICE Pick refused by `target`: nothing to hack, or a
+/// crate already open. Other hackable devices (keypads, replicators) are hacked
+/// only on their board in the port, so their refusal stays silent.
+pub(crate) fn free_hack_refusal_key(world: &World, target: EntityId) -> Option<&'static str> {
+    let is_crate = crate::scripts::script_util::entity_has_script(world, target, "HackableCrate");
+    if hack_diff(world, target).is_none() || (is_crate && is_ruined(world, target)) {
+        Some("FreeHackCant")
+    } else if is_crate && is_open(world, target) {
+        Some("FreeHackHacked")
+    } else {
+        None
+    }
 }
 
 impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
@@ -265,7 +279,8 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
     /// An ICE Pick applied to a still-hackable crate opens it outright and is
     /// consumed. Any other item offered to a *sealed* crate is refused (a
     /// sealed crate is not a container - depositing there would lose the item
-    /// permanently); an open crate takes the ordinary deposit path.
+    /// permanently); an open crate takes the ordinary deposit path, except
+    /// for another ICE Pick.
     fn on_provide_for_consumption(
         &self,
         entity_id: EntityId,
@@ -284,13 +299,19 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
                     name: "hack_success".to_owned(),
                     spatial: false,
                 },
+                crate::item_tools::misc_text(world, "FreeHack")
+                    .map_or(Effect::NoEffect, |text| Effect::ShowMessage { text }),
             ]));
         }
         // A sealed crate - still locked, or ruined - is not a container.
         // Refuse the offer outright rather than letting the default deposit
         // path swallow the item into a `Contains` link nothing can ever reach
-        // again. An open crate falls through and accepts the deposit normally.
-        (!is_open(world, entity_id)).then_some(Effect::NoEffect)
+        // again. An open hackable crate takes ordinary deposits, but an ICE
+        // Pick is a hack attempt, not a deposit: it is refused (the mission
+        // says why).
+        let hack_attempt =
+            is_free_hack_tool(world, provided_entity_id) && hack_diff(world, entity_id).is_some();
+        (!is_open(world, entity_id) || hack_attempt).then_some(Effect::NoEffect)
     }
 
     fn accepts_tool(
@@ -682,30 +703,80 @@ mod tests {
     }
 
     /// A second pick is not wasted on an already-open crate, and no pick can
-    /// resurrect one a critical failure ruined. An open crate is a normal
-    /// container, so the pick falls through to the ordinary deposit; a ruined
-    /// crate is sealed, so the offer is refused outright.
+    /// resurrect one a critical failure ruined. Either way the pick is
+    /// refused - neither spent nor deposited - with retail's reason.
     #[test]
-    fn ice_pick_is_not_consumed_by_an_open_or_ruined_crate() {
+    fn ice_pick_is_refused_by_an_open_or_ruined_crate() {
         let (mut world, security_crate, _clip) = crate_world();
         let pick = ice_pick(&mut world);
         let gui = HackableCrateGui::new();
+        world.add_component(
+            security_crate,
+            PropScripts {
+                scripts: vec!["HackableCrate".to_owned()],
+                inherits: false,
+            },
+        );
+        assert_eq!(free_hack_refusal_key(&world, security_crate), None);
 
-        world.add_component(security_crate, PropObjState(ObjectState::Hacked));
+        for (state, key) in [
+            (ObjectState::Hacked, "FreeHackHacked"),
+            (ObjectState::Broken, "FreeHackCant"),
+        ] {
+            world.add_component(security_crate, PropObjState(state));
+            assert!(
+                matches!(
+                    gui.on_provide_for_consumption(security_crate, &world, pick),
+                    Some(Effect::NoEffect)
+                ),
+                "a {state:?} crate must refuse the pick outright, not take it"
+            );
+            assert_eq!(free_hack_refusal_key(&world, security_crate), Some(key));
+        }
+
+        // A crate with no hack difficulty is a plain container: it takes the
+        // pick like any item.
+        world.remove::<(PropHackDiff,)>(security_crate);
+        world.add_component(security_crate, PropObjState(ObjectState::Normal));
         assert!(
             gui.on_provide_for_consumption(security_crate, &world, pick)
-                .is_none(),
-            "an open crate is a container: the pick is deposited, not spent"
+                .is_none()
         );
 
-        world.add_component(security_crate, PropObjState(ObjectState::Broken));
-        assert!(
-            matches!(
-                gui.on_provide_for_consumption(security_crate, &world, pick),
-                Some(Effect::NoEffect)
-            ),
-            "a ruined crate must refuse the pick outright, not consume it"
-        );
+        // Nothing to hack at all; a keypad is hacked on its board instead.
+        let floor = world.add_entity(());
+        assert_eq!(free_hack_refusal_key(&world, floor), Some("FreeHackCant"));
+        let keypad = world.add_entity((PropHackDiff {
+            success_chance: 0,
+            critical_chance: 0,
+            cost: 1.0,
+        },));
+        assert_eq!(free_hack_refusal_key(&world, keypad), None);
+    }
+
+    /// The hack announces retail's MISC.STR line itself, so VR release and
+    /// flat RMB report it identically.
+    #[test]
+    fn ice_pick_announces_the_authored_success_line() {
+        let (mut world, security_crate, _clip) = crate_world();
+        let pick = ice_pick(&mut world);
+        world.add_unique(crate::string_table::StringTable::from_table(
+            "misc.str",
+            std::collections::HashMap::from([("freehack".into(), "Device hacked!".into())]),
+        ));
+        let effects = Effect::flatten(vec![
+            HackableCrateGui::new()
+                .on_provide_for_consumption(security_crate, &world, pick)
+                .unwrap(),
+        ]);
+        let messages: Vec<_> = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::ShowMessage { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(messages, ["Device hacked!"]);
     }
 
     /// A sealed crate is NOT a container: an item offered to a locked or

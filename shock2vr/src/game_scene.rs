@@ -731,6 +731,9 @@ pub struct DebugUiState {
     /// The HUD status-message lines showing right now, oldest first (the
     /// channel `TrapMessage` and friends write to). Empty when none are up.
     pub messages: Vec<String>,
+    /// The HUD use-slot text under each bracketed object on the last rendered
+    /// frame (retail's tech verb, e.g. "Hack", while a held tool is ready).
+    pub bracket_hints: Vec<String>,
     /// The interstitial banner showing right now (the centered title card),
     /// `\n`-separated lines as authored. `None` when none is up.
     pub banner: Option<String>,
@@ -1125,6 +1128,7 @@ pub trait DebuggableScene {
             panel_pose: None,
             scanner_pose: None,
             messages: Vec::new(),
+            bracket_hints: Vec::new(),
             banner: None,
             security_alarm: None,
         }

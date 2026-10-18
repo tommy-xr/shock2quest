@@ -2,7 +2,7 @@
 //! Application is queued through one effect so each use is revalidated after
 //! earlier uses have finished (a second device cannot repair the same gun).
 use dark::properties::{ObjectState, PropGunState, PropRecycle, PropRepairDiff, PropStackCount};
-use shipyard::{EntitiesView, EntityId, Get, View, World};
+use shipyard::{EntitiesView, EntityId, Get, UniqueView, View, World};
 
 use crate::scripts::{Effect, MessagePayload, Script, maintenance, script_util};
 
@@ -11,6 +11,42 @@ pub fn is_tool(world: &World, tool: EntityId) -> bool {
         || script_util::entity_has_script(world, tool, "FreeRepair")
         || script_util::entity_has_script(world, tool, "Recycler")
         || script_util::entity_has_script(world, tool, "BeakerScript")
+}
+
+/// MISC.STR key of retail's tech-cursor verb for `tool` ("Hack", "Repair"),
+/// shown alone in the target's bracket slot while it will take the tool.
+/// Research has no applied tool in the port, so `TechCursor4` is unused, and
+/// only the ICE Pick has an accepting target today.
+pub fn tool_verb_key(world: &World, tool: EntityId) -> Option<&'static str> {
+    if maintenance::is_maintenance_tool(world, tool) {
+        return Some("TechSkill3");
+    }
+    [
+        ("FreeHack", "TechCursor0"),
+        ("FreeModify", "TechCursor1"),
+        ("FreeRepair", "TechCursor2"),
+    ]
+    .into_iter()
+    .find(|(script, _)| script_util::entity_has_script(world, tool, script))
+    .map(|(_, key)| key)
+}
+
+/// MISC.STR key of the line for `target` refusing an offered `tool`, where the
+/// port can tell why. Ordinary items are refused silently.
+pub fn tool_refusal_key(world: &World, tool: EntityId, target: EntityId) -> Option<&'static str> {
+    use crate::scripts::gui::hackable_crate::{free_hack_refusal_key, is_free_hack_tool};
+    is_free_hack_tool(world, tool)
+        .then(|| free_hack_refusal_key(world, target))
+        .flatten()
+}
+
+/// A MISC.STR line, if the table carries it.
+pub fn misc_text(world: &World, key: &str) -> Option<String> {
+    world
+        .borrow::<UniqueView<crate::string_table::StringTable>>()
+        .ok()?
+        .get("misc.str", key)
+        .cloned()
 }
 
 pub fn offers_to(world: &World, tool: EntityId, target: EntityId) -> bool {
@@ -243,6 +279,29 @@ impl Script for ItemTool {
 mod tests {
     use super::*;
     use dark::properties::{PropObjState, PropScripts};
+
+    #[test]
+    fn each_tech_tool_maps_to_its_retail_verb() {
+        let mut world = World::new();
+        let scripted = |world: &mut World, script: &str| {
+            world.add_entity((PropScripts {
+                scripts: vec![script.to_owned()],
+                inherits: false,
+            },))
+        };
+        for (script, key) in [
+            ("FreeHack", Some("TechCursor0")),
+            ("FreeModify", Some("TechCursor1")),
+            ("FreeRepair", Some("TechCursor2")),
+            ("Wrench", Some("TechSkill3")),
+            ("BeakerScript", None),
+        ] {
+            let tool = scripted(&mut world, script);
+            assert_eq!(tool_verb_key(&world, tool), key, "{script}");
+        }
+        let plain = world.add_entity(());
+        assert_eq!(tool_verb_key(&world, plain), None);
+    }
 
     #[test]
     fn beakers_use_authored_mutation_consume_the_pile_and_refuse_repeat_collection() {
