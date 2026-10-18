@@ -97,11 +97,12 @@ cargo dvr pr 1234 --mission debug_gloves   # also sets the startup mission
 ```
 
 It refuses when the head commit's build is missing, running or failed. A local
-build signed with the shared dev key is replaced in place, keeping saves (see
+build signed with the shared dev key is replaced in place (see
 [dark_vr_tool](../../../tools/dark_vr_tool/README.md) for the key). One signed
-with another key, or a release, needs an uninstall: pass `--allow-uninstall`,
-which deletes the app-private saves (game data and settings under
-`/sdcard/shock2quest` survive).
+with another key, or a release, is uninstalled first; pass `--no-uninstall` to
+refuse instead. Saves, game data and settings under `/sdcard/shock2quest`
+survive. Saves of builds that kept them in app-private storage do not: launch a
+shared-storage build once first so it moves them.
 
 ## Establish an unattended XR session
 

@@ -431,17 +431,22 @@ fn pr_refuses_unfinished_builds_before_touching_the_device() {
     }
 }
 #[test]
-fn pr_installs_ci_apk_and_uninstalls_a_local_build_only_when_allowed() {
+fn pr_replaces_a_local_build_unless_told_not_to_uninstall() {
     let h = Harness::new();
     fs::write(h.dir.path().join("installed-key"), "local key").unwrap();
-    let out = h.command(&["pr", "7"]).output().unwrap();
+    let out = h.command(&["pr", "7", "--no-uninstall"]).output().unwrap();
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("--allow-uninstall"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("another signing key"));
     let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
     assert!(!calls.contains("uninstall") && !calls.contains("am start"));
 
     // The second run reuses the cached download.
-    h.run(&["pr", "7", "--allow-uninstall", "--mission", "earth.mis"]);
+    let out = h
+        .command(&["pr", "7", "--mission", "earth.mis"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("under /sdcard/shock2quest survive"));
     let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
     assert_eq!(calls.matches("\"download\"").count(), 1);
     assert!(calls.find("uninstall").unwrap() < calls.find("am start").unwrap());
