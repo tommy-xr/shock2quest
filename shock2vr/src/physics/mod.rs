@@ -463,6 +463,10 @@ const PLAYER_STEP_HEIGHT: f32 = 2.0;
 /// clear.
 const PLAYER_JUMP_SPEED: f32 = 14.0;
 const PLAYER_JUMP_GRAVITY: f32 = 32.0;
+/// In slowed time the jump arc feels the world's gravity, so the player hangs
+/// and rises higher - but at most twice as high and long (world scale 0.5),
+/// however slow the world, to bound sequence breaks and floaty falls.
+const SLOW_TIME_JUMP_GRAVITY_FLOOR: f32 = 0.5;
 /// Highest landing (SS2 ft above the feet) a jump can mantle onto. The
 /// original reaches past the hop itself: a held jump probes 3.5 ft above the
 /// head anywhere in the arc, so ledges up to ~11 ft. 9.8 ft keeps the reach
@@ -8270,7 +8274,9 @@ impl PhysicsWorld {
                 if requested_vertical > 0.0 && applied_vertical < requested_vertical * 0.5 {
                     velocity = 0.0;
                 }
-                velocity -= PLAYER_JUMP_GRAVITY / SCALE_FACTOR * self.integration_parameters.dt;
+                velocity -= PLAYER_JUMP_GRAVITY / SCALE_FACTOR
+                    * self.integration_parameters.dt
+                    * self.world_time_scale.max(SLOW_TIME_JUMP_GRAVITY_FLOOR);
                 player_handle.jump_velocity =
                     Some(velocity.max(-PLAYER_MAX_FALL_SPEED / SCALE_FACTOR));
                 player_handle.is_grounded = false;
@@ -16162,6 +16168,48 @@ mod tests {
             capped_rise < 0.15,
             "a low ceiling must clip the jump cast, rose {capped_rise}"
         );
+    }
+
+    #[test]
+    fn slowed_time_raises_the_jump_up_to_double() {
+        let rise = |scale: f32| -> f32 {
+            let mut world = PhysicsWorld::new();
+            world.add_kinematic(
+                EntityId::from_inner(1000).unwrap(),
+                vec3(0.0, -0.5, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(20.0, 1.0, 20.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            let mut player = world.create_player(
+                vec3(0.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+                EntityId::from_inner(2000).unwrap(),
+            );
+            step(&mut world, &mut player, 30);
+            world.set_world_time_scale(scale);
+            let start = world.get_player_translation(&player).y;
+            let mut max_y = start;
+            for _ in 0..240 {
+                world.update_with_facing_and_jump(
+                    Vector3::new(0.0, 0.0, 0.0),
+                    Vector3::unit_x(),
+                    true,
+                    &mut player,
+                );
+                max_y = max_y.max(world.get_player_translation(&player).y);
+            }
+            max_y - start
+        };
+        let normal = rise(1.0);
+        for (scale, ratio) in [(0.5, 2.0), (0.25, 2.0)] {
+            let slowed = rise(scale);
+            assert!(
+                (slowed / normal - ratio).abs() < 0.1,
+                "at scale {scale} the hop should be {ratio}x: {normal} -> {slowed}"
+            );
+        }
     }
 
     /// Jump beside a face, pushing `push` from the first airborne frame. Returns

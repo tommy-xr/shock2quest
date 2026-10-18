@@ -65,3 +65,28 @@ test("dying ends the speed boost", { skip: !e2eEnabled, timeout: 600_000 }, asyn
   assert.notEqual((await game.info()).player.life_state, "alive");
   assert.ok(Math.abs((await worldSeconds(game, 60)) - 1) < 1e-3, "death ends the boost");
 });
+
+// Slowed time lowers the jump arc's gravity: the hypo's 0.5 doubles the hop.
+test("the speed boost doubles the jump in Slow world mode", { skip: !e2eEnabled, timeout: 600_000 }, async (t) => {
+  await using game = await launchWithSettings(t, {}, { mission: "debug_minimal" });
+  await game.step({ frames: 10 });
+  const hop = async () => {
+    const start = (await game.player.position()).y;
+    let apex = start;
+    await game.input.set("jump", 1);
+    await game.step({ frames: 2 });
+    await game.input.set("jump", 0);
+    for (let i = 0; i < 60; i++) {
+      await game.step({ frames: 2 });
+      apex = Math.max(apex, (await game.player.position()).y);
+    }
+    return apex - start;
+  };
+  const normal = await hop();
+  assert.ok(normal > 0.5, `the player should hop: ${normal}`);
+  const hypo = await game.player.spawnItem(SPEED_BOOST);
+  await game.entities.sendMessage(hypo.entity_id, { type: "Frob" });
+  await game.step({ frames: 1 });
+  const slowed = await hop();
+  assert.ok(Math.abs(slowed / normal - 2) < 0.15, `hop doubles: ${normal} -> ${slowed}`);
+});
