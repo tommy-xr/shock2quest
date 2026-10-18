@@ -12,8 +12,8 @@ pub fn data_root() -> &'static Path {
 #[cfg(target_os = "android")]
 static ANDROID_SAVE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
-/// Point Android saves at shared storage before constructing the game, once
-/// storage permission is granted and legacy saves are migrated (see
+/// Point Android saves at shared storage before constructing the game, after
+/// storage permission is granted; legacy saves are then migrated into it (see
 /// [`crate::save_load::migrate_legacy_saves`]).
 #[cfg(target_os = "android")]
 pub fn init_android_save_root() {

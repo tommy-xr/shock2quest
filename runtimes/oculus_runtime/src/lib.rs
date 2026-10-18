@@ -92,8 +92,12 @@ fn main() {
         let saves = shock2vr::save_load::save_directory();
         match shock2vr::save_load::migrate_legacy_saves(&legacy, &saves) {
             Ok(moved) => {
-                for save in moved {
-                    println!("SHOCK2QUEST_SAVE_MIGRATED from={}", save.display());
+                for (from, to) in moved {
+                    println!(
+                        "SHOCK2QUEST_SAVE_MIGRATED from={} to={}",
+                        from.display(),
+                        to.display()
+                    );
                 }
             }
             Err(error) => println!(

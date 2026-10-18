@@ -1420,13 +1420,14 @@ actual file paths and successful operations.
 Quest saves live in `/sdcard/shock2quest/saves/`, beside the retail assets and
 under the same storage permission, so uninstalling, replacing a build or
 clearing app data keeps them. Logcat records the actual path as
-`SHOCK2QUEST_SAVE_DIRECTORY path=...`. Earlier builds kept saves in Android's
-app-private files directory. At startup the game moves those `.sav` files over
-when the shared directory has none, logging `SHOCK2QUEST_SAVE_MIGRATED from=...`
-per file; a failed copy (`SHOCK2QUEST_SAVE_MIGRATION_FAILED`) leaves them in
-place and is retried next launch. Uninstalling an earlier build before a
-shared-storage build has run still deletes its saves. Desktop saves remain in
-`<data_root>/saves/`.
+`SHOCK2QUEST_SAVE_DIRECTORY path=...`. Releases v0.0.3 and v0.0.4 kept saves in
+Android's app-private files directory. At startup the game moves those `.sav`
+files over one at a time, logging `SHOCK2QUEST_SAVE_MIGRATED from=... to=...`.
+It never overwrites a shared save: a clashing name (e.g. an older `slot01.sav`
+from v0.0.2) lands as `slot01-legacy.sav`, listed with the imported saves. A
+failure (`SHOCK2QUEST_SAVE_MIGRATION_FAILED`) leaves the rest in place for the
+next launch. Uninstalling one of those builds before a shared-storage build has
+run still deletes its saves. Desktop saves remain in `<data_root>/saves/`.
 
 ##### Save format and build provenance
 
