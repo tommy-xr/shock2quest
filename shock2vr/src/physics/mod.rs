@@ -2945,20 +2945,27 @@ fn advance_water_current(mut velocity: Vector<Real>, flow: Vector<Real>, dt: Rea
         let target = flow[axis] * 0.8;
         let short_of_gate = (flow[axis] > 0.0 && velocity[axis] < target)
             || (flow[axis] < 0.0 && velocity[axis] > target);
-        if short_of_gate {
+        let faded = target + (velocity[axis] - target) * (-CURRENT_DRIFT_DRAG * dt).exp();
+        velocity[axis] = if short_of_gate {
             let acceleration = flow[axis].abs()
                 * if axis == 1 && flow[axis] < 0.0 {
                     8.0
                 } else {
                     2.0
                 };
-            let delta = (target - velocity[axis]).clamp(-acceleration * dt, acceleration * dt);
-            velocity[axis] += delta;
-        } else {
-            velocity[axis] = target + (velocity[axis] - target) * (-CURRENT_DRIFT_DRAG * dt).exp();
-            if (velocity[axis] - target).abs() < CURRENT_DRIFT_REST {
-                velocity[axis] = target;
+            let pushed = velocity[axis]
+                + (target - velocity[axis]).clamp(-acceleration * dt, acceleration * dt);
+            // Drift opposing a weak current fades no slower than in still water.
+            if (faded - target).abs() < (pushed - target).abs() {
+                faded
+            } else {
+                pushed
             }
+        } else {
+            faded
+        };
+        if (velocity[axis] - target).abs() < CURRENT_DRIFT_REST {
+            velocity[axis] = target;
         }
     }
     velocity
@@ -7824,7 +7831,8 @@ impl PhysicsWorld {
             && !player_handle
                 .jump_velocity
                 .is_some_and(|velocity| velocity > 0.0);
-        player_handle.water_current_velocity = if swimming {
+        // A rising jump still in the water keeps riding the current.
+        player_handle.water_current_velocity = if medium != PlayerMedium::Air {
             advance_water_current(
                 player_handle.water_current_velocity,
                 water_current,
@@ -7847,13 +7855,6 @@ impl PhysicsWorld {
             desired_movement * PLAYER_SWIM_SPEED_SCALE
         } else {
             desired_movement
-        };
-        // The current carries the body but does not steer it: ladder grabs,
-        // top-outs and mantles read only the player's own movement.
-        let current_drift = if swimming {
-            player_handle.water_current_velocity * self.integration_parameters.dt
-        } else {
-            Vector::zeros()
         };
         let jump_edge = jump_pressed && !player_handle.jump_was_pressed;
         player_handle.jump_was_pressed = jump_pressed;
@@ -8061,12 +8062,14 @@ impl PhysicsWorld {
                 })
             })
         };
-        // A held ladder owns the body, like a gripping hand: drop the drift.
+        // The current carries the body but does not steer it: ladder grabs,
+        // top-outs and mantles read only the player's own movement. A held
+        // ladder owns the body, like a gripping hand, so it drops the drift.
         let current_drift = if climb_movement.is_some() {
             player_handle.water_current_velocity = Vector::zeros();
             Vector::zeros()
         } else {
-            current_drift
+            player_handle.water_current_velocity * self.integration_parameters.dt
         };
 
         // How far the moving terrain the player is standing on travelled since
@@ -11212,6 +11215,12 @@ mod tests {
             (v.z - 8.0).abs() < 1e-4,
             "the strong axis still gates: {v:?}"
         );
+
+        let mut v = vector![-8.0, 0.0, 0.0];
+        for _ in 0..180 {
+            v = advance_water_current(v, vector![0.1, 0.0, 10.0], 1.0 / 60.0);
+        }
+        assert!(v.x > -0.5, "drift against a weak current fades too: {v:?}");
     }
 
     /// A current pushing a flat swimmer into a ladder must not climb it: only
