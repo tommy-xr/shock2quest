@@ -325,6 +325,10 @@ pub enum Effect {
         command: crate::overworld_game::Command,
     },
 
+    UnlockMiniGames {
+        games: u32,
+    },
+
     RecordMiniGameScore {
         game: u8,
         score: crate::mini_game_scores::MiniGameScore,
