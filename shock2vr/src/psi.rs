@@ -109,7 +109,8 @@ pub const VITALITY_TEMPLATE_ID: i32 = -1159;
 pub const CYBER_TEMPLATE_ID: i32 = -1117;
 
 /// `Quickness` - Psychogenic Agility: grants the authored AGI bonus for
-/// movement and other effective-stat consumers until the power expires.
+/// movement and other effective-stat consumers until the power expires. In
+/// the Slow world speed-boost mode it slows the world instead (`speed_boost`).
 pub const QUICKNESS_TEMPLATE_ID: i32 = -1138;
 
 /// Identity of a sustained stat bonus, shared by activation and removal.

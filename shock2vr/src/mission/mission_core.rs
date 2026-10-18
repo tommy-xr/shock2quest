@@ -4827,9 +4827,19 @@ impl MissionCore {
             .borrow::<UniqueView<QuestInfo>>()
             .is_ok_and(|quests| !quests.player_stats().speed_boost.is_zero());
         let speed_boost_mode = crate::user_settings::get().vr.speed_boosts;
+        let quickness_psi = self
+            .world
+            .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+            .is_ok_and(|active| active.is_active(crate::psi::QUICKNESS_TEMPLATE_ID))
+            .then(|| {
+                crate::implants::effective_stats(&self.world)
+                    .unwrap_or_default()
+                    .psionic_ability
+            });
         let scale = crate::speed_boost::world_time_scale(
             crate::dev_params::get(crate::dev_params::WORLD_TIME_SCALE),
             speed_boost_active,
+            quickness_psi,
             speed_boost_mode,
         );
         let world_time = self.world_clock.advance(tick, scale);
@@ -5868,10 +5878,16 @@ impl MissionCore {
         let expired_sources =
             self.world
                 .run(|mut active: UniqueViewMut<crate::psi::ActivePsiPowers>| {
-                    let dt = time.elapsed.as_secs_f32();
                     let mut expired_sources = Vec::new();
                     active.0.retain_mut(|power| {
-                        power.remaining_secs -= dt;
+                        // Quickness lasts its duration on the player's clock,
+                        // however slow the world it makes.
+                        let dt = if power.template_id == crate::psi::QUICKNESS_TEMPLATE_ID {
+                            tick.elapsed
+                        } else {
+                            time.elapsed
+                        };
+                        power.remaining_secs -= dt.as_secs_f32();
                         if power.remaining_secs <= 0.0 {
                             game_log!(INFO, "Psi power expired: {}", power.name);
                             expired_powers.push(power.template_id);
@@ -13346,7 +13362,14 @@ impl MissionCore {
                         game_log!(INFO, "Psi power active: {} ({}s)", name, duration_secs);
                     }
                     drop(active);
-                    if let Some((source, stat)) = crate::psi::stat_modifier(template_id) {
+                    // In Slow world mode Quickness is bullet time instead of
+                    // its Agility bonus.
+                    let bullet_time = template_id == crate::psi::QUICKNESS_TEMPLATE_ID
+                        && crate::user_settings::get().vr.speed_boosts
+                            == crate::user_settings::SpeedBoostMode::SlowWorld;
+                    if let Some((source, stat)) =
+                        crate::psi::stat_modifier(template_id).filter(|_| !bullet_time)
+                    {
                         let delta = self
                             .world
                             .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
