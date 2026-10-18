@@ -717,8 +717,6 @@ fn emp_layers(kind: EnhancedEffect, frames: &[Vec<Rc<dyn TextureTrait>>]) -> Vec
     }
 }
 
-/// A brief expanding burst, followed by a slower cloud. The parent owns the
-/// longest layer so its attached legacy pulse can be removed with it.
 /// The recharge station's warm glow at item scale: small sparks rising around
 /// the item for about a second, riding it as the hand moves.
 fn item_recharge_layer() -> ParticleSystem {
@@ -739,6 +737,8 @@ fn item_recharge_layer() -> ParticleSystem {
         .with_color(vec3(1.0, 0.88, 0.62))
 }
 
+/// A brief expanding burst, followed by a slower cloud. The parent owns the
+/// longest layer so its attached legacy pulse can be removed with it.
 fn emp_explosion_layers(
     overload: bool,
     frames: &[Vec<Rc<dyn TextureTrait>>],

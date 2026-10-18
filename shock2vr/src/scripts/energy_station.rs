@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
+use cgmath::{EuclideanSpace, Point3, Quaternion, vec3};
 use dark::{
     EnvSoundQuery,
     properties::{PropClassTag, PropPosition},
 };
-use cgmath::{EuclideanSpace, Point3, Quaternion, vec3};
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -12,7 +12,6 @@ use crate::Handedness;
 use crate::mission::PlayerInfo;
 use crate::mission::entity_creator::CreateEntityOptions;
 use crate::physics::PhysicsWorld;
-use crate::runtime_props::RuntimePropTransform;
 use crate::time::Time;
 
 use super::{Effect, Message, MessagePayload, Script};
@@ -179,20 +178,15 @@ pub(crate) fn item_recharge_cue(world: &World, item: EntityId) -> Vec<Effect> {
     let Ok(player) = world.borrow::<UniqueView<PlayerInfo>>() else {
         return Vec::new();
     };
-    let hand = if !crate::mission::mission_core::presentation_is_vr(world) {
-        None
-    } else if player.left_hand_entity_id == Some(item) {
-        Some(Handedness::Left)
-    } else if player.right_hand_entity_id == Some(item) {
-        Some(Handedness::Right)
-    } else {
-        None
-    };
-    let held_at = hand.and_then(|_| {
-        let transforms = world.borrow::<View<RuntimePropTransform>>().ok()?;
-        Some(transforms.get(item).ok()?.0.w.truncate())
-    });
-    // The station's own class tag picks its activate sound.
+    let hand = crate::mission::mission_core::presentation_is_vr(world)
+        .then(|| {
+            [Handedness::Left, Handedness::Right]
+                .into_iter()
+                .find(|&hand| crate::wielded_weapon::held_by_hand(world, hand) == Some(item))
+        })
+        .flatten();
+    let held_at = hand.and_then(|_| crate::util::get_entity_position(world, item));
+    // The recharge station's devicetype tag picks the station's activate sound.
     let mut effects = vec![Effect::PlayEnvironmentalSound {
         audio_handle: AudioHandle::new(),
         query: EnvSoundQuery::from_tag_values(vec![
@@ -260,10 +254,8 @@ mod tests {
 
     use crate::{physics::PhysicsWorld, time::Time, vr_config::Handedness};
 
-    use super::{
-        Effect, EnergyStation, MessagePayload, PlayerInfo, RuntimePropTransform,
-        Script, item_recharge_cue,
-    };
+    use super::{Effect, EnergyStation, MessagePayload, PlayerInfo, Script, item_recharge_cue};
+    use crate::runtime_props::RuntimePropTransform;
 
     fn make_world() -> (World, EntityId, EntityId) {
         let mut world = World::new();
