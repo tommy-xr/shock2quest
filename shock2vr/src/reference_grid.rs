@@ -2,7 +2,8 @@
 //! while remaining independent of head position and orientation.
 use crate::ui::entry_ramp::{EntryExitRamp, RampParams};
 use crate::user_settings::{ReferenceGridMode, VrSettings};
-use cgmath::{InnerSpace, Matrix4, Quaternion, Vector3, vec3};
+use crate::vr_comfort::SustainedTravel;
+use cgmath::{Matrix4, Quaternion, Vector3, vec3};
 use engine::scene::SceneObject;
 
 const FADE: RampParams = RampParams {
@@ -12,7 +13,7 @@ const FADE: RampParams = RampParams {
 
 pub struct ReferenceGrid {
     fade: EntryExitRamp,
-    moving_secs: f32,
+    travel: SustainedTravel,
     pub(crate) stage_floor: Vector3<f32>,
 }
 
@@ -20,7 +21,7 @@ impl Default for ReferenceGrid {
     fn default() -> Self {
         Self {
             fade: EntryExitRamp::default(),
-            moving_secs: 0.0,
+            travel: SustainedTravel::default(),
             stage_floor: vec3(0.0, 0.0, 0.0),
         }
     }
@@ -48,15 +49,9 @@ impl ReferenceGrid {
         if !dt.is_finite() || dt <= 0.0 {
             return;
         }
-        // Require sustained travel above the contact-jitter floor. Stick
-        // intent responds immediately; a passive ride needs three 60Hz frames.
-        let speed = displacement.magnitude() / dt;
-        self.moving_secs = if speed.is_finite() && speed > 0.08 {
-            self.moving_secs + dt
-        } else {
-            0.0
-        };
-        if mode == ReferenceGridMode::Always || artificial_input || self.moving_secs >= 0.05 {
+        // Stick intent responds immediately; a passive ride must be sustained.
+        let riding = self.travel.update(displacement, dt);
+        if mode == ReferenceGridMode::Always || artificial_input || riding {
             self.fade.open(FADE);
         } else {
             self.fade.close();
@@ -114,7 +109,7 @@ fn cage_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::{Deg, Rotation3, SquareMatrix};
+    use cgmath::{Deg, InnerSpace, Rotation3, SquareMatrix};
 
     #[test]
     fn passive_vertical_and_horizontal_rides_activate_without_stick_input() {

@@ -2,7 +2,7 @@
 //! never filtered, slowed, or used as a reason to restrict the view.
 use crate::ui::entry_ramp::{EntryExitRamp, RampParams};
 use crate::user_settings::{TurnMode, VignetteStrength, VrSettings};
-use cgmath::{Matrix4, SquareMatrix, Vector2, vec3};
+use cgmath::{InnerSpace, Matrix4, SquareMatrix, Vector2, Vector3, vec3};
 use engine::scene::SceneObject;
 
 /// Keep the tracked eye stationary while yaw rotates the rest of the rig.
@@ -17,11 +17,32 @@ pub fn turn_origin_shift(
     vec3(shift.x, 0.0, shift.z)
 }
 
+/// Sustained travel of the body across the physics step (platform carry,
+/// falling, water currents), as opposed to contact jitter or one correction.
+/// Above 0.08 wu/s for 50 ms - three 60Hz frames.
+#[derive(Default)]
+pub struct SustainedTravel {
+    moving_secs: f32,
+}
+
+impl SustainedTravel {
+    pub fn update(&mut self, displacement: Vector3<f32>, dt: f32) -> bool {
+        let speed = displacement.magnitude() / dt;
+        self.moving_secs = if speed.is_finite() && speed > 0.08 {
+            self.moving_secs + dt
+        } else {
+            0.0
+        };
+        self.moving_secs >= 0.05
+    }
+}
+
 #[derive(Default)]
 pub struct VrComfort {
     turn_armed: bool,
     last_turn_settings: Option<(TurnMode, f32, f32)>,
     vignette: EntryExitRamp,
+    travel: SustainedTravel,
 }
 
 impl VrComfort {
@@ -58,9 +79,12 @@ impl VrComfort {
         }
     }
 
+    /// `displacement` is the body's travel across this frame's physics step,
+    /// so a passive ride tunnels like stick movement does.
     pub fn update_vignette(
         &mut self,
         movement: Vector2<f32>,
+        displacement: Vector3<f32>,
         turn_radians: f32,
         dt: f32,
         settings: VrSettings,
@@ -72,8 +96,9 @@ impl VrComfort {
         if !dt.is_finite() || dt <= 0.0 {
             return;
         }
-        let moving =
-            settings.vignette_movement && (movement.x.abs() > 0.15 || movement.y.abs() > 0.15);
+        let riding = self.travel.update(displacement, dt);
+        let moving = settings.vignette_movement
+            && (movement.x.abs() > 0.15 || movement.y.abs() > 0.15 || riding);
         let turning = settings.vignette_turning
             && settings.turning == TurnMode::Smooth
             && turn_radians.abs() > 0.0001;
@@ -135,7 +160,7 @@ mod tests {
         let settings = VrSettings::default();
         let projection = perspective(Deg(90.0), 1.5, 0.1, 100.0);
         let mut comfort = VrComfort::default();
-        comfort.update_vignette(vec2(1.0, 0.0), 0.0, 0.2, settings);
+        comfort.update_vignette(vec2(1.0, 0.0), vec3(0.0, 0.0, 0.0), 0.0, 0.2, settings);
         let reference = comfort
             .render(Matrix4::identity(), projection, settings)
             .unwrap()
@@ -198,22 +223,68 @@ mod tests {
     fn vignette_tracks_only_enabled_artificial_motion_and_fades_out() {
         let mut comfort = VrComfort::default();
         let mut settings = VrSettings::default();
-        comfort.update_vignette(vec2(0.0, 1.0), 0.0, 0.1, settings);
+        comfort.update_vignette(vec2(0.0, 1.0), vec3(0.0, 0.0, 0.0), 0.0, 0.1, settings);
         assert_eq!(comfort.vignette.eased(), 0.5);
-        comfort.update_vignette(vec2(0.0, 1.0), 0.0, 0.1, settings);
+        comfort.update_vignette(vec2(0.0, 1.0), vec3(0.0, 0.0, 0.0), 0.0, 0.1, settings);
         assert_eq!(comfort.vignette.eased(), 1.0);
         for _ in 0..4 {
-            comfort.update_vignette(vec2(0.0, 0.0), 0.0, 0.1, settings);
+            comfort.update_vignette(vec2(0.0, 0.0), vec3(0.0, 0.0, 0.0), 0.0, 0.1, settings);
         }
         assert_eq!(comfort.vignette.eased(), 0.0);
-        comfort.update_vignette(vec2(0.0, 0.0), 0.5, 0.1, settings);
+        comfort.update_vignette(vec2(0.0, 0.0), vec3(0.0, 0.0, 0.0), 0.5, 0.1, settings);
         assert_eq!(comfort.vignette.eased(), 0.0, "a snap turn does not tunnel");
         settings.turning = TurnMode::Smooth;
-        comfort.update_vignette(vec2(0.0, 0.0), 0.02, 0.1, settings);
+        comfort.update_vignette(vec2(0.0, 0.0), vec3(0.0, 0.0, 0.0), 0.02, 0.1, settings);
         assert_eq!(comfort.vignette.eased(), 0.5);
         settings.vignette = VignetteStrength::Off;
-        comfort.update_vignette(vec2(0.0, 1.0), 0.02, 0.1, settings);
+        comfort.update_vignette(vec2(0.0, 1.0), vec3(0.0, 0.0, 0.0), 0.02, 0.1, settings);
         assert_eq!(comfort.vignette.eased(), 0.0);
+    }
+
+    #[test]
+    fn vignette_opens_for_a_sustained_passive_ride_but_not_jitter() {
+        let settings = VrSettings::default();
+        let mut comfort = VrComfort::default();
+        // A water current carrying the player at 8 wu/s with no stick input.
+        for _ in 0..12 {
+            comfort.update_vignette(
+                vec2(0.0, 0.0),
+                vec3(0.0, 0.0, 0.133),
+                0.0,
+                1.0 / 60.0,
+                settings,
+            );
+        }
+        assert!(comfort.vignette.eased() > 0.0, "a passive ride tunnels");
+
+        let mut comfort = VrComfort::default();
+        for frame in 0..60 {
+            let jitter = if frame % 2 == 0 { 0.01 } else { 0.0 };
+            comfort.update_vignette(
+                vec2(0.0, 0.0),
+                vec3(jitter, 0.0, 0.0),
+                0.0,
+                1.0 / 60.0,
+                settings,
+            );
+        }
+        assert_eq!(comfort.vignette.eased(), 0.0, "contact jitter does not");
+
+        let mut comfort = VrComfort::default();
+        let settings = VrSettings {
+            vignette_movement: false,
+            ..settings
+        };
+        for _ in 0..12 {
+            comfort.update_vignette(
+                vec2(0.0, 0.0),
+                vec3(0.0, 0.0, 0.133),
+                0.0,
+                1.0 / 60.0,
+                settings,
+            );
+        }
+        assert_eq!(comfort.vignette.eased(), 0.0, "movement tunnelling is off");
     }
 
     #[test]
@@ -226,7 +297,7 @@ mod tests {
                 .render(Matrix4::identity(), projection, settings)
                 .is_none()
         );
-        comfort.update_vignette(vec2(1.0, 0.0), 0.0, 0.1, settings);
+        comfort.update_vignette(vec2(1.0, 0.0), vec3(0.0, 0.0, 0.0), 0.0, 0.1, settings);
         let layer = comfort
             .render(Matrix4::identity(), projection, settings)
             .unwrap();

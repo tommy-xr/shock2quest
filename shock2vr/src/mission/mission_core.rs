@@ -5240,13 +5240,6 @@ impl MissionCore {
             }
         }
 
-        self.vr_comfort.update_vignette(
-            move_thumbstick_value,
-            turn_radians,
-            delta_time,
-            vr_settings,
-        );
-
         let dir = new_rotation * input_context.head.rotation;
         let facing = dir.rotate_vector(cgmath::vec3(0.0, 0.0, -1.0));
         let movement_scale = {
@@ -5515,6 +5508,13 @@ impl MissionCore {
             moved
         };
 
+        self.vr_comfort.update_vignette(
+            move_thumbstick_value,
+            comfort_displacement,
+            turn_radians,
+            delta_time,
+            vr_settings,
+        );
         self.reference_grid.update(
             comfort_displacement,
             move_thumbstick_value.magnitude() > 0.15
