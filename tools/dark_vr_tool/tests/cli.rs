@@ -62,7 +62,7 @@ if a[0] == 'install':
     key.write_text(Path(a[3]).read_text())
     print('Success'); sys.exit(0)
 if a == ['uninstall', 'com.tommybuilds.shock2quest']:
-    (root / 'installed-key').unlink(); print('Success'); sys.exit(0)
+    (root / 'installed-key').unlink(missing_ok=True); print('Success'); sys.exit(0)
 raise RuntimeError(a)
 "#).unwrap();
         fs::set_permissions(adb, fs::Permissions::from_mode(0o755)).unwrap();
@@ -432,6 +432,23 @@ fn pr_refuses_unfinished_builds_before_touching_the_device() {
         let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
         assert!(!calls.contains("devices"));
     }
+}
+#[test]
+fn uninstall_removes_the_package_and_warns_for_app_private_saves() {
+    let h = Harness::new();
+    let out = h.command(&["uninstall"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("app-private"));
+    fs::write(h.dir.path().join("installed-version"), "0.0.4").unwrap();
+    let out = h.command(&["uninstall"]).output().unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("app-private"));
+    let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+    assert_eq!(calls.matches("\"uninstall\"").count(), 2);
 }
 #[test]
 fn pr_never_uninstalls_a_build_with_app_private_saves() {

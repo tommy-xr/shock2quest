@@ -90,6 +90,8 @@ enum Action {
     Launch,
     /// Stop the app
     Stop,
+    /// Remove the installed app; saves and game data under /sdcard/shock2quest stay
+    Uninstall,
     /// List device files; relative paths start in /sdcard/shock2quest
     Ls {
         #[arg(default_value = ROOT)]
@@ -237,6 +239,7 @@ fn main() -> Result<()> {
         Action::Wifi { port } => device.wifi(port)?,
         Action::Launch => device.launch()?,
         Action::Stop => device.stop()?,
+        Action::Uninstall => device.uninstall()?,
         Action::Ls { path } => {
             let path = if path.starts_with('/') {
                 path
@@ -501,6 +504,16 @@ impl Device {
     }
     fn stop(&self) -> Result<()> {
         self.shell(&format!("am force-stop {PACKAGE}"))?;
+        Ok(())
+    }
+    fn uninstall(&self) -> Result<()> {
+        let dump = self.shell(&format!("dumpsys package {PACKAGE}"))?;
+        if version_name(&dump).is_some_and(|v| APP_PRIVATE_SAVE_VERSIONS.contains(&v)) {
+            eprintln!(
+                "Installed build keeps its saves in app-private storage; they are deleted with it."
+            );
+        }
+        print!("{}", output(self.adb().args(["uninstall", PACKAGE]))?);
         Ok(())
     }
     fn assets(&self, action: Assets) -> Result<()> {

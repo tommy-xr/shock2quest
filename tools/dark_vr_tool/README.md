@@ -24,6 +24,7 @@ cargo dvr assets delete             # removes retail assets, including custom mo
 cargo dvr wifi                      # USB -> ADB over Wi-Fi until reboot, then unplug
 cargo dvr launch                    # restart installed app, no build
 cargo dvr stop
+cargo dvr uninstall                 # remove the app; saves under /sdcard/shock2quest stay
 cargo dvr ls                        # defaults to /sdcard/shock2quest
 cargo dvr ls res                    # relative to /sdcard/shock2quest
 cargo dvr ls saves                  # saved games (*.sav), once a save exists
