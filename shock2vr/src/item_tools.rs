@@ -2,7 +2,7 @@
 //! Application is queued through one effect so each use is revalidated after
 //! earlier uses have finished (a second device cannot repair the same gun).
 use dark::properties::{ObjectState, PropGunState, PropRecycle, PropRepairDiff, PropStackCount};
-use shipyard::{EntitiesView, EntityId, Get, View, World};
+use shipyard::{EntitiesView, EntityId, Get, UniqueView, View, World};
 
 use crate::scripts::{Effect, MessagePayload, Script, maintenance, script_util};
 
@@ -29,6 +29,15 @@ pub fn tool_verb_key(world: &World, tool: EntityId) -> Option<&'static str> {
     .into_iter()
     .find(|(script, _)| script_util::entity_has_script(world, tool, script))
     .map(|(_, key)| key)
+}
+
+/// A MISC.STR line, if the table carries it.
+pub fn misc_text(world: &World, key: &str) -> Option<String> {
+    world
+        .borrow::<UniqueView<crate::string_table::StringTable>>()
+        .ok()?
+        .get("misc.str", key)
+        .cloned()
 }
 
 pub fn offers_to(world: &World, tool: EntityId, target: EntityId) -> bool {

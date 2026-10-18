@@ -9,12 +9,13 @@ import { add, aimVrHandAt, scale, sub } from "./helpers/vr-hand.js";
 
 // Retail tech-cursor feedback (MISC.STR) for a held tool, identical in flat
 // and VR: the bracket slot reads the verb ("Hack") while the target will take
-// the tool.
+// the tool, and the use announces "Device hacked!".
 const enabled = process.env.SHOCK2_E2E === "1";
 
 const ICE_PICK = -73;
 const SECURITY_CRATE = 325; // hydro1, still hackable
 const HACK = "Hack";
+const HACKED = "Device hacked!";
 
 async function nearCrate(game: GameServer) {
   await game.step({ frames: 5 });
@@ -40,7 +41,7 @@ async function secondaryClickBareView(game: GameServer): Promise<void> {
   }
 }
 
-test("flat: tech verb under the brackets", { skip: !enabled, timeout: 600_000 }, async () => {
+test("flat: verb under the brackets, then the authored hack lines", { skip: !enabled, timeout: 600_000 }, async () => {
   await using game = await GameServer.launch({ mission: "hydro1.mis" });
   const { crate } = await nearCrate(game);
   await game.player.aimAt(crate, { hitbox: "center", visibility: "required" });
@@ -57,10 +58,11 @@ test("flat: tech verb under the brackets", { skip: !enabled, timeout: 600_000 },
   await secondaryClickBareView(game);
   await game.step({ frames: 3 });
   ui = await game.ui.state();
+  assert.ok(ui.messages.includes(HACKED), `messages: ${JSON.stringify(ui.messages)}`);
   assert.ok(!ui.bracket_hints.includes(HACK), "nothing is ready once the pick is spent");
 });
 
-test("VR: tech verb under the brackets", { skip: !enabled, timeout: 600_000 }, async () => {
+test("VR: verb under the brackets, then the authored hack lines", { skip: !enabled, timeout: 600_000 }, async () => {
   await using game = await GameServer.launch({ mission: "hydro1.mis", debugFlags: ["--vr"] });
   const { cratePos } = await nearCrate(game);
   const player = (await game.info()).player.position as Vec3;
@@ -87,5 +89,6 @@ test("VR: tech verb under the brackets", { skip: !enabled, timeout: 600_000 }, a
   await aimVrHandAt(game, cratePos, 0.45, 1);
   assert.deepEqual((await game.ui.state()).bracket_hints, [HACK], "the ready crate's slot reads the tech verb alone");
   await release();
-  assert.ok(!(await game.ui.state()).bracket_hints.includes(HACK), "nothing is ready once the pick is spent");
+  let ui = await game.ui.state();
+  assert.ok(ui.messages.includes(HACKED), `messages: ${JSON.stringify(ui.messages)}`);
 });

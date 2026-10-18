@@ -284,6 +284,8 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
                     name: "hack_success".to_owned(),
                     spatial: false,
                 },
+                crate::item_tools::misc_text(world, "FreeHack")
+                    .map_or(Effect::NoEffect, |text| Effect::ShowMessage { text }),
             ]));
         }
         // A sealed crate - still locked, or ruined - is not a container.
@@ -706,6 +708,31 @@ mod tests {
             ),
             "a ruined crate must refuse the pick outright, not consume it"
         );
+    }
+
+    /// The hack announces retail's MISC.STR line itself, so VR release and
+    /// flat RMB report it identically.
+    #[test]
+    fn ice_pick_announces_the_authored_success_line() {
+        let (mut world, security_crate, _clip) = crate_world();
+        let pick = ice_pick(&mut world);
+        world.add_unique(crate::string_table::StringTable::from_table(
+            "misc.str",
+            std::collections::HashMap::from([("freehack".into(), "Device hacked!".into())]),
+        ));
+        let effects = Effect::flatten(vec![
+            HackableCrateGui::new()
+                .on_provide_for_consumption(security_crate, &world, pick)
+                .unwrap(),
+        ]);
+        let messages: Vec<_> = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::ShowMessage { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(messages, ["Device hacked!"]);
     }
 
     /// A sealed crate is NOT a container: an item offered to a locked or
