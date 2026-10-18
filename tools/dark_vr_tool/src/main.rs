@@ -17,6 +17,9 @@ mod quest_config;
 
 const ROOT: &str = "/sdcard/shock2quest";
 const PACKAGE: &str = "com.tommybuilds.shock2quest";
+/// Builds that kept saves in app-private storage, which an uninstall deletes:
+/// releases v0.0.3 and v0.0.4, and dev builds before the 0.0.0 version reset.
+const APP_PRIVATE_SAVE_VERSIONS: [&str; 3] = ["0.0.3", "0.0.4", "0.1.0"];
 const DEBUG_PORT: &str = "/sdcard/shock2quest/debug-port.txt";
 const RECORDINGS: &str = "/sdcard/shock2quest/recordings";
 
@@ -468,6 +471,14 @@ impl Device {
                     uninstall,
                     "installed build has {reason}; replacing it needs an uninstall (drop --no-uninstall, or adb uninstall {PACKAGE})"
                 );
+                let dump = self.shell(&format!("dumpsys package {PACKAGE}"))?;
+                if let Some(version) = version_name(&dump)
+                    .filter(|version| APP_PRIVATE_SAVE_VERSIONS.contains(version))
+                {
+                    bail!(
+                        "installed build {version} has {reason} and keeps its saves in app-private storage, which an uninstall deletes; uninstall it yourself to replace it (adb uninstall {PACKAGE})"
+                    );
+                }
                 eprintln!(
                     "Replacing the installed build ({reason}): uninstalling it first. Saves and game data under {ROOT} survive."
                 );
@@ -711,6 +722,13 @@ fn select_build_run<'a>(runs: &'a [BuildRun], sha: &str, branch: &str) -> Result
     )
 }
 
+/// The installed `versionName` from `dumpsys package` output.
+fn version_name(dumpsys: &str) -> Option<&str> {
+    dumpsys
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("versionName="))
+}
+
 /// Why a failed `adb install` can only succeed after an uninstall: a
 /// signing-key change or a downgrade (a 0.0.0 dev APK over a release, a build
 /// signed with another key, or an older 0.1.0 build). Saves live under
@@ -896,6 +914,12 @@ mod tests {
             error(&[run(4, "completed", "failure")])
                 .contains("failure: https://example.test/runs/4")
         );
+    }
+    #[test]
+    fn version_name_reads_dumpsys() {
+        let dump = "Packages:\n  Package [com.tommybuilds.shock2quest] (1a2b):\n    versionCode=16777220 minSdk=26 targetSdk=26\n    versionName=0.0.4\n";
+        assert_eq!(version_name(dump), Some("0.0.4"));
+        assert_eq!(version_name("Unable to find package"), None);
     }
     #[test]
     fn only_a_signature_change_or_downgrade_needs_an_uninstall() {

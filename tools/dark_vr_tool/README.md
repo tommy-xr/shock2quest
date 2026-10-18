@@ -57,9 +57,10 @@ keystore and password from the owner and point cargo-apk at them,
 `CARGO_APK_DEV_KEYSTORE_PASSWORD` for a plain `cargo apk build`. An install
 signed with another key, or versioned above 0.0.0 (a release, or a build from
 before the version reset), is uninstalled first; `--no-uninstall` refuses
-instead. Saves live under `/sdcard/shock2quest`, so an uninstall keeps them,
-except saves of builds that kept them in app-private storage: launch a build
-with shared-storage saves once first so it moves them.
+instead. Saves live under `/sdcard/shock2quest`, so an uninstall keeps them.
+Builds that kept saves in app-private storage (releases v0.0.3/v0.0.4, 0.1.0 dev
+builds) are never uninstalled by the tool: update to a shared-storage release
+in place to move their saves, or uninstall them yourself.
 
 `assets copy` transfers `sshock2.kpf`, `mods/`, and `cutscenes/` into
 `/sdcard/shock2quest`, merging existing directories. `assets recopy` deletes those

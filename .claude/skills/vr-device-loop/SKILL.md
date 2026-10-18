@@ -101,8 +101,8 @@ build signed with the shared dev key is replaced in place (see
 [dark_vr_tool](../../../tools/dark_vr_tool/README.md) for the key). One signed
 with another key, or a release, is uninstalled first; pass `--no-uninstall` to
 refuse instead. Saves, game data and settings under `/sdcard/shock2quest`
-survive. Saves of builds that kept them in app-private storage do not: launch a
-shared-storage build once first so it moves them.
+survive. It refuses to uninstall a build that kept saves in app-private storage
+(v0.0.3/v0.0.4 releases, 0.1.0 dev builds), since that would delete them.
 
 ## Establish an unattended XR session
 
