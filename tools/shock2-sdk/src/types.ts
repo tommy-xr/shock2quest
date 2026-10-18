@@ -1237,6 +1237,9 @@ export interface UiPointer {
   grabbing: boolean;
   /** Which hand owns the pointer, or null when nothing is on the canvas. */
   hand: "left" | "right" | null;
+  /** Canvas rect [x, y, w, h] of the interface button showing the hover
+   * outline, or null when the pointer is on none. */
+  hovered: [number, number, number, number] | null;
 }
 
 /** The world panel a VR presentation hangs the shared canvas on (pawn space). */

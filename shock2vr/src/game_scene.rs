@@ -764,6 +764,9 @@ pub struct DebugUiPointer {
     /// "left" or "right" - which hand the gesture belongs to, or `null` when
     /// nothing is on the canvas (no hand owns the pointer).
     pub hand: Option<String>,
+    /// Canvas rect `[x, y, w, h]` of the interface button showing the hover
+    /// outline, or `null` when the pointer is on none.
+    pub hovered: Option<[f32; 4]>,
 }
 
 /// The world panel a VR presentation hangs the shared canvas on, in pawn space
