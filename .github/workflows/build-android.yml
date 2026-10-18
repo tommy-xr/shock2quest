@@ -77,7 +77,8 @@ jobs:
           cargo apk build
           apk=../../target/debug/apk/shock2quest.apk
           build_tools="$ANDROID_HOME/build-tools/33.0.0"
-          "$build_tools/apksigner" verify --print-certs "$apk" | tee "$RUNNER_TEMP/apk-certs"
+          "$build_tools/apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/apk-certs"
+          cat "$RUNNER_TEMP/apk-certs"
           if [ "$IS_FORK" != true ]; then
             grep -F 'Signer #1 certificate DN: CN=Shock2Quest Dev (CI)' "$RUNNER_TEMP/apk-certs"
           fi
