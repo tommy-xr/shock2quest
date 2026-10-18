@@ -45,6 +45,8 @@ pub struct Cell {
     pub medium: CellMedium,
     pub flags: u8,
     pub flow_group: u8,
+    /// Authored translational water flow in engine axes and world units/second.
+    pub water_current: Vector3<f32>,
     pub center: Vector3<f32>,
     pub radius: f32,
     pub portal_count: u8,
@@ -142,6 +144,7 @@ impl Cell {
             medium,
             flags,
             flow_group,
+            water_current: vec3(0.0, 0.0, 0.0),
             portal_count,
             portals,
             center,

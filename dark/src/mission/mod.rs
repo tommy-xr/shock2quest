@@ -11,6 +11,7 @@ pub mod room_database;
 pub mod scene_builder;
 mod song_params;
 pub mod texture_list;
+mod water_motion;
 
 pub use bsp_tree::*;
 pub use cell::*;
@@ -280,6 +281,12 @@ pub fn read<T: io::Read + io::Seek>(
         reader,
     );
     let water_render_info = read_water_render_info(&table_of_contents, reader);
+    let water_currents = water_motion::read_water_currents(
+        &read_chunk_bytes(&table_of_contents, reader, "CELL_MOTION").unwrap_or_default(),
+    );
+    for cell in &mut cells {
+        cell.water_current = water_currents[cell.flow_group as usize];
+    }
     let all_geometry = create_geometry(
         asset_paths,
         base_path,

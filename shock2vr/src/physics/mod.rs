@@ -2928,6 +2928,49 @@ pub enum PlayerMedium {
     WaterSurface,
 }
 
+/// Exponential fade rate (1/s) of current drift beyond the gate: a full-speed
+/// 8 wu/s drift entering still water coasts about 8/2 = 4 wu.
+const CURRENT_DRIFT_DRAG: Real = 2.0;
+/// Drift within this speed (wu/s) of the gate settles onto it.
+const CURRENT_DRIFT_REST: Real = 0.05;
+
+/// Kinematic counterpart of Dark's underwater current force: acceleration is
+/// 2*flow (8*flow downward) while the drift is short of 0.8*flow in the flow's
+/// direction. The existing controller resolves collisions and swim input
+/// separately; the drift stops at that gate rather than overshooting.
+/// Drift beyond the gate (a weaker current, or still water) fades toward it,
+/// so a swimmer coasts between authored currents instead of stopping dead.
+fn advance_water_current(mut velocity: Vector<Real>, flow: Vector<Real>, dt: Real) -> Vector<Real> {
+    for axis in 0..3 {
+        let target = flow[axis] * 0.8;
+        let short_of_gate = (flow[axis] > 0.0 && velocity[axis] < target)
+            || (flow[axis] < 0.0 && velocity[axis] > target);
+        let faded = target + (velocity[axis] - target) * (-CURRENT_DRIFT_DRAG * dt).exp();
+        velocity[axis] = if short_of_gate {
+            let acceleration = flow[axis].abs()
+                * if axis == 1 && flow[axis] < 0.0 {
+                    8.0
+                } else {
+                    2.0
+                };
+            let pushed = velocity[axis]
+                + (target - velocity[axis]).clamp(-acceleration * dt, acceleration * dt);
+            // Drift opposing a weak current fades no slower than in still water.
+            if (faded - target).abs() < (pushed - target).abs() {
+                faded
+            } else {
+                pushed
+            }
+        } else {
+            faded
+        };
+        if (velocity[axis] - target).abs() < CURRENT_DRIFT_REST {
+            velocity[axis] = target;
+        }
+    }
+    velocity
+}
+
 /// What the player's movement pass is being asked to do this frame.
 ///
 /// Physics stays presentation-agnostic: flat resolves "push into a ladder"
@@ -2942,6 +2985,7 @@ pub enum PlayerMoveRequest {
         jump_pressed: bool,
         push_to_climb: bool,
         medium: PlayerMedium,
+        water_current: Vector3<f32>,
     },
     /// A gripping VR hand demands this body translation (see
     /// [`crate::vr_climb`]). Gravity and the walk pass are both suspended.
@@ -3626,6 +3670,8 @@ pub struct PlayerHandle {
     // or a jump's push off a held ladder. Ordinary jumps steer with the stick
     // instead and leave this zero.
     air_velocity: Vector<Real>,
+    // Derived kinematic water drift. Cleared on leaving water or direct relocation.
+    water_current_velocity: Vector<Real>,
     // The player's OWN translation from the last movement frame - this
     // frame's total travel minus the moving-support carry - so a rider
     // standing still on an elevator reports zero. Purely derived per-frame
@@ -4603,6 +4649,7 @@ impl PhysicsWorld {
         player_handle.is_grounded = false;
         player_handle.jump_velocity = None;
         player_handle.air_velocity = Vector::zeros();
+        player_handle.water_current_velocity = Vector::zeros();
         player_handle.ladder_grip = None;
         player_handle.fatal_fall.relocate(position.y);
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
@@ -6614,6 +6661,7 @@ impl PhysicsWorld {
             jump_velocity: None,
             jump_was_pressed: false,
             air_velocity: Vector::zeros(),
+            water_current_velocity: Vector::zeros(),
             self_translation: Vector3::new(0.0, 0.0, 0.0),
             is_climbing: false,
             ladder_grip: None,
@@ -7061,6 +7109,7 @@ impl PhysicsWorld {
                 jump_pressed,
                 push_to_climb: true,
                 medium: PlayerMedium::Air,
+                water_current: vec3(0.0, 0.0, 0.0),
             },
             player_handle,
         )
@@ -7745,32 +7794,36 @@ impl PhysicsWorld {
             PlayerMoveRequest::HandClimb { translation } => Some(vec_to_nvec(translation)),
             PlayerMoveRequest::Walk { .. } => None,
         };
-        let (desired_movement, facing, jump_pressed, push_to_climb, medium) = match request {
-            PlayerMoveRequest::Walk {
-                movement,
-                facing,
-                jump_pressed,
-                push_to_climb,
-                medium,
-            } => (
-                vec_to_nvec(movement),
-                vec_to_nvec(facing),
-                jump_pressed,
-                push_to_climb,
-                medium,
-            ),
-            // A hand climb has no locomotion input at all. Reporting the jump
-            // button as unchanged leaves its edge state exactly where the last
-            // walking frame left it, so a button held across a climb neither
-            // fires nor re-arms.
-            PlayerMoveRequest::HandClimb { .. } => (
-                Vector::zeros(),
-                Vector::zeros(),
-                player_handle.jump_was_pressed,
-                false,
-                PlayerMedium::Air,
-            ),
-        };
+        let (desired_movement, facing, jump_pressed, push_to_climb, medium, water_current) =
+            match request {
+                PlayerMoveRequest::Walk {
+                    movement,
+                    facing,
+                    jump_pressed,
+                    push_to_climb,
+                    medium,
+                    water_current,
+                } => (
+                    vec_to_nvec(movement),
+                    vec_to_nvec(facing),
+                    jump_pressed,
+                    push_to_climb,
+                    medium,
+                    vec_to_nvec(water_current),
+                ),
+                // A hand climb has no locomotion input at all. Reporting the jump
+                // button as unchanged leaves its edge state exactly where the last
+                // walking frame left it, so a button held across a climb neither
+                // fires nor re-arms.
+                PlayerMoveRequest::HandClimb { .. } => (
+                    Vector::zeros(),
+                    Vector::zeros(),
+                    player_handle.jump_was_pressed,
+                    false,
+                    PlayerMedium::Air,
+                    Vector::zeros(),
+                ),
+            };
         // A contact-supported jump keeps its upward impulse while breaking the
         // surface. Returning to buoyancy at the apex prevents an underwater
         // launch from turning into a falling arc through the pool floor.
@@ -7778,6 +7831,16 @@ impl PhysicsWorld {
             && !player_handle
                 .jump_velocity
                 .is_some_and(|velocity| velocity > 0.0);
+        // A rising jump still in the water keeps riding the current.
+        player_handle.water_current_velocity = if medium != PlayerMedium::Air {
+            advance_water_current(
+                player_handle.water_current_velocity,
+                water_current,
+                self.integration_parameters.dt,
+            )
+        } else {
+            Vector::zeros()
+        };
         if hand_climb.is_some() || swimming {
             // Hanging or swimming: the hand or the water owns the body, so any
             // ballistic arc ends here and no gravity pass runs below.
@@ -7999,6 +8062,15 @@ impl PhysicsWorld {
                 })
             })
         };
+        // The current carries the body but does not steer it: ladder grabs,
+        // top-outs and mantles read only the player's own movement. A held
+        // ladder owns the body, like a gripping hand, so it drops the drift.
+        let current_drift = if climb_movement.is_some() {
+            player_handle.water_current_velocity = Vector::zeros();
+            Vector::zeros()
+        } else {
+            player_handle.water_current_velocity * self.integration_parameters.dt
+        };
 
         // How far the moving terrain the player is standing on travelled since
         // the last time we saw them on it. The physics step above has already
@@ -8117,7 +8189,7 @@ impl PhysicsWorld {
                         &queries,
                         character_shape.as_ref(),
                         &character_pos,
-                        climb_walk_input(desired_movement, climb_movement),
+                        climb_walk_input(desired_movement, climb_movement) + current_drift,
                         carry,
                         self.integration_parameters.dt,
                         gravity,
@@ -10987,8 +11059,247 @@ mod tests {
                 jump_pressed: jump,
                 push_to_climb: true,
                 medium: PlayerMedium::Water,
+                water_current: vec3(0.0, 0.0, 0.0),
             },
             player,
+        );
+    }
+
+    fn current_step(
+        world: &mut PhysicsWorld,
+        player: &mut PlayerHandle,
+        flow: Vector3<f32>,
+        movement: Vector3<f32>,
+        medium: PlayerMedium,
+    ) {
+        world.update_player_movement(
+            PlayerMoveRequest::Walk {
+                movement,
+                facing: vec3(0.0, 0.0, 1.0),
+                jump_pressed: false,
+                push_to_climb: false,
+                medium,
+                water_current: flow,
+            },
+            player,
+        );
+    }
+
+    #[test]
+    fn authored_water_current_accelerates_neutral_swimmer_and_allows_cross_current_steering() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 10.0, 0.0), EntityId::from_inner(1201).unwrap());
+        for _ in 0..60 {
+            current_step(
+                &mut world,
+                &mut player,
+                vec3(0.0, -2.8, 10.0),
+                vec3(0.0, 0.0, 0.0),
+                PlayerMedium::Water,
+            );
+        }
+        let drifted = world.get_player_translation(&player);
+        assert!(
+            drifted.z > 5.0 && drifted.y < 9.0,
+            "neutral swimmer should drift down the authored current: {drifted:?}"
+        );
+        for _ in 0..60 {
+            current_step(
+                &mut world,
+                &mut player,
+                vec3(0.0, -2.8, 10.0),
+                vec3(0.05, 0.0, 0.0),
+                PlayerMedium::Water,
+            );
+        }
+        let steered = world.get_player_translation(&player);
+        assert!(
+            steered.x > 1.0 && steered.z > drifted.z + 5.0,
+            "cross-current steering remains effective: {steered:?}"
+        );
+    }
+
+    #[test]
+    fn authored_water_current_stops_at_solid_wall_and_clears_outside_water() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1202).unwrap(),
+            ColliderBuilder::cuboid(10.0, 10.0, 0.5)
+                .translation(vector![0.0, 10.0, 3.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(0.0, 10.0, 0.0), EntityId::from_inner(1203).unwrap());
+        for _ in 0..120 {
+            current_step(
+                &mut world,
+                &mut player,
+                vec3(0.0, 0.0, 10.0),
+                vec3(0.0, 0.0, 0.0),
+                PlayerMedium::Water,
+            );
+        }
+        let stopped = world.get_player_translation(&player);
+        assert!(
+            stopped.z > 1.0 && stopped.z < 2.5,
+            "current must not tunnel through wall: {stopped:?}"
+        );
+        current_step(
+            &mut world,
+            &mut player,
+            vec3(0.0, 0.0, 10.0),
+            vec3(0.0, 0.0, 0.0),
+            PlayerMedium::Air,
+        );
+        assert_eq!(player.water_current_velocity, Vector::zeros());
+        assert!((world.get_player_translation(&player).z - stopped.z).abs() < 0.01);
+    }
+
+    #[test]
+    fn gripping_a_hold_suspends_water_current_and_releases_without_stale_drift() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 10.0, 0.0), EntityId::from_inner(1204).unwrap());
+        for _ in 0..30 {
+            current_step(
+                &mut world,
+                &mut player,
+                vec3(0.0, 0.0, 10.0),
+                vec3(0.0, 0.0, 0.0),
+                PlayerMedium::Water,
+            );
+        }
+        let held = world.get_player_next_translation(&player);
+        for _ in 0..30 {
+            world.update_player_movement(
+                PlayerMoveRequest::HandClimb {
+                    translation: vec3(0.0, 0.0, 0.0),
+                },
+                &mut player,
+            );
+        }
+        assert!((world.get_player_translation(&player) - held).magnitude() < 0.01);
+        assert_eq!(player.water_current_velocity, Vector::zeros());
+        for _ in 0..30 {
+            current_step(
+                &mut world,
+                &mut player,
+                vec3(0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, 0.0),
+                PlayerMedium::Water,
+            );
+        }
+        assert!((world.get_player_translation(&player) - held).magnitude() < 0.01);
+    }
+
+    #[test]
+    fn water_current_uses_original_force_gate_and_stronger_downward_acceleration() {
+        let v = advance_water_current(Vector::zeros(), vector![10.0, -10.0, 0.0], 0.01);
+        assert!((v.x - 0.2).abs() < 1e-6);
+        assert!((v.y + 0.8).abs() < 1e-6);
+        let cap = advance_water_current(Vector::zeros(), vector![10.0, -10.0, 0.0], 2.0);
+        assert_eq!(cap, vector![8.0, -8.0, 0.0]);
+    }
+
+    /// Drift carried into a weak cross current fades like still water rather
+    /// than bleeding off at the weak current's own tiny acceleration.
+    #[test]
+    fn drift_beyond_a_weak_current_fades_toward_it() {
+        let mut v = vector![8.0, 0.0, 0.0];
+        for _ in 0..180 {
+            v = advance_water_current(v, vector![0.1, 0.0, 10.0], 1.0 / 60.0);
+        }
+        assert!(v.x < 0.5, "carried drift should fade within 3 s: {v:?}");
+        assert!(
+            (v.z - 8.0).abs() < 1e-4,
+            "the strong axis still gates: {v:?}"
+        );
+
+        let mut v = vector![-8.0, 0.0, 0.0];
+        for _ in 0..180 {
+            v = advance_water_current(v, vector![0.1, 0.0, 10.0], 1.0 / 60.0);
+        }
+        assert!(v.x > -0.5, "drift against a weak current fades too: {v:?}");
+    }
+
+    /// A current pushing a flat swimmer into a ladder must not climb it: only
+    /// the player's own input grabs a ladder.
+    #[test]
+    fn water_current_does_not_climb_a_ladder_without_input() {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(1206).unwrap(),
+            vec3(-5.0, 4.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.1, 8.0, 0.9),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(-6.0, 2.0, 0.0), EntityId::from_inner(1207).unwrap());
+        let start = world.get_player_translation(&player);
+        for _ in 0..120 {
+            world.update_player_movement(
+                PlayerMoveRequest::Walk {
+                    movement: vec3(0.0, 0.0, 0.0),
+                    facing: vec3(1.0, 0.0, 0.0),
+                    jump_pressed: false,
+                    push_to_climb: true,
+                    medium: PlayerMedium::Water,
+                    water_current: vec3(10.0, 0.0, 0.0),
+                },
+                &mut player,
+            );
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            !player.is_climbing() && (end.y - start.y).abs() < 0.1,
+            "the current alone climbed the ladder: {start:?} -> {end:?}"
+        );
+    }
+
+    #[test]
+    fn current_drift_coasts_into_still_water_and_fades() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 10.0, 0.0), EntityId::from_inner(1205).unwrap());
+        for _ in 0..60 {
+            current_step(
+                &mut world,
+                &mut player,
+                vec3(0.0, 0.0, 10.0),
+                vec3(0.0, 0.0, 0.0),
+                PlayerMedium::Water,
+            );
+        }
+        let entered = world.get_player_translation(&player);
+        current_step(
+            &mut world,
+            &mut player,
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            PlayerMedium::Water,
+        );
+        assert!(
+            world.get_player_translation(&player).z > entered.z + 0.05,
+            "still water must not stop current drift dead"
+        );
+        for _ in 0..600 {
+            current_step(
+                &mut world,
+                &mut player,
+                vec3(0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, 0.0),
+                PlayerMedium::Water,
+            );
+        }
+        assert_eq!(player.water_current_velocity, Vector::zeros());
+        let coasted = world.get_player_translation(&player).z - entered.z;
+        assert!(
+            coasted > 1.0 && coasted < 8.0,
+            "drift fades over a few units: {coasted}"
         );
     }
 
@@ -11032,6 +11343,7 @@ mod tests {
                     jump_pressed: true,
                     push_to_climb: true,
                     medium: PlayerMedium::WaterSurface,
+                    water_current: vec3(0.0, 0.0, 0.0),
                 },
                 &mut player,
             );
@@ -11075,6 +11387,7 @@ mod tests {
             jump_pressed,
             push_to_climb: false,
             medium: PlayerMedium::WaterSurface,
+            water_current: vec3(0.0, 0.0, 0.0),
         };
         world.update_player_movement(request(false), &mut player);
         let start = world.get_player_translation(&player);
@@ -11122,6 +11435,7 @@ mod tests {
                         jump_pressed: frame % 2 == 1,
                         push_to_climb: false,
                         medium,
+                        water_current: vec3(0.0, 0.0, 0.0),
                     },
                     &mut player,
                 );
@@ -11538,6 +11852,7 @@ mod tests {
                     jump_pressed: false,
                     push_to_climb: false,
                     medium,
+                    water_current: vec3(0.0, 0.0, 0.0),
                 },
                 &mut player,
             );
