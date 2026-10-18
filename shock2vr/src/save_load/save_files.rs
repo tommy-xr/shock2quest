@@ -7,7 +7,7 @@
 
 use std::{
     fs,
-    io::{BufReader, Read},
+    io::{self, BufReader, Read},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -41,6 +41,33 @@ pub fn all_saves() -> Vec<SaveFile> {
 /// The most recently written save, or `None` when nothing has been saved yet.
 pub fn latest_save() -> Option<SaveFile> {
     latest_save_in(&save_directory())
+}
+
+/// Moves the `.sav` files older Quest builds kept in the app-private `legacy`
+/// directory into `target`, only while `target` holds none, so newer saves are
+/// never overwritten. The directories sit on different filesystems: each file
+/// is copied under a temporary name, and only after every copy succeeded are
+/// they renamed into place and the originals removed. A failed copy leaves no
+/// `.sav` in `target`, so the next launch retries. Returns the moved files.
+pub fn migrate_legacy_saves(legacy: &Path, target: &Path) -> io::Result<Vec<PathBuf>> {
+    let saves: Vec<PathBuf> = all_saves_in(legacy).into_iter().map(|s| s.path).collect();
+    if saves.is_empty() || !all_saves_in(target).is_empty() {
+        return Ok(Vec::new());
+    }
+    fs::create_dir_all(target)?;
+    let staged = |save: &Path| {
+        target
+            .join(save.file_name().unwrap())
+            .with_extension("migrating")
+    };
+    for save in &saves {
+        fs::copy(save, staged(save))?;
+    }
+    for save in &saves {
+        fs::rename(staged(save), target.join(save.file_name().unwrap()))?;
+        fs::remove_file(save)?;
+    }
+    Ok(saves)
 }
 
 /// [`all_saves`] against an explicit directory (missing directory -> empty).
@@ -153,6 +180,76 @@ mod tests {
             "x".repeat(4096)
         );
         assert_eq!(read_metadata(json.as_bytes()), None);
+    }
+
+    #[test]
+    fn legacy_saves_move_only_into_a_target_without_saves() {
+        let legacy = TempDir::new("save-migrate-legacy");
+        let target = TempDir::new("save-migrate-target");
+        let target_saves = target.path().join("saves");
+        write_save(legacy.path(), "slot01.sav");
+        write_save(legacy.path(), "quicksave.sav");
+        write_save(legacy.path(), "notes.txt");
+
+        let mut moved = migrate_legacy_saves(legacy.path(), &target_saves).unwrap();
+        moved.sort();
+        assert_eq!(
+            moved,
+            [
+                legacy.path().join("quicksave.sav"),
+                legacy.path().join("slot01.sav")
+            ]
+        );
+        let mut names: Vec<_> = fs::read_dir(&target_saves)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["quicksave.sav", "slot01.sav"]);
+        assert!(all_saves_in(legacy.path()).is_empty());
+        assert!(legacy.path().join("notes.txt").exists());
+
+        // A target that already has saves is never touched.
+        write_save(legacy.path(), "slot02.sav");
+        assert!(
+            migrate_legacy_saves(legacy.path(), &target_saves)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(legacy.path().join("slot02.sav").exists());
+        assert!(!target_saves.join("slot02.sav").exists());
+    }
+
+    #[test]
+    fn no_legacy_saves_means_no_migration() {
+        let legacy = TempDir::new("save-migrate-none");
+        let target = TempDir::new("save-migrate-none-target");
+        let missing = legacy.path().join("missing");
+        assert!(
+            migrate_legacy_saves(&missing, target.path())
+                .unwrap()
+                .is_empty()
+        );
+        write_save(legacy.path(), "notes.txt");
+        assert!(
+            migrate_legacy_saves(legacy.path(), target.path())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn interrupted_migration_is_retried() {
+        let legacy = TempDir::new("save-migrate-retry");
+        let target = TempDir::new("save-migrate-retry-target");
+        write_save(legacy.path(), "slot01.sav");
+        // Leftover from a copy that failed part-way: not a save, so retry.
+        write_save(target.path(), "slot01.migrating");
+
+        let moved = migrate_legacy_saves(legacy.path(), target.path()).unwrap();
+        assert_eq!(moved, [legacy.path().join("slot01.sav")]);
+        assert!(target.path().join("slot01.sav").exists());
+        assert!(!target.path().join("slot01.migrating").exists());
     }
 
     #[test]

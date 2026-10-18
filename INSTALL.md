@@ -76,7 +76,8 @@ See the [Quest player guide](https://github.com/tommy-xr/shock2quest/blob/main/d
 
 To update, download the newer APK and run `adb install -r` with its filename.
 If Android reports `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, your installed build
-was signed with a different key. Back up saves before uninstalling it; an
-uninstall removes app-private data. Then install the public release. If Android
+was signed with a different key. Saves in `/sdcard/shock2quest/saves` survive
+uninstalling it; older builds kept saves in app-private data, which an uninstall
+removes. Then install the public release. If Android
 reports `INSTALL_FAILED_VERSION_DOWNGRADE`, a development build may have a higher
 version code; back up before replacing it rather than forcing a downgrade.

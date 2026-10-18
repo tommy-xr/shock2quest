@@ -42,20 +42,6 @@ fn main() {
     // Without a subscriber every engine `render_log!` (shader compile/link
     // failures included) is dropped; stdout reaches logcat as RustStdoutStderr.
     engine::logging::init_logging("SHOCK2_LOG");
-    #[cfg(target_os = "android")]
-    {
-        use std::os::unix::ffi::OsStrExt;
-
-        let files_directory = std::ffi::OsStr::from_bytes(
-            ndk_glue::native_activity().internal_data_path().to_bytes(),
-        );
-        paths::init_android_save_root(std::path::Path::new(files_directory));
-        println!(
-            "SHOCK2QUEST_SAVE_DIRECTORY path={}",
-            shock2vr::save_load::save_directory().display()
-        );
-    }
-
     #[cfg(feature = "linked")]
     let entry = xr::Entry::linked();
     #[cfg(not(feature = "linked"))]
@@ -90,6 +76,32 @@ fn main() {
     if !permission_granted {
         println!("Cannot access storage without permissions");
         return;
+    }
+
+    // Saves live on shared storage so an uninstall keeps them; builds before
+    // that kept them in the app-private files directory, so move those over.
+    #[cfg(target_os = "android")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+
+        let files_directory = std::ffi::OsStr::from_bytes(
+            ndk_glue::native_activity().internal_data_path().to_bytes(),
+        );
+        let legacy = std::path::Path::new(files_directory).join("saves");
+        paths::init_android_save_root();
+        let saves = shock2vr::save_load::save_directory();
+        match shock2vr::save_load::migrate_legacy_saves(&legacy, &saves) {
+            Ok(moved) => {
+                for save in moved {
+                    println!("SHOCK2QUEST_SAVE_MIGRATED from={}", save.display());
+                }
+            }
+            Err(error) => println!(
+                "SHOCK2QUEST_SAVE_MIGRATION_FAILED from={} error={error}",
+                legacy.display()
+            ),
+        }
+        println!("SHOCK2QUEST_SAVE_DIRECTORY path={}", saves.display());
     }
 
     println!(
