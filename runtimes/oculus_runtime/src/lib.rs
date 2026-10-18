@@ -90,20 +90,18 @@ fn main() {
         let legacy = std::path::Path::new(files_directory).join("saves");
         paths::init_android_save_root();
         let saves = shock2vr::save_load::save_directory();
-        match shock2vr::save_load::migrate_legacy_saves(&legacy, &saves) {
-            Ok(moved) => {
-                for (from, to) in moved {
-                    println!(
-                        "SHOCK2QUEST_SAVE_MIGRATED from={} to={}",
-                        from.display(),
-                        to.display()
-                    );
-                }
+        for (from, result) in shock2vr::save_load::migrate_legacy_saves(&legacy, &saves) {
+            match result {
+                Ok(to) => println!(
+                    "SHOCK2QUEST_SAVE_MIGRATED from={} to={}",
+                    from.display(),
+                    to.display()
+                ),
+                Err(error) => println!(
+                    "SHOCK2QUEST_SAVE_MIGRATION_FAILED from={} error={error}",
+                    from.display()
+                ),
             }
-            Err(error) => println!(
-                "SHOCK2QUEST_SAVE_MIGRATION_FAILED from={} error={error}",
-                legacy.display()
-            ),
         }
         println!("SHOCK2QUEST_SAVE_DIRECTORY path={}", saves.display());
     }

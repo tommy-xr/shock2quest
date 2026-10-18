@@ -472,13 +472,15 @@ impl Device {
                     "installed build has {reason}; replacing it needs an uninstall (drop --no-uninstall, or adb uninstall {PACKAGE})"
                 );
                 let dump = self.shell(&format!("dumpsys package {PACKAGE}"))?;
-                if let Some(version) = version_name(&dump)
-                    .filter(|version| APP_PRIVATE_SAVE_VERSIONS.contains(version))
-                {
+                let Some(version) = version_name(&dump) else {
                     bail!(
-                        "installed build {version} has {reason} and keeps its saves in app-private storage, which an uninstall deletes; uninstall it yourself to replace it (adb uninstall {PACKAGE})"
+                        "installed build has {reason}, and its version (so where it keeps saves) could not be read; replace it yourself"
                     );
-                }
+                };
+                ensure!(
+                    !APP_PRIVATE_SAVE_VERSIONS.contains(&version),
+                    "installed build {version} has {reason} and keeps its saves in app-private storage, which an uninstall deletes. To keep them, first install a build with shared-storage saves over it in place (same key, equal or higher version) and launch it once; otherwise uninstall it yourself (adb uninstall {PACKAGE})"
+                );
                 eprintln!(
                     "Replacing the installed build ({reason}): uninstalling it first. Saves and game data under {ROOT} survive."
                 );
@@ -727,6 +729,7 @@ fn version_name(dumpsys: &str) -> Option<&str> {
     dumpsys
         .lines()
         .find_map(|line| line.trim().strip_prefix("versionName="))
+        .filter(|version| !version.is_empty())
 }
 
 /// Why a failed `adb install` can only succeed after an uninstall: a
@@ -920,6 +923,7 @@ mod tests {
         let dump = "Packages:\n  Package [com.tommybuilds.shock2quest] (1a2b):\n    versionCode=16777220 minSdk=26 targetSdk=26\n    versionName=0.0.4\n";
         assert_eq!(version_name(dump), Some("0.0.4"));
         assert_eq!(version_name("Unable to find package"), None);
+        assert_eq!(version_name("    versionName="), None);
     }
     #[test]
     fn only_a_signature_change_or_downgrade_needs_an_uninstall() {

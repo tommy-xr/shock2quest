@@ -59,8 +59,10 @@ signed with another key, or versioned above 0.0.0 (a release, or a build from
 before the version reset), is uninstalled first; `--no-uninstall` refuses
 instead. Saves live under `/sdcard/shock2quest`, so an uninstall keeps them.
 Builds that kept saves in app-private storage (releases v0.0.3/v0.0.4, 0.1.0 dev
-builds) are never uninstalled by the tool: update to a shared-storage release
-in place to move their saves, or uninstall them yourself.
+builds) are never uninstalled by the tool, nor is one whose version cannot be
+read. A later release installed over v0.0.3/v0.0.4 in place moves their saves
+on first launch; 0.1.0 builds have no in-place path, so uninstalling one (by
+hand) deletes its saves.
 
 `assets copy` transfers `sshock2.kpf`, `mods/`, and `cutscenes/` into
 `/sdcard/shock2quest`, merging existing directories. `assets recopy` deletes those

@@ -51,19 +51,10 @@ pub fn latest_save() -> Option<SaveFile> {
 /// taken too it stays where it is. The directories sit on different
 /// filesystems, so each file is copied (flushed, write time kept for the load
 /// order) under a temporary name, renamed into place, then removed from
-/// `legacy`. Returns each `(from, to)` moved.
-pub fn migrate_legacy_saves(legacy: &Path, target: &Path) -> io::Result<Vec<(PathBuf, PathBuf)>> {
-    let mut moved = Vec::new();
-    for save in all_saves_in(legacy) {
-        let Some(to) = [
-            format!("{}.sav", save.name),
-            format!("{}-legacy.sav", save.name),
-        ]
-        .into_iter()
-        .map(|name| target.join(name))
-        .find(|to| !to.exists()) else {
-            continue;
-        };
+/// `legacy`. Returns each attempted save with where it went, or why it stayed;
+/// one failure does not stop the rest.
+pub fn migrate_legacy_saves(legacy: &Path, target: &Path) -> Vec<(PathBuf, io::Result<PathBuf>)> {
+    let migrate = |save: &SaveFile, to: PathBuf| -> io::Result<PathBuf> {
         fs::create_dir_all(target)?;
         let staged = to.with_extension("migrating");
         fs::copy(&save.path, &staged)?;
@@ -73,9 +64,22 @@ pub fn migrate_legacy_saves(legacy: &Path, target: &Path) -> io::Result<Vec<(Pat
         file.sync_all()?;
         fs::rename(&staged, &to)?;
         fs::remove_file(&save.path)?;
-        moved.push((save.path, to));
-    }
-    Ok(moved)
+        Ok(to)
+    };
+    all_saves_in(legacy)
+        .into_iter()
+        .filter_map(|save| {
+            let to = [
+                format!("{}.sav", save.name),
+                format!("{}-legacy.sav", save.name),
+            ]
+            .into_iter()
+            .map(|name| target.join(name))
+            .find(|to| !to.exists())?;
+            let result = migrate(&save, to);
+            Some((save.path, result))
+        })
+        .collect()
 }
 
 /// [`all_saves`] against an explicit directory (missing directory -> empty).
@@ -201,7 +205,10 @@ mod tests {
         fs::create_dir(&target_saves).unwrap();
         fs::write(target_saves.join("slot01.sav"), b"shared").unwrap();
 
-        let mut moved = migrate_legacy_saves(legacy.path(), &target_saves).unwrap();
+        let mut moved: Vec<_> = migrate_legacy_saves(legacy.path(), &target_saves)
+            .into_iter()
+            .map(|(from, to)| (from, to.unwrap()))
+            .collect();
         moved.sort();
         assert_eq!(
             moved,
@@ -228,11 +235,7 @@ mod tests {
         assert!(legacy.path().join("notes.txt").exists());
         assert_eq!(all_saves_in(&target_saves).len(), 3);
         // Nothing left to move on the next launch.
-        assert!(
-            migrate_legacy_saves(legacy.path(), &target_saves)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(migrate_legacy_saves(legacy.path(), &target_saves).is_empty());
     }
 
     #[test]
@@ -242,11 +245,7 @@ mod tests {
         write_save(legacy.path(), "slot01.sav");
         write_save(target.path(), "slot01.sav");
         write_save(target.path(), "slot01-legacy.sav");
-        assert!(
-            migrate_legacy_saves(legacy.path(), target.path())
-                .unwrap()
-                .is_empty()
-        );
+        assert!(migrate_legacy_saves(legacy.path(), target.path()).is_empty());
         assert!(legacy.path().join("slot01.sav").exists());
     }
 
@@ -264,7 +263,7 @@ mod tests {
                 .set_modified(base - Duration::from_secs(age))
                 .unwrap();
         }
-        migrate_legacy_saves(legacy.path(), target.path()).unwrap();
+        migrate_legacy_saves(legacy.path(), target.path());
         let saves = all_saves_in(target.path());
         assert_eq!(saves[0].name, "slot01");
         assert_eq!(saves[0].modified, base);
@@ -272,14 +271,29 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_save_does_not_stop_the_others() {
+        let legacy = TempDir::new("save-migrate-fail");
+        let target = TempDir::new("save-migrate-fail-target");
+        write_save(legacy.path(), "slot01.sav");
+        write_save(legacy.path(), "slot02.sav");
+        // A directory where slot01's staged copy should go makes its copy fail.
+        fs::create_dir(target.path().join("slot01.migrating")).unwrap();
+
+        let mut results = migrate_legacy_saves(legacy.path(), target.path());
+        results.sort_by(|a, b| a.0.cmp(&b.0));
+        assert!(results[0].1.is_err());
+        assert_eq!(
+            results[1].1.as_ref().unwrap(),
+            &target.path().join("slot02.sav")
+        );
+        assert!(legacy.path().join("slot01.sav").exists());
+    }
+
+    #[test]
     fn missing_legacy_directory_moves_nothing() {
         let target = TempDir::new("save-migrate-none-target");
         let missing = target.path().join("missing");
-        assert!(
-            migrate_legacy_saves(&missing, target.path())
-                .unwrap()
-                .is_empty()
-        );
+        assert!(migrate_legacy_saves(&missing, target.path()).is_empty());
     }
 
     #[test]
