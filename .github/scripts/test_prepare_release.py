@@ -62,6 +62,9 @@ class ReleaseVersionTests(unittest.TestCase):
         # Local and CI dev builds keep it; every release must exceed 0.0.0.
         manifest = tomllib.loads((ROOT / "runtimes/oculus_runtime/Cargo.toml").read_text())
         self.assertEqual(manifest["package"]["version"], "0.0.0")
+        lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
+        self.assertEqual([p["version"] for p in lock["package"] if p["name"] == "shock2quest"],
+                         ["0.0.0"])
 
     def test_rejects_invalid_versions_without_touching_files(self):
         with tempfile.TemporaryDirectory() as folder:
