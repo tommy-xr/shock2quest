@@ -18234,6 +18234,9 @@ impl MissionCore {
                     (Some(cue), Some(light)) => Some(cue * light),
                     (cue, light) => cue.or(light),
                 };
+                let full_bright = v_render_type
+                    .get(*entity_id)
+                    .is_ok_and(|render_type| render_type.0 == RenderType::FullBright);
                 let heat = crate::psi_overload_glow::color(
                     v_psi_charge.get(*entity_id).ok(),
                     self.overload_glows.get(entity_id).copied(),
@@ -18248,6 +18251,7 @@ impl MissionCore {
                     if v_double_sided.contains(*entity_id) {
                         xformed_obj.set_backface_culling(None);
                     }
+                    xformed_obj.set_full_bright(full_bright);
                     xformed_obj.set_glow(heat.and_then(|heat| {
                         crate::psi_overload_glow::glow(heat, xformed_obj.material_name.as_deref())
                     }));

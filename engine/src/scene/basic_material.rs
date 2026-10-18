@@ -232,6 +232,8 @@ where
     emissivity: f32,
     /// Per-draw multiplier from `Material::set_emissivity_scale`.
     emissivity_scale: f32,
+    /// Per-draw flag from `Material::set_full_bright`.
+    full_bright: bool,
     /// Per-draw glow from `Material::set_glow`.
     glow: Glow,
     transparency: f32,
@@ -311,10 +313,12 @@ where
             gl::Uniform1i(uniforms.additive_unlit_loc, i32::from(self.additive_unlit));
             gl::Uniform1i(uniforms.unlit_loc, i32::from(self.unlit));
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
-            gl::Uniform1f(
-                uniforms.emissivity_loc,
-                self.emissivity * self.emissivity_scale,
+            let (emission, lit_scale) = super::material::emission_and_lit_scale(
+                self.emissivity,
+                self.emissivity_scale,
+                self.full_bright,
             );
+            gl::Uniform1f(uniforms.emissivity_loc, emission);
             let Glow { color, uv_rect } = self.glow;
             gl::Uniform3f(uniforms.glow_loc, color.x, color.y, color.z);
             gl::Uniform4f(
@@ -324,10 +328,7 @@ where
                 uv_rect.z,
                 uv_rect.w,
             );
-            gl::Uniform1f(
-                uniforms.lit_scale_loc,
-                super::material::lit_scale(self.emissivity, self.emissivity_scale),
-            );
+            gl::Uniform1f(uniforms.lit_scale_loc, lit_scale);
             gl::Uniform1f(
                 uniforms.ambient_intensity_loc,
                 if self.fixed_ambient {
@@ -406,6 +407,10 @@ where
 
     fn set_emissivity_scale(&mut self, scale: f32) {
         self.emissivity_scale = scale;
+    }
+
+    fn set_full_bright(&mut self, full_bright: bool) {
+        self.full_bright = full_bright;
     }
 
     fn set_glow(&mut self, glow: Glow) {
@@ -722,6 +727,7 @@ where
         diffuse_override: None,
         emissivity,
         emissivity_scale: 1.0,
+        full_bright: false,
         glow: Glow::NONE,
         transparency,
         base_transparency: transparency,
@@ -750,6 +756,7 @@ where
         diffuse_override: None,
         emissivity,
         emissivity_scale: 1.0,
+        full_bright: false,
         glow: Glow::NONE,
         transparency,
         base_transparency: transparency,
@@ -774,6 +781,7 @@ where
         diffuse_override: None,
         emissivity: 1.0,
         emissivity_scale: 1.0,
+        full_bright: false,
         glow: Glow::NONE,
         transparency,
         base_transparency: transparency,
@@ -798,6 +806,7 @@ pub fn create_incidence(
         diffuse_override: None,
         emissivity: 0.0,
         emissivity_scale: 1.0,
+        full_bright: false,
         glow: Glow::NONE,
         transparency: 0.0,
         base_transparency: 0.0,

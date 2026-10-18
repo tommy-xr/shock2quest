@@ -85,6 +85,11 @@ pub trait Material: Any {
     /// Materials are shared across entities, so callers reset it afterwards.
     fn set_emissivity_scale(&mut self, _scale: f32) {}
 
+    /// Draw at full texture intensity, ignoring scene lighting, for the next
+    /// draw (Dark's FullBright render type). Shared like the emissivity
+    /// scale, so callers reset it afterwards.
+    fn set_full_bright(&mut self, _full_bright: bool) {}
+
     /// Add a glow over lighting for the next draw (`Glow::NONE` = none).
     /// Shared like the emissivity scale, so callers reset it afterwards.
     fn set_glow(&mut self, _glow: Glow) {}
@@ -119,6 +124,24 @@ pub fn lit_scale(emissivity: f32, emissivity_scale: f32) -> f32 {
     }
 }
 
+/// The (emission, lit scale) a shader takes: full bright shows the texture
+/// as-is, all emission and no light (an authored shine still takes scene
+/// light); otherwise the authored emission under its scale (see `lit_scale`).
+pub fn emission_and_lit_scale(
+    emissivity: f32,
+    emissivity_scale: f32,
+    full_bright: bool,
+) -> (f32, f32) {
+    if full_bright {
+        (1.0, 0.0)
+    } else {
+        (
+            emissivity * emissivity_scale,
+            lit_scale(emissivity, emissivity_scale),
+        )
+    }
+}
+
 /// World-space position of the eye a view matrix looks from.
 pub fn eye_position(view: &Matrix4<f32>) -> cgmath::Vector3<f32> {
     view.invert().unwrap_or_else(Matrix4::identity).w.truncate()
@@ -138,6 +161,19 @@ pub fn normal_matrix(world: &Matrix4<f32>) -> Matrix3<f32> {
 mod tests {
     use super::*;
     use cgmath::{InnerSpace, Vector3};
+
+    /// Full bright shows the texture as-is whatever the authored glow: all
+    /// emission, no scene light. Otherwise the authored terms pass through.
+    #[test]
+    fn full_bright_is_all_emission_and_no_light() {
+        for (emissivity, scale) in [(0.0, 1.0), (0.5, 0.2), (1.0, 1.0)] {
+            assert_eq!(emission_and_lit_scale(emissivity, scale, true), (1.0, 0.0));
+            assert_eq!(
+                emission_and_lit_scale(emissivity, scale, false),
+                (emissivity * scale, lit_scale(emissivity, scale))
+            );
+        }
+    }
 
     /// A 45-degree slope squashed 4x along x: its normal must stay
     /// perpendicular to the squashed surface.

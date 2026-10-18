@@ -373,6 +373,8 @@ pub struct SceneObjectSummary {
     pub material_name: Option<String>,
     /// Authored self-light, before any per-draw power multiplier.
     pub emissivity: f32,
+    /// Drawn unlit at full texture intensity (FullBright render type).
+    pub full_bright: bool,
     pub entity_id: Option<i32>,
     pub name: Option<String>,
     pub model: Option<String>,

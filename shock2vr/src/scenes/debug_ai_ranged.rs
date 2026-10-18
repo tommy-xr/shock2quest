@@ -1,5 +1,5 @@
-//! Ranged AI shooters: a shotgun hybrid, a midwife and a security droid stand
-//! in a row ahead of the player and open fire on sight.
+//! Ranged AI shooters: a shotgun hybrid, a midwife, a security droid and a
+//! slug turret stand in a row ahead of the player and open fire on sight.
 //!
 //! Each fires through the creature launch path (`AIProjectile`), so this is
 //! the controlled place to watch what an AI shot looks like - flash, exhaust,
@@ -19,6 +19,10 @@ use crate::{
 
 /// (template, lane z): OG-Shotgun, Midwife, Security.
 const SHOOTERS: [(i32, f32); 3] = [(-175, -4.0), (-179, 0.0), (-172, 4.0)];
+
+/// Slug Turret, beside the row. Turret models face their -X, so it turns
+/// 180 degrees to face the player; its narrow sight cone must reach them.
+const SLUG_TURRET: (i32, f32) = (-369, 7.0);
 
 /// Distance ahead (along -X, the identity spawn's forward) of the shooters:
 /// outside every one's minimum range, so each fires before closing in.
@@ -70,8 +74,17 @@ pub fn create_debug_ai_ranged_scene(
             CreateEntityOptions::default(),
         );
     }
+    let (template_id, z) = SLUG_TURRET;
+    scene.core_mut().create_entity_with_position(
+        asset_cache,
+        template_id,
+        Point3::new(-SHOOTER_DISTANCE, 1.0, z),
+        Quaternion::from_angle_y(Deg(180.0)),
+        Matrix4::identity(),
+        CreateEntityOptions::default(),
+    );
     println!(
-        "[debug_ai_ranged] A shotgun hybrid, a midwife and a security droid stand \
+        "[debug_ai_ranged] A shotgun hybrid, a midwife, a security droid and a slug turret stand \
          {SHOOTER_DISTANCE} units ahead and fire on sight. Set the `cheat` dev param to survive."
     );
     Box::new(scene)

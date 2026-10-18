@@ -6,8 +6,8 @@ import { GameServer } from "../src/index.js";
 // A creature's shot shows its report at the weapon, not just the bare
 // projectile: the hybrid's flash and smoke, the droid's quieter laser flash
 // and wisp, and the midwife's faint wisp, each with its gunshot.
-// `debug_ai_ranged` stands a shotgun hybrid, a midwife and a security droid
-// ahead of the player. Each case keeps one shooter alive: another's round in
+// `debug_ai_ranged` stands a shotgun hybrid, a midwife, a security droid and a
+// slug turret ahead of the player. Each case keeps one shooter alive: another's round in
 // flight blocks a line of fire, which can hold a shooter's trigger for the
 // whole window.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
@@ -35,7 +35,10 @@ for (const [shooterName, [roundName, gunshot]] of Object.entries(ROUNDS)) {
       const all = (await game.entities.list({ limit: 400 })).entities;
       const shooter = all.find((e) => e.name === shooterName);
       assert.ok(shooter, `debug_ai_ranged should contain ${shooterName}`);
-      for (const other of all.filter((e) => e.name in ROUNDS && e.id !== shooter.id)) {
+      const others = all.filter(
+        (e) => (e.name in ROUNDS || e.name === "Slug Turret") && e.id !== shooter.id,
+      );
+      for (const other of others) {
         await game.entities.sendMessage(other.id, { type: "Damage", amount: 10_000 });
       }
       const rounds = new Set(all.filter((e) => e.name === roundName).map((e) => e.id));
@@ -100,3 +103,40 @@ for (const [shooterName, [roundName, gunshot]] of Object.entries(ROUNDS)) {
     },
   );
 }
+
+// The slug turret's own flash is authored FullBright: drawn unlit at full
+// intensity, not a dull lit ribbon.
+test(
+  "Slug Turret's flash draws full bright",
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ai_ranged" });
+    await game.devParams.set("cheat", 1);
+    await game.step({ frames: 2 });
+    for (const other of (await game.entities.list({ limit: 400 })).entities) {
+      if (other.name in ROUNDS) {
+        await game.entities.sendMessage(other.id, {
+          type: "Damage",
+          amount: 10_000,
+        });
+      }
+    }
+
+    let fullBright: boolean[] | undefined;
+    for (let frame = 0; frame < 600 && fullBright === undefined; frame++) {
+      await game.step({ frames: 1 });
+      const [flash] = (await game.entities.list({ filter: "Slug Flash" }))
+        .entities;
+      if (flash) {
+        const { objects } = await game.scene.objects({ entityId: flash.id });
+        fullBright = objects.map((object) => object.full_bright);
+      }
+    }
+
+    assert.ok(fullBright?.length, "the slug turret must fire its Slug Flash");
+    assert.ok(
+      fullBright.every(Boolean),
+      `Slug Flash must draw full bright (${fullBright})`,
+    );
+  },
+);

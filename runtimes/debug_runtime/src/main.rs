@@ -1314,6 +1314,7 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
             commands::SceneObjectSummary {
                 material_name: obj.material_name.as_deref().map(str::to_owned),
                 emissivity: obj.material.borrow().emissivity(),
+                full_bright: obj.full_bright(),
                 // Match /entities' public IDs: a deferred effect can reuse a
                 // dead flash's slot with nonzero Shipyard generation bits.
                 entity_id: tag.and_then(|t| t.entity_id).map(|id| id as i32),

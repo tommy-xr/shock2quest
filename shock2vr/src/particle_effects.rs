@@ -90,8 +90,6 @@ impl AiMuzzle {
     }
 
     /// The hybrid's shotgun takes the player's gun flash, `Assault Flash`.
-    /// The slug turrets' `Slug Flash` reads as a dull ribbon here: the
-    /// renderer ignores its FullBright render type.
     pub fn authored_flash(self) -> Option<&'static str> {
         matches!(self, Self::Slug).then_some("assault flash")
     }
