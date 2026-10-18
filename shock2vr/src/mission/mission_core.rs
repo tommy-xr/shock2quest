@@ -83,8 +83,8 @@ use crate::{
     game_scene::PlayerSavePoseError,
     gui::GuiManager,
     hud::{
-        BracketStyle, DamageFlash, draw_health_bar, draw_item_name, draw_item_outline,
-        is_hud_selectable,
+        BracketStyle, DamageFlash, bracket_hint, draw_health_bar, draw_item_name,
+        draw_item_outline, is_hud_selectable,
     },
     input_context::{self, InputContext},
     interaction::{FlatInteraction, InteractionContext, PlayerInteraction, VrInteraction},
@@ -3237,9 +3237,11 @@ pub struct MissionCore {
     psi_pull: Option<crate::psi_pull::Flight>,
     free_hand_psi_pull: crate::vr_psi_pull::FreeHandPull,
     psi_pull_aim: Vec<EntityId>,
-    /// Per hand (left, right): the release target that will accept the held
-    /// item. Flat uses the right slot for the use-mode cursor item.
-    tool_ready: [Option<EntityId>; 2],
+    /// Per hand (left, right): the held item and the release target that will
+    /// accept it. Flat uses the right slot for the use-mode cursor item.
+    tool_ready: [Option<(EntityId, EntityId)>; 2],
+    /// The HUD use-slot text under each bracketed object, last frame.
+    bracket_hints: Vec<String>,
     healing_pulses: HashMap<EntityId, f32>,
     /// Seconds since each amp's overload cast, while its red flash lasts.
     overload_glows: HashMap<EntityId, f32>,
@@ -4391,6 +4393,7 @@ impl MissionCore {
             free_hand_psi_pull: Default::default(),
             psi_pull_aim: Vec::new(),
             tool_ready: [None; 2],
+            bracket_hints: Vec::new(),
             healing_pulses: HashMap::new(),
             overload_glows: HashMap::new(),
             gui: GuiManager::new(),
@@ -7198,9 +7201,11 @@ impl MissionCore {
                 .into_iter()
                 .enumerate()
             {
-                if let Some(pulse) =
-                    crate::haptics::tool_ready_pulse(self.tool_ready[i], tool_ready[i])
-                {
+                let target = |ready: Option<(EntityId, EntityId)>| ready.map(|(_, target)| target);
+                if let Some(pulse) = crate::haptics::tool_ready_pulse(
+                    target(self.tool_ready[i]),
+                    target(tool_ready[i]),
+                ) {
                     effects.push(Effect::HandHaptic { hand, pulse });
                 }
             }
@@ -17198,7 +17203,7 @@ impl MissionCore {
         for target in self
             .psi_pull_aim
             .iter()
-            .chain(self.tool_ready.iter().flatten())
+            .chain(self.tool_ready.iter().flatten().map(|(_, target)| target))
         {
             if !highlighted.contains(target) {
                 highlighted.push(*target);
@@ -17221,22 +17226,25 @@ impl MissionCore {
                 options.debug_show_ids,
             ));
         }
+        self.bracket_hints.clear();
         for hit_entity in highlighted {
             // Resolve once so brackets and the health bar frame the same object.
             let Some(bounds) = self.selection_bounds(hit_entity) else {
                 continue;
             };
 
+            let style = BracketStyle::for_entity(hit_entity, &self.tool_ready);
+            let hint = bracket_hint(asset_cache, &self.world, hit_entity, style);
             ret.extend(draw_item_outline(
                 asset_cache,
                 bounds,
-                hit_entity,
-                BracketStyle::for_entity(hit_entity, &self.tool_ready),
-                &self.world,
+                style,
+                hint.as_deref(),
                 view,
                 projection,
                 screen_size,
             ));
+            self.bracket_hints.extend(hint);
 
             ret.extend(draw_health_bar(
                 asset_cache,
@@ -19552,20 +19560,21 @@ impl MissionCore {
 
     /// Per hand: the release target that will accept the held item. Flat's
     /// equivalent is the use-mode cursor item, the one RMB applies.
-    fn tool_ready_targets(&self, presentation: crate::PresentationMode) -> [Option<EntityId>; 2] {
+    fn tool_ready_targets(
+        &self,
+        presentation: crate::PresentationMode,
+    ) -> [Option<(EntityId, EntityId)>; 2] {
         if presentation != crate::PresentationMode::Vr {
             return [
                 None,
                 self.flat_ui
                     .held_entity()
-                    .and_then(|item| self.flat_apply_target(item)),
+                    .and_then(|item| Some((item, self.flat_apply_target(item)?))),
             ];
         }
         self.interaction.release_offers().map(|offer| {
-            offer.and_then(|(item, target)| {
-                self.script_world
-                    .accepts_tool(target, &self.world, item)
-                    .then_some(target)
+            offer.filter(|(item, target)| {
+                self.script_world.accepts_tool(*target, &self.world, *item)
             })
         })
     }
@@ -22265,6 +22274,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 }
             }),
             messages: self.hud_messages(),
+            bracket_hints: self.bracket_hints.clone(),
             banner: self.hud_banner().map(|banner| banner.text),
             security_alarm: {
                 let alarm = crate::security_alarm::status(&self.world);

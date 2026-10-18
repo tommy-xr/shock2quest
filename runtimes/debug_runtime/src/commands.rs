@@ -682,6 +682,8 @@ pub struct UiStateResult {
     pub scanner_pose: Option<shock2vr::game_scene::DebugScannerPose>,
     /// The HUD status-message lines showing right now, oldest first.
     pub messages: Vec<String>,
+    /// The HUD use-slot text under each bracketed object, last frame.
+    pub bracket_hints: Vec<String>,
     /// The centered interstitial banner showing right now, `\n`-separated
     /// lines as authored, or `None` when none is up.
     pub banner: Option<String>,

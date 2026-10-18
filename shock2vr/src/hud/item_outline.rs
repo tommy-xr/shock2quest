@@ -396,6 +396,31 @@ mod tests {
         }
     }
 
+    /// A ready tool's verb replaces the authored hint outright - "Hack", not
+    /// "Hack container" - and an unresolvable verb leaves the hint alone.
+    #[test]
+    fn a_tool_verb_takes_the_hud_use_slot() {
+        let huduse = HashMap::from([("containers".into(), "Search container".into())]);
+        let misc = HashMap::from([("techcursor0".into(), "Hack".into())]);
+        let crate_hint = Some("Containers: \"\"");
+        assert_eq!(
+            hint_text(Some("TechCursor0"), crate_hint, &huduse, &misc).as_deref(),
+            Some("Hack")
+        );
+        assert_eq!(
+            hint_text(Some("TechCursor0"), None, &huduse, &misc).as_deref(),
+            Some("Hack")
+        );
+        assert_eq!(
+            hint_text(None, crate_hint, &huduse, &misc).as_deref(),
+            Some("Search container")
+        );
+        assert_eq!(
+            hint_text(Some("TechCursor9"), crate_hint, &huduse, &misc).as_deref(),
+            Some("Search container")
+        );
+    }
+
     #[test]
     fn rollover_frame_keeps_authored_size_and_recenters_for_wide_screens() {
         use crate::ui::{Rect, UiElement};
@@ -499,12 +524,13 @@ mod tests {
     fn only_a_tool_ready_target_gets_the_accepts_style() {
         let target = EntityId::new_from_index_and_gen(1, 0);
         let other = EntityId::new_from_index_and_gen(2, 0);
+        let item = EntityId::new_from_index_and_gen(3, 0);
         assert_eq!(
-            BracketStyle::for_entity(target, &[None, Some(target)]),
-            BracketStyle::AcceptsHeldItem
+            BracketStyle::for_entity(target, &[None, Some((item, target))]),
+            BracketStyle::AcceptsHeldItem(item)
         );
         assert_eq!(
-            BracketStyle::for_entity(other, &[None, Some(target)]),
+            BracketStyle::for_entity(other, &[None, Some((item, target))]),
             BracketStyle::Selected
         );
         assert_eq!(
@@ -514,7 +540,7 @@ mod tests {
         // Ordinary selection keeps the authored art untouched.
         assert_eq!(BracketStyle::Selected.tint(), vec4(1.0, 1.0, 1.0, 1.0));
         assert_ne!(
-            BracketStyle::AcceptsHeldItem.tint(),
+            BracketStyle::AcceptsHeldItem(item).tint(),
             BracketStyle::Selected.tint()
         );
     }
@@ -941,6 +967,50 @@ fn resolve_hud_use(
         .filter(|text| !text.is_empty())
 }
 
+/// The text in an object's HUD use slot, decided once for flat and VR. While
+/// it will take a held tool, the slot reads retail's tech verb alone ("Hack");
+/// otherwise its authored `P$HUDUse`.
+pub fn bracket_hint(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+    style: BracketStyle,
+) -> Option<String> {
+    let verb = match style {
+        BracketStyle::AcceptsHeldItem(tool) => crate::item_tools::tool_verb_key(world, tool),
+        BracketStyle::Selected => None,
+    };
+    let hud_use = world
+        .borrow::<View<PropHUDUse>>()
+        .ok()
+        .and_then(|hints| hints.get(entity_id).ok().map(|raw| raw.0.clone()));
+    let empty = std::collections::HashMap::new();
+    let mut table = |used: bool, name| {
+        used.then(|| asset_cache.get_opt(&STRINGS_IMPORTER, name))
+            .flatten()
+    };
+    let misc = table(verb.is_some(), "misc.str");
+    let huduse = table(hud_use.is_some(), "huduse.str");
+    hint_text(
+        verb,
+        hud_use.as_deref(),
+        huduse.as_deref().unwrap_or(&empty),
+        misc.as_deref().unwrap_or(&empty),
+    )
+}
+
+/// A resolvable verb key wins over the authored HUDUse hint.
+fn hint_text(
+    verb_key: Option<&str>,
+    hud_use: Option<&str>,
+    huduse: &std::collections::HashMap<String, String>,
+    misc: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    verb_key
+        .and_then(|key| crate::string_table::StringTable::lookup(misc, key).cloned())
+        .or_else(|| resolve_hud_use(hud_use, huduse))
+}
+
 /// Original HUD use slot: left-aligned, four pixels below the selection rect,
 /// moving left only when needed to preserve the ten-pixel right margin.
 fn hud_use_position(extents: Aabb2<f32>, text_width: f32, screen_width: f32) -> Vector2<f32> {
@@ -954,17 +1024,20 @@ fn hud_use_position(extents: Aabb2<f32>, text_width: f32, screen_width: f32) -> 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BracketStyle {
     Selected,
-    /// The held item would be taken by this object if released (or applied) now.
-    AcceptsHeldItem,
+    /// This held item would be taken by the object if released (or applied) now.
+    AcceptsHeldItem(EntityId),
 }
 
 impl BracketStyle {
-    pub fn for_entity(entity_id: EntityId, tool_ready: &[Option<EntityId>]) -> Self {
-        if tool_ready.contains(&Some(entity_id)) {
-            BracketStyle::AcceptsHeldItem
-        } else {
-            BracketStyle::Selected
-        }
+    /// `tool_ready` pairs each ready held item with the target that will take it.
+    pub fn for_entity(entity_id: EntityId, tool_ready: &[Option<(EntityId, EntityId)>]) -> Self {
+        tool_ready
+            .iter()
+            .flatten()
+            .find(|(_, target)| *target == entity_id)
+            .map_or(BracketStyle::Selected, |(item, _)| {
+                BracketStyle::AcceptsHeldItem(*item)
+            })
     }
 
     /// Multiplied into the bracket art. The art has no red channel (retail
@@ -972,7 +1045,7 @@ impl BracketStyle {
     fn tint(self) -> Vector4<f32> {
         match self {
             BracketStyle::Selected => vec4(1.0, 1.0, 1.0, 1.0),
-            BracketStyle::AcceptsHeldItem => vec4(1.0, 0.6, 1.4, 1.0),
+            BracketStyle::AcceptsHeldItem(_) => vec4(1.0, 0.6, 1.4, 1.0),
         }
     }
 }
@@ -980,9 +1053,8 @@ impl BracketStyle {
 pub fn draw_item_outline(
     asset_cache: &mut AssetCache,
     bounds: Aabb3<f32>,
-    entity_id: EntityId,
     style: BracketStyle,
-    world: &World,
+    hint: Option<&str>,
     view: Matrix4<f32>,
     projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
@@ -1020,22 +1092,18 @@ pub fn draw_item_outline(
         bottom_right_brack_obj,
         top_right_brack_obj,
     ];
-    let hints = world.borrow::<View<PropHUDUse>>().unwrap();
-    if let Ok(raw) = hints.get(entity_id) {
-        let strings = asset_cache.get(&STRINGS_IMPORTER, "huduse.str");
-        if let Some(hint) = resolve_hud_use(Some(&raw.0), &strings) {
-            let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
-            let width = engine::measure_text_width(&**font, &hint, LABEL_HEIGHT);
-            let position = hud_use_position(extents, width, screen_size.x);
-            objects.push(SceneObject::screen_space_text(
-                &hint,
-                font,
-                LABEL_HEIGHT,
-                0.5,
-                position.x,
-                position.y,
-            ));
-        }
+    if let Some(hint) = hint {
+        let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
+        let width = engine::measure_text_width(&**font, hint, LABEL_HEIGHT);
+        let position = hud_use_position(extents, width, screen_size.x);
+        objects.push(SceneObject::screen_space_text(
+            hint,
+            font,
+            LABEL_HEIGHT,
+            0.5,
+            position.x,
+            position.y,
+        ));
     }
     objects
 }

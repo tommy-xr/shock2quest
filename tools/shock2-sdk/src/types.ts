@@ -1207,6 +1207,11 @@ export interface UiState {
    */
   messages: string[];
   /**
+   * The HUD use-slot text under each bracketed object on the last rendered
+   * frame - retail's tech verb alone (e.g. "Hack") while a held tool is ready.
+   */
+  bracket_hints: string[];
+  /**
    * The station security alarm - present exactly while one is up, which is
    * when the HUD shows its badge and countdown.
    */
