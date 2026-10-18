@@ -10339,6 +10339,7 @@ impl MissionCore {
         let authored_velocity_frame = additional_options.authored_velocity_frame;
         let transient_fx = additional_options.transient_fx;
         let caller_hosted = rider_depth == 0 && additional_options.attach_to.is_some();
+        let shrink_away_seconds = additional_options.shrink_away_seconds;
         let has_spawn_clearance = additional_options.projectile_launch_origin.is_some();
         let created_entity = {
             entity_creator::create_entity_with_position(
@@ -10369,6 +10370,43 @@ impl MissionCore {
             root_transform,
             authored_velocity_frame,
         );
+
+        // A scale tweq shrinks the stand-in and destroys it on reaching
+        // nothing. Rates are per 100 ms; the largest axis sets the pace.
+        if let Some(seconds) = shrink_away_seconds {
+            self.make_un_physical(info.entity_id);
+            self.script_world.remove_entity(info.entity_id);
+            let size = self
+                .world
+                .borrow::<View<dark::properties::PropScale>>()
+                .ok()
+                .and_then(|scales| scales.get(info.entity_id).ok().map(|s| s.0))
+                .map_or(1.0, |s| s.x.abs().max(s.y.abs()).max(s.z.abs()));
+            let axis = dark::properties::TweqAxisLimits {
+                rate: size * 0.1 / seconds.max(0.01),
+                low: 0.0,
+                high: f32::MAX,
+            };
+            let running = dark::properties::TweqAnimationState::ON
+                | dark::properties::TweqAnimationState::REVERSE;
+            self.world.add_component(
+                info.entity_id,
+                (
+                    RuntimePropDoNotSerialize {},
+                    dark::properties::PropTweqScaleConfig {
+                        animation_config: dark::properties::TweqAnimationConfig::SIM,
+                        halt: dark::properties::TweqHalt::DestroyObject,
+                        multiply: false,
+                        axes: [axis; 3],
+                        primary_axis: 0,
+                    },
+                    dark::properties::PropTweqScaleState {
+                        animation_state: running,
+                        axis_states: [running; 3],
+                    },
+                ),
+            );
+        }
 
         // Spawn clearance may move the projectile before physics is built.
         // Apply that same translation to trails instantiated below.

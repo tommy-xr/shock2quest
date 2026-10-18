@@ -2228,6 +2228,10 @@ pub struct CreateEntityOptions {
     /// impact spangs so they don't accumulate at every bullet hole. Cosmetic
     /// transients are excluded from saves rather than replayed after loading.
     pub transient_fx: bool,
+    /// Create a visual-only stand-in - no physics, scripts or save state -
+    /// that shrinks to nothing over this many seconds and is then destroyed:
+    /// a transmuted item breaking down in the player's hand.
+    pub shrink_away_seconds: Option<f32>,
     /// Draw without backface culling (`RuntimePropDoubleSided`).
     pub double_sided: bool,
     /// Cosmetic material recipe for a ballistic impact host.
@@ -2275,6 +2279,7 @@ impl Default for CreateEntityOptions {
             ecology_type: None,
             attach_to: None,
             transient_fx: false,
+            shrink_away_seconds: None,
             double_sided: false,
             impact_appearance: None,
             projectile_raycast_origin: None,

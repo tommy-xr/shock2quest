@@ -29,6 +29,17 @@ pub fn weapon_in_hand(world: &World, hand: Handedness) -> Option<EntityId> {
     is_weapon(world, held).then_some(held)
 }
 
+/// The VR hand holding `entity`. Flat never holds an item in a world hand, so
+/// this is always `None` there.
+pub fn vr_hand_holding(world: &World, entity: EntityId) -> Option<Handedness> {
+    if !crate::mission::mission_core::presentation_is_vr(world) {
+        return None;
+    }
+    [Handedness::Left, Handedness::Right]
+        .into_iter()
+        .find(|&hand| held_by_hand(world, hand) == Some(entity))
+}
+
 /// Whatever `hand` holds, weapon or not. The one place `PlayerInfo`'s two
 /// slots are read by handedness.
 pub fn held_by_hand(world: &World, hand: Handedness) -> Option<EntityId> {

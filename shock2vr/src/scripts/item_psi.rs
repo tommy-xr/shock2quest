@@ -3,6 +3,8 @@
 //! Scripts name the source and target; the mission resolves the operation against
 //! live state before applying its effects. This prevents two queued gestures from
 //! spending the same points, transmuting a deleted object, or losing a stack update.
+use cgmath::{InnerSpace, Matrix3, Matrix4, Point3, Quaternion, SquareMatrix, vec3};
+use dark::properties::PropTemplateId;
 use dark::properties::{
     PropAlchemy, PropEnergy, PropFabricate, PropFabricateCost, PropGunState, PropStackCount,
     PropStackIncrement,
@@ -11,6 +13,8 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use super::{Effect, script_util};
 use crate::mission::PlayerInfo;
+use crate::mission::entity_creator::CreateEntityOptions;
+use crate::runtime_props::RuntimePropTransform;
 
 pub const ELECTRO_PSI: i32 = -3151;
 pub const FABRICATE: i32 = -3149;
@@ -205,7 +209,8 @@ pub fn resolve(world: &World, request: ItemUse, target: EntityId, roll: i32) -> 
             if amount <= 0 {
                 return message("This item cannot be transmuted.");
             }
-            let consume = if increment == count {
+            let consumed = increment == count;
+            let consume = if consumed {
                 Effect::DestroyEntity { entity_id: target }
             } else {
                 Effect::AdjustStackCount {
@@ -213,11 +218,13 @@ pub fn resolve(world: &World, request: ItemUse, target: EntityId, roll: i32) -> 
                     delta: -increment,
                 }
             };
-            vec![
+            let mut effects = vec![
                 consume,
                 Effect::AwardNanites { amount },
                 message(format!("Transmuted for {amount} nanites.")),
-            ]
+            ];
+            effects.extend(transmute_cue(world, target, consumed));
+            effects
         }
         _ => return Effect::NoEffect,
     };
@@ -229,6 +236,71 @@ pub fn resolve(world: &World, request: ItemUse, target: EntityId, roll: i32) -> 
     );
     result.extend(super::psi_amp_script::amp_cast_flashes(world, request.tool));
     Effect::combine(result)
+}
+
+/// Seconds a wholly transmuted held item takes to shrink away.
+const TRANSMUTE_SHRINK_SECONDS: f32 = 0.4;
+
+/// Alchemy breaking an item in a VR hand down into nanites: a burst of sparks
+/// and a firm pulse in that hand, and when the whole stack goes, a visual
+/// stand-in that shrinks away where it was held. A flat inventory target is
+/// not in the world, so it gets the message alone.
+fn transmute_cue(world: &World, target: EntityId, consumed: bool) -> Vec<Effect> {
+    let Some(hand) = crate::wielded_weapon::vr_hand_holding(world, target) else {
+        return Vec::new();
+    };
+    let Some(transform) = world
+        .borrow::<View<RuntimePropTransform>>()
+        .ok()
+        .and_then(|v| v.get(target).ok().map(|t| t.0))
+    else {
+        return Vec::new();
+    };
+    let position = Point3::from_homogeneous(transform.w);
+    let mut effects = vec![
+        Effect::CreateEntityByTemplateName {
+            source_entity_id: target,
+            template_name: "sparkley sphere".into(),
+            position,
+            orientation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            initial_velocity: vec3(0.0, 0.0, 0.0),
+            options: CreateEntityOptions {
+                transient_fx: true,
+                ..Default::default()
+            },
+        },
+        Effect::HandHaptic {
+            hand,
+            pulse: crate::haptics::TOOL_APPLIED,
+        },
+    ];
+    if let (true, Some(template)) = (consumed, prop!(world, target, PropTemplateId)) {
+        // Match the item as rendered in the hand, which can be scaled and,
+        // in a mirrored hand, reflected (kept as a negative x scale).
+        let (x, y, z) = (
+            transform.x.truncate(),
+            transform.y.truncate(),
+            transform.z.truncate(),
+        );
+        let mut scale = vec3(x.magnitude(), y.magnitude(), z.magnitude());
+        let mut basis = Matrix3::from_cols(x / scale.x, y / scale.y, z / scale.z);
+        if basis.determinant() < 0.0 {
+            basis.x = -basis.x;
+            scale.x = -scale.x;
+        }
+        effects.push(Effect::CreateEntity {
+            template_id: template.template_id,
+            position,
+            orientation: Quaternion::from(basis),
+            root_transform: Matrix4::identity(),
+            options: CreateEntityOptions {
+                scale_override: Some(scale),
+                shrink_away_seconds: Some(TRANSMUTE_SHRINK_SECONDS),
+                ..Default::default()
+            },
+        });
+    }
+    effects
 }
 
 fn fabrication_chance(data: [f32; 4], psi: i32) -> i32 {
@@ -462,6 +534,37 @@ mod tests {
                 .any(|e| matches!(e, Effect::AwardNanites { amount: 3 }))
         );
     }
+    #[test]
+    fn transmuting_a_vr_held_item_bursts_and_shrinks_away_only_when_consumed() {
+        let (mut world, _, target) = fixture(ALCHEMY);
+        world.add_component(
+            target,
+            (
+                RuntimePropTransform(Matrix4::from_translation(vec3(1.0, 2.0, 3.0))),
+                PropTemplateId { template_id: -52 },
+            ),
+        );
+        assert!(transmute_cue(&world, target, true).is_empty(), "flat");
+        world.add_unique(crate::mission::GlobalPresentationMode(
+            crate::PresentationMode::Vr,
+        ));
+        assert!(matches!(
+            transmute_cue(&world, target, true).as_slice(),
+            [
+                Effect::CreateEntityByTemplateName { template_name, position, .. },
+                Effect::HandHaptic { hand: crate::Handedness::Left, .. },
+                Effect::CreateEntity { template_id: -52, options, .. },
+            ] if template_name == "sparkley sphere"
+                && *position == Point3::new(1.0, 2.0, 3.0)
+                && options.shrink_away_seconds == Some(TRANSMUTE_SHRINK_SECONDS)
+        ));
+        assert_eq!(
+            transmute_cue(&world, target, false).len(),
+            2,
+            "a partial stack stays in the hand"
+        );
+    }
+
     #[test]
     fn ineligible_empty_unowned_and_self_targets_never_spend() {
         for power in [ELECTRO_PSI, FABRICATE, ALCHEMY] {
