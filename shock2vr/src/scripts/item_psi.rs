@@ -4,7 +4,7 @@
 //! live state before applying its effects. This prevents two queued gestures from
 //! spending the same points, transmuting a deleted object, or losing a stack update.
 use cgmath::{InnerSpace, Matrix3, Matrix4, Point3, Quaternion, SquareMatrix, vec3};
-use dark::properties::PropTemplateId;
+use dark::properties::PropModelName;
 use dark::properties::{
     PropAlchemy, PropEnergy, PropFabricate, PropFabricateCost, PropGunState, PropStackCount,
     PropStackIncrement,
@@ -274,7 +274,12 @@ fn transmute_cue(world: &World, target: EntityId, consumed: bool) -> Vec<Effect>
             pulse: crate::haptics::TOOL_APPLIED,
         },
     ];
-    if let (true, Some(template)) = (consumed, prop!(world, target, PropTemplateId)) {
+    // The class template, not a mission-local object id that may name some
+    // other object after a level change; the model as rendered in the hand.
+    if let (true, Some(template_id)) = (
+        consumed,
+        script_util::entity_class_template_id(world, target),
+    ) {
         // Match the item as rendered in the hand, which can be scaled and,
         // in a mirrored hand, reflected (kept as a negative x scale).
         let (x, y, z) = (
@@ -289,11 +294,12 @@ fn transmute_cue(world: &World, target: EntityId, consumed: bool) -> Vec<Effect>
             scale.x = -scale.x;
         }
         effects.push(Effect::CreateEntity {
-            template_id: template.template_id,
+            template_id,
             position,
             orientation: Quaternion::from(basis),
             root_transform: Matrix4::identity(),
             options: CreateEntityOptions {
+                model_override: prop!(world, target, PropModelName).map(|m| m.0),
                 scale_override: Some(scale),
                 shrink_away_seconds: Some(TRANSMUTE_SHRINK_SECONDS),
                 ..Default::default()
@@ -541,7 +547,11 @@ mod tests {
             target,
             (
                 RuntimePropTransform(Matrix4::from_translation(vec3(1.0, 2.0, 3.0))),
-                PropTemplateId { template_id: -52 },
+                // A mission-placed item: its object id is local to that
+                // mission; the stand-in must come from its class.
+                PropTemplateId { template_id: 506 },
+                crate::runtime_props::RuntimePropCanonicalTemplateId(-52),
+                PropModelName("medpatch_h".into()),
             ),
         );
         assert!(transmute_cue(&world, target, true).is_empty(), "flat");
@@ -557,6 +567,7 @@ mod tests {
             ] if template_name == "sparkley sphere"
                 && *position == Point3::new(1.0, 2.0, 3.0)
                 && options.shrink_away_seconds == Some(TRANSMUTE_SHRINK_SECONDS)
+                && options.model_override.as_deref() == Some("medpatch_h")
         ));
         assert_eq!(
             transmute_cue(&world, target, false).len(),

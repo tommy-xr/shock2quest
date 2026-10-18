@@ -10372,32 +10372,31 @@ impl MissionCore {
         );
 
         // A scale tweq shrinks the stand-in and destroys it on reaching
-        // nothing. Rates are per 100 ms; the largest axis sets the pace.
+        // nothing. Rates are per 100 ms, one per axis so all reach zero
+        // together; tweq axes are in Dark order, runtime (|x|, z, y).
         if let Some(seconds) = shrink_away_seconds {
-            self.make_un_physical(info.entity_id);
-            self.script_world.remove_entity(info.entity_id);
-            let size = self
+            self.make_visual_only(info.entity_id);
+            let scale = self
                 .world
                 .borrow::<View<dark::properties::PropScale>>()
                 .ok()
                 .and_then(|scales| scales.get(info.entity_id).ok().map(|s| s.0))
-                .map_or(1.0, |s| s.x.abs().max(s.y.abs()).max(s.z.abs()));
-            let axis = dark::properties::TweqAxisLimits {
-                rate: size * 0.1 / seconds.max(0.01),
+                .unwrap_or(vec3(1.0, 1.0, 1.0));
+            let axes = [scale.x, scale.z, scale.y].map(|size| dark::properties::TweqAxisLimits {
+                rate: size.abs() * 0.1 / seconds,
                 low: 0.0,
                 high: f32::MAX,
-            };
+            });
             let running = dark::properties::TweqAnimationState::ON
                 | dark::properties::TweqAnimationState::REVERSE;
             self.world.add_component(
                 info.entity_id,
                 (
-                    RuntimePropDoNotSerialize {},
                     dark::properties::PropTweqScaleConfig {
                         animation_config: dark::properties::TweqAnimationConfig::SIM,
                         halt: dark::properties::TweqHalt::DestroyObject,
                         multiply: false,
-                        axes: [axis; 3],
+                        axes,
                         primary_axis: 0,
                     },
                     dark::properties::PropTweqScaleState {
@@ -10406,6 +10405,8 @@ impl MissionCore {
                     },
                 ),
             );
+            // A stand-in brings no particle riders of its own.
+            return info;
         }
 
         // Spawn clearance may move the projectile before physics is built.
@@ -10581,14 +10582,19 @@ impl MissionCore {
             // must not fly off / collide / slay as a second live projectile),
             // and keep them out of saves (they are recreated with their host
             // and would otherwise load back orphaned, since attachments are
-            // runtime-only).
-            self.make_un_physical(rider.entity_id);
-            // ...and any gameplay scripts (a projectile-archetype rider must
-            // not raycast/damage as a live projectile).
-            self.script_world.remove_entity(rider.entity_id);
-            self.world
-                .add_component(rider.entity_id, RuntimePropDoNotSerialize {});
+            // runtime-only). Its gameplay scripts go too: a projectile-
+            // archetype rider must not raycast/damage as a live projectile.
+            self.make_visual_only(rider.entity_id);
         }
+    }
+
+    /// Strip an entity to its visuals: no physics body, no scripts, and no
+    /// save state.
+    fn make_visual_only(&mut self, entity_id: EntityId) {
+        self.make_un_physical(entity_id);
+        self.script_world.remove_entity(entity_id);
+        self.world
+            .add_component(entity_id, RuntimePropDoNotSerialize {});
     }
 
     /// Bound overlapping wisps per gun and across the mission.
