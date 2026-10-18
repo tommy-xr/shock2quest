@@ -61,19 +61,21 @@ for (const vr of [false, true]) {
     assert.equal(await state(), "Hacked");
     await click(game, await button("gamepig-back"));
     assert.ok(!(await elements()).some(e => e.label === "hack-gamepig"), "a hacked device cannot charge again");
-    for (const label of ["game-2", "game-3", "game-5", "game-8", "game-10"]) await button(label);
-    assert.ok((await elements()).some(e => /overworld/i.test(e.text ?? "")), "unimplemented titles are also unlocked");
+    // HackSuccess ORs the GamePig's own P$MiniGames (0x1398) into the player's.
+    assert.deepEqual((await elements()).filter(e => e.label?.startsWith("game-")).map(e => e.label),
+      ["game-3", "game-4", "game-7", "game-8", "game-9", "game-12"],
+      "hacking adds the GamePig's authored games, not cartridge-only titles");
 
     const name = `gamepig_hack_${vr}_${Date.now()}`;
     try {
       const bits = () => JSON.parse(readFileSync(savedGamePath(name), "utf8")).global_data.quest_info.mini_games;
       await game.save(name);
-      assert.equal(bits(), 0x1ffc, "all eleven actual games are installed without the empty Slots entry");
+      assert.equal(bits(), 0x1398, "exactly the GamePig's authored games (Swinekeeper is one of them)");
       const balance = await carriedNaniteTotal(game);
       await game.load(name);
       await game.step({ frames: 2 });
       await game.save(name);
-      assert.equal(bits(), 0x1ffc);
+      assert.equal(bits(), 0x1398);
       assert.equal(await carriedNaniteTotal(game), balance);
       const [restored] = await game.entities.byTemplate(-3864);
       assert.ok(restored);

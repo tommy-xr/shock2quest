@@ -1,6 +1,6 @@
 use cgmath::vec2;
-use dark::properties::ObjectState;
-use shipyard::{EntityId, World};
+use dark::properties::{ObjectState, PropMiniGames};
+use shipyard::{EntityId, Get, View, World};
 
 use super::{GamePigGuiMsg, PanelText};
 use crate::{
@@ -12,9 +12,6 @@ use crate::{
     ui::{Rect, canvas_viewport::CanvasViewport},
 };
 
-// Index and the unused Slots entry are not games.
-pub(crate) const ALL_GAMES: u32 = 0x1ffc;
-
 pub(crate) fn can_hack(world: &World, entity: EntityId) -> bool {
     !matches!(
         keypad::object_state(world, entity),
@@ -22,13 +19,20 @@ pub(crate) fn can_hack(world: &World, entity: EntityId) -> bool {
     ) && keypad::hack_diff(world, entity).is_some()
 }
 
-pub(crate) fn success(entity: EntityId, _world: &World) -> Effect {
+/// The retail `MiniGameBoy` HackSuccess ORs the device's own `P$MiniGames`
+/// into the player's: the Gameboy's authored games, not cartridge-only titles.
+pub(crate) fn success(entity: EntityId, world: &World) -> Effect {
+    let games = world
+        .borrow::<View<PropMiniGames>>()
+        .ok()
+        .and_then(|view| view.get(entity).ok().map(|prop| prop.0))
+        .unwrap_or(0);
     Effect::combine(vec![
         Effect::SetObjectState {
             entity_id: entity,
             state: ObjectState::Hacked,
         },
-        Effect::UnlockMiniGames { games: ALL_GAMES },
+        Effect::UnlockMiniGames { games },
     ])
 }
 
@@ -137,6 +141,10 @@ mod tests {
     };
     use dark::properties::{PropHackDiff, PropObjState, PropScripts};
 
+    /// Gameboy (-3864)'s authored `P$MiniGames`: Swinekeeper, OverWorld,
+    /// Hogger, TicTacToe, Swine Hunter and Golf.
+    const GAMEBOY_GAMES: u32 = 0x1398;
+
     fn fixture(nanites: i32) -> (World, EntityId) {
         let mut world = World::new();
         let entity = world.add_entity((
@@ -149,6 +157,7 @@ mod tests {
                 scripts: vec!["MiniGameBoy".into()],
                 inherits: false,
             },
+            PropMiniGames(GAMEBOY_GAMES),
         ));
         let mut quest = QuestInfo::new();
         quest.player_stats_mut().nanites = nanites;
@@ -204,9 +213,12 @@ mod tests {
                 let effects = Effect::flatten(vec![effect]);
                 let won = state.hack.as_ref().unwrap().phase == HackPhase::Won;
                 assert_eq!(
-                    effects
-                        .iter()
-                        .any(|e| matches!(e, Effect::UnlockMiniGames { games: ALL_GAMES })),
+                    effects.iter().any(|e| matches!(
+                        e,
+                        Effect::UnlockMiniGames {
+                            games: GAMEBOY_GAMES
+                        }
+                    )),
                     won
                 );
                 if won {
@@ -328,9 +340,13 @@ mod tests {
         assert!(
             Effect::flatten(vec![(outcomes.success)(entity, &world)])
                 .iter()
-                .any(|e| matches!(e, Effect::UnlockMiniGames { games: ALL_GAMES }))
+                .any(|e| matches!(
+                    e,
+                    Effect::UnlockMiniGames {
+                        games: GAMEBOY_GAMES
+                    }
+                ))
         );
-        assert_eq!(ALL_GAMES.count_ones(), 11);
         for state in [
             ObjectState::Hacked,
             ObjectState::Broken,
