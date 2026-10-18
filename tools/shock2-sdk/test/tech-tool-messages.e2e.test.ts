@@ -9,13 +9,17 @@ import { add, aimVrHandAt, scale, sub } from "./helpers/vr-hand.js";
 
 // Retail tech-cursor feedback (MISC.STR) for a held tool, identical in flat
 // and VR: the bracket slot reads the verb ("Hack") while the target will take
-// the tool, and the use announces "Device hacked!".
+// the tool, the use announces "Device hacked!", and offering a pick to the
+// crate it already opened announces that it is already hacked.
 const enabled = process.env.SHOCK2_E2E === "1";
 
 const ICE_PICK = -73;
 const SECURITY_CRATE = 325; // hydro1, still hackable
 const HACK = "Hack";
 const HACKED = "Device hacked!";
+// MISC.STR FreeHackHacked; the 25AE stack's SCP layer rewords retail's
+// "Device cannot be further hacked.".
+const ALREADY_HACKED = /^Device (cannot be further|already) hacked\.$/;
 
 async function nearCrate(game: GameServer) {
   await game.step({ frames: 5 });
@@ -60,6 +64,17 @@ test("flat: verb under the brackets, then the authored hack lines", { skip: !ena
   ui = await game.ui.state();
   assert.ok(ui.messages.includes(HACKED), `messages: ${JSON.stringify(ui.messages)}`);
   assert.ok(!ui.bracket_hints.includes(HACK), "nothing is ready once the pick is spent");
+
+  // A second pick: the open crate refuses it, and says why.
+  await game.player.spawnItem(ICE_PICK);
+  await game.step({ frames: 3 });
+  await clickUiElement(game, stripItem(await game.ui.state(), "ICE Pick"));
+  await game.step({ frames: 2 });
+  assert.ok(!(await game.ui.state()).bracket_hints.includes(HACK));
+  await secondaryClickBareView(game);
+  ui = await game.ui.state();
+  assert.ok(ui.messages.some((m) => ALREADY_HACKED.test(m)), `messages: ${JSON.stringify(ui.messages)}`);
+  assert.ok(ui.cursor, "the refused pick stays on the cursor");
 });
 
 test("VR: verb under the brackets, then the authored hack lines", { skip: !enabled, timeout: 600_000 }, async () => {
@@ -91,4 +106,18 @@ test("VR: verb under the brackets, then the authored hack lines", { skip: !enabl
   await release();
   let ui = await game.ui.state();
   assert.ok(ui.messages.includes(HACKED), `messages: ${JSON.stringify(ui.messages)}`);
+
+  // Let the success line expire so the refusal is unambiguous.
+  await game.step({ duration: "6s" });
+  const second = await holdPick();
+  await aimVrHandAt(game, cratePos, 0.45, 1);
+  assert.ok(!(await game.ui.state()).bracket_hints.includes(HACK), "an open crate is not ready");
+  await release();
+  ui = await game.ui.state();
+  assert.ok(ui.messages.some((m) => ALREADY_HACKED.test(m)), `messages: ${JSON.stringify(ui.messages)}`);
+  assert.ok(!ui.messages.includes(HACKED));
+  assert.ok(
+    (await game.physics.bodies({ entityId: second })).bodies.length > 0,
+    "the refused pick drops into the world instead of into the crate",
+  );
 });

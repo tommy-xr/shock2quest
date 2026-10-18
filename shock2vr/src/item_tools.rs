@@ -31,6 +31,15 @@ pub fn tool_verb_key(world: &World, tool: EntityId) -> Option<&'static str> {
     .map(|(_, key)| key)
 }
 
+/// MISC.STR key of the line for `target` refusing an offered `tool`, where the
+/// port can tell why. Ordinary items are refused silently.
+pub fn tool_refusal_key(world: &World, tool: EntityId, target: EntityId) -> Option<&'static str> {
+    use crate::scripts::gui::hackable_crate::{free_hack_refusal_key, is_free_hack_tool};
+    is_free_hack_tool(world, tool)
+        .then(|| free_hack_refusal_key(world, target))
+        .flatten()
+}
+
 /// A MISC.STR line, if the table carries it.
 pub fn misc_text(world: &World, key: &str) -> Option<String> {
     world

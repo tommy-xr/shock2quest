@@ -7651,8 +7651,10 @@ impl MissionCore {
                 _ => {}
             }
         }
-        // Releases offered to a target that accepts them; confirmed below once
-        // a script consumes the item.
+        // Releases offered to a target: an accepted item is confirmed below
+        // once a script consumes it. A release is also a plain drop, so a
+        // refusal is explained only on a hackable target no script took the
+        // item from (a container deposit says nothing).
         let tool_offers: Vec<_> = interaction_msgs
             .iter()
             .filter_map(|effect| match effect {
@@ -7664,9 +7666,12 @@ impl MissionCore {
                         },
                 } => {
                     let slot = held.iter().position(|held| *held == Some(*entity))?;
-                    self.script_world
-                        .accepts_tool(*to, &self.world, *entity)
-                        .then_some((*entity, slot))
+                    if self.script_world.accepts_tool(*to, &self.world, *entity) {
+                        return Some((*entity, slot, None));
+                    }
+                    crate::scripts::gui::hack_diff(&self.world, *to)?;
+                    let refusal = self.tool_refusal(*entity, *to)?;
+                    Some((*entity, slot, Some(refusal)))
                 }
                 _ => None,
             })
@@ -8054,12 +8059,14 @@ impl MissionCore {
             scope: "game", level: DEBUG, "script_world.update",
             self.script_world.update(&self.world, &self.physics, time)
         );
-        for (item, slot) in tool_offers {
-            if destroys(&script_effects, item) {
-                effects.push(Effect::HandHaptic {
+        for (item, slot, refusal) in tool_offers {
+            match refusal {
+                None if destroys(&script_effects, item) => effects.push(Effect::HandHaptic {
                     hand: [crate::Handedness::Left, crate::Handedness::Right][slot],
                     pulse: crate::haptics::TOOL_APPLIED,
-                });
+                }),
+                Some(refusal) if !takes(&script_effects, item) => effects.push(refusal),
+                _ => {}
             }
         }
         effects.append(&mut script_effects);
@@ -10040,7 +10047,12 @@ impl MissionCore {
             // RMB never deposits into a container or drops an ignored item.
             FlatUiDragAction::Apply(entity_id) => {
                 let Some(target) = self.flat_apply_target(entity_id) else {
-                    return Vec::new();
+                    return self
+                        .interaction
+                        .frob_target()
+                        .and_then(|target| self.tool_refusal(entity_id, target))
+                        .into_iter()
+                        .collect();
                 };
                 vec![Effect::Send {
                     msg: Message {
@@ -19579,6 +19591,14 @@ impl MissionCore {
         })
     }
 
+    /// Retail's line for `target` refusing an offered tech tool (MISC.STR
+    /// `FreeHackCant`...); `None` for ordinary items.
+    fn tool_refusal(&self, item: EntityId, target: EntityId) -> Option<Effect> {
+        let key = crate::item_tools::tool_refusal_key(&self.world, item, target)?;
+        let text = crate::item_tools::misc_text(&self.world, key)?;
+        Some(Effect::ShowMessage { text })
+    }
+
     /// Flat RMB's target for a cursor item: the bounded frob target, only if
     /// it explicitly accepts the item.
     fn flat_apply_target(&self, item: EntityId) -> Option<EntityId> {
@@ -20566,10 +20586,26 @@ pub fn held_item_collision_group(world: &World, entity_id: EntityId) -> Option<C
 
 /// Whether `effects` (nested ones included) destroy `entity`.
 fn destroys(effects: &[Effect], entity: EntityId) -> bool {
+    any_effect(
+        effects,
+        &|effect| matches!(effect, Effect::DestroyEntity { entity_id } if *entity_id == entity),
+    )
+}
+
+/// Whether `effects` destroy `entity` or deposit it into a container.
+fn takes(effects: &[Effect], entity: EntityId) -> bool {
+    any_effect(effects, &|effect| {
+        matches!(effect,
+            Effect::DestroyEntity { entity_id }
+            | Effect::DropEntityInfo { dropped_entity_id: entity_id, .. }
+                if *entity_id == entity)
+    })
+}
+
+fn any_effect(effects: &[Effect], matches: &impl Fn(&Effect) -> bool) -> bool {
     effects.iter().any(|effect| match effect {
-        Effect::DestroyEntity { entity_id } => *entity_id == entity,
-        Effect::Multiple(inner) | Effect::Combined { effects: inner } => destroys(inner, entity),
-        _ => false,
+        Effect::Multiple(inner) | Effect::Combined { effects: inner } => any_effect(inner, matches),
+        effect => matches(effect),
     })
 }
 
