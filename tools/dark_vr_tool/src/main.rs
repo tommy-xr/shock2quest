@@ -18,8 +18,8 @@ mod quest_config;
 const ROOT: &str = "/sdcard/shock2quest";
 const PACKAGE: &str = "com.tommybuilds.shock2quest";
 /// Builds that kept saves in app-private storage, which an uninstall deletes:
-/// releases v0.0.3 and v0.0.4, and dev builds before the 0.0.0 version reset.
-const APP_PRIVATE_SAVE_VERSIONS: [&str; 3] = ["0.0.3", "0.0.4", "0.1.0"];
+/// releases v0.0.3 to v0.0.5, and dev builds before the 0.0.0 version reset.
+const APP_PRIVATE_SAVE_VERSIONS: [&str; 4] = ["0.0.3", "0.0.4", "0.0.5", "0.1.0"];
 const DEBUG_PORT: &str = "/sdcard/shock2quest/debug-port.txt";
 const RECORDINGS: &str = "/sdcard/shock2quest/recordings";
 
@@ -78,6 +78,18 @@ enum Action {
         mission: Option<String>,
         /// Fail instead of uninstalling an install that cannot be replaced in
         /// place (another key, or a release or older build versioned above it)
+        #[arg(long)]
+        no_uninstall: bool,
+    },
+    /// Install and launch a GitHub release's APK, e.g. 0.0.4 (needs gh)
+    Release {
+        /// e.g. 0.0.4 or v0.0.4
+        version: String,
+        /// Also set the startup mission, as `mission set` does
+        #[arg(long)]
+        mission: Option<String>,
+        /// Fail instead of uninstalling an install that cannot be replaced in
+        /// place (another key, or a higher version)
         #[arg(long)]
         no_uninstall: bool,
     },
@@ -178,6 +190,14 @@ fn main() -> Result<()> {
             }
             Some(fetch_pr_apk(*number)?)
         }
+        Action::Release {
+            version, mission, ..
+        } => {
+            if let Some(mission) = mission {
+                validate_setting(mission, true)?;
+            }
+            Some(fetch_release_apk(version)?)
+        }
         _ => None,
     };
     if let Some(path) = &apk {
@@ -213,6 +233,11 @@ fn main() -> Result<()> {
         }
         Action::DebugPort { action } => device.setting(DEBUG_PORT, action, false)?,
         Action::Pr {
+            mission,
+            no_uninstall,
+            ..
+        }
+        | Action::Release {
             mission,
             no_uninstall,
             ..
@@ -472,7 +497,7 @@ impl Device {
                 };
                 ensure!(
                     uninstall,
-                    "installed build has {reason}; replacing it needs an uninstall (drop --no-uninstall, or adb uninstall {PACKAGE})"
+                    "installed build has {reason}; replacing it needs an uninstall (drop --no-uninstall, or cargo dvr uninstall)"
                 );
                 let dump = self.shell(&format!("dumpsys package {PACKAGE}"))?;
                 let Some(version) = version_name(&dump) else {
@@ -482,7 +507,7 @@ impl Device {
                 };
                 ensure!(
                     !APP_PRIVATE_SAVE_VERSIONS.contains(&version),
-                    "installed build {version} has {reason} and keeps its saves in app-private storage, which an uninstall deletes. To keep them, first install a build with shared-storage saves over it in place (same key, equal or higher version) and launch it once; otherwise uninstall it yourself (adb uninstall {PACKAGE})"
+                    "installed build {version} has {reason} and keeps its saves in app-private storage, which an uninstall deletes. To keep them, first install a build with shared-storage saves over it in place (same key, equal or higher version) and launch it once; otherwise uninstall it yourself (cargo dvr uninstall)"
                 );
                 eprintln!(
                     "Replacing the installed build ({reason}): uninstalling it first. Saves and game data under {ROOT} survive."
@@ -780,41 +805,95 @@ fn fetch_pr_apk(number: u32) -> Result<PathBuf> {
         "unexpected head SHA {sha:?}"
     );
     println!("PR #{number} {branch} @ {sha}");
-    let cache = std::env::temp_dir().join("shock2quest-pr-apk").join(sha);
-    let apk = cache.join("shock2quest.apk");
     // One commit is one build, so a cached APK cannot be stale.
+    cached_apk(&format!("shock2quest-pr-apk/{sha}"), |staging| {
+        let runs = parse_runs(&gh(&[
+            "run",
+            "list",
+            "--workflow",
+            "build-android.yml",
+            "--commit",
+            sha,
+            "--json",
+            "databaseId,status,conclusion,url",
+        ])?)?;
+        let run = select_build_run(&runs, sha, branch)?;
+        gh(&[
+            "run",
+            "download",
+            &run.id.to_string(),
+            "-n",
+            &apk_artifact_name(sha),
+            "-D",
+            &staging.to_string_lossy(),
+        ])
+        .with_context(|| {
+            format!(
+                "could not download the APK from {} (missing if built before CI uploaded one, or older than 30 days)",
+                run.url
+            )
+        })?;
+        Ok(())
+    })
+}
+
+/// `0.0.4` or `v0.0.4` -> the release tag `v0.0.4`.
+fn release_tag(version: &str) -> Result<String> {
+    let number = version.strip_prefix('v').unwrap_or(version);
+    ensure!(
+        number.split('.').count() == 3
+            && number
+                .split('.')
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())),
+        "expected a release version like 0.0.4, got {version:?}"
+    );
+    Ok(format!("v{number}"))
+}
+
+/// Downloads release `version`'s APK into a per-tag temp cache.
+fn fetch_release_apk(version: &str) -> Result<PathBuf> {
+    let tag = release_tag(version)?;
+    println!("Release {tag}");
+    // release.yml never replaces a published release's assets, so a cached APK
+    // cannot be stale.
+    cached_apk(&format!("shock2quest-release-apk/{tag}"), |staging| {
+        // v0.0.1 names its APK shock2quest-0.0.1.apk; later releases shock2quest.apk.
+        gh(&[
+            "release",
+            "download",
+            &tag,
+            "-p",
+            "*.apk",
+            "-D",
+            &staging.to_string_lossy(),
+        ])
+        .with_context(|| format!("could not download release {tag}'s APK (gh release list)"))?;
+        let apks: Vec<_> = std::fs::read_dir(staging)?
+            .map(|entry| entry.map(|e| e.path()))
+            .collect::<io::Result<_>>()?;
+        let [apk] = apks.as_slice() else {
+            bail!("release {tag} has {} APKs, expected one", apks.len())
+        };
+        std::fs::rename(apk, staging.join("shock2quest.apk"))?;
+        Ok(())
+    })
+}
+
+/// `<temp>/<key>/shock2quest.apk`, filled by `download` on a miss. `download`
+/// writes into a per-process staging directory, so an interrupted or
+/// concurrent download is never reused.
+fn cached_apk(key: &str, download: impl FnOnce(&Path) -> Result<()>) -> Result<PathBuf> {
+    let cache = std::env::temp_dir().join(key);
+    let apk = cache.join("shock2quest.apk");
     if apk.is_file() {
         return Ok(apk);
     }
-    let runs = parse_runs(&gh(&[
-        "run",
-        "list",
-        "--workflow",
-        "build-android.yml",
-        "--commit",
-        sha,
-        "--json",
-        "databaseId,status,conclusion,url",
-    ])?)?;
-    let run = select_build_run(&runs, sha, branch)?;
-    // Stage per process so an interrupted or concurrent download is never reused.
-    let staging = cache.with_extension(format!("partial-{}", std::process::id()));
+    // Not with_extension: release tags contain dots (v0.0.4).
+    let staging = std::env::temp_dir().join(format!("{key}.partial-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
-    let downloaded = gh(&[
-        "run",
-        "download",
-        &run.id.to_string(),
-        "-n",
-        &apk_artifact_name(sha),
-        "-D",
-        &staging.to_string_lossy(),
-    ]);
-    if let Err(error) = downloaded {
+    if let Err(error) = download(&staging) {
         let _ = std::fs::remove_dir_all(&staging);
-        bail!(
-            "could not download the APK from {} (missing if built before CI uploaded one, or older than 30 days): {error}",
-            run.url
-        );
+        return Err(error);
     }
     // A concurrent run may have published first; keep its copy.
     if std::fs::rename(&staging, &cache).is_err() {
@@ -930,6 +1009,14 @@ mod tests {
             error(&[run(4, "completed", "failure")])
                 .contains("failure: https://example.test/runs/4")
         );
+    }
+    #[test]
+    fn release_tags_accept_bare_or_v_prefixed_versions() {
+        assert_eq!(release_tag("0.0.4").unwrap(), "v0.0.4");
+        assert_eq!(release_tag("v0.0.10").unwrap(), "v0.0.10");
+        for bad in ["latest", "0.0", "v0.0.4-rc1", "0..4", "../0.0.4", ""] {
+            assert!(release_tag(bad).is_err(), "{bad}");
+        }
     }
     #[test]
     fn version_name_reads_dumpsys() {
