@@ -41,18 +41,29 @@ for (const vr of [false, true]) {
       const animation = await (await fetch(`${game.baseUrl}/v1/entities/${id}/animation`)).json() as { clip?: string; queue?: unknown[] } | null;
       assert.ok(animation?.clip || animation?.queue?.length, "skeletal animation continues with morph weights");
     }
+    // Released channels are neutral, except mouths a speaking hybrid's
+    // authored lip sync drives (lip-sync.e2e covers those). Lip sync never
+    // drives MouthShapeA (the closed mouth has no shape), so it stays strict.
+    const neutral = async (id: number) => {
+      const speaking = (await game.audio.recent({ playing: true })).sounds
+        .some((s) => s.tags.some(([k, v]) => k === "kind" && v === "speech"));
+      return (await shapes(id)).every((o) => o.morph_weights?.every((w, i) => {
+        const name = o.morph_names?.[i];
+        return name === "worm" || (speaking && name?.startsWith("MouthShape") && name !== "MouthShapeA") || w === 0;
+      }));
+    };
     assert.equal((await set(first, {})).status, 200);
     await game.step({ frames: 1 });
-    assert.ok((await shapes(first)).every((o) => o.morph_weights?.every((w, i) => o.morph_names?.[i] === "worm" || w === 0)));
+    assert.ok(await neutral(first));
     assert.ok((await shapes(second)).every((o) => o.morph_weights?.[o.morph_names!.indexOf("worm")] === 1));
-    assert.equal((await set(first, { MouthShapeH: 1 })).status, 200);
+    assert.equal((await set(first, { MouthShapeA: 1 })).status, 200);
     await game.input.trigger("DebugReloadLevel");
     await game.step({ frames: 2 });
     assert.equal((await game.info()).mission, "debug_ragdoll");
     const reloaded = (await game.entities.list({ filter: "OG-Pipe", limit: 100 })).entities;
     assert.ok(reloaded.length > 0);
     for (const entity of reloaded) {
-      assert.ok((await shapes(entity.id)).every((o) => o.morph_weights?.every((w, i) => o.morph_names?.[i] === "worm" || w === 0)),
+      assert.ok(await neutral(entity.id),
         "reloading the same scene clears old entity preview weights");
     }
   });

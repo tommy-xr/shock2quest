@@ -14866,12 +14866,24 @@ impl MissionCore {
                             let duration = audio_clip
                                 .total_duration()
                                 .unwrap_or(Duration::from_secs(2));
+                            let mouth = crate::lip_sync::sequence(
+                                &self.world,
+                                asset_cache
+                                    .get_opt(
+                                        &dark::importers::STRINGS_IMPORTER,
+                                        crate::lip_sync::FACEPOS_TABLE,
+                                    )
+                                    .as_deref(),
+                                entity_id,
+                                &resolved.sample_name,
+                            );
                             if let Some(previous) = self.speech_playback.started(
                                 entity_id,
                                 priority,
                                 now,
                                 duration,
                                 handle.clone(),
+                                mouth,
                             ) {
                                 stop_sound(audio_context, previous);
                             }
@@ -17998,6 +18010,7 @@ impl MissionCore {
             }
         }
 
+        let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
         let mut total_model_count = 0;
         let mut rendered_model_count = 0;
 
@@ -18160,6 +18173,9 @@ impl MissionCore {
             crate::plant_animation::apply(&self.world, *entity_id, &mut scene_objs);
             if let Some(weight) = self.script_world.monster_idle_weight(*entity_id) {
                 crate::monster_idle::apply(&mut scene_objs, weight);
+            }
+            if let Some(weights) = self.speech_playback.mouth_weights(*entity_id, now) {
+                crate::lip_sync::apply(&mut scene_objs, &weights);
             }
             self.script_world
                 .apply_morph_weights(*entity_id, &mut scene_objs);

@@ -39,3 +39,7 @@ weights, and weights outside [-1,1] are rejected. Preview weights are session-on
 and cleared on scene changes. Skinning continues normally. The same endpoint
 works in flat and `--vr`; ordinary entities remain neutral until a driver supplies
 weights. No asset is modified.
+
+Drivers: `worm` (`shock2vr/src/monster_idle.rs`) and, while an `ND-lipsync.dml`
+`Face` archetype speaks, the authored `facepos.str` mouth shapes
+(`shock2vr/src/lip_sync.rs`). A preview overrides both.
