@@ -54,8 +54,8 @@ struct Flight {
 }
 
 /// Whether a projectile created at `world_time_scale` is in slow time: at or
-/// below `threshold`, fast shots travel with a bullet drawn and every
-/// projectile trails; above it, nothing changes from normal play.
+/// below `threshold`, fast shots travel with a bullet drawn and bullets
+/// trail; above it, nothing changes from normal play.
 pub fn launched_in_slow_time(world_time_scale: f32, threshold: f32) -> bool {
     world_time_scale <= threshold
 }

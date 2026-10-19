@@ -10551,8 +10551,9 @@ impl MissionCore {
         smoke().count() < 24 && smoke().filter(|(g, ..)| *g == gun).count() < 3
     }
 
-    /// Samples every projectile created in slow time into its trail, except
-    /// cosmetic launches (ejected brass, muzzle effects).
+    /// Samples every bullet created in slow time into its trail; energy
+    /// bolts, grenades and cosmetic launches (ejected brass, muzzle effects)
+    /// leave none.
     fn update_projectile_trails(&mut self, world_dt: f32) {
         let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let launched = self
@@ -10581,13 +10582,15 @@ impl MissionCore {
                     .filter(|entity| !launched.contains(*entity)),
             )
             .filter(|entity| !cosmetic.contains(*entity))
+            .filter(|entity| {
+                slow_time.contains(*entity)
+                    && crate::scripts::script_util::is_ballistic_projectile(&self.world, *entity)
+            })
             .filter_map(|entity| {
                 let transform = transforms.get(entity).ok()?;
                 // Fast shots fly without a physics body.
                 let shot = !self.id_to_physics.contains_key(&entity);
-                slow_time
-                    .contains(entity)
-                    .then(|| (entity, transform.0.w.truncate(), shot))
+                Some((entity, transform.0.w.truncate(), shot))
             });
         self.projectile_trails.update(
             world_dt,
