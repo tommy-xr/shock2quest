@@ -113,8 +113,9 @@ pub struct ParticleSystem {
     /// Seconds a continuous emitter keeps launching before it stops for good
     /// (a pulsed charge sparkle); `None` = until told otherwise.
     emit_seconds: Option<f32>,
-    /// Radians per second each particle orbits the vertical axis through its
-    /// launch center: a rising particle traces a corkscrew. 0 = straight.
+    /// Radians per second each particle orbits the y axis through the
+    /// emitter's position at launch, without turning its velocity: a particle
+    /// launched straight up traces a corkscrew. 0 = straight.
     swirl: f32,
 }
 
@@ -167,7 +168,7 @@ fn create_random_particle(system: &ParticleSystem, transform: Matrix4<f32>) -> P
         velocity = (transform * velocity.extend(0.0)).truncate();
     }
     let scale = randf(system.particle_size.0, system.particle_size.1);
-    let axis = if system.world_space {
+    let center = if system.world_space {
         transform.w.truncate()
     } else {
         vec3(0.0, 0.0, 0.0)
@@ -178,7 +179,7 @@ fn create_random_particle(system: &ParticleSystem, transform: Matrix4<f32>) -> P
         position,
         velocity,
         scale,
-        axis,
+        center,
     }
 }
 
@@ -297,9 +298,6 @@ impl ParticleSystem {
         }
     }
 
-    /// A one-shot burst or a timed emitter that has finished and fully
-    /// expired (never true for an untimed continuous emitter). The owner can
-    /// drop the system - and, for impact spangs, the entity carrying it.
     pub fn with_swirl(self, radians_per_second: f32) -> ParticleSystem {
         ParticleSystem {
             swirl: radians_per_second,
@@ -307,6 +305,9 @@ impl ParticleSystem {
         }
     }
 
+    /// A one-shot burst or a timed emitter that has finished and fully
+    /// expired (never true for an untimed continuous emitter). The owner can
+    /// drop the system - and, for impact spangs, the entity carrying it.
     pub fn is_done(&self) -> bool {
         let finished = if self.one_shot {
             self.has_launched
@@ -580,8 +581,8 @@ struct Particle {
     position: Vector3<f32>,
     velocity: Vector3<f32>,
     scale: f32,
-    /// Launch center, the point `swirl` orbits around.
-    axis: Vector3<f32>,
+    /// The emitter's position at launch, which `swirl` orbits.
+    center: Vector3<f32>,
 }
 
 impl Particle {
@@ -593,9 +594,9 @@ impl Particle {
         self.scale = (self.scale + size_velocity * dt).max(0.0);
         if swirl != 0.0 {
             let (sin, cos) = (swirl * dt).sin_cos();
-            let offset = self.position - self.axis;
-            self.position.x = self.axis.x + offset.x * cos - offset.z * sin;
-            self.position.z = self.axis.z + offset.x * sin + offset.z * cos;
+            let offset = self.position - self.center;
+            self.position.x = self.center.x + offset.x * cos - offset.z * sin;
+            self.position.z = self.center.z + offset.x * sin + offset.z * cos;
         }
     }
 }
