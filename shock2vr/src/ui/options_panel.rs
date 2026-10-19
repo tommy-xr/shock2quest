@@ -231,27 +231,19 @@ impl OptionsPanel {
                     0.7
                 });
         }
-        let body = layout.frame[1];
-        canvas.text(
-            Rect::new(body.x + 16.0, body.y + body.h - 66.0, body.w - 32.0, 24.0),
-            "Click a value to change it",
-            "mainfont.fon",
-            14.0,
-            HAlign::Center,
-            VAlign::Middle,
-        );
-        canvas.text(
-            Rect::new(body.x + 16.0, body.y + body.h - 38.0, body.w - 32.0, 24.0),
-            if self.error {
-                "Could not save settings. Previous values kept."
-            } else {
-                "Saved automatically."
-            },
-            "mainfont.fon",
-            14.0,
-            HAlign::Center,
-            VAlign::Middle,
-        );
+        if self.error {
+            let body = layout.frame[1];
+            canvas
+                .text(
+                    Rect::new(body.x + 16.0, body.y + body.h - 38.0, body.w - 32.0, 24.0),
+                    "Could not save settings. Previous values kept.",
+                    "mainfont.fon",
+                    14.0,
+                    HAlign::Center,
+                    VAlign::Middle,
+                )
+                .opacity(0.55);
+        }
         let strings = assets.get_opt(&STRINGS_IMPORTER, "options.str");
         let done = resolve_menu_label(strings.as_deref(), "done", "Done");
         canvas
