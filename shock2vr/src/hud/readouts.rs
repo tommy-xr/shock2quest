@@ -90,6 +90,7 @@ pub(crate) fn system_button() -> ReadoutButtonSpec {
         // authored 38 px so the label sits inside the bevel rather than on it.
         texture: Some("IFBTN00.PCX"),
         text: Some("MENU".to_owned()),
+        font: crate::ui::CHROME_BOLD_FONT,
     }
 }
 
@@ -100,6 +101,7 @@ pub(crate) fn exit_button() -> ReadoutButtonSpec {
         rect: Rect::new(304.0, 437.0, 32.0, 40.0),
         texture: Some("iface/ml0.png"),
         text: None,
+        font: FONT,
     }
 }
 
@@ -309,6 +311,7 @@ fn hand_selectors(readouts: &UseModeReadouts) -> [ReadoutButtonSpec; 2] {
             rect: HAND_TABS[slot],
             texture: Some("IFBTN00.PCX"),
             text: Some(format!("{} {value}", ["LEFT", "RIGHT"][slot])),
+            font: crate::ui::CHROME_FONT,
         }
     })
 }
@@ -327,6 +330,7 @@ pub(crate) fn buttons(readouts: &UseModeReadouts) -> Vec<ReadoutButtonSpec> {
         rect: LOG_BUTTON,
         texture: Some("iface/ifbtn00.pcx"),
         text: None,
+        font: FONT,
     };
     ammo_panel::buttons(&readouts.ammo)
         .into_iter()

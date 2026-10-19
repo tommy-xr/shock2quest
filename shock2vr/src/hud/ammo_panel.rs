@@ -179,6 +179,9 @@ pub struct ReadoutButtonSpec {
     pub rect: Rect,
     pub texture: Option<&'static str>,
     pub text: Option<String>,
+    /// Cyan [`FONT`] for a control on the black readout, a chrome font for a
+    /// caption on a grey plate.
+    pub font: &'static str,
 }
 
 /// Draw one control at `rect`: its art, then its label centred on it.
@@ -194,7 +197,7 @@ pub(crate) fn draw_button(canvas: &mut UiCanvas, button: &ReadoutButtonSpec, rec
     if let Some(text) = &button.text {
         // Ellipsized: labels are data (a localized MISC.STR string, an authored
         // `P$SHead` header), and an over-wide one would spill onto the gauge.
-        canvas.text_native_fit(rect, text, FONT, HAlign::Center, VAlign::Middle);
+        canvas.text_native_fit(rect, text, button.font, HAlign::Center, VAlign::Middle);
     }
 }
 
@@ -331,6 +334,7 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
         rect,
         texture,
         text: text.map(str::to_owned),
+        font: FONT,
     };
     if !readout.show_buttons {
         return Vec::new();

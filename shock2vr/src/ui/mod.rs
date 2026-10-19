@@ -79,6 +79,11 @@ pub const TITLE_FONT: &str = "@shock-title";
 /// Monochrome MAINFONT in ShockUtilInitColor's foreground colour. Unlike the
 /// paletted MFD faces, this packed bitmap needs an explicit tint.
 pub const MESSAGE_FONT: &str = "@shock-message";
+/// Labels on the interface's grey chrome (hand tabs): neutral grey MAINFONT,
+/// so a plate's caption reads as hardware, not as lit readout data.
+pub const CHROME_FONT: &str = "@shock-chrome";
+/// The bold variant (METAFONT), for the system button.
+pub const CHROME_BOLD_FONT: &str = "@shock-chrome-bold";
 
 /// The tints below are FALLBACKS. An antialiased `.FON` carries its own colour
 /// per texel, as indices into `res/iface/fontpal.pcx`, and the font importer
@@ -89,6 +94,9 @@ pub const MESSAGE_FONT: &str = "@shock-message";
 /// `(0,255,191)`.
 const TITLE_TINT: [u8; 3] = [1, 194, 147];
 const MFD_TINT: [u8; 3] = [0, 255, 190];
+/// A cool grey a step below the bevel highlight, so chrome labels sit on the
+/// plate instead of glowing off it.
+const CHROME_TINT: [u8; 3] = [168, 176, 172];
 
 /// The font for a `UiElement::Text`, whichever kind it is.
 ///
@@ -103,6 +111,17 @@ pub(crate) fn resolve_font(asset_cache: &mut AssetCache, font: &str) -> Rc<Box<d
             &dark::importers::TINTED_FONT_IMPORTER,
             "mainfont.fon",
             &[0, 255, 190],
+        );
+    }
+    if font == CHROME_FONT || font == CHROME_BOLD_FONT {
+        return asset_cache.get_ext(
+            &dark::importers::TINTED_FONT_IMPORTER,
+            if font == CHROME_BOLD_FONT {
+                "metafont.fon"
+            } else {
+                "mainfont.fon"
+            },
+            &CHROME_TINT,
         );
     }
     if font == TITLE_FONT {
