@@ -48,6 +48,31 @@ for (const collect of ["release", "trigger"] as const) test(`VR nanites credit o
   assert.equal((await game.info()).player.stats?.nanites, 250);
 });
 
+test("VR nanites collected by a free hand's ray dissolve into sparks", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  const [pile] = await game.entities.byTemplate(257);
+  assert.ok(pile);
+  const [x, y, z] = pile.position;
+  await game.player.teleport({ x: x + .8, y: y + 1, z: z + .8 });
+  await game.step({ frames: 120 });
+  const aim = await game.player.aimAt(pile.id, { hitbox: "center", visibility: "required" });
+  assert.ok(aim.target_confirmed);
+  await aimVrHandAt(game, aim.world_point, .6, 0, 0);
+  await game.step({ frames: 4 });
+  const sparks = async () => (await game.entities.byTemplate(-1944)).length; // sparkley sphere
+  const idleSparks = await sparks();
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 12 });
+  assert.equal((await game.info()).player.stats?.nanites, 250);
+  assert.equal(await sparks(), idleSparks + 1, "the pile breaks down into sparks");
+  await game.step({ frames: 60 });
+  assert.equal((await game.entities.byTemplate(257)).length, 0, "its shrinking stand-in is gone");
+  assert.equal(await sparks(), idleSparks);
+});
+
 for (const hand of ["left", "right"] as const) {
   test(`VR ${hand} personal card authorizes a replicator, consumes no nanites, returns on release`, {
     skip: !enabled, timeout: 180_000,

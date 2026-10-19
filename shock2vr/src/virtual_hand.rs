@@ -736,11 +736,12 @@ fn handle_empty_hand_state(
     let mut msgs = Vec::new();
     let mut last_frobbed_entity = frobbed_entity;
     let mut next_hand_state = HandState::Empty;
+    // A keycard downloads only from the hand; other downloads also collect from the ray.
     if (input_hand.trigger_value > 0.5 || input_hand.a_value > 0.5)
         && !result
             .as_ref()
             .and_then(|hit| hit.maybe_entity_id)
-            .is_some_and(|entity| crate::scripts::script_util::is_download_pickup(world, entity))
+            .is_some_and(|entity| is_key_source(world, entity))
     {
         if let Some(RayCastResult {
             hit_point: _,
@@ -1867,6 +1868,23 @@ mod tests {
                     "no credit before release: {kind:?}"
                 );
             }
+            input.squeeze_value = 0.0;
+            input.trigger_value = 1.0;
+            let (_, effects) = handle_empty_hand_state(
+                Handedness::Right,
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                None,
+                &world,
+                &physics,
+                &input,
+                None,
+            );
+            assert_eq!(
+                frob_message_count(&effects),
+                usize::from(!is_key_source(&world, entity)),
+                "a ray trigger collects all but a keycard: {kind:?}"
+            );
         }
         let mut world = World::new();
         let soft = world.add_entity((

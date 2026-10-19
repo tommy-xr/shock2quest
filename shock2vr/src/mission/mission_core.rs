@@ -7270,6 +7270,23 @@ impl MissionCore {
         }
         rewrite_inventory_release(&mut interaction_msgs, &store, &collect);
         if game_options.presentation_mode == crate::PresentationMode::Vr {
+            // A ray frob collects a download in place; dissolve it as a hand collect does (those are in `collect`).
+            for effect in &interaction_msgs {
+                if let VirtualHandEffect::OutMessage {
+                    message: Message { to, payload: MessagePayload::Frob },
+                } = effect
+                {
+                    if !collect.contains(to)
+                        && crate::scripts::script_util::is_download_pickup(&self.world, *to)
+                    {
+                        effects.extend(crate::scripts::script_util::dissolve_cue(
+                            &self.world,
+                            *to,
+                            true,
+                        ));
+                    }
+                }
+            }
             let mut scan_required = false;
             interaction_msgs.retain(|effect| {
                 // Without the interface there is no card to scan, so readers take a plain frob.
