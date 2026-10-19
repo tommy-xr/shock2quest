@@ -91,6 +91,28 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
     with buttons held / with metagame (Tab) mode active. Implement each as a
     guard with a test.
 
+## Where an object panel appears in VR
+
+One shared canvas. Each VR host only maps an already-resolved rect (AGENTS.md
+section 3).
+
+- **Cyber interface / MFD (left Menu short press):** the flat MFD canvas,
+  unchanged, sidecars included (the HRM hack/repair/modify plug). Machines,
+  loot and a GamePig no hand holds (used from the backpack) open here, and
+  look and behave as they do in flat.
+- **Tricorder screen:** opened by scanning, or by frobbing a replicator,
+  trainer or O/S upgrade. It is 252x296, the 188 body plus the plug, so a
+  panel and its sidecar fit with no VR-specific layout.
+- **A held device's own screen (GamePig):** only the body's content window is
+  mapped onto the model's aperture, so no sidecar shows. Actions that live on
+  a sidecar (hack) stay reachable through the cyber interface or tricorder.
+- **Keypads** keep their in-world UI.
+
+Before building a panel action, decide which hosts expose it. Never squeeze a
+substitute button into the body to make up for a missing sidecar. The
+GamePig's in-screen HACK bar (#2280) was that mistake; #2386 replaced it with
+the plug.
+
 ## Domain behaviors agents consistently get wrong
 
 - **Audio logs are COLLECTED, not inventoried - and collection does NOT play
@@ -110,7 +132,9 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
   drawn by either free hand, returned on release, never consumable or lost. In VR,
   credential-locked doors/readers accept either frob or scanning; both use the
   normal key checks. Replicators, trainers and O/S upgrades also accept frob,
-  opening the held tricorder or the cyber interface when stowed. Keypads retain
+  opening the held tricorder or the cyber interface when stowed. A scanned
+  GamePig (on the floor or in the other hand) opens on the tricorder without
+  being picked up. Keypads retain
   their in-world UI. Other supported machines still require scanning. Opening a
   machine interface never purchases anything. Require withdrawal before another scan. This design
   supersedes the immediate-VR-pickup/no-wielding rule and PR #1387's optional card.
