@@ -745,23 +745,24 @@ fn item_recharge_layer() -> ParticleSystem {
         .with_color(vec3(1.0, 0.88, 0.62))
 }
 
-/// Nanite sparks bursting off an item as it breaks down. World space, so they
-/// hang where the item was rather than following the emptied hand.
+/// Nanite sparks corkscrewing up off an item as it breaks down. World space,
+/// so they rise from where the item was rather than following the hand.
 fn item_transmute_layer() -> ParticleSystem {
     ParticleSystem::new()
         .with_one_shot(true)
         .with_world_space(true)
-        .with_num_particles(36)
-        .with_launch_shape(LaunchShape::Sphere {
-            radius: (0.0, 0.06),
+        .with_num_particles(32)
+        .with_launch_shape(LaunchShape::Cylinder {
+            radius: (0.015, 0.035),
         })
-        .with_velocity(vec3(-0.5, -0.2, -0.5), vec3(0.5, 0.7, 0.5))
-        .with_acceleration(vec3(0.0, -0.6, 0.0))
-        .with_particle_size(0.015, 0.035)
-        .with_lifetime(0.4, 0.8)
+        .with_launch_bounding_box(vec3(0.0, -0.03, 0.0), vec3(0.0, 0.03, 0.0))
+        .with_velocity(vec3(0.0, 0.12, 0.0), vec3(0.0, 0.25, 0.0))
+        .with_swirl(9.0)
+        .with_particle_size(0.01, 0.025)
+        .with_lifetime(0.5, 0.8)
         .with_alpha(1.0)
-        .with_fade_time(0.3)
-        .with_color(vec3(1.0, 0.82, 0.35))
+        .with_fade_time(0.5)
+        .with_color(vec3(0.25, 0.55, 1.0))
 }
 
 /// A brief expanding burst, followed by a slower cloud. The parent owns the

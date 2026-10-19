@@ -113,6 +113,9 @@ pub struct ParticleSystem {
     /// Seconds a continuous emitter keeps launching before it stops for good
     /// (a pulsed charge sparkle); `None` = until told otherwise.
     emit_seconds: Option<f32>,
+    /// Radians per second each particle orbits the vertical axis through its
+    /// launch center: a rising particle traces a corkscrew. 0 = straight.
+    swirl: f32,
 }
 
 fn randf(a: f32, b: f32) -> f32 {
@@ -164,12 +167,18 @@ fn create_random_particle(system: &ParticleSystem, transform: Matrix4<f32>) -> P
         velocity = (transform * velocity.extend(0.0)).truncate();
     }
     let scale = randf(system.particle_size.0, system.particle_size.1);
+    let axis = if system.world_space {
+        transform.w.truncate()
+    } else {
+        vec3(0.0, 0.0, 0.0)
+    };
     Particle {
         age: 0.0,
         remaining_life_in_seconds: lifetime,
         position,
         velocity,
         scale,
+        axis,
     }
 }
 
@@ -210,6 +219,7 @@ impl ParticleSystem {
             world_space: false,
             emitting: true,
             emit_seconds: None,
+            swirl: 0.0,
         }
     }
 
@@ -290,6 +300,13 @@ impl ParticleSystem {
     /// A one-shot burst or a timed emitter that has finished and fully
     /// expired (never true for an untimed continuous emitter). The owner can
     /// drop the system - and, for impact spangs, the entity carrying it.
+    pub fn with_swirl(self, radians_per_second: f32) -> ParticleSystem {
+        ParticleSystem {
+            swirl: radians_per_second,
+            ..self
+        }
+    }
+
     pub fn is_done(&self) -> bool {
         let finished = if self.one_shot {
             self.has_launched
@@ -437,10 +454,10 @@ impl ParticleSystem {
 
     pub fn update(&mut self, dt: Duration, transform: Matrix4<f32>) {
         let delta_time = dt.as_secs_f32();
-        let (acceleration, size_velocity) = (self.acceleration, self.size_velocity);
+        let motion = (self.acceleration, self.size_velocity, self.swirl);
         self.particles
             .iter_mut()
-            .for_each(|p| p.advance(delta_time, acceleration, size_velocity));
+            .for_each(|p| p.advance(delta_time, motion));
 
         self.particles.retain(|p| p.remaining_life_in_seconds > 0.0);
 
@@ -484,7 +501,7 @@ impl ParticleSystem {
                 let overdue = (-self.launch_time_remaining).min(delta_time);
                 let emitter = self.emitter_transform_at(transform, overdue, delta_time);
                 let mut particle = create_random_particle(self, emitter);
-                particle.advance(overdue, acceleration, size_velocity);
+                particle.advance(overdue, motion);
                 self.particles.push(particle);
                 self.launch_time_remaining += self.launch_time;
             }
@@ -563,15 +580,23 @@ struct Particle {
     position: Vector3<f32>,
     velocity: Vector3<f32>,
     scale: f32,
+    /// Launch center, the point `swirl` orbits around.
+    axis: Vector3<f32>,
 }
 
 impl Particle {
-    fn advance(&mut self, dt: f32, acceleration: Vector3<f32>, size_velocity: f32) {
+    fn advance(&mut self, dt: f32, (acceleration, size_velocity, swirl): (Vector3<f32>, f32, f32)) {
         self.age += dt;
         self.remaining_life_in_seconds -= dt;
         self.position += self.velocity * dt;
         self.velocity += acceleration * dt;
         self.scale = (self.scale + size_velocity * dt).max(0.0);
+        if swirl != 0.0 {
+            let (sin, cos) = (swirl * dt).sin_cos();
+            let offset = self.position - self.axis;
+            self.position.x = self.axis.x + offset.x * cos - offset.z * sin;
+            self.position.z = self.axis.z + offset.x * sin + offset.z * cos;
+        }
     }
 }
 
@@ -657,6 +682,26 @@ mod tests {
         assert_eq!(system.particle_count(), 0);
         assert!(system.is_done());
         assert!(!ParticleSystem::new().is_done());
+    }
+
+    #[test]
+    fn a_swirling_particle_corkscrews_around_its_launch_center() {
+        let mut system = ParticleSystem::new()
+            .with_one_shot(true)
+            .with_num_particles(1)
+            .with_lifetime(2.0, 2.0)
+            .with_world_space(true)
+            .with_launch_bounding_box(vec3(1.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0))
+            .with_velocity(vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0))
+            .with_swirl(std::f32::consts::PI);
+        let launch = Matrix4::from_translation(vec3(10.0, 0.0, 0.0));
+        system.update(Duration::ZERO, launch);
+        // Half a second at pi rad/s: a quarter turn about x=10, half a unit up.
+        for _ in 0..50 {
+            system.update(Duration::from_millis(10), launch);
+        }
+        let p = system.particles[0].position;
+        assert!((p - vec3(10.0, 0.5, 1.0)).magnitude2() < 1e-4, "{p:?}");
     }
 
     #[test]
