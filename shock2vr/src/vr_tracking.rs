@@ -119,12 +119,13 @@ impl RoomscaleState {
             self.offset = -head;
             return Vector3::zero();
         }
+        self.offset -= delta;
         if !locomotion_allowed {
-            // Keep live tracking while another system owns motion, without
-            // replaying that physical travel when ordinary locomotion resumes.
+            // Another system owns the body (grip, mantle, death, control
+            // lock): treat the whole step as blocked, like a wall, so the rig
+            // stays on the capsule instead of drifting and snapping later.
             return Vector3::zero();
         }
-        self.offset -= delta;
         delta
     }
 
@@ -228,6 +229,8 @@ mod tests {
         assert_eq!(state.sample(&input, true, true, true), Vector3::zero());
         input.head.position.x = 10.3;
         assert_eq!(state.sample(&input, true, true, false), Vector3::zero());
+        // Blocked travel is still corrected: the rig stays on the capsule.
+        assert!((state.offset.x + 10.3).abs() < 1e-5);
         assert_eq!(state.sample(&input, true, true, true), Vector3::zero());
         assert_eq!(state.sample(&input, false, true, true), Vector3::zero());
         assert_eq!(state.offset, Vector3::zero());

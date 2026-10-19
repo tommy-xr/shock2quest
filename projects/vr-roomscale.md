@@ -53,8 +53,12 @@ Invalid tracking and explicit OpenXR origin changes reset delta history. A
 single-sample horizontal jump over 0.5 metres is also treated as a discontinuity.
 This fallback does not implement full reference-space continuity. Physical motion
 is not added while dead, control-locked, free-camera enabled, gripping or topping
-out. Pause discards delta history so it cannot replay after resuming. Seamless
-leaning, climbing and pause/recenter transitions remain follow-up work.
+out; those steps are corrected like a wall, so the rig stays on the capsule.
+Physical travel is excluded from the comfort vignette and reference grid. While
+swimming the request is scaled with the rest of locomotion, so the body covers
+less ground than the wearer walks (accepted for the spike). Pause discards delta
+history so it cannot replay after resuming. Seamless leaning, climbing,
+pause/recenter transitions and a stationary-guardian gate remain follow-up work.
 
 ## Work tracking
 

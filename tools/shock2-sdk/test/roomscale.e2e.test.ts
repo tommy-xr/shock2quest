@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { quatConjugate, quatRotate } from "./helpers/vr-hand.js";
@@ -78,6 +81,35 @@ test("roomscale adds to stick movement and turning stays centered off-origin", {
   const physical = quatRotate(turned.rotation, [0.18, 0, 0]);
   close(combined[0] - stick[0], physical[0]);
   close(combined[2] - stick[2], physical[2]);
+});
+
+test("roomscale walking never activates the comfort vignette", { skip }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "shock2-roomscale-vignette-"));
+  const path = join(root, "settings.json");
+  const previous = process.env.SHOCK2_SETTINGS_PATH;
+  process.env.SHOCK2_SETTINGS_PATH = path;
+  await writeFile(path, JSON.stringify({ vr: { vignette: "High" } }));
+  try {
+    await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+    await game.player.teleport({ x: -5.8, y: 1, z: -16 });
+    await game.devParams.set("vr_roomscale", 1);
+    // Settle the teleport drop (its fall counts as travel) before measuring.
+    await game.step({ frames: 90 });
+    const mask = () => game.scene.fromSource("vr_comfort_vignette");
+    assert.equal((await mask()).length, 0, "vignette idle before walking");
+    // Walk physically at ~1 m/s into the wall at X=-6.48 and keep pushing.
+    for (let i = 1; i <= 60; i++) {
+      await game.input.set("head.position", [-i * 0.017, 1.04, 0]);
+      await game.step({ frames: 1 });
+      assert.equal((await mask()).length, 0, `physical walking must not vignette (frame ${i})`);
+    }
+    await game.input.set("left_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 20 });
+    assert.ok((await mask()).length > 0, "stick travel still vignettes");
+  } finally {
+    if (previous === undefined) delete process.env.SHOCK2_SETTINGS_PATH;
+    else process.env.SHOCK2_SETTINGS_PATH = previous;
+  }
 });
 
 test("disabled roomscale keeps the body still; flat ignores the experiment", { skip }, async () => {

@@ -3134,8 +3134,12 @@ impl Game {
         head_offset: Vector3<f32>,
         head_rotation: Quaternion<f32>,
     ) -> death_camera::CameraPose {
-        let head_offset =
-            head_offset + vr_tracking::RoomscaleState::offset(self.active_game_scene.world());
+        // The loading scene must not inherit the old mission's rig offset.
+        let head_offset = if self.pending_save_load.is_none() {
+            head_offset + vr_tracking::RoomscaleState::offset(self.active_game_scene.world())
+        } else {
+            head_offset
+        };
         death_camera::resolve(
             pawn_position,
             pawn_rotation,

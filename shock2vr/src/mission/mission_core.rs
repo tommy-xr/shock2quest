@@ -5562,20 +5562,29 @@ impl MissionCore {
         };
 
         // A hand climb moves the body by the player's own arms, which, like
-        // roomscale walking, must never restrict the view.
-        self.vr_comfort.update_vignette(
-            move_thumbstick_value,
-            if hand_climb.translation.is_some() {
+        // roomscale walking, must never restrict the view. Remove the
+        // physical request from the comfort signal. A wall may have rejected
+        // part of it (and pushed the capsule back out), so a remainder larger
+        // than the actual travel is blocked physical motion, not a ride.
+        let comfort_motion = if hand_climb.translation.is_some() {
+            vec3(0.0, 0.0, 0.0)
+        } else {
+            let artificial = comfort_displacement - new_rotation.rotate_vector(roomscale_movement);
+            if artificial.magnitude2() > comfort_displacement.magnitude2() {
                 vec3(0.0, 0.0, 0.0)
             } else {
-                comfort_displacement
-            },
+                artificial
+            }
+        };
+        self.vr_comfort.update_vignette(
+            move_thumbstick_value,
+            comfort_motion,
             turn_radians,
             delta_time,
             vr_settings,
         );
         self.reference_grid.update(
-            comfort_displacement,
+            comfort_motion,
             move_thumbstick_value.magnitude() > 0.15
                 || (vr_settings.turning == crate::user_settings::TurnMode::Smooth
                     && turn_radians.abs() > 0.0001),
