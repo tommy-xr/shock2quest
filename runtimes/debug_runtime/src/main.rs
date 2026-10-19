@@ -952,6 +952,7 @@ fn run_game_blocking(
                         &last_scene,
                         last_scene_frame,
                         args.defer_transitions,
+                        args.vr,
                     );
                 }
             }
@@ -1005,7 +1006,9 @@ fn run_game_blocking(
                 None
             };
             let game_time = if let Some(frame) = &replay_frame {
-                current_input = frame.input.clone();
+                // The recording holds what the game saw, already lowered for
+                // a crouch; keep the standing pose so paused updates match.
+                current_input = shift_rig(&frame.input, crouch_drop(&game, &frame.input, args.vr));
                 action_state = frame.actions();
                 Time {
                     elapsed: Duration::from_secs_f32(frame.dt),
@@ -1019,12 +1022,16 @@ fn run_game_blocking(
             } else {
                 game_time.clone()
             };
-            if replay_frame.is_none() {
-                hand_targets.apply(&game, &mut current_input);
-            }
+            let update_input = match &replay_frame {
+                Some(frame) => frame.input.clone(),
+                None => {
+                    hand_targets.apply(&game, &mut current_input);
+                    crouched_rig(&game, &current_input, args.vr)
+                }
+            };
             profile!(
                 "game.update",
-                game.update(&game_time, &current_input, &mut action_state)
+                game.update(&game_time, &update_input, &mut action_state)
             );
             // Use the selected fixed-step, recorded, or free-running clock
             // verbatim; reporting must never choose or advance gameplay time.
@@ -1061,6 +1068,7 @@ fn run_game_blocking(
                     &game_time,
                     &current_input,
                     &mut action_state,
+                    args.vr,
                 );
             }
 
@@ -1133,9 +1141,10 @@ fn run_game_blocking(
             };
             // Still call update with zero time to maintain state consistency
             hand_targets.apply(&game, &mut current_input);
+            let update_input = crouched_rig(&game, &current_input, args.vr);
             profile!(
                 "game.update",
-                game.update(&zero_time, &current_input, &mut action_state)
+                game.update(&zero_time, &update_input, &mut action_state)
             );
             if !args.defer_transitions {
                 complete_pending_transition(
@@ -1143,6 +1152,7 @@ fn run_game_blocking(
                     &zero_time,
                     &current_input,
                     &mut action_state,
+                    args.vr,
                 );
             }
         }
@@ -1383,6 +1393,7 @@ fn complete_pending_transition(
     time: &Time,
     current_input: &InputContext,
     action_state: &mut InputActionState,
+    vr: bool,
 ) {
     let mut pumped = 0u32;
     while game.has_pending_transition() && pumped < TRANSITION_PUMP_FRAME_CAP {
@@ -1390,7 +1401,11 @@ fn complete_pending_transition(
             elapsed: Duration::from_secs_f32(0.0),
             total: time.total,
         };
-        game.update(&zero_time, current_input, action_state);
+        game.update(
+            &zero_time,
+            &crouched_rig(game, current_input, vr),
+            action_state,
+        );
         pumped += 1;
         thread::sleep(Duration::from_secs_f32(FIXED_STEP_DT));
     }
@@ -1408,6 +1423,7 @@ fn process_command(
     last_scene: &[commands::SceneObjectSummary],
     last_scene_frame: u64,
     defer_transitions: bool,
+    vr: bool,
 ) {
     match command {
         RuntimeCommand::GetInfo(reply) => {
@@ -1529,7 +1545,7 @@ fn process_command(
             // Land the warp before replying, so `success` and every later
             // request see the destination level (see `complete_pending_transition`).
             if !defer_transitions {
-                complete_pending_transition(game, time, current_input, action_state);
+                complete_pending_transition(game, time, current_input, action_state, vr);
             }
             // Report the ACTUAL post-switch scene rather than assuming success.
             let mission = game.scene_name().to_string();
@@ -2381,6 +2397,36 @@ fn input_snapshot_from_context(input: &InputContext) -> InputSnapshot {
             right: hand_snapshot(input.right_hand),
         },
     }
+}
+
+/// How far the tracking stance lowers the VR rig below the standing pose that
+/// `/v1/control/input` patches describe: Quest's `max(head - eye cap, 0)`, so a
+/// ledge hang, which keeps the tracking stance, moves nothing. Zero in flat and
+/// for recorded tracked input, which the game rebases itself.
+pub(crate) fn crouch_drop(game: &Game, input: &InputContext, vr: bool) -> Vector3<f32> {
+    let drop = if vr && input.tracking.is_none() {
+        (input.head.position.y - game.player_eye_cap_above_center()).max(0.0)
+    } else {
+        0.0
+    };
+    vec3(0.0, drop, 0.0)
+}
+
+/// `input` with its head and hands moved by `offset`.
+fn shift_rig(input: &InputContext, offset: Vector3<f32>) -> InputContext {
+    let mut input = input.clone();
+    input.head.position += offset;
+    input.left_hand.position += offset;
+    input.right_hand.position += offset;
+    input
+}
+
+/// The input `game.update` sees: a crouch lowers the patched head and hands
+/// together, as Quest's button crouch lowers its tracked rig, rather than
+/// leaving the hands above a crouched eye (#2378). It reads the stance before
+/// the update, so the rig trails a crouch or stand by one frame.
+fn crouched_rig(game: &Game, input: &InputContext, vr: bool) -> InputContext {
+    shift_rig(input, -crouch_drop(game, input, vr))
 }
 
 /// The camera this frame renders from: the crouch-aware eye height shared with
