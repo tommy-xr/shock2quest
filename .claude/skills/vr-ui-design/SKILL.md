@@ -99,9 +99,10 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
   pickup is a documented *stopgap* because VR lacks an action mapper (issue
   #921) - do not preserve it as "faithful", and do not model logs as
   carryable objects.
-- **VR downloads on release.** Nanites, cyber modules, valid software upgrades,
-  and found access cards are physically held until grip release, anywhere
-  (including shoulder/backpack and against the personal card). Collection uses
+- **VR downloads on release or trigger.** Nanites, cyber modules, valid software
+  upgrades, and found access cards are physically held until grip release or a
+  trigger pull, anywhere (including shoulder/backpack and against the personal
+  card); a free hand's trigger ray collects them in place. Collection uses
   their existing scripts to credit balances, install software or record credentials;
   they never occupy backpack cells. Logs retain their separate immediate-collection
   behavior. Flat pickup remains immediate.

@@ -304,7 +304,8 @@ pub(crate) fn is_cyber_module(world: &World, entity: EntityId) -> bool {
     entity_has_script(world, entity, EXP_COOKIE_SCRIPT)
 }
 
-/// Pickups that VR can hold before downloading into the personal card on release.
+/// Pickups that VR can hold before downloading into the personal card on release
+/// or trigger; a free hand's trigger ray collects them in place.
 /// Logs deliberately retain immediate collection; invalid/unused software is not
 /// claimed because its script cannot install or consume it.
 pub(crate) fn is_download_pickup(world: &World, entity: EntityId) -> bool {
@@ -325,7 +326,7 @@ pub(crate) fn is_download_pickup(world: &World, entity: EntityId) -> bool {
 ///
 /// Immediate acquisition routes use Frob instead of transferring these into a
 /// backpack cell. VR physical grips separately use `is_download_pickup` to
-/// defer collection until release.
+/// defer collection until release or trigger.
 pub(crate) fn is_always_collected(world: &World, entity: EntityId) -> bool {
     crate::virtual_hand::is_key_source(world, entity)
         || is_nanite_pickup(world, entity)

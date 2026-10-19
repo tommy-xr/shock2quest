@@ -17,7 +17,7 @@ import {
 //   corpse 754 --Contains--> card 942 (PropKeySrc region 128)
 //   card slots 1120/1122 --SwitchLink--> HydroSectorB door 1127
 //
-// VR physical grips hold found cards until release. The downloaded credential
+// VR physical grips hold found cards until release or trigger. The downloaded credential
 // opens its authored gate through either an empty-hand frob or a tricorder scan.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const CORPSE = 754;
