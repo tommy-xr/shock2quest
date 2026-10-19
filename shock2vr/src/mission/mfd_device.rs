@@ -548,6 +548,34 @@ mod tests {
     }
 
     #[test]
+    fn only_a_held_gamepig_keeps_its_own_screen() {
+        let mut world = shipyard::World::new();
+        let gamepig = world.add_entity(dark::properties::PropScripts {
+            scripts: vec!["MiniGameBoy".into()],
+            inherits: false,
+        });
+        let crate_ = world.add_entity(());
+        world.add_unique(crate::mission::PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: crate_,
+            inventory_entity_id: crate_,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+        });
+        assert!(
+            gamepig_uses_mfd(&world, gamepig),
+            "opened from the backpack"
+        );
+        assert!(!gamepig_uses_mfd(&world, crate_));
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::mission::PlayerInfo>>()
+            .unwrap()
+            .right_hand_entity_id = Some(gamepig);
+        assert!(!gamepig_uses_mfd(&world, gamepig), "held: its own screen");
+    }
+
+    #[test]
     fn arbitrary_panels_and_footer_points_round_trip() {
         for src in [
             Rect::new(2.0, 124.0, 252.0, 296.0),
@@ -597,6 +625,15 @@ pub(super) fn machine_uses_mfd(world: &shipyard::World, entity: shipyard::Entity
     ]
     .iter()
     .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))
+}
+
+/// A GamePig shows on its own screen only while a hand holds it. Opened from
+/// the backpack it uses the MFD canvas, plug included, like flat.
+pub(super) fn gamepig_uses_mfd(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
+    crate::scripts::script_util::entity_has_script(world, entity, "MiniGameBoy")
+        && [crate::Handedness::Left, crate::Handedness::Right]
+            .into_iter()
+            .all(|hand| crate::wielded_weapon::held_by_hand(world, hand) != Some(entity))
 }
 
 /// Only existing reader/panel scripts receive Frob; all other objects are queried.

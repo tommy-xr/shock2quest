@@ -12418,9 +12418,12 @@ impl MissionCore {
                     if self.flat_ui.utilities.has_left_panel() {
                         self.flat_ui.utilities = Default::default();
                     }
-                    // Machines share the cyber interface unless the handheld
-                    // MFD already owns the panel. Frob never toggles it closed.
-                    let machine = super::mfd_device::machine_uses_mfd(&self.world, entity);
+                    // Machines, and in VR a GamePig no hand holds, share the
+                    // cyber interface unless the handheld MFD already owns the
+                    // panel. Frob never toggles it closed.
+                    let machine = super::mfd_device::machine_uses_mfd(&self.world, entity)
+                        || (game_options.presentation_mode == crate::PresentationMode::Vr
+                            && super::mfd_device::gamepig_uses_mfd(&self.world, entity));
                     match game_options.presentation_mode {
                         crate::PresentationMode::Vr if self.flat_ui.device => {
                             // Hand frobs and scans share one panel owner, even
