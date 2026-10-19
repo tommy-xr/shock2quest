@@ -539,7 +539,8 @@ mod tests {
             scripts: vec!["MiniGameBoy".into()],
             inherits: false,
         });
-        assert!(opens_panel(&world, gamepig));
+        assert!(is_gamepig(&world, gamepig));
+        assert!(!opens_panel(&world, gamepig), "a frob would pick it up");
         // The tricorder screen is the body plus the plug: no letterboxing.
         let canvas = crate::scripts::gui::GamePigGui
             .get_config()
@@ -627,10 +628,15 @@ pub(super) fn machine_uses_mfd(world: &shipyard::World, entity: shipyard::Entity
     .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))
 }
 
+/// A scan opens a GamePig's panel directly: frobbing a world one picks it up.
+pub(super) fn is_gamepig(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
+    crate::scripts::script_util::entity_has_script(world, entity, "MiniGameBoy")
+}
+
 /// A GamePig shows on its own screen only while a hand holds it. Opened from
 /// the backpack it uses the MFD canvas, plug included, like flat.
 pub(super) fn gamepig_uses_mfd(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
-    crate::scripts::script_util::entity_has_script(world, entity, "MiniGameBoy")
+    is_gamepig(world, entity)
         && [crate::Handedness::Left, crate::Handedness::Right]
             .into_iter()
             .all(|hand| crate::wielded_weapon::held_by_hand(world, hand) != Some(entity))
@@ -648,7 +654,6 @@ pub fn opens_panel(world: &shipyard::World, entity: shipyard::EntityId) -> bool 
             "HackableCrate",
             "ResearchableScript",
             "Chemical",
-            "MiniGameBoy",
         ]
         .iter()
         .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))

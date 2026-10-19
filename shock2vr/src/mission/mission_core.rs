@@ -7534,6 +7534,8 @@ impl MissionCore {
                                 text: "Hold the specimen to begin research".into(),
                             });
                         }
+                    } else if !inspect_only && super::mfd_device::is_gamepig(&self.world, entity) {
+                        effects.push(Effect::OpenPanel { entity });
                     } else if !inspect_only && super::mfd_device::opens_panel(&self.world, entity) {
                         effects.extend(crate::scripts::world_frob::world_frob_feedback(
                             &self.world,

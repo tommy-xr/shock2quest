@@ -1,83 +1,190 @@
 import assert from "node:assert/strict";
 import { readFileSync, rmSync } from "node:fs";
 import { test } from "node:test";
-import { GameServer } from "../src/index.js";
+import { GameServer, type UiElement } from "../src/index.js";
 import { openGamePig } from "./helpers/gamepig.js";
 import { winHack } from "./helpers/hack.js";
 import { carriedNaniteTotal } from "./helpers/nanites.js";
 import { savedGamePath } from "./helpers/save.js";
+import { clickCanvasWithRay, clickUiElement } from "./helpers/ui.js";
+import { aimMfdAt, drawPersonalCard } from "./helpers/vr-hand.js";
 
-for (const vr of [false, true]) {
-  test(`GamePig paid hack unlocks its library and survives saves (${vr ? "VR" : "flat"})`, {
-    skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000,
+const skip = process.env.SHOCK2_E2E !== "1";
+type Click = (game: GameServer, element: UiElement) => Promise<void>;
+/** Aim the free right hand's ray at an element of the VR host's canvas. */
+const rayClick: Click = async (g, element) => {
+  const [x, y, w, h] = element.rect;
+  await clickCanvasWithRay(g, (await g.ui.state()).panel_pose!, [x + w / 2, y + h / 2]);
+};
+
+const elements = async (game: GameServer) => (await game.ui.state()).active_panel!.elements;
+async function button(game: GameServer, label: string) {
+  const found = (await elements(game)).find(e => e.label === label);
+  assert.ok(found, `missing ${label}`);
+  return found;
+}
+const games = async (game: GameServer) =>
+  (await elements(game)).filter(e => e.label?.startsWith("game-")).map(e => e.label);
+const objectState = async (game: GameServer, id: number) =>
+  (await game.entities.detail(id)).properties.find(p => p.name === "ObjectState")?.value;
+
+async function fund(game: GameServer) {
+  await game.player.setStats({ cyber_affinity: 6, skills: { hack: 6 } });
+  for (let i = 0; i < 25; i++) {
+    const nanites = await game.player.spawnItem(-89);
+    await game.entities.sendMessage(nanites.entity_id, { type: "Frob" });
+    await game.step({ frames: 1 });
+  }
+  return carriedNaniteTotal(game);
+}
+
+/** Pay for and win the board from the plug, then check every game unlocked. */
+async function hackFromPlug(game: GameServer, entity: number, click: Click) {
+  const wallet = await fund(game);
+  assert.ok(wallet >= 400);
+  await click(game, await button(game, "hack-gamepig"));
+  assert.ok((await elements(game)).some(e => e.texture === "hack.pcx"));
+  assert.ok(!(await elements(game)).some(e => e.label === "hack-gamepig"), "the plug drops beside the board");
+  assert.equal(await carriedNaniteTotal(game), wallet, "opening is free");
+  await click(game, await button(game, "start-hack"));
+  assert.equal(await carriedNaniteTotal(game), wallet - 50, "START charges the authored 50 nanites");
+  assert.notEqual(await objectState(game, entity), "Hacked", "payment is not a win");
+  await winHack(game, click);
+  assert.equal(await objectState(game, entity), "Hacked");
+  await click(game, await button(game, "gamepig-back"));
+  assert.ok(!(await elements(game)).some(e => e.label === "hack-gamepig"), "a hacked device cannot charge again");
+  for (const label of ["game-2", "game-3", "game-5", "game-8", "game-10"]) await button(game, label);
+  assert.ok((await elements(game)).some(e => /overworld/i.test(e.text ?? "")), "unimplemented titles are also unlocked");
+}
+
+test("GamePig paid hack from the plug unlocks its library and survives saves (flat)", {
+  skip, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "medsci1.mis" });
+  const { handheld } = await openGamePig(game, false, "Swinekeeper");
+  const original = await games(game);
+  assert.deepEqual(original, ["game-3"]);
+  const plug = await button(game, "hack-gamepig");
+  assert.ok(plug.texture === "plugh0.pcx" && plug.rect[0] >= 188, "the HRM plug sits beside the 188px body");
+  assert.ok(!(await elements(game)).some(e => e.text === "HACK"), "no placeholder HACK row");
+  await clickUiElement(game, plug);
+  const empty = await carriedNaniteTotal(game);
+  assert.ok(empty < 50);
+  await clickUiElement(game, await button(game, "start-hack"));
+  assert.equal(await carriedNaniteTotal(game), empty, "an unaffordable attempt charges nothing");
+  assert.ok((await elements(game)).some(e => e.texture === "payh.pcx"));
+  await clickUiElement(game, await button(game, "gamepig-back"));
+  assert.deepEqual(await games(game), original, "canceling an unpaid board unlocks nothing");
+  await hackFromPlug(game, handheld.entity_id, clickUiElement);
+
+  const name = `gamepig_hack_${Date.now()}`;
+  try {
+    const bits = () => JSON.parse(readFileSync(savedGamePath(name), "utf8")).global_data.quest_info.mini_games;
+    await game.save(name);
+    assert.equal(bits(), 0x1ffc, "all eleven actual games are installed without the empty Slots entry");
+    const balance = await carriedNaniteTotal(game);
+    await game.load(name);
+    await game.step({ frames: 2 });
+    await game.save(name);
+    assert.equal(bits(), 0x1ffc);
+    assert.equal(await carriedNaniteTotal(game), balance);
+    const [restored] = await game.entities.byTemplate(-3864);
+    assert.ok(restored);
+    assert.equal(await objectState(game, restored.id), "Hacked");
+  } finally { rmSync(savedGamePath(name), { force: true }); }
+});
+
+test("VR cyber interface opens a backpack GamePig with the flat canvas and its plug", {
+  skip, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  const handheld = await game.player.spawnItem("Gameboy");
+  await game.input.trigger("ToggleUseMode");
+  await game.step({ frames: 5 });
+  const ui = await game.ui.state();
+  const slot = ui.strip!.elements.find(e => e.entity_id === handheld.entity_id);
+  assert.ok(slot, "the GamePig is in the backpack");
+  await clickCanvasWithRay(game, ui.panel_pose!, [slot.rect[0] + slot.rect[2] / 2, slot.rect[1] + slot.rect[3] / 2]);
+  await game.step({ frames: 10 });
+  const opened = await game.ui.state();
+  assert.equal(opened.mode, "use");
+  assert.equal(opened.active_panel?.entity_id, handheld.entity_id);
+  assert.deepEqual(opened.panel_pose?.canvas, [640, 480], "the cyber interface's shared canvas");
+  const body = (await elements(game)).find(e => e.texture === "gameback.pcx")!;
+  const plug = await button(game, "hack-gamepig");
+  assert.ok(plug.rect[0] >= body.rect[0] + 188, "the plug sits beside the body, as in flat");
+  await hackFromPlug(game, handheld.entity_id, rayClick);
+});
+
+for (const held of [false, true]) {
+  test(`VR tricorder scan of a ${held ? "held" : "world"} GamePig shows its plug and hacks it`, {
+    skip, timeout: 180_000,
   }, async () => {
-    await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: vr ? ["--vr"] : [] });
-    const { handheld, click } = await openGamePig(game, vr, "Swinekeeper");
-    const elements = async () => (await game.ui.state()).active_panel!.elements;
-    const button = async (label: string) => {
-      const found = (await elements()).find(e => e.label === label);
-      assert.ok(found, `missing ${label}`);
-      return found;
-    };
-    const state = async () => (await game.entities.detail(handheld.entity_id)).properties.find(p => p.name === "ObjectState")?.value;
-    const original = (await elements()).filter(e => e.label?.startsWith("game-")).map(e => e.label);
-    assert.deepEqual(original, ["game-3"]);
-    await click(game, await button("hack-gamepig"));
-    assert.ok((await elements()).some(e => e.texture === "hack.pcx"));
-    const empty = await carriedNaniteTotal(game);
-    assert.ok(empty < 50);
-    await click(game, await button("start-hack"));
-    assert.equal(await carriedNaniteTotal(game), empty, "an unaffordable attempt charges nothing");
-    assert.ok((await elements()).some(e => e.texture === "payh.pcx"));
-    await click(game, await button("gamepig-back"));
-    assert.deepEqual((await elements()).filter(e => e.label?.startsWith("game-")).map(e => e.label), original,
-      "canceling an unpaid board unlocks nothing");
-
-    await game.player.setStats({ cyber_affinity: 6, skills: { hack: 6 } });
-    for (let i = 0; i < 25; i++) {
-      const nanites = await game.player.spawnItem(-89);
-      await game.entities.sendMessage(nanites.entity_id, { type: "Frob" });
-      await game.step({ frames: 1 });
+    await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
+      debugFlags: ["--vr", "--experimental", "mfd_device"] });
+    await game.devParams.set("vr_mfd_focus_scan", 0);
+    await game.step({ frames: 30 });
+    const [pig] = await game.entities.byTemplate(-3864);
+    assert.ok(pig, "the rack carries a GamePig");
+    await game.player.teleport({ x: pig.position[0], y: .9, z: 0 });
+    await game.step({ frames: 120 });
+    let target = pig.position;
+    let expected = pig.id;
+    if (held) {
+      await game.input.set("right_hand.squeeze", 1);
+      await game.player.spawnItem("Gameboy", { hand: "right" });
+      await game.step({ frames: 3 });
+      await game.input.set("right_hand.position", [.15, .9, -.45]);
+      await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+      await game.step({ frames: 5 });
+      expected = (await game.info()).player.right_hand_entity_id!;
+      assert.ok(expected);
+      target = (await game.entities.detail(expected)).position;
+    } else {
+      await game.input.set("right_hand.position", [.6, .7, -.8]);
     }
-    const wallet = await carriedNaniteTotal(game);
-    assert.ok(wallet >= 400);
-    if (vr) {
-      // Only Swinekeeper is installed, so down selects the HACK row.
-      await game.input.set("left_hand.thumbstick", [0, -1]);
-      await game.step({ frames: 2 });
-      await game.input.set("left_hand.thumbstick", [0, 0]);
-      await game.input.trigger("LeftHandLowerButton");
-      await game.step({ frames: 2 });
-    } else await click(game, await button("hack-gamepig"));
-    await button("start-hack");
-    assert.equal(await carriedNaniteTotal(game), wallet, "opening is free");
-    if (vr) {
-      await game.input.trigger("LeftHandLowerButton");
-      await game.step({ frames: 2 });
-    } else await click(game, await button("start-hack"));
-    assert.equal(await carriedNaniteTotal(game), wallet - 50, "START charges the authored 50 nanites");
-    assert.notEqual(await state(), "Hacked", "payment is not a win");
-    await winHack(game, click);
-    assert.equal(await state(), "Hacked");
-    await click(game, await button("gamepig-back"));
-    assert.ok(!(await elements()).some(e => e.label === "hack-gamepig"), "a hacked device cannot charge again");
-    for (const label of ["game-2", "game-3", "game-5", "game-8", "game-10"]) await button(label);
-    assert.ok((await elements()).some(e => /overworld/i.test(e.text ?? "")), "unimplemented titles are also unlocked");
-
-    const name = `gamepig_hack_${vr}_${Date.now()}`;
-    try {
-      const bits = () => JSON.parse(readFileSync(savedGamePath(name), "utf8")).global_data.quest_info.mini_games;
-      await game.save(name);
-      assert.equal(bits(), 0x1ffc, "all eleven actual games are installed without the empty Slots entry");
-      const balance = await carriedNaniteTotal(game);
-      await game.load(name);
-      await game.step({ frames: 2 });
-      await game.save(name);
-      assert.equal(bits(), 0x1ffc);
-      assert.equal(await carriedNaniteTotal(game), balance);
-      const [restored] = await game.entities.byTemplate(-3864);
-      assert.ok(restored);
-      assert.equal((await game.entities.detail(restored.id)).properties.find(p => p.name === "ObjectState")?.value, "Hacked");
-    } finally { rmSync(savedGamePath(name), { force: true }); }
+    await drawPersonalCard(game, "left");
+    await aimMfdAt(game, target, held ? .25 : 1.1, 1, 0, { hand: "left", lookAtTarget: false });
+    await game.step({ frames: 2 });
+    await game.input.set("left_hand.trigger", 1);
+    await game.step({ frames: 3 });
+    await game.input.set("left_hand.trigger", 0);
+    await game.input.set("left_hand.position", [-.25, 1, -.8]);
+    await game.input.set("left_hand.rotation", [0, 0, 0, 1]);
+    await game.step({ frames: 3 });
+    const scanned = (await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan!;
+    assert.equal(scanned, expected);
+    const ui = await game.ui.state();
+    assert.equal(ui.active_panel?.entity_id, scanned, "the scan opens the GamePig on the tricorder");
+    assert.ok(!(await game.player.inventory()).items.some(i => i.entity_id === pig.id),
+      "scanning never picks the device up");
+    await button(game, "hack-gamepig");
+    if (held) {
+      // The held hand has no free ray; release it so the pointer can click.
+      await game.input.set("right_hand.squeeze", 0);
+      await game.input.set("right_hand.position", [.6, .7, -.8]);
+      await game.step({ frames: 3 });
+    }
+    assert.deepEqual(await games(game), [], "nothing is installed before the hack");
+    await hackFromPlug(game, scanned, rayClick);
   });
 }
+
+test("VR held GamePig screen lists games without a hack affordance", {
+  skip, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: ["--vr"] });
+  await openGamePig(game, true, "Swinekeeper");
+  assert.deepEqual(await games(game), ["game-3"]);
+  assert.ok(!(await elements(game)).some(e => e.label === "hack-gamepig" || e.text === "HACK"),
+    "the held screen windows only the body");
+  // Swinekeeper is the only row: down wraps onto it rather than a hack row.
+  await game.input.set("left_hand.thumbstick", [0, -1]);
+  await game.step({ frames: 2 });
+  await game.input.set("left_hand.thumbstick", [0, 0]);
+  await game.input.trigger("LeftHandLowerButton");
+  await game.step({ frames: 2 });
+  assert.ok((await elements(game)).some(e => e.texture === "swinebck.pcx"), "primary starts the game");
+  assert.ok(!(await elements(game)).some(e => e.texture === "hack.pcx"));
+});
