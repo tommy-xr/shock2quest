@@ -70,6 +70,8 @@ fn resolve(
         pawn_rotation,
         dev_params::get(dev_params::GLOVE_FORWARD_CM),
     )
+    // Patched hands are standing poses; the update lowers them by the crouch.
+    .map(|local| local + crate::crouch_drop(game, input, true))
 }
 
 impl HandTargets {
@@ -156,10 +158,15 @@ impl HandTargets {
         input: &InputContext,
     ) -> [(Option<[f32; 3]>, Option<[f32; 3]>); 2] {
         let pose = game.player_pose().filter(|_| self.vr);
+        let drop = crate::crouch_drop(game, input, self.vr);
         let world = |hand: &Hand| {
             pose.map(|(position, rotation)| {
+                let lowered = Hand {
+                    position: hand.position - drop,
+                    ..hand.clone()
+                };
                 let p = hand_world_point(
-                    hand,
+                    &lowered,
                     position,
                     rotation,
                     dev_params::get(dev_params::GLOVE_FORWARD_CM),
