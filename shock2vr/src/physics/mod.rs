@@ -8334,8 +8334,10 @@ impl PhysicsWorld {
             } else {
                 // A ceiling (or other overhead collision) consumes the upward
                 // cast. Cancel the rise immediately, then let the next frame's
-                // downward half of the same arc settle normally.
-                if requested_vertical > 0.0 && applied_vertical < requested_vertical * 0.5 {
+                // downward half of the same arc settle normally. The current's
+                // own vertical drift is expected motion, not an obstruction.
+                let expected_vertical = requested_vertical + current_drift.y;
+                if expected_vertical > 0.0 && applied_vertical < expected_vertical * 0.5 {
                     velocity = 0.0;
                 }
                 velocity -= PLAYER_JUMP_GRAVITY / SCALE_FACTOR * self.integration_parameters.dt;
@@ -11443,6 +11445,42 @@ mod tests {
             assert!(world.get_player_translation(&player).y < 0.01);
             assert!(player.jump_velocity.is_none());
         }
+    }
+
+    /// A downward current slows a rising underwater jump; with nothing
+    /// overhead it must not read as a ceiling hit that cancels the rise.
+    #[test]
+    fn downward_current_does_not_cancel_a_rising_jump_as_a_ceiling() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1208).unwrap(),
+            ColliderBuilder::cuboid(10.0, 1.0, 10.0)
+                .translation(vector![0.0, -1.0, 0.0])
+                .build(),
+        );
+        let mut player = world.create_player(
+            vec3(0.0, player_center_above_floor(false) + 0.1, 0.0),
+            EntityId::from_inner(1209).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+        swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), false);
+        swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), true);
+        let launch = player.jump_velocity.unwrap_or(0.0);
+        assert!(launch > 0.0);
+        let drift = -0.6 * launch;
+        player.water_current_velocity = vector![0.0, drift, 0.0];
+        current_step(
+            &mut world,
+            &mut player,
+            vec3(0.0, drift / 0.8, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            PlayerMedium::Water,
+        );
+        assert!(
+            player.jump_velocity.is_some_and(|v| v > 0.0),
+            "open water must not cancel the rise: {:?}",
+            player.jump_velocity
+        );
     }
 
     #[test]
