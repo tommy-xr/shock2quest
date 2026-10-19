@@ -846,8 +846,34 @@ pub fn get_first_link_with_template_and_data<TData: Clone>(
         .map(|(template_id, data)| (*template_id, data.clone()))
 }
 
-/// Nightdive's impactor only replaces ballistic projectile families. Resolve
+/// Whether `projectile` is a bullet: a pistol, rifle or shotgun round, the
+/// hybrid's slug or the slug turret's, not an energy bolt or grenade. Resolve
 /// classes from the mounted gamesys, never hardcode archetype/runtime IDs.
+pub(crate) fn is_ballistic_projectile(world: &World, projectile: EntityId) -> bool {
+    use crate::mission::mission_core::GlobalEntityMetadata;
+    let (Some(template), Ok(hierarchy), Ok(metadata)) = (
+        entity_class_template_id(world, projectile),
+        world.borrow::<UniqueView<GlobalTemplateHierarchy>>(),
+        world.borrow::<UniqueView<GlobalEntityMetadata>>(),
+    ) else {
+        return false;
+    };
+    [
+        "pistol & rifle projectiles",
+        "shotgun projectiles",
+        "grunt shotgun slug",
+        "turret slug",
+    ]
+    .iter()
+    .any(|name| {
+        metadata
+            .0
+            .get(*name)
+            .is_some_and(|class| hierarchy.is_or_descends_from(template, class.template_id))
+    })
+}
+
+/// Nightdive's impactor only replaces ballistic projectile families.
 pub(crate) fn ballistic_impact_appearance(
     world: &World,
     projectile: EntityId,
@@ -856,24 +882,7 @@ pub(crate) fn ballistic_impact_appearance(
 ) -> Option<crate::particle_effects::ImpactAppearance> {
     use crate::mission::mission_core::GlobalEntityMetadata;
     use crate::particle_effects::{ImpactAppearance, ImpactSurface};
-    let template = entity_class_template_id(world, projectile)?;
-    let hierarchy = world.borrow::<UniqueView<GlobalTemplateHierarchy>>().ok()?;
-    let metadata = world.borrow::<UniqueView<GlobalEntityMetadata>>().ok()?;
-    let belongs_to = |template, name: &str| {
-        metadata
-            .0
-            .get(name)
-            .is_some_and(|class| hierarchy.is_or_descends_from(template, class.template_id))
-    };
-    if ![
-        "pistol & rifle projectiles",
-        "shotgun projectiles",
-        "grunt shotgun slug",
-        "turret slug",
-    ]
-    .iter()
-    .any(|name| belongs_to(template, name))
-    {
+    if !is_ballistic_projectile(world, projectile) {
         return None;
     }
     if let Some(material) = surface_material {
@@ -884,6 +893,14 @@ pub(crate) fn ballistic_impact_appearance(
     }
     let victim = resolve_proxy_entity(world, victim);
     let victim_template = entity_class_template_id(world, victim)?;
+    let hierarchy = world.borrow::<UniqueView<GlobalTemplateHierarchy>>().ok()?;
+    let metadata = world.borrow::<UniqueView<GlobalEntityMetadata>>().ok()?;
+    let belongs_to = |template, name: &str| {
+        metadata
+            .0
+            .get(name)
+            .is_some_and(|class| hierarchy.is_or_descends_from(template, class.template_id))
+    };
     // Explicit remaster overrides, from sq_scripts/impactor.nut. In particular
     // assassins are metal despite their flesh classification in legacy data.
     let surface = if belongs_to(victim_template, "grub") || belongs_to(victim_template, "arachnid")
