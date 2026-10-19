@@ -266,3 +266,26 @@ export async function aimMfdAt(
   assert.ok(Math.hypot(...sub(actual.origin, origin)) < .001, "scanner follows this frame's device pose");
   assert.ok(dot(quatRotate(actual.rotation, [0, 0, -1]), direction) > .9999);
 }
+
+/** Move a VR hand onto a thigh holster (slot 0 right, 1 left) without changing its grip. */
+export async function reachHolster(
+  game: GameServer,
+  hand: "left" | "right",
+  slot: number,
+) {
+  const player = (await game.info()).player;
+  const center = player.hand_feedback?.holsters?.centers?.[slot];
+  assert.ok(center, "tracked holster zones must be published");
+  await game.input.set(
+    `${hand}_hand.position`,
+    quatRotate(quatConjugate(player.rotation), sub(center, player.position)),
+  );
+  await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
+  await game.step({ frames: 5 });
+  assert.equal(
+    (await game.info()).player.hand_feedback?.holsters?.near[
+      hand === "left" ? 0 : 1
+    ],
+    slot,
+  );
+}

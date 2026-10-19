@@ -10223,6 +10223,20 @@ impl MissionCore {
         }
     }
 
+    /// Put `entity_id` in a thigh holster (slot 0 right, 1 left), out of any
+    /// container and the physics world.
+    pub(crate) fn holster(&mut self, entity_id: EntityId, slot: usize) {
+        self.detach_from_containers(entity_id);
+        self.make_un_physical(entity_id);
+        self.world.add_component(
+            entity_id,
+            (
+                crate::runtime_props::RuntimePropHolstered { slot: slot as u8 },
+                PropHasRefs(false),
+            ),
+        );
+    }
+
     /// Remove every incoming `Contains` link to `entity_id` (take it out of
     /// whatever container holds it) without giving it world presence.
     fn detach_from_containers(&mut self, entity_id: EntityId) {
@@ -20034,15 +20048,7 @@ impl MissionCore {
                     }
                 }
                 VirtualHandEffect::HolsterItem { entity_id, slot } => {
-                    self.detach_from_containers(entity_id);
-                    self.make_un_physical(entity_id);
-                    self.world.add_component(
-                        entity_id,
-                        (
-                            crate::runtime_props::RuntimePropHolstered { slot: slot as u8 },
-                            PropHasRefs(false),
-                        ),
-                    );
+                    self.holster(entity_id, slot);
                     deferred.push(crate::scripts::script_util::announce(
                         entity_id,
                         "place_item",

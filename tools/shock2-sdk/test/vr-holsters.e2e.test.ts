@@ -4,8 +4,7 @@ import { GameServer } from "../src/index.js";
 import {
   aimVrHandAt,
   aimVrHandAtCanvas,
-  quatConjugate,
-  quatRotate,
+  reachHolster,
   sub,
 } from "./helpers/vr-hand.js";
 import { ammoOf } from "./helpers/weapon.js";
@@ -13,27 +12,6 @@ import { ammoOf } from "./helpers/weapon.js";
 const enabled = process.env.SHOCK2_E2E === "1";
 const owner = (hand: "left" | "right") =>
   hand === "left" ? "wielded_entity_id" : "right_hand_entity_id";
-async function reach(
-  game: GameServer,
-  hand: "left" | "right",
-  slot: number,
-) {
-  const player = (await game.info()).player;
-  const center = player.hand_feedback?.holsters?.centers?.[slot];
-  assert.ok(center, "tracked holster zones must be published");
-  await game.input.set(
-    `${hand}_hand.position`,
-    quatRotate(quatConjugate(player.rotation), sub(center, player.position)),
-  );
-  await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
-  await game.step({ frames: 5 });
-  assert.equal(
-    (await game.info()).player.hand_feedback?.holsters?.near[
-      hand === "left" ? 0 : 1
-    ],
-    slot,
-  );
-}
 
 for (const hand of ["left", "right"] as const) {
   for (const slot of [0, 1]) {
@@ -59,7 +37,7 @@ for (const hand of ["left", "right"] as const) {
       // Holsters are dedicated capacity even when the largest backpack is full.
       for (let i = 0; i < 45; i++) await game.player.spawnItem(-1221);
     }
-    await reach(game, hand, slot);
+    await reachHolster(game, hand, slot);
     assert.equal((await game.info()).player[owner(hand)], item.id, "reaching is not releasing");
     await game.input.set(`${hand}_hand.squeeze`, 0);
     await game.step({ frames: 8 });
@@ -92,7 +70,7 @@ for (const [name, template] of [
     await aimVrHandAt(game, item.position, 0.2, 1);
     await game.step({ frames: 5 });
     assert.equal((await game.info()).player.right_hand_entity_id, item.id);
-    await reach(game, "right", 0);
+    await reachHolster(game, "right", 0);
     await game.input.set("right_hand.squeeze", 0);
     await game.step({ frames: 8 });
     assert.equal((await game.info()).player.hand_feedback?.holsters?.items[0], item.id);
@@ -110,7 +88,7 @@ test("a shotgun without an authored holster pose is refused", { skip: !enabled, 
   const item = (await game.entities.list()).entities.find(e => e.template_id === -19)!;
   await aimVrHandAt(game, item.position, 0.2, 1);
   await game.step({ frames: 5 });
-  await reach(game, "right", 0);
+  await reachHolster(game, "right", 0);
   await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 8 });
   const player = (await game.info()).player;
@@ -127,13 +105,13 @@ test("occupied holster retains the refused weapon until a deliberate regrip", { 
   assert.ok(pistol && wrench);
   await aimVrHandAt(game, pistol.position, 0.2, 1);
   await game.step({ frames: 5 });
-  await reach(game, "right", 0);
+  await reachHolster(game, "right", 0);
   await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 8 });
   await aimVrHandAt(game, wrench.position, 0.2, 1);
   await game.step({ frames: 5 });
   assert.equal((await game.info()).player.right_hand_entity_id, wrench.id);
-  await reach(game, "right", 0);
+  await reachHolster(game, "right", 0);
   await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 8 });
   assert.equal((await game.info()).player.right_hand_entity_id, wrench.id);
@@ -166,7 +144,7 @@ test("holstered weapon survives real mission save, load, and transition", { skip
   // Keep the interface open while transferring directly from backpack to thigh.
   assert.equal((await game.info()).player.right_hand_entity_id, item.id);
   const ammo = ammoOf(await game.entities.detail(item.id));
-  await reach(game, "right", 0);
+  await reachHolster(game, "right", 0);
   await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 8 });
   const name = `holster-${Date.now()}`;
@@ -177,7 +155,7 @@ test("holstered weapon survives real mission save, load, and transition", { skip
   assert.ok(saved != null);
   assert.equal(ammoOf(await game.entities.detail(saved)), ammo);
   assert.equal((await game.physics.bodies({ entityId: saved })).bodies.length, 0);
-  await reach(game, "left", 0);
+  await reachHolster(game, "left", 0);
   await game.input.set("left_hand.squeeze", 1);
   await game.step({ frames: 8 });
   assert.equal((await game.info()).player.wielded_entity_id, saved);
@@ -230,7 +208,7 @@ test("drawing a holstered wrench restores its physical melee body", { skip: !ena
   await aimVrHandAt(game, wrench.position, 0.2, 1);
   await game.step({ frames: 5 });
   assert.equal((await game.info()).player.right_hand_entity_id, wrench.id);
-  await reach(game, "right", 0);
+  await reachHolster(game, "right", 0);
   await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 8 });
   assert.equal((await game.info()).player.hand_feedback?.holsters?.items[0], wrench.id);
@@ -252,7 +230,7 @@ for (const slot of [0, 1]) {
     await aimVrHandAt(game, amp.position, 0.2, 1);
     await game.step({ frames: 5 });
     assert.equal((await game.info()).player.right_hand_entity_id, amp.id);
-    await reach(game, "right", slot);
+    await reachHolster(game, "right", slot);
     await game.input.set("right_hand.squeeze", 0);
     await game.step({ frames: 8 });
     assert.equal((await game.info()).player.right_hand_entity_id, null);
@@ -264,7 +242,7 @@ for (const slot of [0, 1]) {
     assert.equal(icon?.entity_id, amp.id, "the paperdoll names the physically matching holster");
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
-    await reach(game, "right", slot);
+    await reachHolster(game, "right", slot);
     await game.input.set("right_hand.squeeze", 1);
     await game.step({ frames: 8 });
     assert.equal((await game.info()).player.right_hand_entity_id, amp.id);

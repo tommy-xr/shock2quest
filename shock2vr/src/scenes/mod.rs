@@ -24,6 +24,7 @@ pub mod cutscene_skip;
 pub mod debrief;
 pub mod debug_ai_ranged;
 pub mod debug_annelid;
+pub mod debug_bullet_time;
 pub mod debug_camera;
 pub mod debug_common;
 pub mod debug_gamepig;
@@ -181,6 +182,10 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     (
         "debug_ai_ranged",
         debug_ai_ranged::create_debug_ai_ranged_scene,
+    ),
+    (
+        "debug_bullet_time",
+        debug_bullet_time::create_debug_bullet_time_scene,
     ),
     (
         "debug_interactions",
