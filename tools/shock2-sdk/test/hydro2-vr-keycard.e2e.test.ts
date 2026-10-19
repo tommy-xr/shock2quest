@@ -17,7 +17,7 @@ import {
 //   corpse 754 --Contains--> card 942 (PropKeySrc region 128)
 //   card slots 1120/1122 --SwitchLink--> HydroSectorB door 1127
 //
-// VR physical grips hold found cards until release. The downloaded credential
+// VR physical grips hold found cards until release or trigger. The downloaded credential
 // opens its authored gate through either an empty-hand frob or a tricorder scan.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const CORPSE = 754;
@@ -144,8 +144,8 @@ test(
   },
 );
 
-test(
-  "Hydro2 VR strip grip holds Card B and release downloads its credential",
+for (const collect of ["release", "trigger"] as const) test(
+  `Hydro2 VR strip grip holds Card B and ${collect} downloads its credential`,
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -200,8 +200,13 @@ test(
     assert.equal((await game.ui.state()).mode, "shooter");
 
     await game.input.set("right_hand.position", [0.3, 0.9, -0.5]);
-    await game.input.set("right_hand.squeeze", 0);
-    await game.step({ frames: 8 });
+    const sparks = async () => (await game.entities.byTemplate(-1944)).length; // sparkley sphere
+    const idleSparks = await sparks();
+    await game.input.set(`right_hand.${collect === "release" ? "squeeze" : "trigger"}`, collect === "release" ? 0 : 1);
+    await game.step({ frames: 2 });
+    assert.equal(await sparks(), idleSparks + 1, "the card dissolves into sparks");
+    await game.input.setMany({ "right_hand.squeeze": 0, "right_hand.trigger": 0 });
+    await game.step({ frames: 30 }); // the card's shrinking stand-in is gone
     await assertCardCollectedAndDoorOpens(game, CARD_ARCHETYPE);
   },
 );

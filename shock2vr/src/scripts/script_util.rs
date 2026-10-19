@@ -1,10 +1,13 @@
-use crate::mission::entity_creator::initialize_entity_with_props;
+use crate::mission::entity_creator::{CreateEntityOptions, initialize_entity_with_props};
 use crate::mission::mission_core::GlobalTemplateHierarchy;
 use crate::{
     runtime_props::RuntimePropTransform,
     util::{point3_to_vec3, resolve_proxy_entity},
 };
-use cgmath::{Transform, Vector3, point3};
+use cgmath::{
+    InnerSpace, Matrix3, Matrix4, Point3, Quaternion, SquareMatrix, Transform, Vector3, point3,
+    vec3,
+};
 use dark::{
     EnvSoundQuery,
     properties::{
@@ -37,6 +40,66 @@ pub(crate) fn entity_class_template_id(world: &World, entity: EntityId) -> Optio
                 .ok()
                 .and_then(|templates| templates.get(entity).ok().map(|id| id.template_id))
         })
+}
+
+/// Seconds a held item broken down into nanites takes to shrink away.
+const DISSOLVE_SHRINK_SECONDS: f32 = 0.4;
+
+/// A held item breaking down into nanites: sparks corkscrew off it and, when
+/// it is used up, a visual stand-in shrinks away where it was held.
+pub(crate) fn dissolve_cue(world: &World, item: EntityId, consumed: bool) -> Vec<Effect> {
+    let Some(transform) = world
+        .borrow::<View<RuntimePropTransform>>()
+        .ok()
+        .and_then(|v| v.get(item).ok().map(|t| t.0))
+    else {
+        return Vec::new();
+    };
+    let position = Point3::from_homogeneous(transform.w);
+    let mut effects = vec![Effect::CreateEntityByTemplateName {
+        source_entity_id: item,
+        template_name: "sparkley sphere".into(),
+        position,
+        orientation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        initial_velocity: vec3(0.0, 0.0, 0.0),
+        options: CreateEntityOptions {
+            transient_fx: true,
+            ..Default::default()
+        },
+    }];
+    // The class template, not a mission-local object id that may name some
+    // other object after a level change; the model as rendered in the hand.
+    if let (true, Some(template_id)) = (consumed, entity_class_template_id(world, item)) {
+        // Match the item as rendered in the hand, which can be scaled and,
+        // in a mirrored hand, reflected (kept as a negative x scale).
+        let (x, y, z) = (
+            transform.x.truncate(),
+            transform.y.truncate(),
+            transform.z.truncate(),
+        );
+        let mut scale = vec3(x.magnitude(), y.magnitude(), z.magnitude());
+        let mut basis = Matrix3::from_cols(x / scale.x, y / scale.y, z / scale.z);
+        if basis.determinant() < 0.0 {
+            basis.x = -basis.x;
+            scale.x = -scale.x;
+        }
+        effects.push(Effect::CreateEntity {
+            template_id,
+            position,
+            orientation: Quaternion::from(basis),
+            root_transform: Matrix4::identity(),
+            options: CreateEntityOptions {
+                model_override: world
+                    .borrow::<View<dark::properties::PropModelName>>()
+                    .ok()
+                    .and_then(|v| v.get(item).ok().map(|m| m.0.clone())),
+                scale_override: Some(scale),
+                shrink_away_seconds: Some(DISSOLVE_SHRINK_SECONDS),
+                ..Default::default()
+            },
+        });
+    }
+    effects
 }
 
 /// Whether authored death policy dispatches Slain while retaining the object.
@@ -241,7 +304,8 @@ pub(crate) fn is_cyber_module(world: &World, entity: EntityId) -> bool {
     entity_has_script(world, entity, EXP_COOKIE_SCRIPT)
 }
 
-/// Pickups that VR can hold before downloading into the personal card on release.
+/// Pickups that VR can hold before downloading into the personal card on release
+/// or trigger; a free hand's trigger ray collects them in place.
 /// Logs deliberately retain immediate collection; invalid/unused software is not
 /// claimed because its script cannot install or consume it.
 pub(crate) fn is_download_pickup(world: &World, entity: EntityId) -> bool {
@@ -262,7 +326,7 @@ pub(crate) fn is_download_pickup(world: &World, entity: EntityId) -> bool {
 ///
 /// Immediate acquisition routes use Frob instead of transferring these into a
 /// backpack cell. VR physical grips separately use `is_download_pickup` to
-/// defer collection until release.
+/// defer collection until release or trigger.
 pub(crate) fn is_always_collected(world: &World, entity: EntityId) -> bool {
     crate::virtual_hand::is_key_source(world, entity)
         || is_nanite_pickup(world, entity)

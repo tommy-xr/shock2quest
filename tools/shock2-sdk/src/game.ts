@@ -488,6 +488,11 @@ export class InputApi {
     await this.client.post("/v1/control/input", { channel, value });
   }
 
+  /** Set several channels in one frame, e.g. both hands' triggers. */
+  async setMany(values: Record<string, unknown>): Promise<void> {
+    await this.client.post("/v1/control/input", values);
+  }
+
   /** Hold or release the ordinary production jump button. */
   async setJump(pressed: boolean): Promise<void> {
     await this.set("jump", pressed ? 1 : 0);

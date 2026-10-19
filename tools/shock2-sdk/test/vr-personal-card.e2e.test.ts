@@ -6,7 +6,7 @@ import { add, sub, scale, normalize, quatRotate, quatConjugate, aimVrHandAt, dra
 
 const enabled = process.env.SHOCK2_E2E === "1";
 
-test("VR nanites credit on release exactly once, with sound and releasing-hand haptics", {
+for (const collect of ["release", "trigger"] as const) test(`VR nanites credit on ${collect} exactly once, with sound, haptics and sparks`, {
   skip: !enabled, timeout: 180_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
@@ -29,18 +29,56 @@ test("VR nanites credit on release exactly once, with sound and releasing-hand h
   assert.equal(player.stats?.nanites, 0);
   const pulses = player.hand_feedback?.haptics?.sequence[1] ?? 0;
   const since = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+  const sparks = async () => (await game.entities.byTemplate(-1944)).length; // sparkley sphere
+  const idleSparks = await sparks();
   await game.input.set("right_hand.position", [.3, .9, -.55]);
-  await game.input.set("right_hand.squeeze", 0);
+  if (collect === "release") await game.input.set("right_hand.squeeze", 0);
+  else await game.input.set("right_hand.trigger", 1);
   await game.step({ frames: 12 });
   player = (await game.info()).player;
   assert.equal(player.right_hand_entity_id, null);
   assert.equal(player.stats?.nanites, 250);
   assert.equal(player.hand_feedback?.haptics?.sequence[1], pulses + 1);
-  assert.equal((await game.entities.byTemplate(257)).length, 0);
+  assert.equal(await sparks(), idleSparks + 1, "the pile breaks down into sparks");
   const audio = (await game.audio.recent()).sounds.filter(s => s.sequence > since);
   assert.ok(audio.length > 0, "collection must emit an audible cue");
   await game.step({ frames: 60 });
+  assert.equal((await game.entities.byTemplate(257)).length, 0, "its shrinking stand-in is gone");
+  assert.equal(await sparks(), idleSparks);
   assert.equal((await game.info()).player.stats?.nanites, 250);
+});
+
+// Earth's 250-nanite pile, and MedSci1's loose Science Card.
+for (const [label, mission, obj] of [["nanites", "earth.mis", 257], ["a keycard", "medsci1.mis", 338]] as const) test(`VR ${label} collected by both free hands' rays dissolve once`, {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission, port: 0, debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  const [pile] = await game.entities.byTemplate(obj);
+  assert.ok(pile);
+  const [x, y, z] = pile.position;
+  await game.player.teleport({ x: x + .8, y: y + 1, z: z + .8 });
+  await game.step({ frames: 120 });
+  const aim = await game.player.aimAt(pile.id, { hitbox: "center", visibility: "required" });
+  assert.ok(aim.target_confirmed);
+  for (const hand of ["left", "right"] as const) await aimVrHandAt(game, aim.world_point, .6, 0, 0, { hand });
+  await game.step({ frames: 4 });
+  const sparks = async () => (await game.entities.byTemplate(-1944)).length; // sparkley sphere
+  const idleSparks = await sparks();
+  const before = new Set((await game.entities.list()).entities.map(e => e.id));
+  // The stand-in is spawned from the pile's archetype, so find it as a new entity where the pile was.
+  const standIns = async () => (await game.entities.list()).entities.filter(e => !before.has(e.id)
+    && e.template_id !== -1944 && Math.hypot(...sub(e.position, pile.position)) < .3);
+  await game.input.setMany({ "left_hand.trigger": 1, "right_hand.trigger": 1 });
+  await game.step({ frames: 12 });
+  if (obj === 257) assert.equal((await game.info()).player.stats?.nanites, 250);
+  assert.equal((await game.entities.byTemplate(obj)).length, 0, "collected");
+  assert.equal((await game.player.inventory()).items.find(item => item.entity_id === pile.id), undefined);
+  assert.equal(await sparks(), idleSparks + 1, "the pile breaks down into sparks");
+  assert.equal((await standIns()).length, 1, "one stand-in shrinks in its place");
+  await game.step({ frames: 60 });
+  assert.equal((await standIns()).length, 0, "the stand-in is gone");
+  assert.equal(await sparks(), idleSparks);
 });
 
 for (const hand of ["left", "right"] as const) {
