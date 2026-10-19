@@ -555,7 +555,8 @@ pub(super) struct Holsters {
     pub centers: Option<[Vector3<f32>; 2]>,
     pub near: [Option<usize>; 2],
     pressed: [bool; 2],
-    pressed_item: [Option<EntityId>; 2],
+    /// The item each tracked hand squeezed last frame: a release edge needs one.
+    pub(super) pressed_item: [Option<EntityId>; 2],
     pub retained: RetainedRelease,
 }
 

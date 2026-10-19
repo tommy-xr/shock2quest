@@ -6517,6 +6517,16 @@ impl MissionCore {
             && self.player_is_alive()
             && self.player_controls_enabled
             && crate::cyber_interface::installed(&self.world);
+        let holster_posed = held.map(|entity| {
+            entity.is_some_and(|entity| {
+                self.holsters
+                    .poses
+                    .for_entity(&self.world, entity)
+                    .is_some()
+            })
+        });
+        // Last frame's tracked squeeze, for the paperdoll release edge below.
+        let gripped = self.holsters.pressed_item;
         let holster_actions = self.holsters.update(
             &body_input,
             held,
@@ -6532,14 +6542,7 @@ impl MissionCore {
                     crate::virtual_hand::is_wieldable_weapon(&self.world, entity)
                 })
             }),
-            held.map(|entity| {
-                entity.is_some_and(|entity| {
-                    self.holsters
-                        .poses
-                        .for_entity(&self.world, entity)
-                        .is_some()
-                })
-            }),
+            holster_posed,
             body_gear,
             tick.elapsed.as_secs_f32(),
         );
@@ -6588,21 +6591,20 @@ impl MissionCore {
         let holster_actions = super::holsters::paperdoll_actions(
             if body_gear { holster_well } else { [None; 2] },
             held,
+            // A real release edge, as the thigh holster requires: a grip held
+            // open by a retain or restore never squeezed, so it never claims.
+            // Downloads and logs keep their collecting release.
             std::array::from_fn(|i| {
-                [&hands_input.left_hand, &hands_input.right_hand][i].squeeze_value
-                    < crate::ui::VR_TRIGGER_THRESHOLD
-                    && !self.holsters.retained.keep_grip(i)
-                    && !self.chest_slots.retained.keep_grip(i)
-                    && chest_actions[i].is_none()
-            }),
-            held.map(|entity| {
-                entity.is_some_and(|entity| {
-                    self.holsters
-                        .poses
-                        .for_entity(&self.world, entity)
-                        .is_some()
+                held[i].is_some_and(|entity| {
+                    gripped[i] == Some(entity)
+                        && [&hands_input.left_hand, &hands_input.right_hand][i].squeeze_value
+                            < crate::ui::VR_TRIGGER_THRESHOLD
+                        && chest_actions[i].is_none()
+                        && !crate::scripts::script_util::is_always_collected(&self.world, entity)
+                        && !crate::scripts::script_util::is_download_pickup(&self.world, entity)
                 })
             }),
+            holster_posed,
             super::holsters::occupants(&self.world),
             holster_actions,
         );
@@ -8012,7 +8014,8 @@ impl MissionCore {
             let item = hand_items[slot]?;
             let point = ray.canvas_hit?;
             // A release over a paperdoll holster well holsters instead.
-            if !self.flat_ui.strip_contains(point) || self.flat_ui.holster_slot_at(point).is_some()
+            if !self.flat_ui.strip_contains(point)
+                || (body_gear && self.flat_ui.holster_slot_at(point).is_some())
             {
                 return None;
             }
