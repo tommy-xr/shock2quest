@@ -414,10 +414,15 @@ impl VirtualHand {
                 let mut msgs = Vec::new();
 
                 // A held download other than a keycard also collects on
-                // trigger, through the same drop a release takes.
+                // trigger, through the same drop a release takes. Never from
+                // an untracked fallback pose.
                 let trigger_collects = prev.trigger_value < 0.5
                     && input_hand.trigger_value > 0.5
-                    && maintenance_target.is_none()
+                    && crate::vr_support::GripPose {
+                        position: input_hand.position,
+                        rotation: input_hand.rotation,
+                    }
+                    .is_tracked()
                     && crate::scripts::script_util::is_download_pickup(world, entity_id)
                     && !is_key_source(world, entity_id);
 
@@ -428,7 +433,7 @@ impl VirtualHand {
                         motion: release,
                     }];
 
-                    if let Some(target) = release_target.filter(|_| !trigger_collects) {
+                    if let Some(target) = release_target {
                         msgs.push(VirtualHandEffect::OutMessage {
                             message: Message {
                                 to: target,
@@ -1917,6 +1922,27 @@ mod tests {
         assert!(collects(&world, soft), "soft");
         let keycard = spawn_collected(&mut world, CollectedKind::KeyCard);
         assert!(!collects(&world, keycard), "a keycard waits for release");
+
+        let mut untracked = Hand::default();
+        untracked.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        untracked.squeeze_value = 1.0;
+        untracked.trigger_value = 1.0;
+        let (hand, _) = VirtualHand::update(
+            &VirtualHand::new(Handedness::Right).grab_entity(&world, soft),
+            &PhysicsWorld::new(),
+            &world,
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            &untracked,
+            None,
+            Vector3::zero(),
+            1.0 / 60.0,
+        );
+        assert_eq!(
+            hand.get_held_entity(),
+            Some(soft),
+            "an untracked fallback trigger never collects"
+        );
     }
 
     /// Trigger and grip are still down after a trigger collect; they must not
