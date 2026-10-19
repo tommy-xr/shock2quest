@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 
+use cgmath::{EuclideanSpace, Point3, Quaternion, vec3};
 use dark::{
     EnvSoundQuery,
     properties::{PropClassTag, PropPosition},
 };
 use engine::audio::AudioHandle;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
+use crate::Handedness;
+use crate::mission::PlayerInfo;
+use crate::mission::entity_creator::CreateEntityOptions;
 use crate::physics::PhysicsWorld;
 use crate::time::Time;
 
@@ -166,6 +170,52 @@ fn set_attached_fx_active(world: &World, station_id: EntityId, active: bool) -> 
     )
 }
 
+/// The station's charge cue on a carried `item` charged elsewhere (ElectroPsi):
+/// its activate sound and, for an item in a VR hand, its sparkle on the item
+/// plus a firm pulse in that hand. A flat inventory target is not in the world,
+/// so it only gets the sound.
+pub(crate) fn item_recharge_cue(world: &World, item: EntityId) -> Vec<Effect> {
+    let Ok(player) = world.borrow::<UniqueView<PlayerInfo>>() else {
+        return Vec::new();
+    };
+    let hand = crate::mission::mission_core::presentation_is_vr(world)
+        .then(|| {
+            [Handedness::Left, Handedness::Right]
+                .into_iter()
+                .find(|&hand| crate::wielded_weapon::held_by_hand(world, hand) == Some(item))
+        })
+        .flatten();
+    let held_at = hand.and_then(|_| crate::util::get_entity_position(world, item));
+    // The recharge station's devicetype tag picks the station's activate sound.
+    let mut effects = vec![Effect::PlayEnvironmentalSound {
+        audio_handle: AudioHandle::new(),
+        query: EnvSoundQuery::from_tag_values(vec![
+            ("event", "activate"),
+            ("devicetype", "recharge"),
+        ]),
+        position: held_at.unwrap_or(player.pos),
+    }];
+    if let (Some(hand), Some(at)) = (hand, held_at) {
+        effects.push(Effect::CreateEntityByTemplateName {
+            source_entity_id: item,
+            template_name: "RechargeFX".into(),
+            position: Point3::from_vec(at),
+            orientation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            initial_velocity: vec3(0.0, 0.0, 0.0),
+            options: CreateEntityOptions {
+                attach_to: Some(item),
+                transient_fx: true,
+                ..Default::default()
+            },
+        });
+        effects.push(Effect::HandHaptic {
+            hand,
+            pulse: crate::haptics::TOOL_APPLIED,
+        });
+    }
+    effects
+}
+
 fn recharge_message(to: &EntityId) -> Effect {
     Effect::Send {
         msg: Message {
@@ -204,7 +254,8 @@ mod tests {
 
     use crate::{physics::PhysicsWorld, time::Time, vr_config::Handedness};
 
-    use super::{Effect, EnergyStation, MessagePayload, Script};
+    use super::{Effect, EnergyStation, MessagePayload, PlayerInfo, Script, item_recharge_cue};
+    use crate::runtime_props::RuntimePropTransform;
 
     fn make_world() -> (World, EntityId, EntityId) {
         let mut world = World::new();
@@ -215,6 +266,47 @@ mod tests {
         },));
         let item = world.add_entity(());
         (world, station, item)
+    }
+
+    #[test]
+    fn item_recharge_cue_sparkles_and_pulses_only_an_item_in_a_vr_hand() {
+        let cue = |mode, held: bool| {
+            let mut world = World::new();
+            let item = world.add_entity((RuntimePropTransform(cgmath::Matrix4::from_translation(
+                vec3(1.0, 2.0, 3.0),
+            )),));
+            let player = world.add_entity(());
+            world.add_unique(PlayerInfo {
+                pos: vec3(0.0, 0.0, 0.0),
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                entity_id: player,
+                left_hand_entity_id: None,
+                right_hand_entity_id: held.then_some(item),
+                inventory_entity_id: player,
+            });
+            world.add_unique(crate::mission::GlobalPresentationMode(mode));
+            item_recharge_cue(&world, item)
+        };
+        let vr = cue(crate::PresentationMode::Vr, true);
+        assert!(matches!(
+            vr.as_slice(),
+            [
+                Effect::PlayEnvironmentalSound { position, .. },
+                Effect::CreateEntityByTemplateName { template_name, options, .. },
+                Effect::HandHaptic { hand: Handedness::Right, .. },
+            ] if *position == vec3(1.0, 2.0, 3.0)
+                && template_name == "RechargeFX"
+                && options.transient_fx
+        ));
+        for (mode, held) in [
+            (crate::PresentationMode::Vr, false),
+            (crate::PresentationMode::Flat, true),
+        ] {
+            assert!(matches!(
+                cue(mode, held).as_slice(),
+                [Effect::PlayEnvironmentalSound { position, .. }] if *position == vec3(0.0, 0.0, 0.0)
+            ));
+        }
     }
 
     fn hover(item: EntityId) -> MessagePayload {

@@ -6,7 +6,7 @@ use cgmath::{Matrix4, vec3};
 use dark::importers::TEXTURE_IMPORTER;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{ParticleSystem, SceneObject},
+    scene::{LaunchShape, ParticleSystem, SceneObject},
     texture::{TextureOptions, TextureTrait},
 };
 use std::{rc::Rc, time::Duration};
@@ -501,6 +501,7 @@ pub(crate) enum EnhancedEffect {
     EmpLegacyJet,
     EmpExplosion { overload: bool },
     EmpLegacyPulse,
+    ItemRecharge,
 }
 
 impl EnhancedEffect {
@@ -513,6 +514,13 @@ impl EnhancedEffect {
         ]
         .into_iter()
         .find_map(|(name, kind)| (lookup(name) == Some(template)).then_some(kind))
+    }
+
+    /// A runtime-spawned (transient) copy of an authored effect, which plays on
+    /// a carried item instead of the fixture it was authored for: the recharge
+    /// station's column of glow, which would engulf a hand-held item.
+    pub fn for_transient(template: i32, lookup: impl Fn(&str) -> Option<i32>) -> Option<Self> {
+        (lookup("rechargefx") == Some(template)).then_some(Self::ItemRecharge)
     }
 
     /// Restrict replacements to cosmetic riders of real EMP shots. These
@@ -558,6 +566,8 @@ impl EnhancedEffect {
             Self::EmpCore { .. } | Self::EmpArcs { .. } | Self::EmpLegacyJet => {
                 &["NDsbll", "NDarc", "NDsprk"]
             }
+            // The default glow disk, like the station's own group.
+            Self::ItemRecharge => &[],
         };
         let frames: Vec<_> = sprite_names
             .iter()
@@ -573,6 +583,7 @@ impl EnhancedEffect {
                 }
                 Self::EmpExplosion { overload } => emp_explosion_layers(overload, &frames),
                 Self::EmpLegacyPulse => vec![],
+                Self::ItemRecharge => vec![item_recharge_layer()],
                 _ => emp_layers(self, &frames),
             },
             replaces_parent_model: matches!(self, Self::EmpCore { .. }),
@@ -704,6 +715,26 @@ fn emp_layers(kind: EnhancedEffect, frames: &[Vec<Rc<dyn TextureTrait>>]) -> Vec
         ],
         _ => unreachable!("non-rendering EMP component handled above"),
     }
+}
+
+/// The recharge station's warm glow at item scale: small sparks rising around
+/// the item for about a second, riding it as the hand moves.
+fn item_recharge_layer() -> ParticleSystem {
+    ParticleSystem::new()
+        .with_num_particles(48)
+        .with_launch_time(Duration::from_millis(15))
+        .with_emit_duration(1.2)
+        .with_launch_shape(LaunchShape::Cylinder {
+            radius: (0.04, 0.1),
+        })
+        .with_launch_bounding_box(vec3(0.0, -0.1, 0.0), vec3(0.0, 0.05, 0.0))
+        .with_velocity(vec3(0.0, 0.15, 0.0), vec3(0.0, 0.35, 0.0))
+        .with_particle_size(0.05, 0.1)
+        .with_lifetime(0.35, 0.6)
+        .with_alpha(1.0)
+        .with_fade_in_time(0.05)
+        .with_fade_time(0.3)
+        .with_color(vec3(1.0, 0.88, 0.62))
 }
 
 /// A brief expanding burst, followed by a slower cloud. The parent owns the
@@ -984,6 +1015,28 @@ mod tests {
             assert!(!effect.is_done());
         }
         assert!(emp_layers(EnhancedEffect::EmpLegacyJet, &frames).is_empty());
+    }
+
+    #[test]
+    fn transient_recharge_glow_is_item_scale_and_finishes() {
+        let lookup = |name: &str| (name == "rechargefx").then_some(-2914);
+        assert_eq!(
+            EnhancedEffect::for_transient(-2914, lookup),
+            Some(EnhancedEffect::ItemRecharge)
+        );
+        assert_eq!(EnhancedEffect::for_transient(-1, lookup), None);
+        // The station's own authored group keeps its legacy presentation.
+        assert_eq!(EnhancedEffect::for_template(-2914, lookup), None);
+        let mut effect = ParticleEffect::from(item_recharge_layer());
+        let frame = Duration::from_millis(100);
+        for _ in 0..11 {
+            effect.update(frame, Matrix4::identity());
+        }
+        assert!(!effect.is_done(), "still emitting at 1.1 s");
+        for _ in 0..8 {
+            effect.update(frame, Matrix4::identity());
+        }
+        assert!(effect.is_done());
     }
 
     #[test]

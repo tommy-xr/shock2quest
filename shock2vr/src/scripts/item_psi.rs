@@ -141,6 +141,7 @@ pub fn resolve(world: &World, request: ItemUse, target: EntityId, roll: i32) -> 
                         capacity: charged,
                     },
                     message("Item recharged."),
+                    Effect::combine(super::energy_station::item_recharge_cue(world, target)),
                 ]
             } else if let Some(energy) = prop!(world, target, PropEnergy) {
                 let increment = amount.min(crate::implants::recharge_capacity(world) - energy.0);
@@ -154,6 +155,7 @@ pub fn resolve(world: &World, request: ItemUse, target: EntityId, roll: i32) -> 
                         recharge: true,
                     },
                     message("Item recharged."),
+                    Effect::combine(super::energy_station::item_recharge_cue(world, target)),
                 ]
             } else {
                 return message("This item cannot be recharged.");

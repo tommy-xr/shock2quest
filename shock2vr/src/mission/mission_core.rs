@@ -4480,6 +4480,7 @@ impl MissionCore {
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
                 Matrix4::identity(),
                 false,
+                false,
                 0,
                 None,
             );
@@ -8184,6 +8185,13 @@ impl MissionCore {
                                         lookup,
                                     )
                                 })
+                                .or_else(|| {
+                                    v_transient_fx.contains(id).then_some(())?;
+                                    crate::particle_effects::EnhancedEffect::for_transient(
+                                        template.template_id,
+                                        lookup,
+                                    )
+                                })
                             });
                             if let Some(effect) = enhanced.and_then(|kind| kind.build(asset_cache))
                             {
@@ -10339,6 +10347,7 @@ impl MissionCore {
     ) -> EntityCreationInfo {
         let authored_velocity_frame = additional_options.authored_velocity_frame;
         let transient_fx = additional_options.transient_fx;
+        let caller_hosted = rider_depth == 0 && additional_options.attach_to.is_some();
         let has_spawn_clearance = additional_options.projectile_launch_origin.is_some();
         let created_entity = {
             entity_creator::create_entity_with_position(
@@ -10389,6 +10398,7 @@ impl MissionCore {
             orientation,
             root_transform,
             transient_fx,
+            caller_hosted,
             rider_depth,
             exclude_template,
         );
@@ -10406,6 +10416,8 @@ impl MissionCore {
         orientation: Quaternion<f32>,
         root_transform: Matrix4<f32>,
         transient_fx: bool,
+        // The caller bolted this root creation to a host of its choosing.
+        caller_hosted: bool,
         rider_depth: u32,
         exclude_template: Option<i32>,
     ) {
@@ -10456,8 +10468,11 @@ impl MissionCore {
             // bullet spang's "Bullet Hit" decal) don't exist yet - bring them
             // along too. Only for transient FX: a live projectile's outgoing
             // link is cosmetic authoring for OTHER hosts (the player Fusion
-            // Shot's link to the droid variant) and must not spawn here.
-            if transient_fx {
+            // Shot's link to the droid variant) and must not spawn here. Nor
+            // when the caller bolted the FX to a host of its choosing: the
+            // recharge station's sparkle on a held item must not bring a
+            // station along.
+            if transient_fx && !caller_hosted {
                 riders.extend(ancestors.iter().flat_map(|t| {
                     self.template_to_particle_attachees
                         .get(t)

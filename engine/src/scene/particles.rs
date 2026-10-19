@@ -110,6 +110,9 @@ pub struct ParticleSystem {
     /// Whether a continuous emitter launches new particles; existing ones
     /// live out their lifetimes either way.
     emitting: bool,
+    /// Seconds a continuous emitter keeps launching before it stops for good
+    /// (a pulsed charge sparkle); `None` = until told otherwise.
+    emit_seconds: Option<f32>,
 }
 
 fn randf(a: f32, b: f32) -> f32 {
@@ -206,6 +209,7 @@ impl ParticleSystem {
             fade_in_time: 0.0,
             world_space: false,
             emitting: true,
+            emit_seconds: None,
         }
     }
 
@@ -274,11 +278,25 @@ impl ParticleSystem {
         }
     }
 
-    /// A one-shot system whose burst has fully expired (never true for
-    /// continuous emitters). The owner can drop the system - and, for impact
-    /// spangs, the entity carrying it.
+    /// Stop launching after `seconds`; the system is then done once its last
+    /// particle expires, like a one-shot burst.
+    pub fn with_emit_duration(self, seconds: f32) -> ParticleSystem {
+        ParticleSystem {
+            emit_seconds: Some(seconds),
+            ..self
+        }
+    }
+
+    /// A one-shot burst or a timed emitter that has finished and fully
+    /// expired (never true for an untimed continuous emitter). The owner can
+    /// drop the system - and, for impact spangs, the entity carrying it.
     pub fn is_done(&self) -> bool {
-        self.one_shot && self.has_launched && self.particles.is_empty()
+        let finished = if self.one_shot {
+            self.has_launched
+        } else {
+            self.emit_seconds.is_some_and(|left| left <= 0.0)
+        };
+        finished && self.particles.is_empty()
     }
 
     pub fn with_lifetime(self, min: f32, max: f32) -> ParticleSystem {
@@ -427,6 +445,12 @@ impl ParticleSystem {
         self.particles.retain(|p| p.remaining_life_in_seconds > 0.0);
 
         self.launch_time_remaining -= delta_time;
+        if let Some(left) = self.emit_seconds.as_mut() {
+            *left -= delta_time;
+            if *left <= 0.0 {
+                self.emitting = false;
+            }
+        }
 
         if self.one_shot {
             // Launch the whole burst once; expired particles are never
@@ -610,6 +634,29 @@ mod tests {
         }
         let xs: Vec<f32> = system.particles.iter().map(|p| p.position.x).collect();
         assert_eq!(xs, vec![3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn a_timed_emitter_stops_launching_and_finishes_when_its_particles_expire() {
+        let mut system = ParticleSystem::new()
+            .with_num_particles(10)
+            .with_lifetime(0.3, 0.3)
+            .with_launch_time(Duration::from_millis(100))
+            .with_emit_duration(0.5);
+        let step = |system: &mut ParticleSystem| {
+            system.update(Duration::from_millis(100), Matrix4::identity())
+        };
+        for _ in 0..4 {
+            step(&mut system);
+        }
+        assert!(system.particle_count() > 0);
+        assert!(!system.is_done());
+        for _ in 0..5 {
+            step(&mut system);
+        }
+        assert_eq!(system.particle_count(), 0);
+        assert!(system.is_done());
+        assert!(!ParticleSystem::new().is_done());
     }
 
     #[test]
