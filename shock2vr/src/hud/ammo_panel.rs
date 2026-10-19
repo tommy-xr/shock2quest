@@ -82,8 +82,9 @@ pub(crate) const PSI_SELECT: Rect = Rect::new(
     PSI_POWER_NEXT.h,
 );
 
-/// The font every readout label uses (the original's HUD font).
-const FONT: &str = "mainfont.fon";
+/// The font every readout label uses: the original HUD's antialiased face in
+/// its cyan text palette. Plain `mainfont.fon` is an untinted bitmap and draws white.
+const FONT: &str = crate::ui::MFD_FONT;
 
 /// The condition badges, best first: a green "10" down through a red "1", then
 /// a crossed-out badge for a gun that is not in working order. The shipped art

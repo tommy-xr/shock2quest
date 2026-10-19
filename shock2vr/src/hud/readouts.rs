@@ -22,8 +22,8 @@ use super::ammo_panel::{self, AmmoReadout, ReadoutButton, ReadoutButtonSpec};
 use crate::mission::PlayerInfo;
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 
-/// The font the bio numbers use (the original's HUD font).
-const FONT: &str = "mainfont.fon";
+/// The font the bio numbers use - the same cyan HUD face as the ammo readout.
+const FONT: &str = crate::ui::MFD_FONT;
 
 /// The bio panel's compact (BIO.PCX) and expanded (BIOFULL.PCX) art sizes.
 /// BIO is the left crop of BIOFULL, so the bars and numbers below land
