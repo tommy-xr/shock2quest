@@ -473,6 +473,17 @@ impl FlatUiHost {
         crate::scripts::gui::backpack_cell_at(panel_pos, grid)
     }
 
+    /// The holster storage slot whose paperdoll well `canvas_pos` lands on -
+    /// the target for a VR release aimed at the paperdoll. Uses the same
+    /// rects that draw the wells. Storage indexes right then left; the
+    /// paperdoll lists physical left then right.
+    pub fn holster_slot_at(&self, canvas_pos: Vector2<f32>) -> Option<usize> {
+        holster_readout_rects(self.strip_rect()?)
+            .iter()
+            .position(|rect| rect.contains(canvas_pos))
+            .map(|well| 1 - well)
+    }
+
     #[cfg(test)]
     fn set_placement_preview(
         &mut self,
@@ -3745,6 +3756,9 @@ mod tests {
         host.holster_items[1] = Some(make_cursor_item(&world, item));
         let [left, right] = holster_readout_rects(host.strip_rect().unwrap());
         assert!(right.x < left.x, "paperdoll faces the viewer");
+        // Storage indexes right then left.
+        assert_eq!(host.holster_slot_at(right.center()), Some(0));
+        assert_eq!(host.holster_slot_at(left.center()), Some(1));
         host.cursor_canvas = Some(right.center());
         assert_eq!(
             host.pointed_equipment_name().as_deref(),

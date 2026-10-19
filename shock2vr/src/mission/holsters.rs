@@ -33,6 +33,76 @@ mod tests {
     }
 
     #[test]
+    fn paperdoll_release_stores_once_and_refuses_occupied_or_unposed() {
+        let mut world = World::new();
+        let [a, b, c] = [(); 3].map(|_| world.add_entity(()));
+        let store = |entity, slot| Some(Action::Store { entity, slot });
+        // Hovering without releasing claims nothing.
+        assert_eq!(
+            paperdoll_actions(
+                [Some(0); 2],
+                [Some(a), Some(b)],
+                [false; 2],
+                [true; 2],
+                [None; 2],
+                [None; 2]
+            ),
+            [None; 2]
+        );
+        // Both hands release onto one empty well: the first wins, the second is refused.
+        assert_eq!(
+            paperdoll_actions(
+                [Some(1); 2],
+                [Some(a), Some(b)],
+                [true; 2],
+                [true; 2],
+                [None; 2],
+                [None; 2]
+            ),
+            [store(a, 1), Some(Action::Refuse { entity: b })]
+        );
+        // Occupied slot, or an item with no holster pose, is refused.
+        assert_eq!(
+            paperdoll_actions(
+                [Some(0), Some(1)],
+                [Some(a), Some(b)],
+                [true; 2],
+                [true, false],
+                [Some(c), None],
+                [None; 2]
+            ),
+            [
+                Some(Action::Refuse { entity: a }),
+                Some(Action::Refuse { entity: b })
+            ]
+        );
+        // A physical store this frame owns its hand and fills its slot.
+        assert_eq!(
+            paperdoll_actions(
+                [Some(0), Some(0)],
+                [Some(a), Some(b)],
+                [true; 2],
+                [true; 2],
+                [None; 2],
+                [store(a, 0), None]
+            ),
+            [store(a, 0), Some(Action::Refuse { entity: b })]
+        );
+        // Off the wells is not a paperdoll release.
+        assert_eq!(
+            paperdoll_actions(
+                [None; 2],
+                [Some(a), None],
+                [true; 2],
+                [true; 2],
+                [None; 2],
+                [None; 2]
+            ),
+            [None; 2]
+        );
+    }
+
+    #[test]
     fn chest_tracking_or_modal_recovery_never_invents_a_release() {
         for invalid in ["head", "hand", "modal"] {
             let (_, mut input, ids) = setup();
@@ -526,6 +596,39 @@ pub(super) fn occupants(world: &World) -> [Option<EntityId>; 2] {
 
 /// Both thigh holsters are standard equipment, independent of O/S upgrades.
 pub(super) const SLOT_COUNT: usize = 2;
+
+/// A VR release over an inventory paperdoll well stores into that holster,
+/// under the thigh slot's rules: an empty slot and an authored holster pose.
+/// Anything else is refused, never silently dropped. `wells` are storage
+/// slots per hand; `actions` (the physical gestures) keep priority.
+pub(super) fn paperdoll_actions(
+    wells: [Option<usize>; 2],
+    held: [Option<EntityId>; 2],
+    releasing: [bool; 2],
+    eligible: [bool; 2],
+    mut slots: [Option<EntityId>; 2],
+    mut actions: [Option<Action>; 2],
+) -> [Option<Action>; 2] {
+    // A physical store this frame already fills its slot.
+    for action in actions.iter().flatten() {
+        if let Action::Store { entity, slot } = *action {
+            slots[slot] = Some(entity);
+        }
+    }
+    for i in 0..2 {
+        let (Some(slot), Some(entity), true, None) = (wells[i], held[i], releasing[i], actions[i])
+        else {
+            continue;
+        };
+        actions[i] = Some(if eligible[i] && slots[slot].is_none() {
+            slots[slot] = Some(entity);
+            Action::Store { entity, slot }
+        } else {
+            Action::Refuse { entity }
+        });
+    }
+    actions
+}
 
 impl Holsters {
     pub fn disarm_input(&mut self) {
