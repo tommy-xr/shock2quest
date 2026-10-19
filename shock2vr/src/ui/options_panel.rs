@@ -16,7 +16,7 @@ const FRAME: [Rect; 2] = [
     Rect::new(20.0, 67.0, 601.0, 335.0),
 ];
 // Keep retail audio's five rows; extend its pitch for additional controls.
-const ROWS: [Rect; 8] = [
+const ROWS: [Rect; 9] = [
     Rect::new(93.0, 73.0, 481.0, 23.0),
     Rect::new(93.0, 102.0, 481.0, 23.0),
     Rect::new(93.0, 130.0, 481.0, 23.0),
@@ -25,6 +25,7 @@ const ROWS: [Rect; 8] = [
     Rect::new(93.0, 216.0, 481.0, 23.0),
     Rect::new(93.0, 245.0, 481.0, 23.0),
     Rect::new(93.0, 274.0, 481.0, 23.0),
+    Rect::new(93.0, 303.0, 481.0, 23.0),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +132,8 @@ impl OptionsPanel {
             (0, 4) => vr.grid_opacity = cycle(vr.grid_opacity, &[0.15, 0.3, 0.5]),
             (0, 5) => vr.grid_spacing = cycle(vr.grid_spacing, &[0.5, 1.0, 2.0]),
             (0, 6) => vr.grid_size = cycle(vr.grid_size, &[8.0, 10.0, 12.0, 16.0]),
-            (0, 7) => {
+            (0, 7) => vr.speed_boosts = vr.speed_boosts.next(),
+            (0, 8) => {
                 vr.vignette = defaults.vignette;
                 vr.vignette_movement = defaults.vignette_movement;
                 vr.vignette_turning = defaults.vignette_turning;
@@ -139,6 +141,7 @@ impl OptionsPanel {
                 vr.grid_opacity = defaults.grid_opacity;
                 vr.grid_spacing = defaults.grid_spacing;
                 vr.grid_size = defaults.grid_size;
+                vr.speed_boosts = defaults.speed_boosts;
             }
             (1, 0) => {
                 vr.turning = if vr.turning == TurnMode::Snap {
@@ -198,6 +201,7 @@ impl OptionsPanel {
                 format!("Grid opacity: {:.0}%", settings.grid_opacity * 100.0),
                 format!("Grid spacing: {} m", settings.grid_spacing),
                 format!("Grid size: {} m", settings.grid_size),
+                format!("Speed boosts: {}", settings.speed_boosts.label()),
                 "Reset comfort defaults".to_owned(),
             ]
         } else {
@@ -270,6 +274,7 @@ fn cycle(value: f32, values: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::user_settings::SpeedBoostMode;
     #[test]
     fn retail_hit_regions_disable_unimplemented_tabs() {
         let panel = OptionsPanel::default();
@@ -291,6 +296,17 @@ mod tests {
             panel.hit(&layout, vec2(320.0, 80.0)),
             Some(OptionsEvent::Row(0))
         );
+    }
+
+    #[test]
+    fn comfort_cycles_speed_boosts_and_reset_restores_slow_world() {
+        let panel = OptionsPanel::default();
+        let mut settings = UserSettings::default();
+        assert_eq!(settings.vr.speed_boosts, SpeedBoostMode::SlowWorld);
+        panel.change(&mut settings, 7);
+        assert_eq!(settings.vr.speed_boosts, SpeedBoostMode::Classic);
+        panel.change(&mut settings, 8);
+        assert_eq!(settings.vr.speed_boosts, SpeedBoostMode::SlowWorld);
     }
 
     #[test]

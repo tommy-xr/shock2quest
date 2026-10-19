@@ -78,6 +78,31 @@ impl ReferenceGridMode {
     }
 }
 
+/// What a speed boost does: slow the world (bullet time) or, as retail did,
+/// speed the player up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpeedBoostMode {
+    #[default]
+    SlowWorld,
+    Classic,
+}
+
+impl SpeedBoostMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::SlowWorld => Self::Classic,
+            Self::Classic => Self::SlowWorld,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::SlowWorld => "Slow world",
+            Self::Classic => "Classic",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VrSettings {
@@ -93,6 +118,7 @@ pub struct VrSettings {
     pub grid_size: f32,
     /// The psi amp's aim beam: its muzzle axis is not where a hand seems to point.
     pub psi_pointer: bool,
+    pub speed_boosts: SpeedBoostMode,
 }
 
 impl Default for VrSettings {
@@ -109,6 +135,7 @@ impl Default for VrSettings {
             grid_spacing: 1.0,
             grid_size: 10.0,
             psi_pointer: true,
+            speed_boosts: SpeedBoostMode::SlowWorld,
         }
     }
 }

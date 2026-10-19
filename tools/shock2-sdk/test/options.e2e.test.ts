@@ -152,7 +152,7 @@ for (const vr of [false, true]) {
         assert.equal((await saved()).vr.grid_opacity, 0.5);
         assert.equal((await saved()).vr.grid_spacing, 2);
         assert.equal((await saved()).vr.grid_size, 12);
-        await click(game, [333, 285]); // Reset comfort, keeping turning settings
+        await click(game, [333, 314]); // Reset comfort, keeping turning settings
         assert.equal((await saved()).vr.reference_grid, "Off");
         assert.equal((await saved()).vr.grid_opacity, 0.3);
         assert.equal((await saved()).vr.grid_spacing, 1);

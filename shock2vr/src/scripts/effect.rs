@@ -668,6 +668,12 @@ pub enum Effect {
         duration: std::time::Duration,
     },
 
+    /// Start (or restart) the Speed Boost hypo's timer and consume one unit.
+    UseSpeedBoost {
+        entity_id: EntityId,
+        duration: std::time::Duration,
+    },
+
     /// Atomically use one food/drink or diagnostic module against the live
     /// player, decrementing a stack or destroying its final item. Even full
     /// health consumes one; healing is clamped to the authored maximum.

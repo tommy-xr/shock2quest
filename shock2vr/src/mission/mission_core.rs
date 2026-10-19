@@ -998,10 +998,30 @@ fn apply_stat_booster_use(
     boosts: &[(crate::player_stats::Stat, i32)],
     duration: std::time::Duration,
 ) -> ConsumableUseOutcome {
-    if boosts.is_empty()
-        || !world
-            .borrow::<EntitiesView>()
-            .is_ok_and(|entities| entities.is_alive(entity_id))
+    if boosts.is_empty() {
+        return ConsumableUseOutcome::NotUsed;
+    }
+    consume_carried_booster(world, entity_id, |stats| {
+        for &(stat, delta) in boosts {
+            stats.apply_modifier(crate::player_stats::TimedStatModifier {
+                source: "drug".to_owned(),
+                stat,
+                delta,
+                remaining: duration,
+            });
+        }
+    })
+}
+
+/// Apply a carried hypo to the player and use one unit of its stack.
+fn consume_carried_booster(
+    world: &World,
+    entity_id: EntityId,
+    apply: impl FnOnce(&mut crate::player_stats::PlayerStats),
+) -> ConsumableUseOutcome {
+    if !world
+        .borrow::<EntitiesView>()
+        .is_ok_and(|entities| entities.is_alive(entity_id))
         || !crate::scripts::script_util::player_carried_items(world).contains(&entity_id)
     {
         return ConsumableUseOutcome::NotUsed;
@@ -1013,19 +1033,12 @@ fn apply_stat_booster_use(
     if stack_count.is_some_and(|stack| stack <= 0) {
         return ConsumableUseOutcome::NotUsed;
     }
-    {
-        let mut quests = world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
-        for &(stat, delta) in boosts {
-            quests
-                .player_stats_mut()
-                .apply_modifier(crate::player_stats::TimedStatModifier {
-                    source: "drug".to_owned(),
-                    stat,
-                    delta,
-                    remaining: duration,
-                });
-        }
-    }
+    apply(
+        world
+            .borrow::<UniqueViewMut<QuestInfo>>()
+            .unwrap()
+            .player_stats_mut(),
+    );
     if stack_count.is_some_and(|stack| stack > 1) {
         let mut stacks = world
             .borrow::<ViewMut<dark::properties::PropStackCount>>()
@@ -4584,7 +4597,9 @@ impl MissionCore {
             .clear();
 
         self.world.run(|mut quests: UniqueViewMut<QuestInfo>| {
-            quests.player_stats_mut().modifiers.clear();
+            let stats = quests.player_stats_mut();
+            stats.modifiers.clear();
+            stats.speed_boost = std::time::Duration::ZERO;
         });
         self.refresh_implant_effects();
         self.death_camera = Some(self.begin_death_camera());
@@ -4806,8 +4821,18 @@ impl MissionCore {
         let _profile = crate::perf::scope(crate::perf::Phase::MissionUpdate);
         // Two time domains: `tick` is the player's (locomotion, hands, held
         // items, weapon cadence, UI); `time` is the world's, slowed by
-        // `world_time_scale` (AI, scripts, animation, particles, physics).
-        let scale = crate::dev_params::get(crate::dev_params::WORLD_TIME_SCALE);
+        // `world_time_scale` and speed boosts (AI, scripts, animation,
+        // particles, physics).
+        let speed_boost_active = self
+            .world
+            .borrow::<UniqueView<QuestInfo>>()
+            .is_ok_and(|quests| !quests.player_stats().speed_boost.is_zero());
+        let speed_boost_mode = crate::user_settings::get().vr.speed_boosts;
+        let scale = crate::speed_boost::world_time_scale(
+            crate::dev_params::get(crate::dev_params::WORLD_TIME_SCALE),
+            speed_boost_active,
+            speed_boost_mode,
+        );
         let world_time = self.world_clock.advance(tick, scale);
         let time = &world_time;
         self.physics.set_world_time_scale(scale);
@@ -5247,6 +5272,7 @@ impl MissionCore {
             let stats = crate::implants::effective_stats(&self.world).unwrap_or_default();
             let params = self.world.borrow::<UniqueView<GlobalGameParams>>().unwrap();
             crate::player_stats::agility_movement_scale(stats.agility, params.0.as_ref())
+                * crate::speed_boost::player_speed_scale(speed_boost_active, speed_boost_mode)
         };
         // Apply once to ordinary stick movement, before collision/flat ladder
         // redirection. Hand pulls, turn, jump launch and free-camera flight
@@ -5837,7 +5863,11 @@ impl MissionCore {
         );
 
         let expired = self.world.run(|mut quests: UniqueViewMut<QuestInfo>| {
-            quests.player_stats_mut().tick_modifiers(time.elapsed)
+            let stats = quests.player_stats_mut();
+            // The boost lasts its duration on the player's clock, however
+            // slow the world it makes.
+            stats.speed_boost = stats.speed_boost.saturating_sub(tick.elapsed);
+            stats.tick_modifiers(time.elapsed)
         });
         if expired {
             self.refresh_implant_effects();
@@ -10709,7 +10739,7 @@ impl MissionCore {
         // Decided once at creation from the world scale then; a projectile in
         // flight keeps it, across a load too (its marker is saved).
         let slow_time = crate::scripts::internal_fast_projectile::launched_in_slow_time(
-            crate::dev_params::get(crate::dev_params::WORLD_TIME_SCALE),
+            physics.world_time_scale(),
             crate::dev_params::get(crate::dev_params::SLOW_TIME_SHOT_THRESHOLD),
         );
         let is_projectile = world
@@ -13153,10 +13183,12 @@ impl MissionCore {
                 }
 
                 effect @ (Effect::UsePsiKit { entity_id, .. }
-                | Effect::UseStatBooster { entity_id, .. }) => {
+                | Effect::UseStatBooster { entity_id, .. }
+                | Effect::UseSpeedBoost { entity_id, .. }) => {
                     // This mutation and the consumption below happen while
-                    // processing one effect against live state. Two boosters
-                    // used in the same update therefore add independently;
+                    // processing one effect against live state. Two stat
+                    // boosters used in the same update therefore add
+                    // independently (a second speed boost restarts its timer);
                     // a duplicate use of an already-destroyed booster no-ops.
                     let outcome = match &effect {
                         Effect::UsePsiKit { amount, .. } => {
@@ -13165,6 +13197,12 @@ impl MissionCore {
                         Effect::UseStatBooster {
                             boosts, duration, ..
                         } => apply_stat_booster_use(&self.world, entity_id, boosts, *duration),
+                        // Reusing the hypo restarts its timer rather than adding to it.
+                        Effect::UseSpeedBoost { duration, .. } => {
+                            consume_carried_booster(&self.world, entity_id, |stats| {
+                                stats.speed_boost = *duration
+                            })
+                        }
                         _ => unreachable!(),
                     };
                     if outcome == ConsumableUseOutcome::NotUsed {
@@ -25037,6 +25075,10 @@ impl crate::game_scene::GameScene for MissionCore {
             .borrow::<UniqueView<Time>>()
             .ok()
             .map(|t| t.total)
+    }
+
+    fn world_time_scale(&self) -> f32 {
+        self.physics.world_time_scale()
     }
 
     fn update(

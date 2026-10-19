@@ -95,6 +95,7 @@ mod room_trigger;
 pub mod script_util;
 mod setup_initial_debrief;
 mod shodan_shield;
+mod speed_patch;
 mod stat_booster;
 mod std_door;
 pub(crate) use std_door::player_door_frob_blocked;
@@ -1415,7 +1416,7 @@ impl ScriptWorld {
             //goodies:
             "expcookie" => Box::new(ExpCookie::new()), // cyber modules
             "medkitscript" => Box::new(HealingItemScript::new(HealingItemKind::MedicalKit)),
-            "speedpatch" => Box::new(UnimplementedScript::new(&script_name)), // speed boost
+            "speedpatch" => Box::new(speed_patch::SpeedPatch),
             "radpatch" => Box::new(RadPatchScript),
             "autoinstallsoft" => Box::new(AutoInstallSoft::new()), // auto install software
             "strboost" | "intboost" => Box::new(stat_booster::StatBooster),

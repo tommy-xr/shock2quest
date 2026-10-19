@@ -7275,6 +7275,10 @@ impl PhysicsWorld {
     }
 
     /// Sets how fast the world solver runs relative to the player this tick.
+    pub fn world_time_scale(&self) -> f32 {
+        self.world_time_scale
+    }
+
     pub fn set_world_time_scale(&mut self, scale: f32) {
         self.world_time_scale = scale;
     }

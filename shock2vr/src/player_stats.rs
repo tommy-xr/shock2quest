@@ -169,6 +169,9 @@ impl SoftwareVersions {
 pub struct PlayerStats {
     #[serde(default)]
     pub modifiers: Vec<TimedStatModifier>,
+    /// Remaining Speed Boost hypo time, counted on the player's clock.
+    #[serde(default)]
+    pub speed_boost: std::time::Duration,
     pub strength: i32,
     pub endurance: i32,
     pub agility: i32,
@@ -240,6 +243,7 @@ impl Default for PlayerStats {
         // all careers currently share this baseline and diverge via their tours.
         PlayerStats {
             modifiers: Vec::new(),
+            speed_boost: std::time::Duration::ZERO,
             strength: 1,
             endurance: 1,
             agility: 1,
