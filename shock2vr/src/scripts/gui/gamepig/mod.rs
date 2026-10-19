@@ -105,12 +105,6 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             return components;
         }
-        // The index leaves locked rows empty and keeps
-        // each game's authored index, rather than packing unlocked titles.
-        let games = world
-            .borrow::<UniqueView<QuestInfo>>()
-            .map(|quest| quest.mini_games)
-            .unwrap_or(0);
         let mut components = vec![
             gui::image("gameback.pcx")
                 .with_position(vec2(0.0, 0.0))
@@ -179,15 +173,11 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             return components;
         }
         let installed = installed_games(world);
-        for index in 1..=12 {
-            if games & (1 << index) == 0 {
-                continue;
-            }
-            if state.controller_active && installed.get(state.selection) == Some(&index) {
-                highlight(
-                    &mut components,
-                    Rect::new(14.0, 14.0 + (index - 1) as f32 * 15.0, 137.0, 15.0),
-                );
+        // Unlocked titles pack into consecutive rows, so locked games leave no gaps.
+        for (row, &index) in installed.iter().enumerate() {
+            let y = 14.0 + row as f32 * 15.0;
+            if state.controller_active && state.selection == row {
+                highlight(&mut components, Rect::new(14.0, y, 137.0, 15.0));
             }
             let name =
                 PanelText::string(world, "minigame", &format!("GameName{index}"), "Test Game");
@@ -208,16 +198,13 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             if let Some(selection) = selection {
                 components.push(
                     gui::button(selection)
-                        .with_position(vec2(16.0, 14.0 + (index - 1) as f32 * 15.0))
+                        .with_position(vec2(16.0, y))
                         .with_size(vec2(135.0, 15.0))
                         .with_label(&format!("game-{index}"))
                         .with_alpha(0.0),
                 );
             }
-            components.push(PanelText::text(
-                &name,
-                Rect::new(16.0, 14.0 + (index - 1) as f32 * 15.0, 135.0, 15.0),
-            ));
+            components.push(PanelText::text(&name, Rect::new(16.0, y, 135.0, 15.0)));
         }
         if hacking::can_hack(world, entity_id) {
             let rect = Rect::new(16.0, 230.0, 135.0, 22.0);
@@ -895,7 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn index_uses_only_unlocked_authored_names_at_retail_rows() {
+    fn index_packs_unlocked_authored_names_into_consecutive_rows() {
         let mut world = World::new();
         let entity = world.add_entity(());
         let mut quest = QuestInfo::new();
@@ -921,8 +908,8 @@ mod tests {
         assert_eq!(
             text,
             vec![
-                ("Swinekeeper", vec2(16.0, 44.0)),
-                ("Tic-Tac-Triop", vec2(16.0, 119.0))
+                ("Swinekeeper", vec2(16.0, 14.0)),
+                ("Tic-Tac-Triop", vec2(16.0, 29.0))
             ]
         );
         assert_eq!(
