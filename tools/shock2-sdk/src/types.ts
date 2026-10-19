@@ -299,7 +299,8 @@ export interface EntityDetailResult {
   aim_points?: AimPoint[];
   /**
    * World-space `[min, max]` of what the HUD highlight frames: the union of
-   * the entity's hitboxes where it has them, otherwise its own collider.
+   * the entity's hitboxes where it has them, otherwise its model's drawn
+   * mesh, otherwise its own collider.
    */
   selection_bounds?: [[number, number, number], [number, number, number]] | null;
   /** World-space centre of a gun's magazine zone (VR clip insert); null when

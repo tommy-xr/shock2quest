@@ -17120,7 +17120,10 @@ impl MissionCore {
 
     /// The world-space bounds that stand in for an entity: the union of its
     /// hitboxes where it has them - the volume a creature's limbs occupy in
-    /// the pose it is in - otherwise its own collider.
+    /// the pose it is in - otherwise its visible model, otherwise its own
+    /// collider. A fixture's authored collider can be far larger than what is
+    /// drawn: the security crate's is sized from its model header's box, about
+    /// twice the mesh deep (#2350).
     ///
     /// The HUD highlight frames this, and `/v1/entities/:id` reports it, from
     /// this one function: what an agent reads is what the player sees framed.
@@ -17131,7 +17134,23 @@ impl MissionCore {
     pub(crate) fn selection_bounds(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
         self.hit_boxes
             .hit_box_bounds(&self.physics, entity_id)
+            .or_else(|| self.model_surface_bounds(entity_id))
             .or_else(|| self.physics.get_aabb2(entity_id))
+    }
+
+    /// `entity`'s model surface bounds carried into the world by the transform
+    /// it is drawn with. Only for an entity a ray can hit - one with a body -
+    /// so a decal reports no bounds rather than a frame it can never show.
+    /// The surface is the bind pose, as frob rays test it, so a jointed object
+    /// (a camera mid-pan) is framed at rest, as its collider was before.
+    fn model_surface_bounds(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
+        use collision::Aabb as _;
+        if !self.id_to_physics.contains_key(&entity_id) {
+            return None;
+        }
+        let local = self.id_to_model.get(&entity_id)?.surface_bounds()?;
+        let transforms = self.world.borrow::<View<RuntimePropTransform>>().ok()?;
+        Some(local.transform(&transforms.get(entity_id).ok()?.0))
     }
 
     /// The world object the mini-frame names when the canvas pointer is on

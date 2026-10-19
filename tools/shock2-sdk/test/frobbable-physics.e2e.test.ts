@@ -39,10 +39,15 @@ test(
         JSON.stringify(pod.position),
     );
 
-    const bounds = (await game.entities.detail(pod.id)).selection_bounds;
-    assert.ok(bounds);
-    assert.ok(Math.abs((bounds[1][0] - bounds[0][0]) / 2 - 1.96 / 2.5) < 0.001,
-      `the pod must retain its authored 1.96-foot radius: ${JSON.stringify(bounds)}`);
+    // The HUD frames the drawn model (#2350), so read the collider through the
+    // body's mass instead: rapier derives it from the colliders at density 1
+    // (authored PhysAttr mass is not applied), and the extra ray-only
+    // selection collider is massless.
+    const [body] = (await game.physics.bodies({ entityId: pod.id })).bodies;
+    assert.ok(body && body.mass !== null);
+    const radius = 1.96 / 2.5;
+    assert.ok(Math.abs(body.mass - (4 / 3) * Math.PI * radius ** 3) < 0.01,
+      `the pod must retain its authored 1.96-foot radius: mass ${body.mass}`);
 
     // Exercise the real control that admits the player to the ladder route.
     await game.player.teleport({ x: -291.5, y: -0.756, z: 84.4157 });
