@@ -49,9 +49,9 @@ test("roomscale adds to stick movement and turning stays centered off-origin", {
   await game.input.set("head.position", [2, 1.04, 1]);
   await game.step({ frames: 30 });
   const start = (await game.info()).player;
-  await game.input.set("left_hand.thumbstick", [1, 0]);
+  await game.input.set("right_hand.thumbstick", [1, 0]);
   await game.step({ frames: 15 });
-  await game.input.set("left_hand.thumbstick", [0, 0]);
+  await game.input.set("right_hand.thumbstick", [0, 0]);
   await game.step({ frames: 2 });
   const turned = (await game.info()).player;
   close(turned.position[0], start.position[0]);
@@ -62,17 +62,18 @@ test("roomscale adds to stick movement and turning stays centered off-origin", {
 
   const stickRun = async (physical: boolean) => {
     const before = (await game.info()).player;
-    await game.input.set("right_hand.thumbstick", [0, 0.4]);
+    await game.input.set("left_hand.thumbstick", [0, 0.4]);
     for (let i = 1; i <= 6; i++) {
       if (physical) await game.input.set("head.position", [2 + i * 0.03, 1.04, 1]);
       await game.step({ frames: 1 });
     }
-    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
     await game.step({ frames: 2 });
     const after = (await game.info()).player;
     return after.position.map((v, i) => v - before.position[i]);
   };
   const stick = await stickRun(false);
+  assert.ok(Math.hypot(stick[0], stick[2]) > 0.05, `stick run moved: ${stick}`);
   const combined = await stickRun(true);
   const physical = quatRotate(turned.rotation, [0.18, 0, 0]);
   close(combined[0] - stick[0], physical[0]);

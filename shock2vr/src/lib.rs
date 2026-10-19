@@ -3107,10 +3107,6 @@ impl Game {
             .is_some_and(|sample| sample.weight > 0.0)
     }
 
-    pub fn presentation_mode(&self) -> PresentationMode {
-        self.options.presentation_mode
-    }
-
     pub fn resolve_camera(
         &self,
         pawn_position: Vector3<f32>,

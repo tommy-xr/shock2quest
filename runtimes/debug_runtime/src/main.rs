@@ -2445,11 +2445,14 @@ fn crouched_rig(game: &Game, input: &InputContext, vr: bool) -> InputContext {
 /// whatever `/v1/control/input` last aimed the head at.
 fn tracked_head(game: &Game, input: &InputContext) -> (Vector3<f32>, Quaternion<f32>) {
     (
-        if game.presentation_mode() == shock2vr::PresentationMode::Vr {
-            input.head.position
-        } else {
-            vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0)
-        },
+        // Preserve injected room-scale displacement so VR turn pivots and
+        // the rendered eye use the same horizontal tracking origin. Synthetic
+        // crouch still supplies the live vertical eye height.
+        vec3(
+            input.head.position.x,
+            game.player_eye_height() / SCALE_FACTOR,
+            input.head.position.z,
+        ),
         input.head.rotation,
     )
 }
