@@ -388,6 +388,14 @@ fn mod_layer_may_override(family: &str, archive: &str, upgraded_terrain: bool) -
     }
 }
 
+/// The Nightdive string tables, reachable only by their qualified
+/// `nightdive_strings/` names: plain lookups keep the base tables, so the
+/// `$`-token stubs never reach UI, while `lip_sync` can read `facepos.str`
+/// (Nightdive's only data table there).
+fn nightdive_strings_mount(archive: String) -> Box<ZipAssetPath> {
+    ZipAssetPath::with_prefix_namespace_only(archive, "strings/", "nightdive_strings")
+}
+
 /// Mount one resource family, matching the options its `.crf` counterpart uses.
 ///
 /// `strings` must not collapse basenames (translated tables share them), and
@@ -432,6 +440,12 @@ fn anniversary_family_mounts(
             } else {
                 mounts.push(mount_family(path, &format!("{family}/"), family));
             }
+        }
+    }
+    if family == "strings" {
+        let path = resource_path("mods/sshock2ee.kpf");
+        if Path::new(&path).exists() {
+            mounts.push(nightdive_strings_mount(path));
         }
     }
     // The base archive keeps the original `data/res/<family>/` layout.
@@ -3534,6 +3548,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn nightdive_strings_expose_facepos_without_shadowing_base_tables() {
+        let root = crate::test_support::TempDir::new("nightdive-strings");
+        let nightdive = root.path().join("sshock2ee.zip");
+        let base = root.path().join("sshock2.zip");
+        crate::test_support::write_archive(
+            &nightdive,
+            &[
+                ("strings/facepos.str", b"cs2601:\"0022\"\r\n"),
+                ("strings/objname.str", b"psi6:\"$PSI6\""),
+            ],
+        );
+        crate::test_support::write_archive(
+            &base,
+            &[("data/res/strings/objname.str", b"psi6:\"Psi Amp\"")],
+        );
+        let mounts = AssetPath::combine(vec![
+            nightdive_strings_mount(nightdive.to_string_lossy().into_owned()),
+            mount_family(
+                base.to_string_lossy().into_owned(),
+                "data/res/strings/",
+                "strings",
+            ),
+        ]);
+        let read = |name: &str| {
+            let mut bytes = String::new();
+            mounts
+                .get_reader(String::new(), name.to_owned())
+                .unwrap()
+                .borrow_mut()
+                .read_to_string(&mut bytes)
+                .unwrap();
+            bytes
+        };
+        assert_eq!(read("objname.str"), "psi6:\"Psi Amp\"");
+        assert!(read(crate::lip_sync::FACEPOS_TABLE).starts_with("cs2601:"));
+        assert!(!mounts.exists(String::new(), "facepos.str".into()));
+        let table = dark::importers::parse_strings(
+            &read(crate::lip_sync::FACEPOS_TABLE)
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(table["cs2601"].trim(), "0022");
+    }
+
     fn features(list: &[&str]) -> HashSet<String> {
         list.iter().map(|s| s.to_string()).collect()
     }
@@ -3982,6 +4042,7 @@ mod app_tests {
 
 pub mod tricorder;
 
+pub mod lip_sync;
 mod model_frame_animation;
 pub mod monster_idle;
 pub mod plant_animation;
