@@ -760,6 +760,29 @@ where
         self
     }
 
+    /// Stretch `texture` to `rect` as a nine-patch: `borders` (left, top,
+    /// right, bottom, in the art's own texels, `art_size` its authored size)
+    /// keep their size while the middle stretches, so a bevel survives.
+    pub fn nine_slice_image(
+        &mut self,
+        rect: Rect,
+        texture: &str,
+        art_size: [f32; 2],
+        borders: [f32; 4],
+    ) -> &mut Self {
+        self.elements.push(UiElement::Image {
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
+            texture: texture.to_owned(),
+            alpha: 1.0,
+            kind: ImageKind::NineSlice {
+                source_size: art_size,
+                borders,
+            },
+        });
+        self
+    }
+
     /// Draw the `source` region of `texture` - in the art's own texels, with
     /// `art_size` its authored pixel size - stretched to `rect`.
     pub fn cropped_image(
