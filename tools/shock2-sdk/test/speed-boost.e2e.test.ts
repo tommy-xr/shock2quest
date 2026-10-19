@@ -66,7 +66,7 @@ test("dying ends the speed boost", { skip: !e2eEnabled, timeout: 600_000 }, asyn
   assert.ok(Math.abs((await worldSeconds(game, 60)) - 1) < 1e-3, "death ends the boost");
 });
 
-// Slowed time lowers the jump arc's gravity: the hypo's 0.5 doubles the hop.
+// Slowed time lowers the jump arc's gravity, capped at 2x: the hypo's 0.25 doubles the hop.
 test("the speed boost doubles the jump in Slow world mode", { skip: !e2eEnabled, timeout: 600_000 }, async (t) => {
   await using game = await launchWithSettings(t, { vr: { speed_boosts: "SlowWorld" } }, { mission: "debug_minimal" });
   await game.step({ frames: 10 });
