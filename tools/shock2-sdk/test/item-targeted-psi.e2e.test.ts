@@ -178,6 +178,19 @@ for (const toolHand of ["right", "left"] as const) {
     psi = await cast("Alchemy");
     assert.equal(await property(game, patch.id, "StackCount"), 1);
     assert.equal((await game.info()).player.psi_points, psi - 4);
+    // Transmuting the last one: the held item breaks down into nanite sparks
+    // while a visual stand-in shrinks away where it was held.
+    const patches = async () => (await game.entities.byTemplate(-52)).length;
+    const nanites = async () => (await game.entities.byTemplate(-1944)).length; // sparkley sphere
+    await game.step({ frames: 60 }); // the partial cast's sparks settle
+    const [idlePatches, idleNanites] = [await patches(), await nanites()];
+    await cast("Alchemy");
+    assert.ok(!(await game.player.inventory()).items.some(i => i.entity_id === patch.id), "the patch is consumed");
+    assert.equal(await patches(), idlePatches, "a stand-in replaces it");
+    assert.equal(await nanites(), idleNanites + 1, "nanite sparks burst off it");
+    await game.step({ frames: 60 });
+    assert.equal(await patches(), idlePatches - 1, "the stand-in shrinks away");
+    assert.equal(await nanites(), idleNanites, "and the sparks expire");
     assert.ok((await game.player.inventory()).items.some(i => i.entity_id === amp.id && i.location === `${toolHand}_hand`));
 
   });

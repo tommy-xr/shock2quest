@@ -8,7 +8,6 @@ use dark::{
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
-use crate::Handedness;
 use crate::mission::PlayerInfo;
 use crate::mission::entity_creator::CreateEntityOptions;
 use crate::physics::PhysicsWorld;
@@ -178,13 +177,7 @@ pub(crate) fn item_recharge_cue(world: &World, item: EntityId) -> Vec<Effect> {
     let Ok(player) = world.borrow::<UniqueView<PlayerInfo>>() else {
         return Vec::new();
     };
-    let hand = crate::mission::mission_core::presentation_is_vr(world)
-        .then(|| {
-            [Handedness::Left, Handedness::Right]
-                .into_iter()
-                .find(|&hand| crate::wielded_weapon::held_by_hand(world, hand) == Some(item))
-        })
-        .flatten();
+    let hand = crate::wielded_weapon::vr_hand_holding(world, item);
     let held_at = hand.and_then(|_| crate::util::get_entity_position(world, item));
     // The recharge station's devicetype tag picks the station's activate sound.
     let mut effects = vec![Effect::PlayEnvironmentalSound {

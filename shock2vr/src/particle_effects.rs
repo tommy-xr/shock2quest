@@ -502,6 +502,7 @@ pub(crate) enum EnhancedEffect {
     EmpExplosion { overload: bool },
     EmpLegacyPulse,
     ItemRecharge,
+    ItemTransmute,
 }
 
 impl EnhancedEffect {
@@ -518,9 +519,15 @@ impl EnhancedEffect {
 
     /// A runtime-spawned (transient) copy of an authored effect, which plays on
     /// a carried item instead of the fixture it was authored for: the recharge
-    /// station's column of glow, which would engulf a hand-held item.
+    /// station's column of glow, which would engulf a hand-held item, and the
+    /// apparition sparkle reused for an item breaking down into nanites.
     pub fn for_transient(template: i32, lookup: impl Fn(&str) -> Option<i32>) -> Option<Self> {
-        (lookup("rechargefx") == Some(template)).then_some(Self::ItemRecharge)
+        [
+            ("rechargefx", Self::ItemRecharge),
+            ("sparkley sphere", Self::ItemTransmute),
+        ]
+        .into_iter()
+        .find_map(|(name, kind)| (lookup(name) == Some(template)).then_some(kind))
     }
 
     /// Restrict replacements to cosmetic riders of real EMP shots. These
@@ -567,7 +574,7 @@ impl EnhancedEffect {
                 &["NDsbll", "NDarc", "NDsprk"]
             }
             // The default glow disk, like the station's own group.
-            Self::ItemRecharge => &[],
+            Self::ItemRecharge | Self::ItemTransmute => &[],
         };
         let frames: Vec<_> = sprite_names
             .iter()
@@ -584,6 +591,7 @@ impl EnhancedEffect {
                 Self::EmpExplosion { overload } => emp_explosion_layers(overload, &frames),
                 Self::EmpLegacyPulse => vec![],
                 Self::ItemRecharge => vec![item_recharge_layer()],
+                Self::ItemTransmute => vec![item_transmute_layer()],
                 _ => emp_layers(self, &frames),
             },
             replaces_parent_model: matches!(self, Self::EmpCore { .. }),
@@ -735,6 +743,26 @@ fn item_recharge_layer() -> ParticleSystem {
         .with_fade_in_time(0.05)
         .with_fade_time(0.3)
         .with_color(vec3(1.0, 0.88, 0.62))
+}
+
+/// Nanite sparks corkscrewing up off an item as it breaks down. World space,
+/// so they rise from where the item was rather than following the hand.
+fn item_transmute_layer() -> ParticleSystem {
+    ParticleSystem::new()
+        .with_one_shot(true)
+        .with_world_space(true)
+        .with_num_particles(32)
+        .with_launch_shape(LaunchShape::Cylinder {
+            radius: (0.015, 0.035),
+        })
+        .with_launch_bounding_box(vec3(0.0, -0.03, 0.0), vec3(0.0, 0.03, 0.0))
+        .with_velocity(vec3(0.0, 0.12, 0.0), vec3(0.0, 0.25, 0.0))
+        .with_swirl(9.0)
+        .with_particle_size(0.01, 0.025)
+        .with_lifetime(0.5, 0.8)
+        .with_alpha(1.0)
+        .with_fade_time(0.5)
+        .with_color(vec3(0.25, 0.55, 1.0))
 }
 
 /// A brief expanding burst, followed by a slower cloud. The parent owns the
@@ -1025,6 +1053,15 @@ mod tests {
             Some(EnhancedEffect::ItemRecharge)
         );
         assert_eq!(EnhancedEffect::for_transient(-1, lookup), None);
+        let sparkle = |name: &str| (name == "sparkley sphere").then_some(-1944);
+        assert_eq!(
+            EnhancedEffect::for_transient(-1944, sparkle),
+            Some(EnhancedEffect::ItemTransmute)
+        );
+        let mut burst = ParticleEffect::from(item_transmute_layer());
+        burst.update(Duration::ZERO, Matrix4::identity());
+        burst.update(Duration::from_millis(900), Matrix4::identity());
+        assert!(burst.is_done(), "the nanite burst is one-shot");
         // The station's own authored group keeps its legacy presentation.
         assert_eq!(EnhancedEffect::for_template(-2914, lookup), None);
         let mut effect = ParticleEffect::from(item_recharge_layer());
