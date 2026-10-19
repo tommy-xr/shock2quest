@@ -48,7 +48,7 @@ for (const collect of ["release", "trigger"] as const) test(`VR nanites credit o
   assert.equal((await game.info()).player.stats?.nanites, 250);
 });
 
-test("VR nanites collected by a free hand's ray dissolve into sparks", {
+test("VR nanites collected by both free hands' rays dissolve once", {
   skip: !enabled, timeout: 180_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
@@ -60,16 +60,21 @@ test("VR nanites collected by a free hand's ray dissolve into sparks", {
   await game.step({ frames: 120 });
   const aim = await game.player.aimAt(pile.id, { hitbox: "center", visibility: "required" });
   assert.ok(aim.target_confirmed);
-  await aimVrHandAt(game, aim.world_point, .6, 0, 0);
+  for (const hand of ["left", "right"] as const) await aimVrHandAt(game, aim.world_point, .6, 0, 0, { hand });
   await game.step({ frames: 4 });
   const sparks = async () => (await game.entities.byTemplate(-1944)).length; // sparkley sphere
   const idleSparks = await sparks();
-  await game.input.set("right_hand.trigger", 1);
+  const before = new Set((await game.entities.list()).entities.map(e => e.id));
+  // The stand-in is spawned from the pile's archetype, so find it as a new entity where the pile was.
+  const standIns = async () => (await game.entities.list()).entities.filter(e => !before.has(e.id)
+    && e.template_id !== -1944 && Math.hypot(...sub(e.position, pile.position)) < .3);
+  await game.input.setMany({ "left_hand.trigger": 1, "right_hand.trigger": 1 });
   await game.step({ frames: 12 });
   assert.equal((await game.info()).player.stats?.nanites, 250);
   assert.equal(await sparks(), idleSparks + 1, "the pile breaks down into sparks");
+  assert.equal((await standIns()).length, 1, "one stand-in shrinks in its place");
   await game.step({ frames: 60 });
-  assert.equal((await game.entities.byTemplate(257)).length, 0, "its shrinking stand-in is gone");
+  assert.equal((await standIns()).length, 0, "the stand-in is gone");
   assert.equal(await sparks(), idleSparks);
 });
 
