@@ -201,7 +201,7 @@ test(
 
     await game.input.set("right_hand.position", [0.3, 0.9, -0.5]);
     await game.input.set("right_hand.squeeze", 0);
-    await game.step({ frames: 8 });
+    await game.step({ frames: 30 }); // the card's shrinking stand-in is gone
     await assertCardCollectedAndDoorOpens(game, CARD_ARCHETYPE);
   },
 );
