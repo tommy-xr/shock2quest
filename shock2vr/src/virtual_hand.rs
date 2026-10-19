@@ -58,6 +58,9 @@ pub struct VirtualHand {
     squeeze_value: f32,
     // A restored hold has no physical squeeze yet. Arm release after the first squeeze.
     restored_grip_pending: bool,
+    // A trigger collect empties the hand with trigger and grip still down;
+    // ignore both until released, or they would frob or grab what is behind.
+    spent_until_release: bool,
     raytrace_hit: Option<RayCastResult>,
 
     // Keep track of last frobbed entity so frobbing is 'semi-auto'
@@ -191,6 +194,7 @@ impl VirtualHand {
             trigger_value: 0.0,
             squeeze_value: 0.0,
             restored_grip_pending: false,
+            spent_until_release: false,
             raytrace_hit: None,
             last_frobbed_entity: None,
             hand_state: HandState::Empty,
@@ -312,6 +316,7 @@ impl VirtualHand {
         VirtualHand {
             hand_state: HandState::Grabbing { entity_id },
             restored_grip_pending: false,
+            spent_until_release: false,
             feedback: HandFeedback::default(),
             maintenance_target: None,
             release_target: None,
@@ -440,6 +445,7 @@ impl VirtualHand {
                         trigger_value: input_hand.trigger_value,
                         squeeze_value: input_hand.squeeze_value,
                         restored_grip_pending: false,
+                        spent_until_release: trigger_collects,
                         raytrace_hit: None,
                         last_frobbed_entity: None,
                         hand_state: HandState::Empty,
@@ -503,6 +509,7 @@ impl VirtualHand {
                         squeeze_value: input_hand.squeeze_value,
                         restored_grip_pending: prev.restored_grip_pending
                             && input_hand.squeeze_value < 0.5,
+                        spent_until_release: false,
                         raytrace_hit: None,
                         last_frobbed_entity: None,
                         hand_state: next_hand_state,
@@ -514,6 +521,15 @@ impl VirtualHand {
                     };
                     (updated_hand, msgs)
                 }
+            }
+            HandState::Empty
+                if prev.spent_until_release
+                    && (input_hand.trigger_value >= 0.5 || input_hand.squeeze_value >= 0.5) =>
+            {
+                (
+                    prev.update_suppressed(pawn_pos, pawn_rot, input_hand),
+                    Vec::new(),
+                )
             }
             HandState::Empty => handle_empty_hand_state(
                 handedness,
@@ -797,6 +813,7 @@ fn handle_empty_hand_state(
         trigger_value: input_hand.trigger_value,
         squeeze_value: input_hand.squeeze_value,
         restored_grip_pending: false,
+        spent_until_release: false,
         raytrace_hit: result,
         last_frobbed_entity,
         hand_state: next_hand_state,
@@ -830,6 +847,8 @@ fn get_held_position_orientation(
 /// protocol even though the Weapon archetype also inherits that inventory
 /// flag. The decision stays tied to Dark's production frob metadata.
 fn held_trigger_press_payload(world: &World, entity_id: EntityId) -> MessagePayload {
+    // Downloads never use their item: a card waits for release, and the
+    // rest collect on trigger before reaching here.
     if crate::scripts::script_util::is_download_pickup(world, entity_id) {
         return MessagePayload::TriggerPull;
     }
@@ -1300,13 +1319,17 @@ mod tests {
         }
     }
 
-    fn held_trigger_payload(world: &World, entity_id: EntityId) -> MessagePayload {
+    /// Press trigger (grip held) on a hand holding `entity_id`.
+    fn press_trigger_holding(
+        world: &World,
+        entity_id: EntityId,
+    ) -> (VirtualHand, Vec<VirtualHandEffect>) {
         let hand = VirtualHand::new(Handedness::Right).grab_entity(world, entity_id);
         let mut input = Hand::default();
         input.squeeze_value = 1.0;
         input.trigger_value = 1.0;
 
-        let (_, effects) = VirtualHand::update(
+        VirtualHand::update(
             &hand,
             &PhysicsWorld::new(),
             world,
@@ -1316,8 +1339,11 @@ mod tests {
             None,
             Vector3::zero(),
             1.0 / 60.0,
-        );
+        )
+    }
 
+    fn held_trigger_payload(world: &World, entity_id: EntityId) -> MessagePayload {
+        let (_, effects) = press_trigger_holding(world, entity_id);
         effects
             .into_iter()
             .find_map(|effect| match effect {
@@ -1874,20 +1900,7 @@ mod tests {
     fn trigger_collects_held_downloads_except_keycards() {
         use crate::test_support::{CollectedKind, spawn_collected};
         let collects = |world: &World, entity| {
-            let mut input = Hand::default();
-            input.squeeze_value = 1.0;
-            input.trigger_value = 1.0;
-            let (hand, effects) = VirtualHand::update(
-                &VirtualHand::new(Handedness::Right).grab_entity(world, entity),
-                &PhysicsWorld::new(),
-                world,
-                Vector3::zero(),
-                Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                &input,
-                None,
-                Vector3::zero(),
-                1.0 / 60.0,
-            );
+            let (hand, effects) = press_trigger_holding(world, entity);
             let dropped = effects.iter().any(|e| {
                 matches!(e, VirtualHandEffect::DropItem { entity_id, .. } if *entity_id == entity)
             });
@@ -1904,6 +1917,54 @@ mod tests {
         assert!(collects(&world, soft), "soft");
         let keycard = spawn_collected(&mut world, CollectedKind::KeyCard);
         assert!(!collects(&world, keycard), "a keycard waits for release");
+    }
+
+    /// Trigger and grip are still down after a trigger collect; they must not
+    /// frob or grab what is behind until both are let go.
+    #[test]
+    fn a_trigger_collect_spends_held_inputs_until_release() {
+        use crate::test_support::{CollectedKind, spawn_collected};
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let pile = spawn_collected(&mut world, CollectedKind::NanitePile);
+        let behind = spawn_collected(&mut world, CollectedKind::NanitePile);
+        register_kinematic_body(
+            &mut world,
+            &mut physics,
+            behind,
+            vec3(0.0, 0.0, -0.5),
+            vec3(1.0, 1.0, 1.0),
+            CollisionGroup::selectable(),
+        );
+        let step = |prev: &VirtualHand, squeeze: f32, trigger: f32| {
+            let mut input = Hand::default();
+            input.squeeze_value = squeeze;
+            input.trigger_value = trigger;
+            VirtualHand::update(
+                prev,
+                &physics,
+                &world,
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                &input,
+                None,
+                Vector3::zero(),
+                1.0 / 60.0,
+            )
+        };
+        let held = VirtualHand::new(Handedness::Right).grab_entity(&world, pile);
+        let (hand, _) = step(&held, 1.0, 1.0);
+        assert_eq!(hand.get_held_entity(), None);
+        let (hand, effects) = step(&hand, 1.0, 1.0);
+        assert!(effects.is_empty(), "{effects:?}");
+        assert_eq!(hand.get_held_entity(), None);
+        let (hand, _) = step(&hand, 0.0, 0.0);
+        let (hand, _) = step(&hand, 1.0, 0.0);
+        assert_eq!(
+            hand.get_held_entity(),
+            Some(behind),
+            "a fresh squeeze grabs"
+        );
     }
 
     /// Trigger use must not collect a card before grip release.
