@@ -321,6 +321,102 @@ mod tests {
         ));
     }
 
+    fn plug_button(world: &World, entity: EntityId, state: &GamePigGuiState) -> Option<Rect> {
+        GamePigGui
+            .get_components(&None, entity, world, state)
+            .iter()
+            .find(|c| matches!(c.click_event(), Some(GamePigGuiMsg::OpenHack)))
+            .map(GuiComponent::rect)
+    }
+
+    #[test]
+    fn gamepig_index_raises_the_hrm_plug_instead_of_a_hack_row() {
+        use crate::scripts::gui::hrm_plug::{CANVAS_W, PLUG_RECT, plug_sidecar};
+        let (mut world, entity) = fixture(500);
+        let index = GamePigGuiState::default();
+        let drawn = GamePigGui.get_components(&None, entity, &world, &index);
+        assert!(
+            drawn
+                .iter()
+                .any(|c| matches!(c, GuiComponent::Image { .. }) && c.rect() == PLUG_RECT),
+            "the plug's backdrop is drawn beside the body"
+        );
+        assert!(
+            !drawn
+                .iter()
+                .any(|c| matches!(c, GuiComponent::Text { text, .. } if text == "HACK")),
+            "the placeholder HACK row is gone"
+        );
+        let button = plug_button(&world, entity, &index).expect("plug button");
+        assert!(PLUG_RECT.contains(button.center()), "{button:?}");
+        assert_eq!(
+            GamePigGui.sidecar(entity, &world, &index),
+            Some(plug_sidecar(true))
+        );
+        assert_eq!(
+            GamePigGui
+                .get_config_for(entity, &world, &index)
+                .screen_size_in_pixels,
+            vec2(CANVAS_W, 296.0)
+        );
+
+        // The room stays reserved, but the plug is hidden beside a board or game.
+        let hacking = open(&world, entity);
+        let (playing, _) =
+            GamePigGui.handle_msg(entity, &world, &index, &GamePigGuiMsg::SelectSwinekeeper);
+        assert!(playing.game.is_some());
+        let booting = GamePigGuiState {
+            boot: Some(Default::default()),
+            ..Default::default()
+        };
+        for state in [&hacking, &playing, &booting] {
+            assert_eq!(plug_button(&world, entity, state), None);
+            assert_eq!(
+                GamePigGui.sidecar(entity, &world, state),
+                Some(plug_sidecar(false))
+            );
+        }
+        world.add_component(entity, PropObjState(ObjectState::Hacked));
+        assert_eq!(plug_button(&world, entity, &index), None);
+        assert_eq!(
+            GamePigGui.sidecar(entity, &world, &index),
+            Some(plug_sidecar(false))
+        );
+        let unhackable = world.add_entity(PropScripts {
+            scripts: vec!["MiniGameBoy".into()],
+            inherits: false,
+        });
+        assert_eq!(plug_button(&world, unhackable, &index), None);
+        assert_eq!(
+            GamePigGui.sidecar(unhackable, &world, &index),
+            Some(plug_sidecar(false))
+        );
+    }
+
+    /// The held screen windows only the body, so its controller never selects
+    /// the plug; like other plug panels, the plug takes a pointer.
+    #[test]
+    fn gamepig_held_controls_cycle_the_games_without_selecting_the_plug() {
+        use crate::handheld_input::HandheldControl;
+        let (world, entity) = fixture(500);
+        let mut state = GamePigGuiState::default();
+        for y in [-1, 1, -1] {
+            GamePigGui.handheld_input(
+                entity,
+                &world,
+                &mut state,
+                HandheldControl::Navigate { x: 0, y },
+            );
+            assert_eq!(state.selection, 0, "Swinekeeper is the only row");
+        }
+        GamePigGui.handheld_input(entity, &world, &mut state, HandheldControl::Primary);
+        assert!(state.hack.is_none());
+        assert!(matches!(
+            state.game,
+            Some(super::super::Game::Swinekeeper(_))
+        ));
+    }
+
     #[test]
     fn gamepig_hacking_psionic_route_shares_unlocks_and_rejects_terminal_devices() {
         let (mut world, entity) = fixture(500);

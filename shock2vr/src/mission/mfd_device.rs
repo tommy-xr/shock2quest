@@ -532,6 +532,22 @@ mod tests {
     }
 
     #[test]
+    fn scanning_a_gamepig_opens_it_with_its_plug_on_the_screen() {
+        use crate::gui::Gui;
+        let mut world = shipyard::World::new();
+        let gamepig = world.add_entity(dark::properties::PropScripts {
+            scripts: vec!["MiniGameBoy".into()],
+            inherits: false,
+        });
+        assert!(opens_panel(&world, gamepig));
+        // The tricorder screen is the body plus the plug: no letterboxing.
+        let canvas = crate::scripts::gui::GamePigGui
+            .get_config()
+            .screen_size_in_pixels;
+        assert_eq!((canvas.x, canvas.y), (SCREEN.w, SCREEN.h));
+    }
+
+    #[test]
     fn arbitrary_panels_and_footer_points_round_trip() {
         for src in [
             Rect::new(2.0, 124.0, 252.0, 296.0),
@@ -595,6 +611,7 @@ pub fn opens_panel(world: &shipyard::World, entity: shipyard::EntityId) -> bool 
             "HackableCrate",
             "ResearchableScript",
             "Chemical",
+            "MiniGameBoy",
         ]
         .iter()
         .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))

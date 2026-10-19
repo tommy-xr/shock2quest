@@ -79,6 +79,7 @@ impl Script for ProxyGuiScript {
                         self.parent_entity_id,
                     ) {
                         let surface = screen.surface();
+                        let canvas = crate::scripts::gui::GAMEPIG_CANVAS;
                         // Margins are outside the content, but still carry
                         // button edges so dragging a held press in cannot click
                         // and releasing outside cannot leave a stale latch.
@@ -88,8 +89,8 @@ impl Script for ProxyGuiScript {
                                 screen_point.x * surface.w,
                                 screen_point.y * surface.h,
                             ))
-                            .unwrap_or(cgmath::vec2(-188.0, -296.0));
-                        screen_point = point2(point.x / 188.0, point.y / 296.0);
+                            .unwrap_or(-canvas);
+                        screen_point = point2(point.x / canvas.x, point.y / canvas.y);
                     }
                     Effect::Send {
                         msg: Message {

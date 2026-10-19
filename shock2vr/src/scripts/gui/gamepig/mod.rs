@@ -12,18 +12,24 @@ mod swine_hunter;
 mod swinekeeper;
 mod tictactriop;
 
-use super::PanelText;
-use cgmath::{vec2, vec3};
+use super::{
+    PanelText,
+    hrm_plug::{self, PlugKind, draw_plug, plug_sidecar},
+};
+use cgmath::{Vector2, vec2, vec3};
 use shipyard::{EntityId, UniqueView, World};
 
 use crate::{
-    gui::{self, Gui, GuiComponent, GuiConfig, GuiCursor},
+    gui::{self, Gui, GuiComponent, GuiConfig, GuiCursor, PanelSidecar},
     quest_info::QuestInfo,
     scripts::Effect,
     ui::Rect,
 };
 
 pub struct GamePigGui;
+
+/// The body plus the HRM plug's room; a held screen windows only the body.
+pub(crate) const GAMEPIG_CANVAS: Vector2<f32> = Vector2::new(hrm_plug::CANVAS_W, 296.0);
 
 #[derive(Clone, Debug, Default)]
 pub struct GamePigGuiState {
@@ -206,17 +212,11 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             }
             components.push(PanelText::text(&name, Rect::new(16.0, y, 135.0, 15.0)));
         }
-        if hacking::can_hack(world, entity_id) {
-            let rect = Rect::new(16.0, 230.0, 135.0, 22.0);
-            components.extend(hacking::button(
-                GamePigGuiMsg::OpenHack,
-                "hack-gamepig",
-                "HACK",
-                rect,
+        if shows_plug(world, entity_id, state) {
+            components.extend(draw_plug(
+                PlugKind::Hack,
+                Some((GamePigGuiMsg::OpenHack, "hack-gamepig")),
             ));
-            if state.controller_active && state.selection == installed.len() {
-                highlight(&mut components, rect);
-            }
         }
         components
     }
@@ -390,12 +390,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                     }
                     Some(Game::TicTacTriop(_)) => (3, 3),
                     Some(Game::Swinekeeper(_)) => (6, 10),
-                    None => (
-                        1,
-                        (installed_games(world).len()
-                            + usize::from(hacking::can_hack(world, entity)))
-                        .max(1),
-                    ),
+                    None => (1, installed_games(world).len().max(1)),
                 };
                 let column = (state.selection % width) as i32;
                 let row = (state.selection / width) as i32;
@@ -420,11 +415,6 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
                 } else {
                     GamePigGuiMsg::SwineCell(state.selection)
                 }),
-                None if state.selection == installed_games(world).len()
-                    && hacking::can_hack(world, entity) =>
-                {
-                    Some(GamePigGuiMsg::OpenHack)
-                }
                 None => match installed_games(world).get(state.selection) {
                     Some(2) => Some(GamePigGuiMsg::SelectPing),
                     Some(3) => Some(GamePigGuiMsg::SelectSwinekeeper),
@@ -537,11 +527,21 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         true
     }
 
+    /// The plug's room is always kept, so a host never resizes mid-session.
     fn get_config(&self) -> GuiConfig {
         GuiConfig {
             world_offset: vec3(0.0, 0.0, -0.05),
-            screen_size_in_pixels: vec2(188.0, 296.0),
+            screen_size_in_pixels: GAMEPIG_CANVAS,
         }
+    }
+
+    fn sidecar(
+        &self,
+        entity_id: EntityId,
+        world: &World,
+        state: &GamePigGuiState,
+    ) -> Option<PanelSidecar> {
+        Some(plug_sidecar(shows_plug(world, entity_id, state)))
     }
 
     fn handle_msg(
@@ -809,6 +809,14 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
     }
 }
 
+/// Retail raises the hack plug beside the index of an unhacked device.
+fn shows_plug(world: &World, entity: EntityId, state: &GamePigGuiState) -> bool {
+    state.hack.is_none()
+        && state.game.is_none()
+        && state.boot.is_none()
+        && hacking::can_hack(world, entity)
+}
+
 fn installed_games(world: &World) -> Vec<usize> {
     let bits = world
         .borrow::<UniqueView<QuestInfo>>()
@@ -914,7 +922,7 @@ mod tests {
         );
         assert_eq!(
             GamePigGui.get_config().screen_size_in_pixels,
-            vec2(188.0, 296.0)
+            GAMEPIG_CANVAS
         );
     }
 }

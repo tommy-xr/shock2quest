@@ -383,6 +383,8 @@ impl GuiManager {
             return Vec::new();
         };
         let panel = Rect::new(0.0, 0.0, info.canvas_size_px.x, info.canvas_size_px.y);
+        let window = HandheldScreen::for_entity(world, info.parent_entity)
+            .map(|screen| screen.viewport().src);
         info.components
             .iter()
             .filter(|component| {
@@ -391,6 +393,13 @@ impl GuiManager {
                     GuiComponentRenderInfo::Image { texture, .. }
                         if texture.eq_ignore_ascii_case("cursor.pcx")
                 )
+            })
+            // A mounted screen draws only its content window (e.g. no plug).
+            .filter(|component| {
+                window.is_none_or(|w| {
+                    let r = component.canvas_rect(panel);
+                    r.x < w.x + w.w && w.x < r.x + r.w && r.y < w.y + w.h && w.y < r.y + r.h
+                })
             })
             .map(|component| {
                 let rect = component.canvas_rect(panel);
