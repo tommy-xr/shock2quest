@@ -5,7 +5,7 @@ import { launchWithSettings } from "./helpers/settings.js";
 import { worldSeconds } from "./helpers/world-clock.js";
 
 // The Speed Boost hypo (template -58) lasts 20 player-seconds. Slow world
-// (default) halves the world clock and leaves the player's speed alone;
+// (default) slows the world clock to 0.25 and leaves the player's speed alone;
 // Classic doubles the player's stick speed and leaves the world alone.
 //
 // Opt-in (compiles the runtime + needs Data/ assets):
@@ -39,7 +39,7 @@ for (const mode of ["SlowWorld", "Classic"] as const) {
     const boosted = await walk();
     const slowed = await worldSeconds(game, 60);
     if (mode === "SlowWorld") {
-      assert.ok(Math.abs(slowed - 0.5) < 1e-3, `world runs at half speed: ${slowed}`);
+      assert.ok(Math.abs(slowed - 0.25) < 1e-3, `world runs at quarter speed: ${slowed}`);
       assert.ok(Math.abs(boosted / baseline - 1) < 0.05, `player speed unchanged: ${boosted} vs ${baseline}`);
     } else {
       assert.ok(Math.abs(slowed - 1) < 1e-3, `world runs at full speed: ${slowed}`);
@@ -59,7 +59,7 @@ test("dying ends the speed boost", { skip: !e2eEnabled, timeout: 600_000 }, asyn
   const hypo = await game.player.spawnItem(SPEED_BOOST);
   await game.entities.sendMessage(hypo.entity_id, { type: "Frob" });
   await game.step({ frames: 1 });
-  assert.ok(Math.abs((await worldSeconds(game, 60)) - 0.5) < 1e-3, "the boost slows the world");
+  assert.ok(Math.abs((await worldSeconds(game, 60)) - 0.25) < 1e-3, "the boost slows the world");
   await game.entities.sendMessage((await game.info()).player.entity_id!, { type: "Damage", amount: 1000 });
   await game.step({ frames: 2 });
   assert.notEqual((await game.info()).player.life_state, "alive");
