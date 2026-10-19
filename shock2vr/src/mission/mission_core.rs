@@ -7237,6 +7237,11 @@ impl MissionCore {
         store.retain(|(entity, _)| !collect.contains(entity));
         for entity in &downloads {
             if let Some(slot) = held.iter().position(|held| *held == Some(*entity)) {
+                effects.extend(crate::scripts::script_util::dissolve_cue(
+                    &self.world,
+                    *entity,
+                    true,
+                ));
                 let source = [&input_context.left_hand, &input_context.right_hand][slot];
                 self.personal_card
                     .download(crate::virtual_hand::hand_world_position(

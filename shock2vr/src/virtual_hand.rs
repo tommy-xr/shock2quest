@@ -408,14 +408,22 @@ impl VirtualHand {
                 // See what we're hitting
                 let mut msgs = Vec::new();
 
+                // A held download other than a keycard also collects on
+                // trigger, through the same drop a release takes.
+                let trigger_collects = prev.trigger_value < 0.5
+                    && input_hand.trigger_value > 0.5
+                    && maintenance_target.is_none()
+                    && crate::scripts::script_util::is_download_pickup(world, entity_id)
+                    && !is_key_source(world, entity_id);
+
                 // If we're holding onto something, but not grabbing, we can drop it
-                if prev.released_entity(input_hand).is_some() {
+                if prev.released_entity(input_hand).is_some() || trigger_collects {
                     let mut msgs = vec![VirtualHandEffect::DropItem {
                         entity_id,
                         motion: release,
                     }];
 
-                    if let Some(target) = release_target {
+                    if let Some(target) = release_target.filter(|_| !trigger_collects) {
                         msgs.push(VirtualHandEffect::OutMessage {
                             message: Message {
                                 to: target,
@@ -1858,6 +1866,44 @@ mod tests {
             held_trigger_payload(&world, weapon_or_psi_amp),
             MessagePayload::TriggerPull
         ));
+    }
+
+    /// A held download collects on trigger, without waiting for release:
+    /// the hand drops it into the same collection a release takes.
+    #[test]
+    fn trigger_collects_held_downloads_except_keycards() {
+        use crate::test_support::{CollectedKind, spawn_collected};
+        let collects = |world: &World, entity| {
+            let mut input = Hand::default();
+            input.squeeze_value = 1.0;
+            input.trigger_value = 1.0;
+            let (hand, effects) = VirtualHand::update(
+                &VirtualHand::new(Handedness::Right).grab_entity(world, entity),
+                &PhysicsWorld::new(),
+                world,
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                &input,
+                None,
+                Vector3::zero(),
+                1.0 / 60.0,
+            );
+            let dropped = effects.iter().any(|e| {
+                matches!(e, VirtualHandEffect::DropItem { entity_id, .. } if *entity_id == entity)
+            });
+            assert_eq!(dropped, hand.get_held_entity().is_none());
+            dropped
+        };
+        for kind in [CollectedKind::NanitePile, CollectedKind::CyberModule] {
+            let mut world = World::new();
+            let entity = spawn_collected(&mut world, kind);
+            assert!(collects(&world, entity), "{kind:?}");
+        }
+        let mut world = World::new();
+        let soft = world.add_entity(dark::properties::PropSoftType(1));
+        assert!(collects(&world, soft), "soft");
+        let keycard = spawn_collected(&mut world, CollectedKind::KeyCard);
+        assert!(!collects(&world, keycard), "a keycard waits for release");
     }
 
     /// Trigger use must not collect a card before grip release.

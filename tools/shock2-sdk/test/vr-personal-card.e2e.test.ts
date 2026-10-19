@@ -6,7 +6,7 @@ import { add, sub, scale, normalize, quatRotate, quatConjugate, aimVrHandAt, dra
 
 const enabled = process.env.SHOCK2_E2E === "1";
 
-test("VR nanites credit on release exactly once, with sound and releasing-hand haptics", {
+for (const collect of ["release", "trigger"] as const) test(`VR nanites credit on ${collect} exactly once, with sound, haptics and sparks`, {
   skip: !enabled, timeout: 180_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
@@ -29,17 +29,22 @@ test("VR nanites credit on release exactly once, with sound and releasing-hand h
   assert.equal(player.stats?.nanites, 0);
   const pulses = player.hand_feedback?.haptics?.sequence[1] ?? 0;
   const since = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+  const sparks = async () => (await game.entities.byTemplate(-1944)).length; // sparkley sphere
+  const idleSparks = await sparks();
   await game.input.set("right_hand.position", [.3, .9, -.55]);
-  await game.input.set("right_hand.squeeze", 0);
+  if (collect === "release") await game.input.set("right_hand.squeeze", 0);
+  else await game.input.set("right_hand.trigger", 1);
   await game.step({ frames: 12 });
   player = (await game.info()).player;
   assert.equal(player.right_hand_entity_id, null);
   assert.equal(player.stats?.nanites, 250);
   assert.equal(player.hand_feedback?.haptics?.sequence[1], pulses + 1);
-  assert.equal((await game.entities.byTemplate(257)).length, 0);
+  assert.equal(await sparks(), idleSparks + 1, "the pile breaks down into sparks");
   const audio = (await game.audio.recent()).sounds.filter(s => s.sequence > since);
   assert.ok(audio.length > 0, "collection must emit an audible cue");
   await game.step({ frames: 60 });
+  assert.equal((await game.entities.byTemplate(257)).length, 0, "its shrinking stand-in is gone");
+  assert.equal(await sparks(), idleSparks);
   assert.equal((await game.info()).player.stats?.nanites, 250);
 });
 
