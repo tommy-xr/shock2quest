@@ -413,9 +413,8 @@ impl VirtualHand {
                 // See what we're hitting
                 let mut msgs = Vec::new();
 
-                // A held download other than a keycard also collects on
-                // trigger, through the same drop a release takes. Never from
-                // an untracked fallback pose.
+                // A held download also collects on trigger, through the same
+                // drop a release takes. Never from an untracked fallback pose.
                 let trigger_collects = prev.trigger_value < 0.5
                     && input_hand.trigger_value > 0.5
                     && crate::vr_support::GripPose {
@@ -423,8 +422,7 @@ impl VirtualHand {
                         rotation: input_hand.rotation,
                     }
                     .is_tracked()
-                    && crate::scripts::script_util::is_download_pickup(world, entity_id)
-                    && !is_key_source(world, entity_id);
+                    && crate::scripts::script_util::is_download_pickup(world, entity_id);
 
                 // If we're holding onto something, but not grabbing, we can drop it
                 if prev.released_entity(input_hand).is_some() || trigger_collects {
@@ -736,13 +734,7 @@ fn handle_empty_hand_state(
     let mut msgs = Vec::new();
     let mut last_frobbed_entity = frobbed_entity;
     let mut next_hand_state = HandState::Empty;
-    // A keycard downloads only from the hand; other downloads also collect from the ray.
-    if (input_hand.trigger_value > 0.5 || input_hand.a_value > 0.5)
-        && !result
-            .as_ref()
-            .and_then(|hit| hit.maybe_entity_id)
-            .is_some_and(|entity| is_key_source(world, entity))
-    {
+    if input_hand.trigger_value > 0.5 || input_hand.a_value > 0.5 {
         if let Some(RayCastResult {
             hit_point: _,
             hit_normal: _,
@@ -853,8 +845,8 @@ fn get_held_position_orientation(
 /// protocol even though the Weapon archetype also inherits that inventory
 /// flag. The decision stays tied to Dark's production frob metadata.
 fn held_trigger_press_payload(world: &World, entity_id: EntityId) -> MessagePayload {
-    // Downloads never use their item: a card waits for release, and the
-    // rest collect on trigger before reaching here.
+    // Downloads never use their item: they collect on trigger before
+    // reaching here, except from an untracked pose.
     if crate::scripts::script_util::is_download_pickup(world, entity_id) {
         return MessagePayload::TriggerPull;
     }
@@ -1194,7 +1186,7 @@ pub(crate) fn interaction_ray_cast(
 mod tests {
     use super::*;
     use crate::physics::CollisionGroup;
-    use dark::properties::{KeyCard, PropFrobInfo, PropKeySrc, PropPlayerGun};
+    use dark::properties::{PropFrobInfo, PropPlayerGun};
 
     fn scripted_inventory_use() -> PropFrobInfo {
         PropFrobInfo {
@@ -1882,8 +1874,8 @@ mod tests {
             );
             assert_eq!(
                 frob_message_count(&effects),
-                usize::from(!is_key_source(&world, entity)),
-                "a ray trigger collects all but a keycard: {kind:?}"
+                1,
+                "a ray trigger collects: {kind:?}"
             );
         }
         let mut world = World::new();
@@ -1920,7 +1912,7 @@ mod tests {
     /// A held download collects on trigger, without waiting for release:
     /// the hand drops it into the same collection a release takes.
     #[test]
-    fn trigger_collects_held_downloads_except_keycards() {
+    fn trigger_collects_held_downloads() {
         use crate::test_support::{CollectedKind, spawn_collected};
         let collects = |world: &World, entity| {
             let (hand, effects) = press_trigger_holding(world, entity);
@@ -1930,7 +1922,11 @@ mod tests {
             assert_eq!(dropped, hand.get_held_entity().is_none());
             dropped
         };
-        for kind in [CollectedKind::NanitePile, CollectedKind::CyberModule] {
+        for kind in [
+            CollectedKind::NanitePile,
+            CollectedKind::CyberModule,
+            CollectedKind::KeyCard,
+        ] {
             let mut world = World::new();
             let entity = spawn_collected(&mut world, kind);
             assert!(collects(&world, entity), "{kind:?}");
@@ -1938,8 +1934,6 @@ mod tests {
         let mut world = World::new();
         let soft = world.add_entity(dark::properties::PropSoftType(1));
         assert!(collects(&world, soft), "soft");
-        let keycard = spawn_collected(&mut world, CollectedKind::KeyCard);
-        assert!(!collects(&world, keycard), "a keycard waits for release");
 
         let mut untracked = Hand::default();
         untracked.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
@@ -2009,29 +2003,6 @@ mod tests {
             Some(behind),
             "a fresh squeeze grabs"
         );
-    }
-
-    /// Trigger use must not collect a card before grip release.
-    #[test]
-    fn held_keycard_trigger_waits_for_release() {
-        let mut world = World::new();
-        let keycard = world.add_entity((
-            PropFrobInfo {
-                world_action: FrobFlag::MOVE,
-                inventory_action: FrobFlag::empty(),
-                tool_action: FrobFlag::empty(),
-            },
-            PropKeySrc(KeyCard {
-                is_master: false,
-                region_id: 128,
-                lock_id: 0,
-            }),
-        ));
-
-        assert!(matches!(
-            held_trigger_payload(&world, keycard),
-            MessagePayload::TriggerPull
-        ));
     }
 
     /// A wielded weapon draws its own first-person model at the hand, so the

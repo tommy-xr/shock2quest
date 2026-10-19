@@ -144,8 +144,8 @@ test(
   },
 );
 
-test(
-  "Hydro2 VR strip grip holds Card B and release downloads its credential",
+for (const collect of ["release", "trigger"] as const) test(
+  `Hydro2 VR strip grip holds Card B and ${collect} downloads its credential`,
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -200,7 +200,12 @@ test(
     assert.equal((await game.ui.state()).mode, "shooter");
 
     await game.input.set("right_hand.position", [0.3, 0.9, -0.5]);
-    await game.input.set("right_hand.squeeze", 0);
+    const sparks = async () => (await game.entities.byTemplate(-1944)).length; // sparkley sphere
+    const idleSparks = await sparks();
+    await game.input.set(`right_hand.${collect === "release" ? "squeeze" : "trigger"}`, collect === "release" ? 0 : 1);
+    await game.step({ frames: 2 });
+    assert.equal(await sparks(), idleSparks + 1, "the card dissolves into sparks");
+    await game.input.setMany({ "right_hand.squeeze": 0, "right_hand.trigger": 0 });
     await game.step({ frames: 30 }); // the card's shrinking stand-in is gone
     await assertCardCollectedAndDoorOpens(game, CARD_ARCHETYPE);
   },

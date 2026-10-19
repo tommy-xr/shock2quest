@@ -48,12 +48,13 @@ for (const collect of ["release", "trigger"] as const) test(`VR nanites credit o
   assert.equal((await game.info()).player.stats?.nanites, 250);
 });
 
-test("VR nanites collected by both free hands' rays dissolve once", {
+// Earth's 250-nanite pile, and MedSci1's loose Science Card.
+for (const [label, mission, obj] of [["nanites", "earth.mis", 257], ["a keycard", "medsci1.mis", 338]] as const) test(`VR ${label} collected by both free hands' rays dissolve once`, {
   skip: !enabled, timeout: 180_000,
 }, async () => {
-  await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
+  await using game = await GameServer.launch({ mission, port: 0, debugFlags: ["--vr"] });
   await game.step({ frames: 30 });
-  const [pile] = await game.entities.byTemplate(257);
+  const [pile] = await game.entities.byTemplate(obj);
   assert.ok(pile);
   const [x, y, z] = pile.position;
   await game.player.teleport({ x: x + .8, y: y + 1, z: z + .8 });
@@ -70,7 +71,9 @@ test("VR nanites collected by both free hands' rays dissolve once", {
     && e.template_id !== -1944 && Math.hypot(...sub(e.position, pile.position)) < .3);
   await game.input.setMany({ "left_hand.trigger": 1, "right_hand.trigger": 1 });
   await game.step({ frames: 12 });
-  assert.equal((await game.info()).player.stats?.nanites, 250);
+  if (obj === 257) assert.equal((await game.info()).player.stats?.nanites, 250);
+  assert.equal((await game.entities.byTemplate(obj)).length, 0, "collected");
+  assert.equal((await game.player.inventory()).items.find(item => item.entity_id === pile.id), undefined);
   assert.equal(await sparks(), idleSparks + 1, "the pile breaks down into sparks");
   assert.equal((await standIns()).length, 1, "one stand-in shrinks in its place");
   await game.step({ frames: 60 });

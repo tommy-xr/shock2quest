@@ -7275,7 +7275,11 @@ impl MissionCore {
             let mut dissolved = Vec::new();
             for effect in &interaction_msgs {
                 if let VirtualHandEffect::OutMessage {
-                    message: Message { to, payload: MessagePayload::Frob },
+                    message:
+                        Message {
+                            to,
+                            payload: MessagePayload::Frob,
+                        },
                 } = effect
                 {
                     if !collect.contains(to)
