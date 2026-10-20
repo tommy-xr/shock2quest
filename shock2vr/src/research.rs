@@ -643,11 +643,10 @@ mod tests {
 
     #[test]
     fn a_chemical_is_ready_only_for_a_carried_specimen_waiting_on_it_at_skill() {
-        use crate::scripts::{
-            Effect,
-            gui::{Gui, ResearchGui},
-        };
+        use crate::gui::Gui;
+        use crate::scripts::{Effect, gui::ResearchGui};
         use dark::properties::{PropScripts, PropSymName, TechSkillValues};
+        use shipyard::UniqueViewMut;
 
         let chemical = |world: &mut World, name: &str| {
             world.add_entity((
@@ -669,17 +668,20 @@ mod tests {
         let wrong = chemical(&mut world, "Chem #2");
         let player = world.add_entity(PropBaseTechDesc(TechSkillValues([0, 0, 0, 0, 2])));
         let backpack = world.add_entity(());
-        let hold = |world: &mut World, left| {
-            world.add_unique(PlayerInfo {
-                pos: cgmath::vec3(0.0, 0.0, 0.0),
-                rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                entity_id: player,
-                left_hand_entity_id: left,
-                right_hand_entity_id: None,
-                inventory_entity_id: backpack,
-            })
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: Some(specimen),
+            right_hand_entity_id: None,
+            inventory_entity_id: backpack,
+        });
+        let hold = |world: &World, left| {
+            world
+                .borrow::<UniqueViewMut<PlayerInfo>>()
+                .unwrap()
+                .left_hand_entity_id = left;
         };
-        hold(&mut world, Some(specimen));
         world.add_unique(QuestInfo::new());
         assert!(
             !chemical_ready_for(&world, needed, specimen),
@@ -716,9 +718,9 @@ mod tests {
         assert!(!crate::item_tools::offers_to(&world, needed, specimen));
 
         // Not carried, or too little skill to resume: not ready.
-        hold(&mut world, None);
+        hold(&world, None);
         assert!(!chemical_ready_for(&world, needed, specimen));
-        hold(&mut world, Some(specimen));
+        hold(&world, Some(specimen));
         world.add_component(player, PropBaseTechDesc(TechSkillValues([0, 0, 0, 0, 1])));
         assert!(!chemical_ready_for(&world, needed, specimen));
     }
