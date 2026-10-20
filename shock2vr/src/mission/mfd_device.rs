@@ -362,6 +362,25 @@ pub fn compose(native: UiCanvas, screen: Option<Rect>, target: Option<&str>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vr_research_never_opens_a_world_quad() {
+        use PanelRoute::*;
+        // (vr, device, interface_open, shares_interface, researchable)
+        let route = |vr, device, interface, shares, research| {
+            panel_route(vr, device, interface, shares, research)
+        };
+        assert_eq!(route(true, true, false, false, true), Some(Device));
+        assert_eq!(route(true, false, true, false, true), Some(Interface));
+        assert_eq!(route(true, false, false, false, true), None);
+        // Other guis keep their routes.
+        assert_eq!(route(true, false, false, false, false), Some(World));
+        assert_eq!(route(true, false, true, false, false), Some(World));
+        assert_eq!(route(true, false, false, true, false), Some(Interface));
+        assert_eq!(route(false, false, false, false, true), Some(Flat));
+        assert_eq!(route(false, false, false, true, false), Some(Interface));
+    }
+
     #[test]
     fn belt_mount_stays_upright_with_the_lens_facing_outward() {
         use cgmath::{Deg, Rotation3};
@@ -636,6 +655,41 @@ pub(super) fn is_gamepig(world: &shipyard::World, entity: shipyard::EntityId) ->
 /// the backpack it uses the MFD canvas, plug included, like flat.
 pub(super) fn gamepig_uses_mfd(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
     is_gamepig(world, entity) && !crate::wielded_weapon::held_in_hand(world, entity)
+}
+
+/// Where `Effect::OpenPanel` shows a gui.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PanelRoute {
+    /// The drawn VR handheld MFD's screen.
+    Device,
+    /// The cyber interface's MFD area, opening the interface if it is shut.
+    Interface,
+    /// Flat presentation's on-screen MFD.
+    Flat,
+    /// A VR world-space quad on the entity itself.
+    World,
+}
+
+/// `None` = no panel: in VR a researchable never gets a quad on the item, so
+/// with neither the device nor the interface up its progress goes to the HUD.
+pub(super) fn panel_route(
+    vr: bool,
+    device: bool,
+    interface_open: bool,
+    shares_interface: bool,
+    researchable: bool,
+) -> Option<PanelRoute> {
+    Some(if vr && device {
+        PanelRoute::Device
+    } else if shares_interface || (vr && researchable && interface_open) {
+        PanelRoute::Interface
+    } else if !vr {
+        PanelRoute::Flat
+    } else if researchable {
+        return None;
+    } else {
+        PanelRoute::World
+    })
 }
 
 /// Only existing reader/panel scripts receive Frob; all other objects are queried.
