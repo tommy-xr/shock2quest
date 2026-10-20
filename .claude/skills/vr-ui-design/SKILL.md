@@ -104,7 +104,7 @@ section 3).
   trainer or O/S upgrade. It is 252x296, the 188 body plus the plug, so a
   panel and its sidecar fit with no VR-specific layout. A scanned GamePig
   shows the ordinary query panel, never its games, with the hack plug beside
-  it while it can be hacked (`hrm_plug::query_plug`). The plug opens the
+  it while it can be hacked (`scripts::gui::query_plug`). The plug opens the
   GamePig's own board there; BACK returns to the query.
 - **A held device's own screen (GamePig):** only the body's content window is
   mapped onto the model's aperture, so no sidecar shows. Actions that live on

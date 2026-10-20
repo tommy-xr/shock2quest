@@ -12425,6 +12425,11 @@ impl MissionCore {
                 Effect::InspectEntity { entity_id } => {
                     self.flat_ui.close();
                     self.flat_ui.utilities.inspect_entity(entity_id);
+                    // Effects run after the regular utility refresh. Fill
+                    // the reader before this frame renders its title.
+                    self.flat_ui
+                        .utilities
+                        .refresh(&self.world, asset_cache, &self.entity_info);
                 }
                 Effect::OpenPanel { entity } => {
                     self.world

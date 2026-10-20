@@ -217,7 +217,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         if shows_plug(world, entity_id, state) {
             components.extend(draw_plug(
                 PlugKind::Hack,
-                Some((GamePigGuiMsg::OpenHack, "hack-gamepig")),
+                Some((GamePigGuiMsg::OpenHack, HACK_PLUG)),
             ));
         }
         components
@@ -578,9 +578,7 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             state.game = None;
             state.selection = 0;
             let effect = if std::mem::take(&mut state.from_query) {
-                Effect::InspectEntity {
-                    entity_id: entity_id,
-                }
+                Effect::InspectEntity { entity_id }
             } else {
                 Effect::NoEffect
             };
@@ -832,6 +830,16 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         }
         (state, Effect::NoEffect)
     }
+}
+
+/// The hack plug's button label, beside the index or a query of the device.
+const HACK_PLUG: &str = "hack-gamepig";
+
+/// The plug a query of `entity` offers: a GamePig's hack plug while it can be hacked.
+pub(crate) fn query_plug(world: &World, entity: EntityId) -> Option<(PlugKind, &'static str)> {
+    (crate::scripts::script_util::entity_has_script(world, entity, "MiniGameBoy")
+        && hacking::can_hack(world, entity))
+    .then_some((PlugKind::Hack, HACK_PLUG))
 }
 
 /// Retail raises the hack plug beside the index of an unhacked device.

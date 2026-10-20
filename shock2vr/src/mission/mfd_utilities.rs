@@ -32,6 +32,8 @@ enum Control {
     Next,
     LineUp,
     LineDown,
+    /// The HRM plug beside a queried object that offers one.
+    Plug,
 }
 
 #[derive(Default)]
@@ -59,7 +61,7 @@ pub(crate) struct MfdUtilities {
 
 /// A plug-local rect on the canvas, beside the query panel.
 fn beside_panel(r: Rect) -> Rect {
-    Rect::new(PANEL.x + r.x, PANEL.y + r.y, r.w, r.h)
+    crate::hud::ammo_panel::at(Vector2::new(PANEL.x, PANEL.y), r)
 }
 
 impl MfdUtilities {
@@ -128,10 +130,10 @@ impl MfdUtilities {
     pub(crate) fn take_plug_request(&mut self) -> Option<EntityId> {
         self.plug_request.take()
     }
-    pub(crate) fn refresh_plug(&mut self, world: &World) {
+    fn refresh_plug(&mut self, world: &World) {
         self.plug = self
             .selected
-            .and_then(|entity| hrm_plug::query_plug(world, entity));
+            .and_then(|entity| crate::scripts::gui::query_plug(world, entity));
     }
 
     pub(crate) fn is_inspecting(&self) -> bool {
@@ -139,10 +141,7 @@ impl MfdUtilities {
     }
     /// Every clickable control's canvas rect, in hit-test order.
     pub(crate) fn control_rects(&self) -> impl Iterator<Item = Rect> {
-        self.controls()
-            .into_iter()
-            .map(|(_, rect, _, _)| rect)
-            .chain(self.plug.map(|_| beside_panel(BUTTON_RECT)))
+        self.controls().into_iter().map(|(_, rect, _, _)| rect)
     }
 
     fn controls(&self) -> Vec<(Control, Rect, &'static str, &'static str)> {
@@ -181,6 +180,9 @@ impl MfdUtilities {
                 (Control::Next, Rect::new(161.0, 327.0, 18.0, 26.0), ""),
                 (Control::LineDown, Rect::new(161.0, 356.0, 18.0, 17.0), ""),
             ]);
+            if let Some((_, label)) = self.plug {
+                controls.push((Control::Plug, beside_panel(BUTTON_RECT), label));
+            }
         }
         if self.access_cards {
             if self.page > 0 {
@@ -208,6 +210,7 @@ impl MfdUtilities {
                     Control::Research if self.research => "iface/ifbtn41.pcx",
                     Control::Research => "iface/ifbtn40.pcx",
                     Control::Map => "iface/ifbtn50.pcx",
+                    Control::Plug => self.plug.map_or("IFBTN00.PCX", |(kind, _)| kind.art().1),
                     _ => "IFBTN00.PCX",
                 };
                 (control, rect, label, texture)
@@ -257,6 +260,7 @@ impl MfdUtilities {
                         self.map_requested = true;
                     }
                     Control::Close => *self = Self::default(),
+                    Control::Plug => self.plug_request = self.selected,
                     Control::LineUp => self.query_offset = self.query_offset.saturating_sub(1),
                     Control::LineDown => {
                         self.query_offset = (self.query_offset + 1).min(self.max_query_offset())
@@ -315,18 +319,9 @@ impl MfdUtilities {
             }
             return consumed;
         }
-        if let (Some(entity), Some(_)) = (self.selected, self.plug) {
-            if beside_panel(BUTTON_RECT).contains(point) {
-                if pressed {
-                    self.plug_request = Some(entity);
-                }
-                return true;
-            }
-            if beside_panel(PLUG_RECT).contains(point) {
-                return true;
-            }
-        }
-        self.selected.is_some() && PANEL.contains(point)
+        self.selected.is_some()
+            && (PANEL.contains(point)
+                || (self.plug.is_some() && beside_panel(PLUG_RECT).contains(point)))
     }
 
     fn query_line_height(&self) -> f32 {
@@ -441,16 +436,13 @@ impl MfdUtilities {
             if let Some(icon) = &self.icon {
                 canvas.fitted_object_icon(Rect::new(17.0, 138.0, 138.0, 109.0), icon);
             }
-            // Empty until the next refresh: an empty text mesh cannot draw.
-            if !self.title.is_empty() {
-                canvas.text_native_fit(
-                    Rect::new(26.0, 257.0, 129.0, 12.0),
-                    &self.title,
-                    crate::ui::MFD_FONT,
-                    HAlign::Left,
-                    VAlign::Top,
-                );
-            }
+            canvas.text_native_fit(
+                Rect::new(26.0, 257.0, 129.0, 12.0),
+                &self.title,
+                crate::ui::MFD_FONT,
+                HAlign::Left,
+                VAlign::Top,
+            );
             for (rect, line) in self.visible_lines() {
                 if !line.trim().is_empty() {
                     canvas.text_native_fit(
@@ -462,10 +454,9 @@ impl MfdUtilities {
                     );
                 }
             }
+            // Its button is a control, drawn over this backdrop below.
             if let Some((kind, _)) = self.plug {
-                let (backdrop, button, _) = kind.art();
-                canvas.image(beside_panel(PLUG_RECT), backdrop);
-                canvas.image(beside_panel(BUTTON_RECT), button);
+                canvas.image(beside_panel(PLUG_RECT), kind.art().0);
             }
         }
         for (control, rect, label, texture) in self.controls() {
@@ -535,6 +526,7 @@ impl MfdUtilities {
                             Control::LineDown => "query_line_down",
                             Control::Previous => "utility_previous",
                             Control::Next => "utility_next",
+                            Control::Plug => label,
                         }
                         .into(),
                     ),
@@ -556,26 +548,6 @@ impl MfdUtilities {
             } else {
                 Vec::new()
             })
-            .chain(self.plug.into_iter().flat_map(|(kind, label)| {
-                let (backdrop, button, _) = kind.art();
-                [
-                    ("image", backdrop, None, PLUG_RECT),
-                    ("button", button, Some(label), BUTTON_RECT),
-                ]
-                .map(|(kind, texture, label, rect)| {
-                    let r = beside_panel(rect);
-                    let r = [r.x, r.y, r.w, r.h];
-                    crate::game_scene::DebugUiElement {
-                        kind: kind.into(),
-                        texture: Some(texture.into()),
-                        text: None,
-                        label: label.map(Into::into),
-                        entity_id: self.selected.map(|e| e.inner() as i32),
-                        rect: r,
-                        screen_rect: r,
-                    }
-                })
-            }))
             .chain(self.logs.iter().flat_map(|list| list.elements()))
             .chain(if self.research {
                 self.research_catalog.elements()
@@ -768,15 +740,6 @@ mod tests {
         assert!(canvas.elements().iter().all(|element| !matches!(element, crate::ui::UiElement::Text { text, .. } if text.trim().is_empty())));
         let lines: Vec<_> = ui.visible_lines().collect();
         assert_eq!(lines[2].0.y - lines[0].0.y, 24.0);
-    }
-
-    #[test]
-    fn a_query_drawn_before_its_first_refresh_emits_no_empty_text() {
-        let mut ui = MfdUtilities::default();
-        ui.inspect_entity(EntityId::dead());
-        let mut canvas = UiCanvas::new(Vector2::new(640.0, 480.0));
-        ui.draw(&mut canvas);
-        assert!(canvas.elements().iter().all(|element| !matches!(element, crate::ui::UiElement::Text { text, .. } if text.trim().is_empty())));
     }
 
     #[test]

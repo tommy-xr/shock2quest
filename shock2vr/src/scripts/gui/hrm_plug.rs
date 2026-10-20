@@ -5,7 +5,6 @@
 
 use crate::gui::{self, ButtonHoverBehavior, GuiComponent, PanelSidecar};
 use crate::ui::Rect;
-use shipyard::{EntityId, World};
 
 /// The MFD body the plug sits beside.
 const BODY_W: f32 = 188.0;
@@ -58,12 +57,4 @@ pub(crate) fn plug_sidecar(shown: bool) -> PanelSidecar {
         body_width: BODY_W,
         rect: shown.then_some(PLUG_RECT),
     }
-}
-
-/// The plug a queried object offers beside the query panel, with its button
-/// label: a GamePig that can still be hacked.
-pub(crate) fn query_plug(world: &World, entity: EntityId) -> Option<(PlugKind, &'static str)> {
-    (crate::scripts::script_util::entity_has_script(world, entity, "MiniGameBoy")
-        && super::gamepig::hacking::can_hack(world, entity))
-    .then_some((PlugKind::Hack, "hack-gamepig"))
 }
