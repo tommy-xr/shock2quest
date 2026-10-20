@@ -10,7 +10,13 @@
 //! The geometry queries live in `physics::climb_landing`; this module holds the
 //! pure rules they share.
 
-use cgmath::{InnerSpace, Vector3, vec3};
+use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, vec3};
+
+use crate::{
+    input_context::InputContext,
+    physics::{ClimbGripKind, PhysicsWorld, PlayerHandle},
+    vr_climb::HandClimb,
+};
 
 /// Farthest an assisted landing may be from the body centre, horizontally
 /// (world units; about 1.5 m). Wall grace grabs cover anything farther.
@@ -230,6 +236,87 @@ pub fn keeps_held(held: Landing, aimed: Vector3<f32>) -> bool {
         && (aimed.y - held.floor_y).abs() <= GAZE_SNAP_MAX_STEP
 }
 
+/// Resolve this frame's release preview for a VR body hanging from `climb`'s
+/// holds (none while nothing is held or a scripted move owns the body).
+/// `previous` supplies the gaze landing to hold through jitter; `safe_drop`
+/// is the acceptable drop in world units.
+pub fn resolve(
+    physics: &PhysicsWorld,
+    player: &PlayerHandle,
+    climb: &HandClimb,
+    input: &InputContext,
+    pawn_rotation: Quaternion<f32>,
+    previous: &ReleasePreview,
+    safe_drop: f32,
+) -> ReleasePreview {
+    if climb.grips().next().is_none() || player.is_topping_out() {
+        return ReleasePreview::default();
+    }
+    let center = physics.get_player_next_translation(player);
+    // From the standing capsule while balled up on a ledge, like the grip rule.
+    let feet_y = center.y
+        - crate::physics::player_center_above_floor(
+            player.is_crouched() && !player.is_hanging_crouched(),
+        );
+    // Only a ladder exit is assisted: an ordinary ledge pull keeps its vault.
+    let exits_a_ladder = climb.grips().any(|(_, anchor)| {
+        matches!(
+            anchor.grip.kind,
+            ClimbGripKind::Ladder | ClimbGripKind::Surface
+        )
+    });
+    // An untracked head reports a zero quaternion: no gaze then.
+    let head_tracked = input.pose_tracking.is_none_or(|tracking| tracking.head)
+        && input.head.rotation.magnitude2() > 1e-6;
+    let gaze = (exits_a_ladder && head_tracked).then(|| {
+        let view = pawn_rotation * input.head.rotation;
+        physics.gaze_landing(
+            player,
+            center + pawn_rotation.rotate_vector(input.head.position),
+            &gaze_rays(view.rotate_vector(vec3(0.0, 0.0, -1.0))),
+            feet_y,
+            previous.assisted(),
+        )
+    });
+    let outcome = match gaze.as_ref().map(|gaze| gaze.landing) {
+        Some(Ok(landing)) => Some(ReleaseOutcome::new(
+            ReleaseMode::Assisted,
+            landing,
+            feet_y,
+            safe_drop,
+        )),
+        _ => physics
+            .natural_landing(
+                player,
+                climb.predicted_release_velocity(physics.player_step_dt()),
+            )
+            .map(|landing| ReleaseOutcome::new(ReleaseMode::Natural, landing, feet_y, safe_drop)),
+    };
+    ReleasePreview {
+        outcome,
+        gaze_candidate: gaze.as_ref().and_then(|gaze| gaze.candidate),
+        gaze_rejection: match gaze {
+            Some(gaze) => gaze.landing.err(),
+            None => Some(GazeRejection::Inactive),
+        },
+    }
+}
+
+/// How long a fresh hold flashes cyan before showing the release's colour.
+pub const HOLD_PULSE_SECONDS: f32 = 0.25;
+
+/// A held glove's light: the catch flash, then green for a safe release and
+/// red for anything else (a long fall, or no landing known).
+pub fn held_glove_light(held_seconds: f32, safe: bool) -> crate::HandLight {
+    if held_seconds < HOLD_PULSE_SECONDS {
+        crate::HandLight::ClimbHeld
+    } else if safe {
+        crate::HandLight::Green
+    } else {
+        crate::HandLight::Red
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +387,14 @@ mod tests {
         assert!(keeps_held(held, vec3(1.5, 4.0, 0.3)));
         assert!(!keeps_held(held, vec3(2.0, 4.0, 0.0)), "aimed away");
         assert!(!keeps_held(held, vec3(1.0, 4.5, 0.0)), "another level");
+    }
+
+    #[test]
+    fn a_held_glove_flashes_on_the_catch_then_shows_the_release() {
+        use crate::HandLight;
+        assert_eq!(held_glove_light(0.0, true), HandLight::ClimbHeld);
+        assert_eq!(held_glove_light(0.3, true), HandLight::Green);
+        assert_eq!(held_glove_light(0.3, false), HandLight::Red);
     }
 
     #[test]

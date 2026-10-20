@@ -130,6 +130,10 @@ pub trait PlayerInteraction {
     /// (see [`crate::vr_climb::HandClimb::release_all`]).
     fn release_climb_grips(&mut self) {}
 
+    /// Whether letting go of every hold now lands safely, for the held gloves
+    /// (see [`crate::climb_release`]).
+    fn set_climb_release_safe(&mut self, _safe: bool) {}
+
     /// Entities held in (left, right) - for `PlayerInfo`. Flat reports its
     /// wielded weapon as the "left".
     fn held_entities(&self) -> (Option<EntityId>, Option<EntityId>);
@@ -337,6 +341,10 @@ pub struct VrInteraction {
     climb_anticipation: [bool; 2],
     /// Last anticipation pass's climb reach, kept for the glove glow.
     climb_reach: [bool; 2],
+    /// Seconds each hand has held its climb hold: a fresh hold flashes cyan
+    /// before the glove shows the release's green/red.
+    climb_held_seconds: [f32; 2],
+    climb_release_safe: bool,
     ui_point: [bool; 2],
 }
 
@@ -457,6 +465,8 @@ impl VrInteraction {
             body_anticipation: [None; 2],
             climb_anticipation: [false; 2],
             climb_reach: [false; 2],
+            climb_held_seconds: [0.0; 2],
+            climb_release_safe: false,
             ui_point: [false; 2],
         }
     }
@@ -1717,6 +1727,11 @@ impl PlayerInteraction for VrInteraction {
                     )
                     .is_some()
         });
+        let held: [bool; 2] =
+            std::array::from_fn(|i| self.hand_climb.grips().any(|(h, _)| h as usize == i));
+        for (seconds, held) in self.climb_held_seconds.iter_mut().zip(held) {
+            *seconds = if held { *seconds + ctx.step_dt } else { 0.0 };
+        }
         let previous_members = self.climb_members;
         self.climb_members = [None; 2];
         for (hand, anchor) in self.hand_climb.grips() {
@@ -1755,6 +1770,10 @@ impl PlayerInteraction for VrInteraction {
     fn release_climb_grips(&mut self) {
         self.hand_climb.release_all();
         self.climb_members = [None; 2];
+    }
+
+    fn set_climb_release_safe(&mut self, safe: bool) {
+        self.climb_release_safe = safe;
     }
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
@@ -1935,13 +1954,19 @@ impl PlayerInteraction for VrInteraction {
                 Some((1 - support.primary, grip))
             })
         });
-        // Glove lights are cyan while holding, half intensity while in reach.
-        // Holding comes from the resolved holds, so a blocked pull still shows a catch.
+        // Free gloves glow half cyan in reach of a hold. Held gloves flash cyan
+        // as they catch, then both show what letting go of everything does:
+        // green for a safe landing, red otherwise. Holding comes from the
+        // resolved holds, so a blocked pull still shows a catch.
         let mut climb_lights = self
             .climb_reach
             .map(|reach| reach.then_some(crate::hand_glove::HandLight::ClimbReach));
         for (handedness, _) in self.hand_climb.grips() {
-            climb_lights[handedness as usize] = Some(crate::hand_glove::HandLight::ClimbHeld);
+            let index = handedness as usize;
+            climb_lights[index] = Some(crate::climb_release::held_glove_light(
+                self.climb_held_seconds[index],
+                self.climb_release_safe,
+            ));
         }
         for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
             let card_grip = self.body_tool_hands[index]

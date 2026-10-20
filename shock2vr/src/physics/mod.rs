@@ -1,3 +1,4 @@
+mod climb_landing;
 #[cfg(any(test, feature = "damage-query-audit", feature = "lazy-hitboxes"))]
 mod damage_queries;
 mod debug_render_pipeline;
@@ -7,7 +8,6 @@ mod physics_events;
 mod profiling;
 #[cfg(feature = "lazy-hitboxes")]
 mod query_hitboxes;
-mod climb_landing;
 mod release_placement;
 pub use held_recovery::{HeldRecovery, HeldRecoveryContext};
 pub(crate) mod util;
