@@ -361,13 +361,12 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
         font_size: 0.0,
         nine_slice: None,
     };
-    // The fire-mode and reload controls read as pressable: on the plate the
-    // interface's other buttons use, nine-patched to the control's rect, with
-    // the grey caption a plate takes.
+    // The fire-mode and reload controls read as pressable: the original's
+    // green MFD button (TBUTMAX, as the upgrade chooser nine-patches it),
+    // captioned in the cyan readout face.
     let plated = |button, rect, text: Option<&str>| ReadoutButtonSpec {
-        texture: Some("IFBTN00.PCX"),
-        font: crate::ui::CHROME_FONT,
-        nine_slice: Some(PLATE_ART),
+        texture: Some("iface/tbutmax.pcx"),
+        nine_slice: Some(([90.0, 32.0], [3.0; 4])),
         ..spec(button, rect, None, text)
     };
     if !readout.show_buttons {
