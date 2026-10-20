@@ -76,6 +76,8 @@ test(
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
+    // A fresh medsci1 character lacks the pistol's Standard Weapons requirement.
+    await game.player.setStats({ skills: { standard_weapons: 1 } });
 
     await game.input.set("right_hand.squeeze", 1);
     const pistol = (await game.player.spawnItem(PISTOL, { hand: "right" })).entity_id;
@@ -90,7 +92,7 @@ test(
     assert.ok(full > 0, "the pistol is loaded");
     await fireOnce(game);
     await game.step({ frames: 5 });
-    assert.equal(await ammo(game, pistol), full - 1);
+    assert.equal(await ammo(game, pistol), full - 1, "a round is fired");
 
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 8 });
