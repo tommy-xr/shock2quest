@@ -82,7 +82,7 @@ test("VR: the needed chemical, released onto the held specimen, resumes and dose
   await game.step({ frames: 60 });
   const frame = await restFrame(game);
   const toxin = await holdIn(game, "left", TOXIN);
-  await holdIn(game, "right", ANTIMONY);
+  const antimony = await holdIn(game, "right", ANTIMONY);
   await placeHands(game, frame, false);
 
   // Research not yet at its Antimony gate: an early dose is not taken.
@@ -111,6 +111,7 @@ test("VR: the needed chemical, released onto the held specimen, resumes and dose
 
   const count = async (template: number) => (await game.entities.byTemplate(template)).length;
   const [nanites, antimonies] = [await count(SPARKLEY_SPHERE), await count(ANTIMONY)];
+  const heldAt = (await game.entities.detail(antimony)).position as Vec3;
   await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 3 });
   const player = await info(game);
@@ -121,6 +122,8 @@ test("VR: the needed chemical, released onto the held specimen, resumes and dose
   assert.equal(messages.at(-1), "Chemical used in research.");
   assert.equal(await count(SPARKLEY_SPHERE), nanites + 1, "it dissolves into nanites");
   assert.equal(await count(ANTIMONY), antimonies, "a stand-in replaces the single dose");
+  const standIns = (await game.entities.byTemplate(ANTIMONY)).map(e => Math.hypot(...sub(e.position as Vec3, heldAt)));
+  assert.ok(Math.min(...standIns) < 0.02, `the dose dissolves where the hand held it: ${standIns}`);
   h = await haptics(game);
   assert.equal(h.sequence[1], before + 2, "the releasing hand confirms once");
   assertPulse(h.last[1], TOOL_APPLIED);

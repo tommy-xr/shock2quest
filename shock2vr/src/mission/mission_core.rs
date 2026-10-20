@@ -7798,6 +7798,52 @@ impl MissionCore {
                 _ => {}
             }
         }
+        // A chemical released onto a specimen that takes it is used up where
+        // the hand held it, never dropped first (a drop moves it off the grip
+        // and its dissolve would show elsewhere). The release goes straight
+        // to the chemical handler, which also returns any it refuses.
+        let doses: Vec<_> = interaction_msgs
+            .iter()
+            .filter_map(|effect| match effect {
+                VirtualHandEffect::OutMessage {
+                    message:
+                        Message {
+                            to,
+                            payload: MessagePayload::ProvideForConsumption { entity },
+                        },
+                } if crate::scripts::script_util::entity_has_script(
+                    &self.world,
+                    *entity,
+                    "Chemical",
+                ) && self.script_world.accepts_tool(*to, &self.world, *entity)
+                    && interaction_msgs.iter().any(|effect| {
+                        matches!(effect, VirtualHandEffect::DropItem { entity_id, .. } if entity_id == entity)
+                    }) =>
+                {
+                    Some((*entity, *to))
+                }
+                _ => None,
+            })
+            .collect();
+        interaction_msgs.retain(|effect| match effect {
+            VirtualHandEffect::DropItem {
+                entity_id: entity, ..
+            }
+            | VirtualHandEffect::OutMessage {
+                message:
+                    Message {
+                        payload: MessagePayload::ProvideForConsumption { entity },
+                        ..
+                    },
+            } => !doses.iter().any(|(dose, _)| dose == entity),
+            _ => true,
+        });
+        effects.extend(doses.into_iter().map(|(entity_id, specimen)| {
+            Effect::UseResearchChemical {
+                entity_id,
+                specimen: Some(specimen),
+            }
+        }));
         // Releases offered to a target: an accepted item is confirmed below
         // once a script consumes it. A release is also a plain drop, so a
         // refusal is explained only on a hackable target no script took the
@@ -12733,6 +12779,11 @@ impl MissionCore {
                     {
                         continue;
                     }
+                    // A dose released onto a held specimen comes here straight
+                    // from the hand, still unplaced (see `doses` in `update`).
+                    // Ask the hands: `PlayerInfo` mirrors them once per update.
+                    let released =
+                        specimen.is_some() && self.interaction.holding_hand(entity_id).is_none();
                     let consumed = apply_research_chemical(&self.world, entity_id, specimen);
                     if consumed {
                         let stack = self
@@ -12741,11 +12792,7 @@ impl MissionCore {
                             .ok()
                             .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
                         let last_dose = stack.unwrap_or(1) <= 1;
-                        // A dose released onto a held specimen left the other
-                        // hand. Ask the hands: `PlayerInfo` mirrors them once
-                        // per update, so it may still list the released dose.
-                        let released = specimen.is_some()
-                            && self.interaction.holding_hand(entity_id).is_none();
+                        // A released dose left the hand opposite the specimen.
                         let hand = if released {
                             specimen
                                 .and_then(|specimen| self.interaction.holding_hand(specimen))
@@ -12774,14 +12821,20 @@ impl MissionCore {
                             {
                                 stack.0 -= 1;
                             }
-                            // The rest of a released stack goes back to the
-                            // backpack rather than onto the floor.
-                            let backpack = self
-                                .world
-                                .borrow::<UniqueView<PlayerInfo>>()
-                                .map(|player| player.inventory_entity_id);
-                            if let (true, Ok(backpack)) = (released, backpack) {
-                                self.drop_entity_into_container(backpack, entity_id);
+                            // The rest of a released stack goes to the backpack,
+                            // or the floor when it is full.
+                            if released {
+                                let backpack = self
+                                    .world
+                                    .borrow::<UniqueView<PlayerInfo>>()
+                                    .unwrap()
+                                    .inventory_entity_id;
+                                if self
+                                    .drop_entity_into_container(backpack, entity_id)
+                                    .is_none()
+                                {
+                                    self.drop_held_item_into_world(entity_id);
+                                }
                             }
                         } else {
                             self.destroy_entity(entity_id);
@@ -12789,6 +12842,9 @@ impl MissionCore {
                         game_log!(INFO, "Research chemical consumed");
                     } else {
                         game_log!(INFO, "That chemical is not needed");
+                        if released {
+                            self.drop_held_item_into_world(entity_id);
+                        }
                     }
                     effects.push_front(Effect::ShowMessage {
                         text: crate::scripts::gui::chemical_message(&self.world, consumed),
