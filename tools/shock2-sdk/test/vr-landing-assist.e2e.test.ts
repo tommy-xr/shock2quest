@@ -139,6 +139,25 @@ test(
 );
 
 test(
+  "debug_ladder (VR): crouching while hanging still glides to the shown landing",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+    const { anchor } = await climbAt(game, SIDE_Z, 5.3);
+    const lookAt = await aimer(game);
+    await lookAt([-6.3, PLATFORM_Y, SIDE_Z + 2.0]);
+    await game.input.set("crouch", 1);
+    await game.step({ frames: 30 });
+    const shown = await release(game);
+    assert.equal(shown.mode, "assisted", JSON.stringify(shown));
+    const { committed, landed } = await letGoAndSettle(game, anchor);
+    assert.deepEqual(committed, shown.landing, "the shown landing is what a crouched release commits");
+    assert.ok(horizontal(landed, shown.landing!) < 0.05, `arrived at ${landed}, shown ${shown.landing}`);
+    assert.ok(landed[1] > PLATFORM_Y, `on the platform: ${landed}`);
+  },
+);
+
+test(
   "debug_ladder (VR): a grace hold on the wall still offers the assisted exit, and a handoff commits nothing",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {

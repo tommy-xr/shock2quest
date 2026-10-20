@@ -183,16 +183,23 @@ impl PhysicsWorld {
                 continue;
             }
             // A held landing must still be in range: climbing down while
-            // staring at a deck must not turn it into a climb up.
-            if let Some(held) = held.filter(|held| {
-                climb_release::keeps_held(*held, nvec_to_cgmath(aimed))
-                    && climb_release::range_rejection(
-                        body,
-                        feet_y,
-                        vec3(held.center.x, held.floor_y, held.center.z),
-                    )
-                    .is_none()
-            }) {
+            // staring at a deck must not turn it into a climb up. Its body
+            // centre follows the current stance, as the commit's will.
+            if let Some(held) = held
+                .filter(|held| {
+                    climb_release::keeps_held(*held, nvec_to_cgmath(aimed))
+                        && climb_release::range_rejection(
+                            body,
+                            feet_y,
+                            vec3(held.center.x, held.floor_y, held.center.z),
+                        )
+                        .is_none()
+                })
+                .map(|held| {
+                    let floor = vector![held.center.x, held.floor_y, held.center.z];
+                    Self::landing_on(floor, vec_to_nvec(held.normal), standing)
+                })
+            {
                 match self.assisted_route(player, start, held) {
                     Ok(_) => {
                         return GazeLanding {
@@ -504,6 +511,24 @@ mod tests {
         let (world, player) = fixture(&[(vec3(0.75, 4.5, 0.0), vec3(0.2, 1.0, 4.0))]);
         let blocked = aim(&world, &player, vec3(1.9, 4.0, 0.2), Some(first));
         assert!(blocked.landing.is_err());
+    }
+
+    #[test]
+    fn a_held_landing_follows_the_stance_and_commits_in_it() {
+        let (mut world, mut player) = fixture(&[]);
+        let standing = aim(&world, &player, vec3(1.7, 4.0, 0.0), None)
+            .landing
+            .unwrap();
+        world.set_player_crouch(true, &mut player);
+        assert!(player.tracking_is_crouched());
+        let held = aim(&world, &player, vec3(1.7, 4.0, 0.0), Some(standing))
+            .landing
+            .unwrap();
+        assert!(
+            (held.center.y - (4.0 + player_center_above_floor(true))).abs() < 1e-4,
+            "{held:?}"
+        );
+        assert!(world.plan_assisted_release(held, &mut player));
     }
 
     #[test]

@@ -5439,6 +5439,28 @@ impl MissionCore {
                 Vec::new(),
             )
         } else {
+            // A voluntary final release commits the assisted landing on show,
+            // frozen there (the head no longer steers it) and revalidated from
+            // here; it replaces the throw. A broken hold or lost tracking does
+            // not commit. Before the crouch request below: the glide owns the
+            // body, so a held crouch cannot first change the stance the shown
+            // landing was resolved for.
+            let shown = self
+                .climb_release
+                .outcome
+                .filter(|outcome| outcome.mode == crate::climb_release::ReleaseMode::Assisted);
+            let assisted_release = shown.is_some_and(|outcome| {
+                hand_climb.released
+                    && input_context
+                        .pose_tracking
+                        .is_none_or(|tracking| tracking.head && tracking.hands == [true; 2])
+                    && self
+                        .physics
+                        .plan_assisted_release(outcome.landing, &mut self.player_handle)
+            });
+            if assisted_release {
+                self.climb_release_glide = shown;
+            }
             // Apply the crouch request before moving: swaps the capsule size
             // feet-planted; standing up is refused without headroom (the
             // actual state is read back via `player_is_crouched`).
@@ -5499,27 +5521,9 @@ impl MissionCore {
                     hand_climb.translation = None;
                 }
             }
-            // A voluntary final release commits the assisted landing on show,
-            // frozen there (the head no longer steers it) and revalidated from
-            // here; it replaces the throw. A broken hold or lost tracking does
-            // not commit.
-            let shown = self
-                .climb_release
-                .outcome
-                .filter(|outcome| outcome.mode == crate::climb_release::ReleaseMode::Assisted);
-            if let Some(outcome) = shown.filter(|outcome| {
-                hand_climb.released
-                    && input_context
-                        .pose_tracking
-                        .is_none_or(|tracking| tracking.head && tracking.hands == [true; 2])
-                    && self
-                        .physics
-                        .plan_assisted_release(outcome.landing, &mut self.player_handle)
-            }) {
-                self.climb_release_glide = Some(outcome);
-            } else if let Some(launch) = hand_climb.launch {
-                // Letting go of the last hold throws the body with the momentum
-                // of the pull, so a hard haul-and-release sails on past the hold.
+            // Letting go of the last hold throws the body with the momentum of
+            // the pull, so a hard haul-and-release sails on past the hold.
+            if let Some(launch) = hand_climb.launch.filter(|_| !assisted_release) {
                 self.physics.launch_player(launch, &mut self.player_handle);
             }
             // A discrete jump (a Quest hand's lower face button, an injected
