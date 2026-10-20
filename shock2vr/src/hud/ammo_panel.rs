@@ -464,7 +464,11 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
     // The fire-mode button is shown for every gun with a magazine, energy
     // weapons included - only a gun whose data names no mode has none.
     if let Some(header) = &readout.gun_setting_header {
-        out.push(plated(ReadoutButton::GunSetting, SETTING_BUTTON, Some(header)));
+        out.push(plated(
+            ReadoutButton::GunSetting,
+            SETTING_BUTTON,
+            Some(header),
+        ));
     }
     if readout.can_reload {
         out.push(plated(
