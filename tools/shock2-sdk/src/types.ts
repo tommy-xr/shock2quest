@@ -880,9 +880,12 @@ export interface PlayerSnapshot {
 /** One hand's hold in the /v1/info climb readout. */
 export interface ClimbHold {
   hand: "left" | "right";
-  kind: "ladder" | "ledge";
+  /** `surface`: any static solid, taken as a grace grab near a ladder. */
+  kind: "ladder" | "ledge" | "surface";
   entity_id: number | null;
   point: Vec3;
+  /** Which grace grab took this hold (1 or 2); 0 for an ordinary hold. */
+  grace: number;
 }
 
 /** The player's climb state (GET /v1/info). Flat climbs ladders by pushing
@@ -895,6 +898,10 @@ export interface ClimbState {
   /** The hand currently moving the body, or null. */
   anchor_hand: "left" | "right" | null;
   grips: ClimbHold[];
+  /** Grace grabs left in this ladder departure (0..2). */
+  grace_remaining: number;
+  /** Free [left, right] gloves glowing in reach of a hold they would take. */
+  reach: [boolean, boolean];
 }
 
 /** One audio log the player has collected, keyed by its per-deck identity. */
