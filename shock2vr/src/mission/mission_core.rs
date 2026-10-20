@@ -12677,14 +12677,18 @@ impl MissionCore {
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                     let result = quests.research_mut().begin(template_id, required, skill);
                     drop(quests);
-                    let mut skill_required = None;
+                    let skill_required = match result {
+                        crate::research::BeginResearchResult::SkillRequired(required) => {
+                            Some(required)
+                        }
+                        _ => None,
+                    };
                     match result {
                         crate::research::BeginResearchResult::Started => {
                             game_log!(INFO, "Research started");
                         }
                         crate::research::BeginResearchResult::SkillRequired(required) => {
                             game_log!(INFO, "Research skill {} required", required);
-                            skill_required = Some(required);
                         }
                         crate::research::BeginResearchResult::AlreadyComplete => {
                             self.world.add_component(
