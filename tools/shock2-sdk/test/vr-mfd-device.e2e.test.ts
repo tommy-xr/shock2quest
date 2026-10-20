@@ -176,10 +176,13 @@ for (const [held, focus] of [[false, false], [true, false], [true, true]]) {
       await game.step({ frames: focus ? 35 : 5 });
       assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan, chemical.entity_id,
         "the real scanner must identify the chemical being tested");
-      const remaining = (await game.entities.list({ limit: 1000 })).entities.some(e => e.id === chemical.entity_id);
-      assert.equal(remaining, !consumed, `${name}: only the requested chemical may be consumed`);
+      // A dose used up from the hand bursts into nanite sparks, which can
+      // reuse the freed entity id: match the chemical by name too.
+      const present = async () => (await game.entities.list({ limit: 1000 })).entities
+        .some(e => e.id === chemical.entity_id && e.name === name);
+      assert.equal(await present(), !consumed, `${name}: only the requested chemical may be consumed`);
       await game.step({ frames: 5 });
-      assert.equal((await game.entities.list({ limit: 1000 })).entities.some(e => e.id === chemical.entity_id), !consumed);
+      assert.equal(await present(), !consumed);
       await game.input.set("left_hand.trigger", 0);
       await game.input.set("left_hand.squeeze", 0);
       await game.input.set("right_hand.squeeze", 0);
