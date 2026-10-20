@@ -91,7 +91,7 @@ pub(crate) fn system_button() -> ReadoutButtonSpec {
         texture: Some("IFBTN00.PCX"),
         text: Some("MENU".to_owned()),
         font: crate::ui::CHROME_BOLD_FONT,
-        font_size: 8.0,
+        font_size: 12.0,
         nine_slice: Some(ammo_panel::PLATE_ART),
     }
 }
