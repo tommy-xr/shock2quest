@@ -86,3 +86,34 @@ test(
     assert.ok(distance(await rightHandWorld(game), RUNG) > 0.5, "a cleared target no longer holds the hand");
   },
 );
+
+test(
+  "debug_ladder (VR): a world_target hand lands on its point under a roomscale offset",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "debug_ladder",
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 5 });
+    await teleportVerified(game, { x: STAND[0], y: STAND[1], z: STAND[2] });
+    // Spawn physically off the tracking origin: roomscale shifts the rig by
+    // the opposite offset so the head sits on the pawn.
+    await game.devParams.set("vr_roomscale", 1);
+    await game.input.set("head.position", [2, 1.04, 1]);
+    await game.step({ frames: 30 });
+    const RUNG = await ledgeLadderHold(game, 2.3);
+
+    await game.input.set("right_hand.world_target", RUNG);
+    await game.step({ frames: 2 });
+    const held = await rightHandWorld(game);
+    assert.ok(distance(held, RUNG) < 0.02, `hand missed the rung: ${held}`);
+    // The reported position is where the game put the hand: its grab
+    // resolves on the targeted rung.
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    const grips = (await game.info()).player.climb.grips;
+    assert.equal(grips.length, 1);
+    assert.ok(distance(grips[0].point, RUNG) < 0.2, `grabbed at ${grips[0].point}`);
+  },
+);
