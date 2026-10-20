@@ -1,4 +1,6 @@
-use cgmath::{Matrix4, Vector2, Vector4, point2, vec2, vec3, vec4};
+use std::rc::Rc;
+
+use cgmath::{Matrix4, Vector2, Vector3, Vector4, point2, vec2, vec4};
 use collision::{Aabb2, Aabb3};
 use dark::{
     importers::{
@@ -509,6 +511,38 @@ mod tests {
         );
     }
 
+    /// Negative-first: a mesh is framed by its own vertices, not the world
+    /// box around it. An octahedron turned 45 degrees spans half the width of
+    /// its box's world AABB on screen, like a round canister in its square box.
+    #[test]
+    fn a_mesh_is_framed_by_its_vertices_not_its_world_box() {
+        use cgmath::{Deg, Point3, perspective, vec3};
+        use collision::Aabb as _;
+        let [x, y, z] = [Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()];
+        let octahedron = vec![[x, y, z], [-x, -y, -z]];
+        let transform =
+            Matrix4::from_translation(vec3(0.0, 0.0, -6.0)) * Matrix4::from_angle_y(Deg(45.0));
+        let shape = SelectionShape {
+            world: Aabb3::new(Point3::new(-1.0, -1.0, -1.0), Point3::new(1.0, 1.0, 1.0))
+                .transform(&transform),
+            mesh: Some((transform, Rc::new(octahedron))),
+        };
+        let view = Matrix4::look_at_rh(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, -1.0),
+            Vector3::unit_y(),
+        );
+        let projection = perspective(Deg(60.0), 4.0 / 3.0, 0.1, 100.0);
+        let width = |rect: Aabb2<f32>| rect.max.x - rect.min.x;
+
+        let framed = width(project_selection(&shape, view, projection, SCREEN));
+        let loose = width(project_aabb3(&shape.world, view, projection, SCREEN));
+        assert!(
+            framed < 0.6 * loose,
+            "mesh frame {framed} px vs world box {loose} px"
+        );
+    }
+
     use crate::interaction_selection::is_frobbable;
     use dark::properties::{FrobFlag, ObjectNameType, PropFrobInfo};
 
@@ -915,7 +949,7 @@ fn health_bar_fill(world: &World, entity_id: EntityId) -> Option<f32> {
 /// The enemy health bar, drawn flush on top of the selection brackets.
 pub fn draw_health_bar(
     asset_cache: &mut AssetCache,
-    bounds: Aabb3<f32>,
+    bounds: &SelectionShape,
     entity_id: EntityId,
     world: &World,
     view: Matrix4<f32>,
@@ -929,7 +963,7 @@ pub fn draw_health_bar(
     // The same resolved bounds the brackets frame, so the bar
     // cannot sit over a different volume than the outline it caps.
     let extents = clamp_extents_to_screen(
-        project_aabb3(&bounds, view, projection, screen_size),
+        project_selection(bounds, view, projection, screen_size),
         screen_size,
         HEALTH_BAR_MARGIN,
     );
@@ -1052,7 +1086,7 @@ impl BracketStyle {
 
 pub fn draw_item_outline(
     asset_cache: &mut AssetCache,
-    bounds: Aabb3<f32>,
+    bounds: &SelectionShape,
     style: BracketStyle,
     hint: Option<&str>,
     view: Matrix4<f32>,
@@ -1064,7 +1098,6 @@ pub fn draw_item_outline(
         ..Default::default()
     };
 
-    let aabb = bounds;
     let top_left_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK0.PCX", &options);
     let top_right_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK1.PCX", &options);
     let bottom_right_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK2.PCX", &options);
@@ -1075,7 +1108,7 @@ pub fn draw_item_outline(
     // the screen; without the clamp all four brackets land off-view and the
     // object reads as un-highlighted while it is being frobbed.
     let extents = clamp_extents_to_screen(
-        project_aabb3(&aabb, view, projection, screen_size),
+        project_selection(bounds, view, projection, screen_size),
         screen_size,
         size.x,
     );
@@ -1138,53 +1171,65 @@ pub fn clamp_extents_to_screen(
     }
 }
 
+/// What a highlight frames.
+///
+/// A drawn mesh is framed by its own vertices, projected through the
+/// transform it is placed with, so the brackets meet the silhouette.
+/// Projecting the world AABB of the model's box instead gave a tilted
+/// specimen held at arm's length a frame ~1.4x the mesh per axis. Hitbox
+/// unions and colliders have no mesh and frame their world box.
+#[derive(Clone, Debug)]
+pub struct SelectionShape {
+    /// The world box around it - what `/v1/entities` reports.
+    pub world: Aabb3<f32>,
+    /// Model-space triangles and the transform placing them.
+    pub mesh: Option<(Matrix4<f32>, Rc<Vec<[Vector3<f32>; 3]>>)>,
+}
+
 pub fn project_aabb3(
     aabb: &Aabb3<f32>,
     view: Matrix4<f32>,
     projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
 ) -> Aabb2<f32> {
-    let all_corners = vec![
-        vec3(aabb.min.x, aabb.min.y, aabb.min.z),
-        vec3(aabb.min.x, aabb.min.y, aabb.max.z),
-        vec3(aabb.min.x, aabb.max.y, aabb.min.z),
-        vec3(aabb.min.x, aabb.max.y, aabb.max.z),
-        vec3(aabb.max.x, aabb.min.y, aabb.min.z),
-        vec3(aabb.max.x, aabb.min.y, aabb.max.z),
-        vec3(aabb.max.x, aabb.max.y, aabb.min.z),
-        vec3(aabb.max.x, aabb.max.y, aabb.max.z),
-    ];
+    use cgmath::EuclideanSpace as _;
+    project_points(
+        projection * view,
+        aabb.to_corners().map(|corner| corner.to_vec()),
+        screen_size,
+    )
+}
 
-    let mapped_corners: Vec<Vector2<f32>> = all_corners
-        .into_iter()
-        .map(|v| engine::util::project(view, projection, v, screen_size.x, screen_size.y))
-        .collect();
-
-    let mut min_x = mapped_corners[0].x;
-    let mut min_y = mapped_corners[0].y;
-    let mut max_x = mapped_corners[0].x;
-    let mut max_y = mapped_corners[0].y;
-
-    for v in mapped_corners {
-        if v.x < min_x {
-            min_x = v.x
-        }
-
-        if v.y < min_y {
-            min_y = v.y;
-        }
-
-        if v.x > max_x {
-            max_x = v.x;
-        }
-
-        if v.y > max_y {
-            max_y = v.y;
-        }
+/// The screen rect around `bounds`' projected mesh, or its world box.
+pub fn project_selection(
+    bounds: &SelectionShape,
+    view: Matrix4<f32>,
+    projection: Matrix4<f32>,
+    screen_size: Vector2<f32>,
+) -> Aabb2<f32> {
+    match &bounds.mesh {
+        Some((transform, mesh)) => project_points(
+            projection * view * transform,
+            mesh.iter().flatten().copied(),
+            screen_size,
+        ),
+        None => project_aabb3(&bounds.world, view, projection, screen_size),
     }
+}
 
+fn project_points(
+    clip_from_point: Matrix4<f32>,
+    points: impl IntoIterator<Item = Vector3<f32>>,
+    screen_size: Vector2<f32>,
+) -> Aabb2<f32> {
+    let (mut min, mut max) = (vec2(f32::MAX, f32::MAX), vec2(f32::MIN, f32::MIN));
+    for v in points {
+        let v = engine::util::project_fast(clip_from_point, v, screen_size.x, screen_size.y);
+        min = vec2(min.x.min(v.x), min.y.min(v.y));
+        max = vec2(max.x.max(v.x), max.y.max(v.y));
+    }
     Aabb2 {
-        min: point2(min_x, min_y),
-        max: point2(max_x, max_y),
+        min: point2(min.x, min.y),
+        max: point2(max.x, max.y),
     }
 }

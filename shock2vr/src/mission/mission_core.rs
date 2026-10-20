@@ -15,8 +15,6 @@ use cgmath::{
     Vector2, Vector3, num_traits::ToPrimitive, vec2, vec3,
 };
 
-use collision::Aabb3;
-
 use super::turn_clip::TurnClipTracker;
 use crate::SpawnLocation;
 use crate::game_scene::DebuggableScene;
@@ -83,7 +81,7 @@ use crate::{
     game_scene::PlayerSavePoseError,
     gui::GuiManager,
     hud::{
-        BracketStyle, DamageFlash, bracket_hint, draw_health_bar, draw_item_name,
+        BracketStyle, DamageFlash, SelectionShape, bracket_hint, draw_health_bar, draw_item_name,
         draw_item_outline, is_hud_selectable,
     },
     input_context::{self, InputContext},
@@ -17521,43 +17519,51 @@ impl MissionCore {
             .unwrap_or_default()
     }
 
-    /// The world-space bounds that stand in for an entity: the union of its
+    /// The shape that stands in for an entity: the union of its
     /// hitboxes where it has them - the volume a creature's limbs occupy in
     /// the pose it is in - otherwise its visible model, otherwise its own
     /// collider. A fixture's authored collider can be far larger than what is
     /// drawn: the security crate's is sized from its model header's box, about
     /// twice the mesh deep (#2350).
     ///
-    /// The HUD highlight frames this, and `/v1/entities/:id` reports it, from
-    /// this one function: what an agent reads is what the player sees framed.
+    /// The HUD highlight frames this, and `/v1/entities/:id` reports its world
+    /// box, from this one function: an agent reads the volume the player sees
+    /// framed.
     ///
     /// The proxies are stepped by physics before they are re-posed, so the
     /// bounds trail the drawn pose by a frame - invisible at 60 Hz, and not
     /// worth a second pose evaluation to remove.
-    pub(crate) fn selection_bounds(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
+    pub(crate) fn selection_bounds(&self, entity_id: EntityId) -> Option<SelectionShape> {
+        let world_box = |world| SelectionShape { world, mesh: None };
         self.hit_boxes
             .hit_box_bounds(&self.physics, entity_id)
+            .map(world_box)
             .or_else(|| self.model_surface_bounds(entity_id))
-            .or_else(|| self.physics.get_aabb2(entity_id))
+            .or_else(|| self.physics.get_aabb2(entity_id).map(world_box))
     }
 
-    /// `entity`'s model surface bounds carried into the world by the transform
-    /// it is drawn with. Only for an entity a ray can hit - one with a body -
-    /// so a decal reports no bounds rather than a frame it can never show.
+    /// `entity`'s model surface, placed by its world transform. Only for an
+    /// entity a ray can hit - one with a body - so a decal reports no bounds
+    /// rather than a frame it can never show.
     /// The surface is the bind pose, as frob rays test it, so a jointed object
     /// (a camera mid-pan) is framed at rest, as its collider was before. An
     /// item held in a VR hand has no body but is framed too: it is bracketed
     /// while it will take the item in the other hand.
-    fn model_surface_bounds(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
+    fn model_surface_bounds(&self, entity_id: EntityId) -> Option<SelectionShape> {
         use collision::Aabb as _;
         if !self.id_to_physics.contains_key(&entity_id)
             && crate::wielded_weapon::vr_hand_holding(&self.world, entity_id).is_none()
         {
             return None;
         }
-        let local = self.id_to_model.get(&entity_id)?.surface_bounds()?;
+        let model = self.id_to_model.get(&entity_id)?;
+        let local = model.surface_bounds()?;
         let transforms = self.world.borrow::<View<RuntimePropTransform>>().ok()?;
-        Some(local.transform(&transforms.get(entity_id).ok()?.0))
+        let transform = transforms.get(entity_id).ok()?.0;
+        Some(SelectionShape {
+            world: local.transform(&transform),
+            mesh: Some((transform, model.interaction_triangles())),
+        })
     }
 
     /// The world object the mini-frame names when the canvas pointer is on
@@ -17703,7 +17709,7 @@ impl MissionCore {
             let hint = bracket_hint(asset_cache, &self.world, hit_entity, style);
             ret.extend(draw_item_outline(
                 asset_cache,
-                bounds,
+                &bounds,
                 style,
                 hint.as_deref(),
                 view,
@@ -17714,7 +17720,7 @@ impl MissionCore {
 
             ret.extend(draw_health_bar(
                 asset_cache,
-                bounds,
+                &bounds,
                 hit_entity,
                 &self.world,
                 view,
@@ -22245,7 +22251,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .find(|link| link.contains_ordinal.is_some())
                     .map(|link| link.target_id);
 
-                let selection_bounds = self.selection_bounds(id);
+                let selection_bounds = self.selection_bounds(id).map(|shape| shape.world);
                 let magazine_anchor = self
                     .magazine_capacity(id)
                     .and_then(|_| self.magazine_anchor_world(id))
