@@ -150,8 +150,10 @@ pub struct HandClimb {
     /// lost its hold (over-stretched, or the object went away) must not
     /// silently re-grab while the same squeeze is still held.
     was_squeezing: [bool; 2],
-    /// A fresh squeeze may reach contact a few frames late; never retry a broken hold.
-    grab_grace: [f32; 2],
+    /// A fresh empty-hand squeeze stays armed until it takes a hold, so a hand
+    /// closed before reaching the rung grabs on contact. A broken hold disarms
+    /// it: the still-closed hand must not re-grab in a loop.
+    armed: [bool; 2],
     /// The anchor hand's recent travel relative to the pawn, in world axes,
     /// newest last - the pull, which a release throws the body with. Cleared
     /// when the anchor changes: the history belongs to the hand that made it.
@@ -214,9 +216,9 @@ impl HandClimb {
             let squeezing = hand.squeeze > crate::ui::VR_TRIGGER_THRESHOLD;
             let was_squeezing = std::mem::replace(&mut self.was_squeezing[index], squeezing);
             if !squeezing || !hand.is_empty {
-                self.grab_grace[index] = 0.0;
+                self.armed[index] = false;
             } else if !was_squeezing {
-                self.grab_grace[index] = 0.15;
+                self.armed[index] = true;
             }
             match self.grips[index] {
                 Some(anchor) => {
@@ -234,7 +236,7 @@ impl HandClimb {
                     // took a hold can also close on an item; a full hand lets
                     // go of the ladder rather than holding both.
                     if !squeezing || !hand.is_empty || over_stretched || gone {
-                        self.grab_grace[index] = 0.0;
+                        self.armed[index] = false;
                         self.grips[index] = None;
                         let_go_cleanly[index] = !squeezing && !over_stretched && !gone;
                     }
@@ -246,14 +248,14 @@ impl HandClimb {
         // a broken, deleted, released or newly occupied hand cannot
         // authorize the free hand's transfer, regardless of hand iteration order.
         for index in 0..HANDS.len() {
-            if self.grips[index].is_none() && self.grab_grace[index] > 0.0 {
+            if self.grips[index].is_none() && self.armed[index] {
                 // Keep the same deck within reach after releasing the ladder:
                 // the player can place the second hand beside the first and
                 // continue pulling hand over hand across the lip.
                 let transferring = self.grips[1 - index]
                     .is_some_and(|other| (hand_world[index] - other.grip.point).magnitude() <= 1.5);
                 if let Some(grip) = probe(hand_world[index], transferring) {
-                    self.grab_grace[index] = 0.0;
+                    self.armed[index] = false;
                     self.grips[index] = Some(GripAnchor {
                         grip,
                         hand_world_at_grab: hand_world[index],
@@ -262,7 +264,6 @@ impl HandClimb {
                     self.anchor = Some(HANDS[index]);
                 }
             }
-            self.grab_grace[index] = (self.grab_grace[index] - step_dt.max(0.0)).max(0.0);
         }
 
         // The anchor let go. Hand over to the other hand if it is still on -
@@ -354,7 +355,7 @@ impl HandClimb {
     /// the scripted top-out has finished.
     pub fn release_all(&mut self) {
         self.grips = [None, None];
-        self.grab_grace = [0.0, 0.0];
+        self.armed = [false, false];
         self.anchor = None;
         self.recent_anchor_travel.clear();
         self.last_anchor_local = None;
@@ -570,7 +571,7 @@ mod tests {
                 |p, _| Some(ladder_grip(p)),
                 |_| true,
             );
-            // Squeeze free hand before contact, starting the grace window.
+            // Squeeze the free hand before contact.
             climb.update(
                 pawn,
                 rotation,
@@ -599,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_squeeze_can_reach_contact_late_but_cannot_regrab_after_a_break() {
+    fn a_fresh_squeeze_grabs_on_contact_however_late_but_never_regrabs_after_a_break() {
         let mut climb = HandClimb::default();
         let pawn = Vector3::zero();
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
@@ -623,13 +624,15 @@ mod tests {
             |_| true,
         );
         assert!(climb.anchor().is_some());
+        // Over-stretched off the hold, then back onto rungs, still squeezing:
+        // the closed hand stays off until it is opened and pressed again.
         let broken = reach + vec3(0.0, 1.0, 0.0);
-        for _ in 0..3 {
+        for at in [broken, broken, reach, reach] {
             climb.update(
                 pawn,
                 identity,
                 DT,
-                [no_hand(), hand(broken, 1.0)],
+                [no_hand(), hand(at, 1.0)],
                 |p, _| Some(ladder_grip(p)),
                 |_| true,
             );
@@ -643,7 +646,8 @@ mod tests {
             |_, _| None,
             |_| true,
         );
-        for _ in 0..12 {
+        // No acquisition timer: a hand closed long before contact still grabs.
+        for _ in 0..120 {
             climb.update(
                 pawn,
                 identity,
@@ -662,8 +666,8 @@ mod tests {
             |_| true,
         );
         assert!(
-            climb.anchor().is_none(),
-            "expired grace is not a permanent auto-grab"
+            climb.anchor().is_some(),
+            "a closed empty hand grabs on contact"
         );
     }
 
