@@ -1307,7 +1307,7 @@ mod tests {
     }
 
     /// Flat and VR both fire through `TriggerPull`, so this one gate covers
-    /// both; research outranks an unmet weapon skill.
+    /// both (VR melee contact damage aside); research outranks weapon skill.
     #[test]
     fn an_unresearched_weapon_refuses_to_fire_with_a_message() {
         let (mut world, physics, weapon, target) = flat_melee_fixture();

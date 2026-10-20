@@ -89,7 +89,6 @@ test("flat: using an unresearched weapon researches it; it fires only once resea
     await reload(game, entity_id);
     const shot = await fire(game, entity_id);
     assert.deepEqual(shot, { message: REFUSAL, spent: 0, spawned: 0 }, "no shot, no ammo spent");
-    assert.equal(await objectState(game, entity_id), "Unresearched", "firing starts no research");
 
     await finishResearch(game, launcher);
     assert.equal(await objectState(game, entity_id), "Normal", "research covers every launcher");
@@ -99,11 +98,23 @@ test("flat: using an unresearched weapon researches it; it fires only once resea
   });
 });
 
-test("VR: cyber-interface use researches an unresearched weapon; its held trigger refuses", {
+test("VR: the held trigger refuses an unresearched weapon; cyber-interface use researches it", {
   skip: !enabled, timeout: 180_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "debug_research", debugFlags: ["--vr"] });
   await game.step({ frames: 60 });
+  await game.input.set("right_hand.squeeze", 1);
+  const { entity_id: held } = await game.player.spawnItem(WORM_LAUNCHER, { hand: "right" });
+  await game.step({ frames: 3 });
+  assert.equal((await game.info()).player.right_hand_entity_id, held, "a grab still wields it");
+  await reload(game, held);
+  const shot = await fire(game, held);
+  assert.deepEqual(shot, { message: REFUSAL, spent: 0, spawned: 0 }, "no shot, no ammo spent");
+  // Research started by the refused pull would be ~5 % along by now.
+  await game.step({ frames: 600 });
+  await game.input.set("right_hand.squeeze", 0);
+  await game.step({ frames: 3 });
+
   const { entity_id: stowed } = await game.player.spawnItem(WORM_LAUNCHER);
   await game.input.trigger("ToggleUseMode");
   await game.step({ frames: 5 });
@@ -113,15 +124,6 @@ test("VR: cyber-interface use researches an unresearched weapon; its held trigge
   await clickCanvasWithRay(game, requirePanelPose(ui), canvasCenter(slot));
   ui = await game.ui.state();
   assert.ok(showsResearch(ui, stowed), `the interface MFD shows its research: ${JSON.stringify(ui.active_panel?.entity_id)}`);
+  assert.ok(ui.active_panel?.elements.some(e => e.text === "0.0 %"), "firing started no research");
   assert.equal((await game.info()).player.right_hand_entity_id, null, "nothing is wielded");
-  await game.input.trigger("ToggleUseMode");
-  await game.step({ frames: 5 });
-
-  await game.input.set("right_hand.squeeze", 1);
-  const { entity_id: held } = await game.player.spawnItem(WORM_LAUNCHER, { hand: "right" });
-  await game.step({ frames: 3 });
-  assert.equal((await game.info()).player.right_hand_entity_id, held, "a grab still wields it");
-  await reload(game, held);
-  const shot = await fire(game, held);
-  assert.deepEqual(shot, { message: REFUSAL, spent: 0, spawned: 0 }, "no shot, no ammo spent");
 });
