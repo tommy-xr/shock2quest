@@ -12741,15 +12741,21 @@ impl MissionCore {
                             .ok()
                             .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
                         let last_dose = stack.unwrap_or(1) <= 1;
-                        // A dose released onto a held specimen left the other hand.
-                        let holding =
-                            |item| crate::wielded_weapon::vr_hand_holding(&self.world, item);
-                        let hand = holding(entity_id).or_else(|| {
-                            specimen.and_then(holding).map(|hand| match hand {
-                                crate::Handedness::Left => crate::Handedness::Right,
-                                crate::Handedness::Right => crate::Handedness::Left,
-                            })
-                        });
+                        // A dose released onto a held specimen left the other
+                        // hand. Ask the hands: `PlayerInfo` mirrors them once
+                        // per update, so it may still list the released dose.
+                        let released = specimen.is_some()
+                            && self.interaction.holding_hand(entity_id).is_none();
+                        let hand = if released {
+                            specimen
+                                .and_then(|specimen| self.interaction.holding_hand(specimen))
+                                .map(|hand| match hand {
+                                    crate::Handedness::Left => crate::Handedness::Right,
+                                    crate::Handedness::Right => crate::Handedness::Left,
+                                })
+                        } else {
+                            crate::wielded_weapon::vr_hand_holding(&self.world, entity_id)
+                        };
                         // Before the destroy below: the cue reads the item's transform.
                         if let Some(hand) = hand {
                             effects.extend(crate::scripts::script_util::dissolve_cue_in_hand(
@@ -12760,12 +12766,22 @@ impl MissionCore {
                             ));
                         }
                         if !last_dose {
-                            let mut stacks = self
+                            if let Ok(stack) = (&mut self
                                 .world
                                 .borrow::<ViewMut<dark::properties::PropStackCount>>()
-                                .unwrap();
-                            if let Ok(stack) = (&mut stacks).get(entity_id) {
+                                .unwrap())
+                                .get(entity_id)
+                            {
                                 stack.0 -= 1;
+                            }
+                            // The rest of a released stack goes back to the
+                            // backpack rather than onto the floor.
+                            let backpack = self
+                                .world
+                                .borrow::<UniqueView<PlayerInfo>>()
+                                .map(|player| player.inventory_entity_id);
+                            if let (true, Ok(backpack)) = (released, backpack) {
+                                self.drop_entity_into_container(backpack, entity_id);
                             }
                         } else {
                             self.destroy_entity(entity_id);
@@ -20886,22 +20902,37 @@ fn apply_research_chemical(
     chemical_entity: EntityId,
     specimen: Option<EntityId>,
 ) -> bool {
-    // Offered to a specific specimen: resume its project, then dose it.
-    if let Some(specimen) = specimen {
-        if !crate::research::chemical_ready_for(world, chemical_entity, specimen) {
-            return false;
+    let target = match specimen {
+        // Offered to a specific specimen: resume its project, then dose it.
+        Some(specimen) => {
+            if !crate::research::chemical_ready_for(world, chemical_entity, specimen) {
+                return false;
+            }
+            let Some(template_id) =
+                crate::scripts::script_util::entity_class_template_id(world, specimen)
+            else {
+                return false;
+            };
+            let (required, skill) = crate::research::research_skill(world, specimen);
+            let Ok(mut quests) = world.borrow::<UniqueViewMut<QuestInfo>>() else {
+                return false;
+            };
+            quests.research_mut().begin(template_id, required, skill);
+            specimen
         }
-        let Some(template_id) =
-            crate::scripts::script_util::entity_class_template_id(world, specimen)
-        else {
-            return false;
-        };
-        let (required, skill) = crate::research::research_skill(world, specimen);
-        let Ok(mut quests) = world.borrow::<UniqueViewMut<QuestInfo>>() else {
-            return false;
-        };
-        quests.research_mut().begin(template_id, required, skill);
-    }
+        None => {
+            let active_template = world
+                .borrow::<UniqueView<QuestInfo>>()
+                .ok()
+                .and_then(|quests| quests.research().active_template_id());
+            let Some(active_entity) =
+                active_template.and_then(|id| carried_research_entity(world, id))
+            else {
+                return false;
+            };
+            active_entity
+        }
+    };
     let chemical_name = world
         .borrow::<View<dark::properties::PropSymName>>()
         .ok()
@@ -20909,18 +20940,10 @@ fn apply_research_chemical(
     let Some(chemical_name) = chemical_name else {
         return false;
     };
-    let active_template = world
-        .borrow::<UniqueView<QuestInfo>>()
-        .ok()
-        .and_then(|quests| quests.research().active_template_id());
-    let Some(active_entity) = active_template.and_then(|id| carried_research_entity(world, id))
-    else {
-        return false;
-    };
     let needed = world
         .borrow::<View<dark::properties::PropChemicalNeeded>>()
         .ok()
-        .and_then(|view| view.get(active_entity).ok().cloned());
+        .and_then(|view| view.get(target).ok().cloned());
     let Some(needed) = needed else {
         return false;
     };

@@ -348,10 +348,9 @@ impl ResearchState {
         let Some(progress) = self.progress.get(&template_id) else {
             return false;
         };
-        !progress.complete
-            && chemical_due(progress, chemicals)
-                .map(|needed| needed.eq_ignore_ascii_case(chemical_sym_name))
-                .unwrap_or(false)
+        chemical_due(progress, chemicals)
+            .map(|needed| needed.eq_ignore_ascii_case(chemical_sym_name))
+            .unwrap_or(false)
     }
 }
 
@@ -399,9 +398,9 @@ pub(crate) fn chemical_ready_for(world: &World, chemical: EntityId, specimen: En
     let (required, skill) = research_skill(world, specimen);
     skill >= required
         && world.borrow::<UniqueView<QuestInfo>>().is_ok_and(|quests| {
-            quests
-                .research()
-                .accepts_chemical_for(template_id, &name, &needed)
+            let research = quests.research();
+            !research.is_complete(template_id)
+                && research.accepts_chemical_for(template_id, &name, &needed)
         })
         && player_carried_items(world).contains(&specimen)
 }
@@ -632,13 +631,6 @@ mod tests {
         state.begin(-1095, 1, 1);
         assert!(!state.accepts_chemical("Chem #4", &chemicals));
         assert!(state.accepts_chemical_for(-1341, "Chem #4", &chemicals));
-
-        // Finished work takes nothing, whatever its gates read.
-        let mut done = ResearchState::default();
-        done.begin(-1341, 1, 1);
-        done.advance(-1341, 600.0, 1, 1.0, 600.0, None, 0);
-        assert!(done.is_complete(-1341));
-        assert!(!done.accepts_chemical_for(-1341, "Chem #4", &chemicals));
     }
 
     #[test]
@@ -709,10 +701,11 @@ mod tests {
                 if entity_id == needed && target == specimen
         ));
         assert!(!gui.accepts_tool(specimen, &world, wrong));
-        assert!(
-            gui.on_provide_for_consumption(specimen, &world, wrong)
-                .is_none()
-        );
+        // Refused outright, never deposited inside the specimen.
+        assert!(matches!(
+            gui.on_provide_for_consumption(specimen, &world, wrong),
+            Some(Effect::NoEffect)
+        ));
         assert!(crate::item_tools::offers_to_held(&world, needed, specimen));
         assert!(crate::item_tools::can_apply(&world, needed, specimen));
         assert!(!crate::item_tools::offers_to(&world, needed, specimen));
@@ -722,6 +715,18 @@ mod tests {
         assert!(!chemical_ready_for(&world, needed, specimen));
         hold(&world, Some(specimen));
         world.add_component(player, PropBaseTechDesc(TechSkillValues([0, 0, 0, 0, 1])));
+        assert!(!chemical_ready_for(&world, needed, specimen));
+
+        // Finished work takes nothing, whatever its gates read.
+        world.add_component(player, PropBaseTechDesc(TechSkillValues([0, 0, 0, 0, 2])));
+        assert!(chemical_ready_for(&world, needed, specimen));
+        {
+            let mut quests = world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+            let research = quests.research_mut();
+            research.begin(-1341, 2, 2);
+            research.advance(-1341, 600.0, 2, 0.0, 600.0, None, 0);
+            assert!(research.is_complete(-1341));
+        }
         assert!(!chemical_ready_for(&world, needed, specimen));
     }
 

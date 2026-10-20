@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
+import { stackCount } from "./helpers/nanites.js";
 import { add, normalize, scale, sub } from "./helpers/vr-hand.js";
 
 // VR: bring a chemical to the specimen held in the other hand. If that
@@ -155,4 +156,31 @@ test("VR: a chemical the held specimen does not need shows nothing and just drop
   assert.ok(!(await game.ui.state()).messages.includes("Chemical used in research."));
   assert.equal((await haptics(game)).sequence[1], before, "the release is silent");
   assert.equal((await info(game)).active_research_template, TOXIN);
+});
+
+test("VR: releasing a stack onto the held specimen uses one dose and backpacks the rest", {
+  skip: !enabled, timeout: 240_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "debug_research", debugFlags: ["--vr"] });
+  await game.step({ frames: 60 });
+  const frame = await restFrame(game);
+  const toxin = await holdIn(game, "left", TOXIN);
+  // The second spawn merges into the first; the hand takes the whole stack.
+  await game.player.spawnItem(ANTIMONY);
+  const stack = await holdIn(game, "right", ANTIMONY);
+  assert.equal(stackCount((await game.entities.detail(stack)).properties), 2);
+  await placeHands(game, frame, false);
+  await stallOnAntimony(game, toxin);
+
+  await placeHands(game, frame, true);
+  assert.deepEqual(await hints(game), [RESEARCH]);
+  await game.input.set("right_hand.squeeze", 0);
+  await game.step({ frames: 5 });
+  assert.equal((await game.ui.state()).messages.at(-1), "Chemical used in research.");
+  assert.equal(stackCount((await game.entities.detail(stack)).properties), 1, "one dose is used");
+  assert.ok(
+    (await game.player.inventory()).items.some(item => item.entity_id === stack),
+    "the remaining dose is back in the backpack",
+  );
+  assert.equal((await game.physics.bodies({ entityId: stack })).bodies.length, 0, "not on the floor");
 });

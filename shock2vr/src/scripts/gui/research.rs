@@ -2,15 +2,13 @@
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::{
-    PropBaseTechDesc, PropChemicalNeeded, PropObjIcon, PropObjShortName, PropResearchText,
-    PropResearchTime,
+    PropChemicalNeeded, PropObjIcon, PropObjShortName, PropResearchText, PropResearchTime,
 };
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     gui::{self, Gui, GuiComponent, GuiConfig, GuiCursor},
     mission::GlobalEntityMetadata,
-    player_stats::Skill,
     quest_info::QuestInfo,
     research::ResearchStatus,
     scripts::{Effect, script_util::entity_class_template_id},
@@ -245,17 +243,21 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
         crate::research::chemical_ready_for(world, tool, entity_id)
     }
 
+    /// A chemical it does not take is refused, never deposited inside it.
     fn on_provide_for_consumption(
         &self,
         entity_id: EntityId,
         world: &World,
         provided_entity_id: EntityId,
     ) -> Option<Effect> {
-        self.accepts_tool(entity_id, world, provided_entity_id)
-            .then_some(Effect::UseResearchChemical {
+        if self.accepts_tool(entity_id, world, provided_entity_id) {
+            return Some(Effect::UseResearchChemical {
                 entity_id: provided_entity_id,
                 specimen: Some(entity_id),
-            })
+            });
+        }
+        crate::scripts::script_util::entity_has_script(world, provided_entity_id, "Chemical")
+            .then_some(Effect::NoEffect)
     }
 }
 
@@ -394,13 +396,7 @@ pub(crate) fn begin_research_message(
 }
 
 fn research_text(world: &World, entity_id: EntityId, status: &ResearchStatus) -> String {
-    let required_skill = world
-        .borrow::<View<PropBaseTechDesc>>()
-        .unwrap()
-        .get(entity_id)
-        .map(|required| required.0.research().max(1))
-        .unwrap_or(1);
-    let player_skill = crate::scripts::script_util::player_skill_level(world, Skill::Research);
+    let (required_skill, player_skill) = crate::research::research_skill(world, entity_id);
     if player_skill < required_skill && status.authored_seconds == 0.0 {
         format!(
             "This item requires a Research skill of {required_skill}. Use a Tech Upgrade Unit to train Research."
