@@ -359,6 +359,10 @@ impl HandClimb {
         point: Vector3<f32>,
         probe: impl Fn(Vector3<f32>, GripProbe) -> Option<ClimbGrip>,
     ) -> Option<(ClimbGrip, u8)> {
+        // A hand still closed after a broken hold takes nothing until reopened.
+        if self.was_squeezing[slot(hand)] && !self.armed[slot(hand)] {
+            return None;
+        }
         let Some(other) = self.grips[1 - slot(hand)]
             .filter(|other| (point - other.grip.point).magnitude() <= TRANSFER_REACH)
         else {
@@ -1678,6 +1682,20 @@ mod tests {
         );
         grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
         assert_eq!(grace_of(&climb, 1), offered.map(|(_, grace)| grace));
+
+        // Torn off the ladder and still closed: no glow where it cannot grab.
+        let mut climb = HandClimb::default();
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        grace_step(
+            &mut climb,
+            0,
+            (RUNG + vec3(0.0, -1.0, 0.0), SQUEEZE),
+            (WALL[0], OPEN),
+        );
+        assert_eq!(climb.grips().count(), 0);
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        assert!(climb.probe_grip(HANDS[0], RUNG, grace_world).is_none());
+        assert!(climb.probe_grip(HANDS[1], RUNG, grace_world).is_some());
     }
 
     #[test]
