@@ -532,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn gamepig_fills_the_tricorder_screen_and_is_not_frobbed() {
+    fn gamepig_board_fills_the_tricorder_screen_and_is_not_frobbed() {
         use crate::gui::Gui;
         let mut world = shipyard::World::new();
         let gamepig = world.add_entity(dark::properties::PropScripts {
@@ -628,7 +628,6 @@ pub(super) fn machine_uses_mfd(world: &shipyard::World, entity: shipyard::Entity
     .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))
 }
 
-/// A scan opens a GamePig's panel directly: frobbing a world one picks it up.
 pub(super) fn is_gamepig(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
     crate::scripts::script_util::entity_has_script(world, entity, "MiniGameBoy")
 }

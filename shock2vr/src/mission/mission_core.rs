@@ -7534,8 +7534,6 @@ impl MissionCore {
                                 text: "Hold the specimen to begin research".into(),
                             });
                         }
-                    } else if !inspect_only && super::mfd_device::is_gamepig(&self.world, entity) {
-                        effects.push(Effect::OpenPanel { entity });
                     } else if !inspect_only && super::mfd_device::opens_panel(&self.world, entity) {
                         effects.extend(crate::scripts::world_frob::world_frob_feedback(
                             &self.world,
@@ -10087,6 +10085,16 @@ impl MissionCore {
             }
             FlatUiDragAction::ToggleMap => vec![Effect::ToggleMap],
             FlatUiDragAction::OpenPdaEntry(entry) => vec![Effect::ReadPdaEntry(entry)],
+            // Open the object's own panel, then ask it for its board.
+            FlatUiDragAction::OpenHackBoard(entity) => vec![
+                Effect::OpenPanel { entity },
+                Effect::Send {
+                    msg: Message {
+                        to: entity,
+                        payload: MessagePayload::OpenHackBoard,
+                    },
+                },
+            ],
             FlatUiDragAction::Place(entity_id) => vec![crate::scripts::script_util::announce(
                 entity_id,
                 "place_item",
@@ -12413,6 +12421,10 @@ impl MissionCore {
                         crate::scripts::gui::psi_hack::POWER,
                     ));
                     effects.push_front(Effect::SpendPsiPoints { amount: cost });
+                }
+                Effect::InspectEntity { entity_id } => {
+                    self.flat_ui.close();
+                    self.flat_ui.utilities.inspect_entity(entity_id);
                 }
                 Effect::OpenPanel { entity } => {
                     self.world

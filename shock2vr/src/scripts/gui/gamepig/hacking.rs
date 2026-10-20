@@ -393,6 +393,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn gamepig_board_opened_from_a_query_returns_to_it() {
+        let (world, entity) = fixture(500);
+        let mut state = GamePigGuiState::default();
+        let effect = GamePigGui.open_hack_board(entity, &world, &mut state);
+        assert!(matches!(effect, Effect::NoEffect));
+        assert_eq!(state.hack.as_ref().unwrap().phase, HackPhase::Unpaid);
+        let (closed, effect) = GamePigGui.handle_msg(entity, &world, &state, &GamePigGuiMsg::Back);
+        assert!(matches!(effect, Effect::InspectEntity { entity_id } if entity_id == entity));
+        assert!(closed.hack.is_none());
+        let (_, effect) =
+            GamePigGui.handle_msg(entity, &world, &open(&world, entity), &GamePigGuiMsg::Back);
+        assert!(
+            matches!(effect, Effect::NoEffect),
+            "the plug's own board returns to the index"
+        );
+    }
+
     /// The held screen windows only the body, so its controller never selects
     /// the plug; like other plug panels, the plug takes a pointer.
     #[test]

@@ -108,6 +108,17 @@ where
         self.get_config()
     }
 
+    /// Show the hack board reached from the query panel's plug; leaving it
+    /// returns to that query. Default: the panel has none.
+    fn open_hack_board(
+        &self,
+        _entity_id: EntityId,
+        _world: &World,
+        _state: &mut TState,
+    ) -> crate::Effect {
+        crate::Effect::NoEffect
+    }
+
     /// The companion drawn beside this panel's body, if any.
     fn sidecar(
         &self,

@@ -5,7 +5,10 @@ use engine::assets::asset_cache::AssetCache;
 use shipyard::{EntitiesView, EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    scripts::gui::wrap_text,
+    scripts::gui::{
+        hrm_plug::{self, BUTTON_RECT, PLUG_RECT, PlugKind},
+        wrap_text,
+    },
     ui::{HAlign, Rect, UiCanvas, VAlign},
 };
 
@@ -49,6 +52,14 @@ pub(crate) struct MfdUtilities {
     query_offset: usize,
     font: Option<std::rc::Rc<Box<dyn engine::Font>>>,
     icon: Option<String>,
+    /// The HRM plug the queried object offers, with its button label.
+    plug: Option<(PlugKind, &'static str)>,
+    plug_request: Option<EntityId>,
+}
+
+/// A plug-local rect on the canvas, beside the query panel.
+fn beside_panel(r: Rect) -> Rect {
+    Rect::new(PANEL.x + r.x, PANEL.y + r.y, r.w, r.h)
 }
 
 impl MfdUtilities {
@@ -56,6 +67,8 @@ impl MfdUtilities {
     pub(crate) fn panel_rect(&self) -> Option<Rect> {
         if self.character {
             Some(CHARACTER_PANEL)
+        } else if self.plug.is_some() {
+            Some(Rect::new(PANEL.x, PANEL.y, hrm_plug::CANVAS_W, PANEL.h))
         } else if self.has_left_panel() {
             Some(PANEL)
         } else {
@@ -111,13 +124,25 @@ impl MfdUtilities {
     pub(crate) fn query_entity(&self) -> Option<EntityId> {
         self.selected
     }
+    /// The queried object whose plug was clicked, for the host to open.
+    pub(crate) fn take_plug_request(&mut self) -> Option<EntityId> {
+        self.plug_request.take()
+    }
+    pub(crate) fn refresh_plug(&mut self, world: &World) {
+        self.plug = self
+            .selected
+            .and_then(|entity| hrm_plug::query_plug(world, entity));
+    }
 
     pub(crate) fn is_inspecting(&self) -> bool {
         self.inspecting
     }
     /// Every clickable control's canvas rect, in hit-test order.
     pub(crate) fn control_rects(&self) -> impl Iterator<Item = Rect> {
-        self.controls().into_iter().map(|(_, rect, _, _)| rect)
+        self.controls()
+            .into_iter()
+            .map(|(_, rect, _, _)| rect)
+            .chain(self.plug.map(|_| beside_panel(BUTTON_RECT)))
     }
 
     fn controls(&self) -> Vec<(Control, Rect, &'static str, &'static str)> {
@@ -254,6 +279,7 @@ impl MfdUtilities {
         if self.inspecting {
             if pressed && let Some(entity) = candidate {
                 self.selected = Some(entity);
+                self.plug = None;
                 self.inspecting = false;
                 self.research = false;
                 self.logs = None;
@@ -288,6 +314,17 @@ impl MfdUtilities {
                 *self = Self::default();
             }
             return consumed;
+        }
+        if let (Some(entity), Some(_)) = (self.selected, self.plug) {
+            if beside_panel(BUTTON_RECT).contains(point) {
+                if pressed {
+                    self.plug_request = Some(entity);
+                }
+                return true;
+            }
+            if beside_panel(PLUG_RECT).contains(point) {
+                return true;
+            }
         }
         self.selected.is_some() && PANEL.contains(point)
     }
@@ -368,6 +405,7 @@ impl MfdUtilities {
             *self = Self::default();
             return;
         }
+        self.refresh_plug(world);
         self.font = Some(crate::ui::resolve_font(assets, crate::ui::MFD_FONT));
         self.icon =
             crate::scripts::gui::inventory_icon(world, entity).map(|icon| format!("{icon}.pcx"));
@@ -420,6 +458,11 @@ impl MfdUtilities {
                         VAlign::Top,
                     );
                 }
+            }
+            if let Some((kind, _)) = self.plug {
+                let (backdrop, button, _) = kind.art();
+                canvas.image(beside_panel(PLUG_RECT), backdrop);
+                canvas.image(beside_panel(BUTTON_RECT), button);
             }
         }
         for (control, rect, label, texture) in self.controls() {
@@ -510,6 +553,26 @@ impl MfdUtilities {
             } else {
                 Vec::new()
             })
+            .chain(self.plug.into_iter().flat_map(|(kind, label)| {
+                let (backdrop, button, _) = kind.art();
+                [
+                    ("image", backdrop, None, PLUG_RECT),
+                    ("button", button, Some(label), BUTTON_RECT),
+                ]
+                .map(|(kind, texture, label, rect)| {
+                    let r = beside_panel(rect);
+                    let r = [r.x, r.y, r.w, r.h];
+                    crate::game_scene::DebugUiElement {
+                        kind: kind.into(),
+                        texture: Some(texture.into()),
+                        text: None,
+                        label: label.map(Into::into),
+                        entity_id: self.selected.map(|e| e.inner() as i32),
+                        rect: r,
+                        screen_rect: r,
+                    }
+                })
+            }))
             .chain(self.logs.iter().flat_map(|list| list.elements()))
             .chain(if self.research {
                 self.research_catalog.elements()
@@ -762,6 +825,62 @@ mod tests {
         assert!(!ui.is_inspecting());
         assert_eq!(ui.title, "Name");
         assert_eq!(ui.lines, ["Description"]);
+    }
+
+    #[test]
+    fn query_raises_the_hrm_plug_while_its_object_can_be_hacked() {
+        use crate::scripts::gui::hrm_plug::{BUTTON_RECT, CANVAS_W, PLUG_RECT};
+        let mut world = World::new();
+        world.add_unique(crate::quest_info::QuestInfo::new());
+        let gamepig = world.add_entity((
+            dark::properties::PropScripts {
+                scripts: vec!["MiniGameBoy".into()],
+                inherits: false,
+            },
+            dark::properties::PropHackDiff {
+                success_chance: 85,
+                critical_chance: 0,
+                cost: 50.0,
+            },
+        ));
+        let mut ui = MfdUtilities::default();
+        ui.inspect_entity(gamepig);
+        ui.refresh_plug(&world);
+        let rect = ui.panel_rect().unwrap();
+        assert_eq!((rect.x, rect.w), (PANEL.x, CANVAS_W), "room for the plug");
+        let button = ui
+            .debug_elements()
+            .into_iter()
+            .find(|e| e.label.as_deref() == Some("hack-gamepig"))
+            .expect("plug button");
+        let at = |r: Rect| Rect::new(PANEL.x + r.x, PANEL.y + r.y, r.w, r.h);
+        assert_eq!(button.rect, {
+            let r = at(BUTTON_RECT);
+            [r.x, r.y, r.w, r.h]
+        });
+        let center = at(BUTTON_RECT).center();
+        assert!(ui.update(center, false, None, false));
+        assert_eq!(ui.take_plug_request(), None, "hover is not a click");
+        assert!(ui.update(center, true, None, false));
+        assert_eq!(ui.take_plug_request(), Some(gamepig));
+        assert!(
+            ui.update(at(PLUG_RECT).center(), true, None, false),
+            "the plug is opaque"
+        );
+
+        world.add_component(
+            gamepig,
+            dark::properties::PropObjState(dark::properties::ObjectState::Hacked),
+        );
+        ui.refresh_plug(&world);
+        assert_eq!(ui.panel_rect(), Some(PANEL));
+        assert!(
+            !ui.debug_elements()
+                .iter()
+                .any(|e| e.label.as_deref() == Some("hack-gamepig"))
+        );
+        ui.update(center, true, None, false);
+        assert_eq!(ui.take_plug_request(), None);
     }
 
     #[test]

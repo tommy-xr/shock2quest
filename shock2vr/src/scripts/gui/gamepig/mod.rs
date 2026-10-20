@@ -38,6 +38,8 @@ pub struct GamePigGuiState {
     selection: usize,
     controller_active: bool,
     hack: Option<super::keypad::HackState>,
+    /// The board was opened from the query panel's plug; BACK returns there.
+    from_query: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -535,6 +537,22 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
         }
     }
 
+    /// The query panel's plug opens the board directly, skipping any intro.
+    fn open_hack_board(
+        &self,
+        entity_id: EntityId,
+        world: &World,
+        state: &mut GamePigGuiState,
+    ) -> Effect {
+        state.boot = None;
+        let (next, effect) = self.handle_msg(entity_id, world, state, &GamePigGuiMsg::OpenHack);
+        *state = GamePigGuiState {
+            from_query: next.hack.is_some(),
+            ..next
+        };
+        effect
+    }
+
     fn sidecar(
         &self,
         entity_id: EntityId,
@@ -559,7 +577,14 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             state.hack = None;
             state.game = None;
             state.selection = 0;
-            return (state, Effect::NoEffect);
+            let effect = if std::mem::take(&mut state.from_query) {
+                Effect::InspectEntity {
+                    entity_id: entity_id,
+                }
+            } else {
+                Effect::NoEffect
+            };
+            return (state, effect);
         }
         if super::hackable_crate::is_ruined(world, entity_id) {
             return (state, Effect::NoEffect);

@@ -111,6 +111,8 @@ pub enum FlatUiDragAction {
     Readout(ReadoutButton, Option<EntityId>),
     /// An entry picked from the LOGS list, to open in the media reader.
     OpenPdaEntry(crate::quest_info::PdaEntry),
+    /// The query panel's HRM plug was clicked for this object.
+    OpenHackBoard(EntityId),
 }
 
 /// Double-click window (frames at 60Hz) and radius (canvas px) for the
@@ -1504,6 +1506,9 @@ impl FlatUiHost {
                 }
                 if let Some(entry) = self.utilities.take_pda_request() {
                     actions.push(FlatUiDragAction::OpenPdaEntry(entry));
+                }
+                if let Some(entity) = self.utilities.take_plug_request() {
+                    actions.push(FlatUiDragAction::OpenHackBoard(entity));
                 }
                 return (Vec::new(), actions);
             }

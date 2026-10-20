@@ -495,6 +495,10 @@ pub enum Effect {
     OpenPanel {
         entity: EntityId,
     },
+    /// Show `entity` in the query panel, as the scanner or "?" would.
+    InspectEntity {
+        entity_id: EntityId,
+    },
 
     /// Start or resume research on a carried researchable object.
     BeginResearch {

@@ -3,7 +3,7 @@ mod container;
 mod elevator;
 mod gamepig;
 pub(crate) mod hackable_crate;
-mod hrm_plug;
+pub(crate) mod hrm_plug;
 mod keypad;
 mod map;
 mod media;
