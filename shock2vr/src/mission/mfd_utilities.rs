@@ -441,13 +441,16 @@ impl MfdUtilities {
             if let Some(icon) = &self.icon {
                 canvas.fitted_object_icon(Rect::new(17.0, 138.0, 138.0, 109.0), icon);
             }
-            canvas.text_native_fit(
-                Rect::new(26.0, 257.0, 129.0, 12.0),
-                &self.title,
-                crate::ui::MFD_FONT,
-                HAlign::Left,
-                VAlign::Top,
-            );
+            // Empty until the next refresh: an empty text mesh cannot draw.
+            if !self.title.is_empty() {
+                canvas.text_native_fit(
+                    Rect::new(26.0, 257.0, 129.0, 12.0),
+                    &self.title,
+                    crate::ui::MFD_FONT,
+                    HAlign::Left,
+                    VAlign::Top,
+                );
+            }
             for (rect, line) in self.visible_lines() {
                 if !line.trim().is_empty() {
                     canvas.text_native_fit(
@@ -765,6 +768,15 @@ mod tests {
         assert!(canvas.elements().iter().all(|element| !matches!(element, crate::ui::UiElement::Text { text, .. } if text.trim().is_empty())));
         let lines: Vec<_> = ui.visible_lines().collect();
         assert_eq!(lines[2].0.y - lines[0].0.y, 24.0);
+    }
+
+    #[test]
+    fn a_query_drawn_before_its_first_refresh_emits_no_empty_text() {
+        let mut ui = MfdUtilities::default();
+        ui.inspect_entity(EntityId::dead());
+        let mut canvas = UiCanvas::new(Vector2::new(640.0, 480.0));
+        ui.draw(&mut canvas);
+        assert!(canvas.elements().iter().all(|element| !matches!(element, crate::ui::UiElement::Text { text, .. } if text.trim().is_empty())));
     }
 
     #[test]

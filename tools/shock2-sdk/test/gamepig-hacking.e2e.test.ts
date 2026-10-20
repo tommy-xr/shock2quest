@@ -115,8 +115,13 @@ test("VR cyber interface opens a backpack GamePig with the flat canvas and its p
   await hackFromPlug(game, handheld.entity_id, rayClick);
 });
 
+/** A tricorder scan is a query: its panel lives in the utilities, never the games index. */
+async function utility(game: GameServer, label: string) {
+  return (await game.ui.state()).utilities.find(e => e.label === label);
+}
+
 for (const held of [false, true]) {
-  test(`VR tricorder scan of a ${held ? "held" : "world"} GamePig shows its plug and hacks it`, {
+  test(`VR tricorder scan of a ${held ? "held" : "world"} GamePig queries it, with a hack plug until hacked`, {
     skip, timeout: 180_000,
   }, async () => {
     await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
@@ -127,7 +132,6 @@ for (const held of [false, true]) {
     assert.ok(pig, "the rack carries a GamePig");
     await game.player.teleport({ x: pig.position[0], y: .9, z: 0 });
     await game.step({ frames: 120 });
-    let target = pig.position;
     let expected = pig.id;
     if (held) {
       await game.input.set("right_hand.squeeze", 1);
@@ -138,34 +142,62 @@ for (const held of [false, true]) {
       await game.step({ frames: 5 });
       expected = (await game.info()).player.right_hand_entity_id!;
       assert.ok(expected);
-      target = (await game.entities.detail(expected)).position;
     } else {
       await game.input.set("right_hand.position", [.6, .7, -.8]);
     }
     await drawPersonalCard(game, "left");
-    await aimMfdAt(game, target, held ? .25 : 1.1, 1, 0, { hand: "left", lookAtTarget: false });
-    await game.step({ frames: 2 });
-    await game.input.set("left_hand.trigger", 1);
-    await game.step({ frames: 3 });
-    await game.input.set("left_hand.trigger", 0);
-    await game.input.set("left_hand.position", [-.25, 1, -.8]);
-    await game.input.set("left_hand.rotation", [0, 0, 0, 1]);
-    await game.step({ frames: 3 });
-    const scanned = (await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan!;
-    assert.equal(scanned, expected);
-    const ui = await game.ui.state();
-    assert.equal(ui.active_panel?.entity_id, scanned, "the scan opens the GamePig on the tricorder");
+    const scan = async (standOff: number) => {
+      const target = (await game.entities.detail(expected)).position;
+      await aimMfdAt(game, target, standOff, 1, 0, { hand: "left", lookAtTarget: false });
+      await game.step({ frames: 2 });
+      await game.input.set("left_hand.trigger", 1);
+      await game.step({ frames: 3 });
+      await game.input.set("left_hand.trigger", 0);
+      await game.input.set("left_hand.position", [-.25, 1, -.8]);
+      await game.input.set("left_hand.rotation", [0, 0, 0, 1]);
+      await game.step({ frames: 3 });
+      assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan, expected);
+      const ui = await game.ui.state();
+      assert.equal(ui.active_panel, null, "a scan never opens the games panel");
+      const title = ui.utilities.find(e => e.label === "query_title");
+      assert.equal(title?.entity_id, expected, "the scan shows the GamePig's query panel");
+      assert.ok(!ui.utilities.some(e => e.label?.startsWith("game-")));
+    };
+    await scan(held ? .25 : 1.1);
     assert.ok(!(await game.player.inventory()).items.some(i => i.entity_id === pig.id),
       "scanning never picks the device up");
-    await button(game, "hack-gamepig");
+    assert.ok(await utility(game, "hack-gamepig"), "the hack plug sits beside the query");
     if (held) {
       // The held hand has no free ray; release it so the pointer can click.
       await game.input.set("right_hand.squeeze", 0);
       await game.input.set("right_hand.position", [.6, .7, -.8]);
       await game.step({ frames: 3 });
     }
-    assert.deepEqual(await games(game), [], "nothing is installed before the hack");
-    await hackFromPlug(game, scanned, rayClick);
+
+    const wallet = await fund(game);
+    await rayClick(game, (await utility(game, "hack-gamepig"))!);
+    assert.equal((await game.ui.state()).active_panel?.entity_id, expected, "the plug opens its board on the tricorder");
+    assert.ok((await elements(game)).some(e => e.texture === "hack.pcx"));
+    assert.equal(await carriedNaniteTotal(game), wallet, "opening is free");
+    await winHack(game, rayClick);
+    assert.equal(await objectState(game, expected), "Hacked");
+    await rayClick(game, await button(game, "gamepig-back"));
+    let ui = await game.ui.state();
+    assert.equal(ui.active_panel, null, "BACK returns to the query, not the games");
+    assert.equal(ui.utilities.find(e => e.label === "query_title")?.entity_id, expected);
+    assert.ok(!(await utility(game, "hack-gamepig")), "a hacked device offers no plug");
+
+    if (!held) {
+      // The released held device lies at the player's feet; the rack one re-scans cleanly.
+      await rayClick(game, (await utility(game, "utility_close"))!);
+      await game.step({ frames: 60 });
+      await scan(1.1);
+      assert.ok(!(await utility(game, "hack-gamepig")), "a re-scan of the hacked device shows the query alone");
+    }
+    // Read the library through the device's own panel (a script frob, not a scan).
+    await game.entities.sendMessage(expected, { type: "Frob" });
+    await game.step({ frames: 5 });
+    for (const label of ["game-2", "game-3", "game-5", "game-8", "game-10"]) await button(game, label);
   });
 }
 
