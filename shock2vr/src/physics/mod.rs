@@ -2909,6 +2909,10 @@ pub enum ClimbGripKind {
     /// A walkable top surface above the player's feet: the mantle-emulation
     /// hold. Any solid, non-climbable geometry can offer one.
     Ledge,
+    /// Any static terrain face (wall, floor, underside) taken as a bounded
+    /// grace grab near a ladder hold (see [`PhysicsWorld::surface_grip_at`]).
+    /// Never a vault or hanging-crouch hold.
+    Surface,
 }
 
 /// A hold found by [`PhysicsWorld::climbable_grip_at`].
@@ -7525,6 +7529,77 @@ impl PhysicsWorld {
         feet_y: f32,
     ) -> Option<ClimbGrip> {
         self.climbable_grip_above(point, CLIMB_GRIP_RADIUS, feet_y + 0.1)
+    }
+
+    /// Any static terrain face a hand at `point` touches, seen from the body
+    /// at `from`: a grace grab near a ladder. Climbables (air between rungs),
+    /// sensors and movable bodies are refused - a door or crate can move or
+    /// vanish and leave the hold floating. A hand pushed into or through a solid only
+    /// holds within [`CLIMB_GRIP_RADIUS`] of the face nearest the body.
+    pub fn surface_grip_at(&self, point: Vector3<f32>, from: Vector3<f32>) -> Option<ClimbGrip> {
+        let not_climbable =
+            |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
+        let filter = QueryFilter::new()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::PLAYER.bits.into(),
+                (InternalCollisionGroups::WORLD.bits
+                    | InternalCollisionGroups::ENTITY.bits
+                    | InternalCollisionGroups::SELECTABLE.bits)
+                    .into(),
+                Default::default(),
+            ))
+            .exclude_sensors()
+            .predicate(&not_climbable);
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            filter,
+        );
+        // Level geometry has no body; static bodies never move.
+        let is_terrain = |collider: &Collider| {
+            collider
+                .parent()
+                .is_none_or(|body| self.rigid_body_set[body].is_fixed())
+        };
+        let surface = |point: Vector<Real>, normal: Vector<Real>| ClimbGrip {
+            kind: ClimbGripKind::Surface,
+            entity_id: None,
+            point: nvec_to_cgmath(point),
+            normal: nvec_to_cgmath(normal),
+        };
+
+        // Line of sight from the body: anything in the way means the hand is
+        // inside or behind it.
+        let to_hand = vec_to_nvec(point - from);
+        let distance = to_hand.norm();
+        if distance > 1.0e-4 {
+            let ray = Ray::new(point![from.x, from.y, from.z], to_hand / distance);
+            if let Some((handle, hit)) = queries.cast_ray_and_get_normal(&ray, distance, true) {
+                return (distance - hit.time_of_impact <= CLIMB_GRIP_RADIUS
+                    && is_terrain(&self.collider_set[handle]))
+                .then(|| surface(ray.point_at(hit.time_of_impact).coords, hit.normal));
+            }
+        }
+
+        let ball = Ball::new(CLIMB_GRIP_RADIUS);
+        let ball_pos = Isometry::translation(point.x, point.y, point.z);
+        queries
+            .intersect_shape(ball_pos, &ball)
+            .filter(|(_, collider)| is_terrain(collider))
+            .filter_map(|(_, collider)| {
+                rapier3d::parry::query::contact(
+                    &ball_pos,
+                    &ball,
+                    collider.position(),
+                    collider.shape(),
+                    0.0,
+                )
+                .ok()
+                .flatten()
+            })
+            .min_by(|a, b| a.dist.total_cmp(&b.dist))
+            .map(|contact| surface(contact.point2.coords, -contact.normal1.into_inner()))
     }
 
     fn climbable_grip_above(
@@ -14681,6 +14756,55 @@ mod tests {
         assert!(
             world
                 .climbable_grip_at(vec3(-4.85, 3.0, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn surface_grips_take_static_solids_in_sight_and_nothing_else() {
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, Some(u32::MAX));
+        let wall = world.create_static_body(Isometry::translation(-5.0, 2.0, 10.0), None);
+        world.attach_collider(
+            wall,
+            SharedShape::cuboid(0.5, 2.0, 2.0),
+            1.0,
+            CollisionGroup::entity(),
+        );
+        world.add_kinematic(
+            EntityId::from_inner(2030).unwrap(),
+            vec3(5.0, 1.5, 10.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 3.0, 1.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        let at = |x: f32, y: f32, from_x: f32| {
+            world.surface_grip_at(vec3(x, y, 10.0), vec3(from_x, 2.0, 10.0))
+        };
+
+        // A wall face, including with the fist pushed slightly into it.
+        for x in [-4.4, -4.55] {
+            let grip = at(x, 2.0, -3.5).expect("wall face");
+            assert_eq!(grip.kind, ClimbGripKind::Surface);
+            assert!((grip.point.x + 4.5).abs() < 1.0e-3, "{grip:?}");
+            assert!(grip.normal.x > 0.99, "{grip:?}");
+        }
+        // The floor counts too.
+        let floor = at(-3.0, 0.1, -3.0).expect("floor");
+        assert!(
+            floor.normal.y > 0.99 && floor.point.y.abs() < 1.0e-3,
+            "{floor:?}"
+        );
+        // Free air, a hand through the wall, a movable body, a ladder's box.
+        assert!(at(-3.9, 2.0, -3.5).is_none());
+        assert!(at(-5.6, 2.0, -3.5).is_none());
+        assert!(at(4.4, 1.5, 3.5).is_none());
+        assert!(
+            world
+                .surface_grip_at(vec3(-4.85, 3.0, 0.0), vec3(-4.0, 3.0, 0.0))
                 .is_none()
         );
     }
