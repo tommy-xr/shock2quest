@@ -83,7 +83,7 @@ test("VR held specimen trigger reports a Research skill that is too low", {
   await game.step({ frames: 30 });
   assert.equal((await game.info()).player.stats?.skills.research, 0);
   await hold(game, ORGAN);
-  assert.match(await pull(game), /^This item requires a Research skill of \d+\./);
+  assert.match(await pull(game), /^This item requires a Research skill of \d+ to be researched\.$/);
 });
 
 test("VR cyber interface use shows the Research MFD in the interface", {
