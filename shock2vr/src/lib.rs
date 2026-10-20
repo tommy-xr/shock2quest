@@ -138,6 +138,7 @@ pub use hand_glove::{GloveRenderer, HandLight};
 /// same maths the wield uses.
 pub use vr_config::{Handedness, MeleePosedArm, melee_contact_offset};
 pub mod swimming;
+pub mod climb_release;
 pub mod vr_climb;
 pub mod vr_crouch;
 pub mod vr_grip;

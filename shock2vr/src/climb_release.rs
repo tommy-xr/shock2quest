@@ -1,0 +1,336 @@
+//! Where letting go of every climbing hold puts the player (#2376).
+//!
+//! One read-only [`ReleasePreview`] per frame drives the floor footprint, the
+//! held gloves' green/red, and what a voluntary final release does. While a
+//! ladder or grace hold is held, the tracked head can pick a nearby walkable
+//! landing (an *assisted* release: a short collision-checked glide there);
+//! otherwise, or when the gaze finds nothing valid, the preview is the
+//! *natural* release - where the plain drop or throw would land.
+//!
+//! The geometry queries live in `physics::climb_landing`; this module holds the
+//! pure rules they share.
+
+use cgmath::{InnerSpace, Vector3, vec3};
+
+/// Farthest an assisted landing may be from the body centre, horizontally
+/// (world units; about 1.5 m). Wall grace grabs cover anything farther.
+pub const GAZE_MAX_HORIZONTAL: f32 = 2.0;
+/// Deepest an assisted landing may sit below the feet (about 3 m). Generous:
+/// a lower landing is reached by the glide plus an ordinary fall, which keeps
+/// its fall risk (and colour).
+pub const GAZE_MAX_DOWN: f32 = 4.0;
+/// Highest an assisted landing may sit above the feet (about 0.75 m). Small,
+/// so the assist never becomes a way to climb.
+pub const GAZE_MAX_UP: f32 = 1.0;
+/// How far along the head ray a landing surface may be seen.
+pub const GAZE_MAX_RAY: f32 = 8.0;
+/// A gaze landing stays chosen while the aim lands within this of it, so
+/// tracking jitter cannot make the footprint hop between two insets.
+pub const GAZE_HOLD_RADIUS: f32 = 0.75;
+/// Snap rings around the aimed point, searched nearest first, for an inset the
+/// body fits (world units).
+pub const GAZE_SNAP_RINGS: [f32; 2] = [0.3, 0.6];
+const GAZE_SNAP_DIRECTIONS: usize = 8;
+/// A snapped floor must be the aimed surface, not a step beside it.
+pub const GAZE_SNAP_MAX_STEP: f32 = 0.15;
+
+/// The gaze cone as (right, down) offsets in degrees, centre first. Wider
+/// downward: a landing is seen at a grazing angle, so a small head pitch error
+/// moves the aim a long way along the floor.
+const GAZE_CONE_DEGREES: [(f32, f32); 9] = [
+    (0.0, 0.0),
+    (0.0, 4.0),
+    (0.0, -4.0),
+    (4.0, 0.0),
+    (-4.0, 0.0),
+    (0.0, 8.0),
+    (4.0, 4.0),
+    (-4.0, 4.0),
+    (0.0, 12.0),
+];
+
+/// Where a release would leave the body: the resting body centre and the
+/// floor under it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Landing {
+    pub center: Vector3<f32>,
+    pub floor_y: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReleaseMode {
+    /// A gaze-selected landing a release glides to.
+    Assisted,
+    /// Where the plain drop or throw lands.
+    Natural,
+}
+
+impl ReleaseMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Assisted => "assisted",
+            Self::Natural => "natural",
+        }
+    }
+}
+
+/// Why the gaze offered no assisted landing this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GazeRejection {
+    /// Head untracked, or no ladder/grace hold to exit from.
+    Inactive,
+    NoHit,
+    NotWalkable,
+    TooFar,
+    TooHigh,
+    TooLow,
+    /// The standing body does not fit there (walls, low ceiling).
+    NoFit,
+    Unsupported,
+    /// The glide there is obstructed.
+    Blocked,
+}
+
+impl GazeRejection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Inactive => "inactive",
+            Self::NoHit => "no_hit",
+            Self::NotWalkable => "not_walkable",
+            Self::TooFar => "too_far",
+            Self::TooHigh => "too_high",
+            Self::TooLow => "too_low",
+            Self::NoFit => "no_fit",
+            Self::Unsupported => "unsupported",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReleaseOutcome {
+    pub mode: ReleaseMode,
+    pub landing: Landing,
+    /// Feet height now minus the landing floor (negative: a step up).
+    pub drop: f32,
+    /// A validated landing within the acceptable drop.
+    pub safe: bool,
+}
+
+impl ReleaseOutcome {
+    pub fn new(mode: ReleaseMode, landing: Landing, feet_y: f32, safe_drop: f32) -> Self {
+        let drop = feet_y - landing.floor_y;
+        Self {
+            mode,
+            landing,
+            drop,
+            safe: drop <= safe_drop,
+        }
+    }
+}
+
+/// The resolved release for one frame. No `outcome` means nothing can be
+/// predicted reliably: no footprint, and the held gloves read unsafe.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ReleasePreview {
+    pub outcome: Option<ReleaseOutcome>,
+    /// The aimed surface point behind the current gaze verdict.
+    pub gaze_candidate: Option<Vector3<f32>>,
+    pub gaze_rejection: Option<GazeRejection>,
+}
+
+impl ReleasePreview {
+    /// The assisted landing a release would commit, if one is shown.
+    pub fn assisted(&self) -> Option<Landing> {
+        self.outcome
+            .filter(|outcome| outcome.mode == ReleaseMode::Assisted)
+            .map(|outcome| outcome.landing)
+    }
+
+    /// Whether the held gloves read safe.
+    pub fn safe(&self) -> bool {
+        self.outcome.is_some_and(|outcome| outcome.safe)
+    }
+
+    /// An automatic ledge vault onto `grip_point` would take the body somewhere
+    /// other than the assisted landing on show: the release owns the exit.
+    /// A vault onto the shown deck is the same exit and keeps working.
+    pub fn blocks_vault(&self, grip_point: Vector3<f32>) -> bool {
+        self.assisted().is_some_and(|landing| {
+            let across = vec3(
+                landing.center.x - grip_point.x,
+                0.0,
+                landing.center.z - grip_point.z,
+            );
+            across.magnitude() > VAULT_SAME_EXIT_RADIUS
+                || (landing.floor_y - grip_point.y).abs() > GAZE_SNAP_MAX_STEP * 2.0
+        })
+    }
+}
+
+/// A vault's landing is an inset of up to 0.8 past the held lip; within this
+/// of the lip, the shown landing is that same deck.
+const VAULT_SAME_EXIT_RADIUS: f32 = 1.2;
+
+/// The gaze rays for a head looking along `forward`, centre first.
+/// Empty for a degenerate direction.
+pub fn gaze_rays(forward: Vector3<f32>) -> Vec<Vector3<f32>> {
+    if forward.magnitude2() < 1e-6 {
+        return Vec::new();
+    }
+    let forward = forward.normalize();
+    let side = forward.cross(Vector3::unit_y());
+    // Looking straight up or down: any perpendicular will do.
+    let right = if side.magnitude2() < 1e-6 {
+        Vector3::unit_x()
+    } else {
+        side.normalize()
+    };
+    let up = right.cross(forward);
+    GAZE_CONE_DEGREES
+        .iter()
+        .map(|(yaw, down)| {
+            (forward + right * yaw.to_radians().tan() - up * down.to_radians().tan()).normalize()
+        })
+        .collect()
+}
+
+/// Horizontal offsets around an aimed point to try a landing at, nearest first.
+pub fn snap_offsets() -> impl Iterator<Item = Vector3<f32>> {
+    std::iter::once(vec3(0.0, 0.0, 0.0)).chain(GAZE_SNAP_RINGS.into_iter().flat_map(|radius| {
+        (0..GAZE_SNAP_DIRECTIONS).map(move |i| {
+            let angle = i as f32 / GAZE_SNAP_DIRECTIONS as f32 * std::f32::consts::TAU;
+            vec3(angle.cos() * radius, 0.0, angle.sin() * radius)
+        })
+    }))
+}
+
+/// Whether a floor point is in assist range of a body at `body` with feet at
+/// `feet_y`: measured from the body and the feet, never the head or the hands.
+pub fn range_rejection(
+    body: Vector3<f32>,
+    feet_y: f32,
+    floor: Vector3<f32>,
+) -> Option<GazeRejection> {
+    let rise = floor.y - feet_y;
+    if vec3(floor.x - body.x, 0.0, floor.z - body.z).magnitude() > GAZE_MAX_HORIZONTAL {
+        Some(GazeRejection::TooFar)
+    } else if rise > GAZE_MAX_UP {
+        Some(GazeRejection::TooHigh)
+    } else if rise < -GAZE_MAX_DOWN {
+        Some(GazeRejection::TooLow)
+    } else {
+        None
+    }
+}
+
+/// Whether an aimed floor point keeps `held` chosen (see [`GAZE_HOLD_RADIUS`]).
+pub fn keeps_held(held: Landing, aimed: Vector3<f32>) -> bool {
+    vec3(aimed.x - held.center.x, 0.0, aimed.z - held.center.z).magnitude() <= GAZE_HOLD_RADIUS
+        && (aimed.y - held.floor_y).abs() <= GAZE_SNAP_MAX_STEP
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn landing(x: f32, floor_y: f32, z: f32) -> Landing {
+        Landing {
+            center: vec3(x, floor_y + 1.24, z),
+            floor_y,
+        }
+    }
+
+    #[test]
+    fn the_cone_is_centred_on_the_head_and_wider_downward() {
+        let rays = gaze_rays(vec3(0.0, 0.0, -1.0));
+        assert_eq!(rays[0], vec3(0.0, 0.0, -1.0));
+        let max_down = rays.iter().map(|r| -r.y).fold(f32::MIN, f32::max);
+        let max_up = rays.iter().map(|r| r.y).fold(f32::MIN, f32::max);
+        let max_side = rays.iter().map(|r| r.x.abs()).fold(f32::MIN, f32::max);
+        assert!(max_down > max_up && max_down > max_side);
+        assert!(max_side < 0.1, "narrow: {max_side}");
+        // Straight down still yields rays; a zero direction yields none.
+        assert_eq!(gaze_rays(vec3(0.0, -1.0, 0.0)).len(), 9);
+        assert!(gaze_rays(vec3(0.0, 0.0, 0.0)).is_empty());
+    }
+
+    #[test]
+    fn range_is_from_body_and_feet_and_more_generous_downward() {
+        let body = vec3(0.0, 5.0, 0.0);
+        let feet = 3.8;
+        assert_eq!(range_rejection(body, feet, vec3(1.9, feet, 0.0)), None);
+        assert_eq!(
+            range_rejection(body, feet, vec3(2.1, feet, 0.0)),
+            Some(GazeRejection::TooFar)
+        );
+        assert_eq!(
+            range_rejection(body, feet, vec3(0.5, feet + 0.9, 0.0)),
+            None
+        );
+        assert_eq!(
+            range_rejection(body, feet, vec3(0.5, feet + 1.1, 0.0)),
+            Some(GazeRejection::TooHigh)
+        );
+        assert_eq!(
+            range_rejection(body, feet, vec3(0.5, feet - 3.9, 0.0)),
+            None
+        );
+        assert_eq!(
+            range_rejection(body, feet, vec3(0.5, feet - 4.1, 0.0)),
+            Some(GazeRejection::TooLow)
+        );
+    }
+
+    #[test]
+    fn snapping_starts_at_the_aim_and_stays_bounded() {
+        let offsets: Vec<_> = snap_offsets().collect();
+        assert_eq!(offsets[0], vec3(0.0, 0.0, 0.0));
+        let mut last = 0.0;
+        for offset in &offsets {
+            assert!(offset.magnitude() + 1e-5 >= last, "nearest first");
+            last = offset.magnitude();
+        }
+        assert!(last <= 0.6 + 1e-5);
+    }
+
+    #[test]
+    fn small_aim_jitter_keeps_the_held_landing_but_a_new_surface_does_not() {
+        let held = landing(1.0, 4.0, 0.0);
+        assert!(keeps_held(held, vec3(1.5, 4.0, 0.3)));
+        assert!(!keeps_held(held, vec3(2.0, 4.0, 0.0)), "aimed away");
+        assert!(!keeps_held(held, vec3(1.0, 4.5, 0.0)), "another level");
+    }
+
+    #[test]
+    fn safety_is_the_drop_against_the_threshold() {
+        let feet = 5.0;
+        let safe = ReleaseOutcome::new(ReleaseMode::Natural, landing(0.0, 4.0, 0.0), feet, 1.3);
+        assert!(safe.safe);
+        assert!((safe.drop - 1.0).abs() < 1e-5);
+        let long = ReleaseOutcome::new(ReleaseMode::Natural, landing(0.0, 0.0, 0.0), feet, 1.3);
+        assert!(!long.safe);
+        let up = ReleaseOutcome::new(ReleaseMode::Assisted, landing(0.0, 5.5, 0.0), feet, 1.3);
+        assert!(up.safe && up.drop < 0.0);
+        assert!(
+            !ReleasePreview::default().safe(),
+            "no prediction is not safe"
+        );
+    }
+
+    #[test]
+    fn a_shown_assisted_exit_blocks_only_a_vault_somewhere_else() {
+        let lip = vec3(-7.0, 6.0, 0.0);
+        let preview = |mode, landing| ReleasePreview {
+            outcome: Some(ReleaseOutcome::new(mode, landing, 5.0, 1.3)),
+            ..Default::default()
+        };
+        // The deck past the held lip: same exit, the vault keeps working.
+        assert!(!preview(ReleaseMode::Assisted, landing(-7.6, 6.0, 0.0)).blocks_vault(lip));
+        // A side platform: the vault must not take over before release.
+        assert!(preview(ReleaseMode::Assisted, landing(-6.0, 4.0, 2.0)).blocks_vault(lip));
+        // A natural preview never blocks an ordinary vault.
+        assert!(!preview(ReleaseMode::Natural, landing(-6.0, 0.0, 0.0)).blocks_vault(lip));
+        assert!(!ReleasePreview::default().blocks_vault(lip));
+    }
+}

@@ -7,6 +7,7 @@ mod physics_events;
 mod profiling;
 #[cfg(feature = "lazy-hitboxes")]
 mod query_hitboxes;
+mod climb_landing;
 mod release_placement;
 pub use held_recovery::{HeldRecovery, HeldRecoveryContext};
 pub(crate) mod util;
