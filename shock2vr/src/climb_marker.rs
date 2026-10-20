@@ -34,8 +34,9 @@ const FALL_COLOR: [u8; 3] = [240, 60, 50];
 /// The ring's outer edge is the standing body's footprint, slightly widened
 /// so the ring reads around the feet rather than under them.
 const MARKER_SIZE: f32 = crate::physics::PLAYER_STANDING_RADIUS_WORLD * 2.0 * 1.15 / RING_OUTER;
-/// Lift off the floor; depth bias does the rest of the z-fight work.
-const FLOOR_LIFT: f32 = 0.01;
+/// Lift off the floor, clear of flat floor marks (debug pads, signs);
+/// depth bias does the rest of the z-fight work.
+const FLOOR_LIFT: f32 = 0.03;
 
 /// Alpha coverage of an ellipse at `(x, y)`, centred at `(cx, cy)` with radii
 /// `(rx, ry)` and rotated by `angle` (radians); 1 inside, soft at the edge.
@@ -69,8 +70,8 @@ fn foot(x: f32, y: f32, cx: f32, cy: f32, s: f32, angle: f32, edge: f32) -> f32 
     ))
 }
 
-/// The footprint icon. Image rows run top (toes) to bottom (heels); x and y
-/// below are in 0..1 of the texture edge.
+/// The footprint icon. `x` and `y` below run 0..1 across the texture with
+/// `y` from the toes (0) to the heels (1), as in an image.
 pub fn footprint_texture(safe: bool) -> RawTextureData {
     let size = TEXTURE_SIZE;
     let edge = EDGE_PIXELS / size as f32;
@@ -81,7 +82,8 @@ pub fn footprint_texture(safe: bool) -> RawTextureData {
     for row in 0..size {
         for column in 0..size {
             let x = (column as f32 + 0.5) / size as f32;
-            let y = (row as f32 + 0.5) / size as f32;
+            // Rows upload bottom first (v = 0), so the toes go last.
+            let y = ((size - 1 - row) as f32 + 0.5) / size as f32;
             let (dx, dy) = (x * 2.0 - 1.0, y * 2.0 - 1.0);
             let radius = (dx * dx + dy * dy).sqrt();
             let half_edge = edge * 2.0;
@@ -143,10 +145,10 @@ impl LandingMarker {
             })
         });
         let texture = textures[usize::from(!safe)].clone();
-        // Nearly opaque so it joins the blended pass for its per-pixel alpha;
-        // full emission keeps it readable in a dark shaft.
+        // Unlit, so neither a dark shaft nor a lamp changes its colour; nearly
+        // opaque so it joins the blended pass for its per-pixel alpha.
         let mut object = SceneObject::new(
-            basic_material::create_with_fixed_ambient(texture, 1.0, 0.02),
+            basic_material::create_unlit(texture, 0.02),
             Box::new(engine::scene::quad::create()),
         );
         object.set_transform(
@@ -166,7 +168,11 @@ mod tests {
 
     fn alpha(texture: &RawTextureData, x: f32, y: f32) -> u8 {
         let size = texture.width as usize;
-        let (column, row) = ((x * size as f32) as usize, (y * size as f32) as usize);
+        // `y` runs from the toes, which are the last row.
+        let (column, row) = (
+            (x * size as f32) as usize,
+            ((1.0 - y) * size as f32) as usize,
+        );
         texture.bytes[(row * size + column) * 4 + 3]
     }
 

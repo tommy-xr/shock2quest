@@ -4,9 +4,10 @@
 use super::*;
 use crate::climb_release::{self, GazeRejection, Landing};
 
-/// How long a natural fall is followed before the landing counts as
-/// unpredictable (60 Hz frames).
-const NATURAL_MAX_FRAMES: usize = 600;
+/// How long a thrown arc is followed (60 Hz frames), and how far below the
+/// body a floor is looked for, before a landing counts as unpredictable.
+const NATURAL_ARC_FRAMES: usize = 240;
+const NATURAL_MAX_DROP: f32 = 40.0;
 /// Snap and hysteresis searches run for at most this many aimed points a frame.
 const GAZE_SNAPPED_RAYS: usize = 3;
 /// Support checks settle the body for many frames; cap them per query.
@@ -285,19 +286,15 @@ impl PhysicsWorld {
         // Hanging beside a ladder: falling past it is not landing on it.
         let queries = all_queries.with_filter(filter.predicate(&not_climbable));
         let dt = self.integration_parameters.dt;
-        let mut position = self.player_start(player);
+        let start = self.player_start(player);
+        let mut position = start;
         let mut across = velocity.map_or_else(Vector::zeros, |v| vector![v.x, 0.0, v.z]);
         let mut rise = velocity.map(|v| v.y);
-        for _ in 0..NATURAL_MAX_FRAMES {
-            // An arc integrates like a jump; a plain drop falls a fixed step.
-            let delta = match rise {
-                Some(v) => across * dt + Vector::y() * v * dt,
-                None => Vector::y() * player_gravity_step(body),
-            };
+        let cast = |from: Vector<Real>, delta: Vector<Real>| {
             let distance = delta.norm();
-            if distance > 1e-6 {
-                let hit = queries.cast_shape(
-                    &Isometry::translation(position.x, position.y, position.z),
+            queries
+                .cast_shape(
+                    &Isometry::translation(from.x, from.y, from.z),
                     &(delta / distance),
                     shape,
                     rapier3d::parry::query::ShapeCastOptions {
@@ -306,36 +303,42 @@ impl PhysicsWorld {
                         stop_at_penetration: false,
                         compute_impact_geometry_on_penetration: true,
                     },
-                );
-                match hit {
-                    Some((_, hit)) => {
-                        position += delta / distance * hit.time_of_impact;
-                        if delta.y < 0.0 && is_walkable_normal(hit.normal1.y) {
-                            let floor_y = shape
-                                .compute_aabb(&Isometry::translation(
-                                    position.x, position.y, position.z,
-                                ))
-                                .mins
-                                .y;
-                            let floor = vector![position.x, floor_y, position.z];
-                            return Some(Self::landing_on(floor, 1.0, true));
-                        }
-                        // A wall stops the drift and a ceiling the rise.
-                        // Resting on a steep face (nothing left to move) has no
-                        // landing to promise.
-                        if rise.is_none() {
-                            return None;
-                        }
-                        across = Vector::zeros();
-                        rise = rise.map(|v| v.min(0.0));
-                    }
-                    None => position += delta,
-                }
+                )
+                .map(|(_, hit)| (from + delta / distance * hit.time_of_impact, hit.normal1))
+        };
+        let landed = |at: Vector<Real>| {
+            let floor_y = shape
+                .compute_aabb(&Isometry::translation(at.x, at.y, at.z))
+                .mins
+                .y;
+            Self::landing_on(vector![at.x, floor_y, at.z], 1.0, true)
+        };
+        for _ in 0..NATURAL_ARC_FRAMES {
+            // Falling straight from here on: one cast finds the floor.
+            if across == Vector::zeros() && rise.is_none_or(|v| v <= 0.0) {
+                let depth = position.y - (start.y - NATURAL_MAX_DROP);
+                let (at, normal) = cast(position, -Vector::y() * depth.max(1e-3))?;
+                return is_walkable_normal(normal.y).then(|| landed(at));
             }
-            rise = rise.map(|v| {
+            // An arc integrates like a jump.
+            let mut v = rise.unwrap_or(0.0);
+            let delta = across * dt + Vector::y() * v * dt;
+            match cast(position, delta) {
+                Some((at, normal)) => {
+                    position = at;
+                    if delta.y < 0.0 && is_walkable_normal(normal.y) {
+                        return Some(landed(at));
+                    }
+                    // A wall stops the drift and a ceiling the rise.
+                    across = Vector::zeros();
+                    v = v.min(0.0);
+                }
+                None => position += delta,
+            }
+            rise = Some(
                 (v - PLAYER_JUMP_GRAVITY / SCALE_FACTOR * dt)
-                    .max(-PLAYER_MAX_FALL_SPEED / SCALE_FACTOR)
-            });
+                    .max(-PLAYER_MAX_FALL_SPEED / SCALE_FACTOR),
+            );
         }
         None
     }

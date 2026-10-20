@@ -25,9 +25,10 @@ pub const GAZE_MAX_HORIZONTAL: f32 = 2.0;
 /// a lower landing is reached by the glide plus an ordinary fall, which keeps
 /// its fall risk (and colour).
 pub const GAZE_MAX_DOWN: f32 = 4.0;
-/// Highest an assisted landing may sit above the feet (about 0.75 m). Small,
-/// so the assist never becomes a way to climb.
-pub const GAZE_MAX_UP: f32 = 1.0;
+/// Highest an assisted landing may sit above the feet (about 0.95 m): enough
+/// to step off a ladder's top onto its deck, still short of the waist-high
+/// lip a hand vault already climbs, so the assist is never a way to climb.
+pub const GAZE_MAX_UP: f32 = 1.25;
 /// How far along the head ray a landing surface may be seen.
 pub const GAZE_MAX_RAY: f32 = 8.0;
 /// A gaze landing stays chosen while the aim lands within this of it, so
@@ -352,11 +353,11 @@ mod tests {
             Some(GazeRejection::TooFar)
         );
         assert_eq!(
-            range_rejection(body, feet, vec3(0.5, feet + 0.9, 0.0)),
+            range_rejection(body, feet, vec3(0.5, feet + 1.2, 0.0)),
             None
         );
         assert_eq!(
-            range_rejection(body, feet, vec3(0.5, feet + 1.1, 0.0)),
+            range_rejection(body, feet, vec3(0.5, feet + 1.3, 0.0)),
             Some(GazeRejection::TooHigh)
         );
         assert_eq!(

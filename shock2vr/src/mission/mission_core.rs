@@ -5594,7 +5594,15 @@ impl MissionCore {
                 self.interaction
                     .resolve_hand_climb(requested, self.player_handle.self_translation());
             }
-            if !self.player_handle.is_topping_out() {
+            // A committed landing stays shown through the glide and any fall
+            // that ends it, until the body lands or takes a new hold.
+            if !self.player_handle.is_topping_out()
+                && (self.player_handle.is_grounded()
+                    || self
+                        .interaction
+                        .hand_climb()
+                        .is_some_and(|climb| climb.grips().next().is_some()))
+            {
                 self.climb_release_glide = None;
             }
             self.climb_release =
