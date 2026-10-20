@@ -299,8 +299,8 @@ fn impact_damage(mass: f32, closing_speed: f32, organic: bool, tuning: &ThrowTun
 }
 
 impl ThrownItems {
-    /// Flat inventory tosses keep their existing launch speed and damage
-    /// behavior, but need the same impact audio/provenance as VR releases.
+    /// Track a release whose motion is already set (a flat inventory toss, a
+    /// fumbled VR weapon): impact audio and provenance, never armed to damage.
     pub fn track_existing_motion(
         &mut self,
         world: &World,

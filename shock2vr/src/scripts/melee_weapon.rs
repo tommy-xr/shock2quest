@@ -172,9 +172,6 @@ impl Script for HeldMeleeWeapon {
                         entity_id,
                         away_from: contact.map(|contact| contact.point),
                     });
-                    effects.push(Effect::ShowMessage {
-                        text: super::gui::research::unhandled_weapon_message(world, entity_id),
-                    });
                 } else if let Some(amount) = damage {
                     effects.push(self.charge.landed(entity_id));
                     // In VR a qualifying strike is the attack gesture; merely
@@ -1368,8 +1365,8 @@ mod tests {
     }
 
     /// Negative-first: an unresearched weapon's landed blow dealt full damage
-    /// in VR. It now springs out of the hand, away from the contact, with the
-    /// research message - once per contact.
+    /// in VR. It now asks to spring out of the hand, away from the contact -
+    /// once per contact.
     #[test]
     fn an_unresearched_weapon_jumps_out_of_the_hand_instead_of_landing_a_blow() {
         let (mut world, weapon, target) = test_world(PresentationMode::Vr);
@@ -1385,10 +1382,6 @@ mod tests {
             effect,
             Effect::FumbleHeldItem { entity_id, away_from: Some(point) }
                 if *entity_id == weapon && *point == vec3(2.0, 3.0, 4.0)
-        )));
-        assert!(effects.iter().any(|effect| matches!(
-            effect,
-            Effect::ShowMessage { text } if text.starts_with("Research needed to handle ")
         )));
 
         let again = collide(&mut script, &world, weapon, target);

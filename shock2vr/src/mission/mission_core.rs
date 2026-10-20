@@ -15164,8 +15164,17 @@ impl MissionCore {
                     entity_id,
                     away_from,
                 } => {
-                    let hand = self.interaction.holding_hand(entity_id);
-                    if let Some(hand) = hand.filter(|_| self.interaction.fumble(entity_id)) {
+                    // Only while a hand still holds it: a release earlier this
+                    // frame, or a second victim struck before the drop lands,
+                    // fumbles nothing and says nothing.
+                    if let Some(hand) = self.interaction.fumble(entity_id) {
+                        let (left, right) = self.interaction.held_entities();
+                        {
+                            let mut player =
+                                self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
+                            player.left_hand_entity_id = left;
+                            player.right_hand_entity_id = right;
+                        }
                         self.drop_held_item_into_world(entity_id);
                         if let Some(position) = self.entity_world_position(entity_id) {
                             let motion = crate::throwing::fumble_motion(position, away_from);
@@ -15179,6 +15188,12 @@ impl MissionCore {
                         effects.push_back(Effect::HandHaptic {
                             hand,
                             pulse: crate::haptics::WEAPON_FUMBLE,
+                        });
+                        effects.push_back(Effect::ShowMessage {
+                            text: crate::scripts::gui::unhandled_weapon_message(
+                                &self.world,
+                                entity_id,
+                            ),
                         });
                     }
                 }
