@@ -12677,12 +12677,14 @@ impl MissionCore {
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                     let result = quests.research_mut().begin(template_id, required, skill);
                     drop(quests);
+                    let mut skill_required = None;
                     match result {
                         crate::research::BeginResearchResult::Started => {
                             game_log!(INFO, "Research started");
                         }
                         crate::research::BeginResearchResult::SkillRequired(required) => {
                             game_log!(INFO, "Research skill {} required", required);
+                            skill_required = Some(required);
                         }
                         crate::research::BeginResearchResult::AlreadyComplete => {
                             self.world.add_component(
@@ -12692,15 +12694,17 @@ impl MissionCore {
                         }
                     }
                     // In VR with neither the tricorder nor the cyber interface up,
-                    // nothing shows the Research MFD (`panel_route`): report on
-                    // the HUD instead.
-                    if !self.flat_ui.device
-                        && self.flat_ui.active_panel() != Some(entity_id)
-                        && self.gui.active_panel() != Some(entity_id)
-                    {
-                        effects.push_front(Effect::ShowMessage {
-                            text: crate::scripts::gui::research_message(&self.world, entity_id),
-                        });
+                    // nothing shows the Research MFD (`panel_route`).
+                    let mfd_showing = self.flat_ui.device
+                        || self.flat_ui.active_panel() == Some(entity_id)
+                        || self.gui.active_panel() == Some(entity_id);
+                    if let Some(text) = crate::scripts::gui::begin_research_message(
+                        &self.world,
+                        entity_id,
+                        skill_required,
+                        mfd_showing,
+                    ) {
+                        effects.push_front(Effect::ShowMessage { text });
                     }
                 }
 
@@ -12718,13 +12722,29 @@ impl MissionCore {
                                         <= 3.0 / crate::METERS_PER_WORLD_UNIT
                                 })
                             });
-                    if apply_research_chemical(&self.world, entity_id, scanned) {
+                    // A chemical out of reach (not carried, not scanned close by)
+                    // was never offered to research: no verdict to report.
+                    if !scanned
+                        && !crate::scripts::script_util::player_carried_items(&self.world)
+                            .contains(&entity_id)
+                    {
+                        continue;
+                    }
+                    let consumed = apply_research_chemical(&self.world, entity_id);
+                    if consumed {
                         let stack = self
                             .world
                             .borrow::<View<dark::properties::PropStackCount>>()
                             .ok()
                             .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
-                        if stack.unwrap_or(1) > 1 {
+                        let last_dose = stack.unwrap_or(1) <= 1;
+                        // Before the destroy below: the cue reads the held transform.
+                        effects.extend(crate::scripts::script_util::hand_dissolve_cue(
+                            &self.world,
+                            entity_id,
+                            last_dose,
+                        ));
+                        if !last_dose {
                             let mut stacks = self
                                 .world
                                 .borrow::<ViewMut<dark::properties::PropStackCount>>()
@@ -12739,6 +12759,9 @@ impl MissionCore {
                     } else {
                         game_log!(INFO, "That chemical is not needed");
                     }
+                    effects.push_front(Effect::ShowMessage {
+                        text: crate::scripts::gui::chemical_message(&self.world, consumed),
+                    });
                 }
 
                 Effect::CollectLog {
@@ -20794,7 +20817,12 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
 
     match outcome {
         crate::research::AdvanceResearchResult::ChemicalRequired => {
-            return vec![crate::scripts::script_util::announce(entity_id, "bb05")];
+            let mut effects = vec![crate::scripts::script_util::announce(entity_id, "bb05")];
+            effects.extend(
+                crate::scripts::gui::chemical_needed_message(world, entity_id)
+                    .map(|text| Effect::ShowMessage { text }),
+            );
+            return effects;
         }
         crate::research::AdvanceResearchResult::Completed => {}
         _ => return Vec::new(),
@@ -20834,12 +20862,7 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
     effects
 }
 
-fn apply_research_chemical(world: &World, chemical_entity: EntityId, scanned: bool) -> bool {
-    if !scanned
-        && !crate::scripts::script_util::player_carried_items(world).contains(&chemical_entity)
-    {
-        return false;
-    }
+fn apply_research_chemical(world: &World, chemical_entity: EntityId) -> bool {
     let chemical_name = world
         .borrow::<View<dark::properties::PropSymName>>()
         .ok()
