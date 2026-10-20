@@ -12691,9 +12691,11 @@ impl MissionCore {
                             );
                         }
                     }
-                    // A VR specimen in hand has no Research MFD (`panel_route`):
-                    // report the project on the HUD instead.
-                    if self.flat_ui.active_panel() != Some(entity_id)
+                    // In VR with neither the tricorder nor the cyber interface up,
+                    // nothing shows the Research MFD (`panel_route`): report on
+                    // the HUD instead.
+                    if !self.flat_ui.device
+                        && self.flat_ui.active_panel() != Some(entity_id)
                         && self.gui.active_panel() != Some(entity_id)
                     {
                         effects.push_front(Effect::ShowMessage {

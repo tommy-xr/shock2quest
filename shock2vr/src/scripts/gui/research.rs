@@ -137,7 +137,7 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
             );
         }
 
-        let body = research_text(world, entity_id);
+        let body = research_text(world, entity_id, &status);
 
         let lines = PanelText::wrap(world, &body, TEXT_W);
         let line_height = PanelText::line_height(world);
@@ -210,9 +210,13 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
                 Effect::NoEffect,
             ),
             ResearchGuiMsg::PageDown => {
-                let max_scroll = PanelText::wrap(world, &research_text(world, entity_id), TEXT_W)
-                    .len()
-                    .saturating_sub(page_lines(world));
+                let max_scroll = PanelText::wrap(
+                    world,
+                    &research_text(world, entity_id, &research_status(world, entity_id)),
+                    TEXT_W,
+                )
+                .len()
+                .saturating_sub(page_lines(world));
                 (
                     ResearchGuiState {
                         scroll: (state.scroll + page_lines(world)).min(max_scroll),
@@ -294,7 +298,7 @@ pub(crate) fn research_message(world: &World, entity_id: EntityId) -> String {
         &name,
         &status,
         research_fraction(world, entity_id, &status),
-        research_text(world, entity_id),
+        research_text(world, entity_id, &status),
     )
 }
 
@@ -310,8 +314,7 @@ fn status_line(name: &str, status: &ResearchStatus, fraction: f32, body: String)
     }
 }
 
-fn research_text(world: &World, entity_id: EntityId) -> String {
-    let status = research_status(world, entity_id);
+fn research_text(world: &World, entity_id: EntityId, status: &ResearchStatus) -> String {
     let required_skill = world
         .borrow::<View<PropBaseTechDesc>>()
         .unwrap()

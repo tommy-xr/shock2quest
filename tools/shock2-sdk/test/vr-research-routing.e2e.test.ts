@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { canvasCenter, clickCanvasWithRay, requirePanelPose } from "./helpers/ui.js";
-import { drawPersonalCard } from "./helpers/vr-hand.js";
+import { aimMfdAt, drawPersonalCard } from "./helpers/vr-hand.js";
+import { pullTrigger } from "./helpers/weapon.js";
 
 // In VR the Research MFD shows on the drawn tricorder or in the cyber
 // interface, never as a world quad on a carried specimen (#2379). With
@@ -16,6 +17,9 @@ type Game = GameServer;
 const uiBodies = async (game: Game) =>
   (await game.physics.bodies()).bodies.filter(b => b.collision_groups.includes("ui")).length;
 
+const researching = async (game: Game) =>
+  (await game.ui.state()).messages.some(m => m.startsWith("Researching"));
+
 async function hold(game: Game, template: number): Promise<number> {
   await game.input.set("right_hand.squeeze", 1);
   const { entity_id } = await game.player.spawnItem(template, { hand: "right" });
@@ -26,9 +30,7 @@ async function hold(game: Game, template: number): Promise<number> {
 
 /** Pull the holding hand's trigger; return the newest HUD line. */
 async function pull(game: Game): Promise<string> {
-  await game.input.set("right_hand.trigger", 1);
-  await game.step({ frames: 2 });
-  await game.input.set("right_hand.trigger", 0);
+  await pullTrigger(game);
   await game.step({ frames: 2 });
   const ui = await game.ui.state();
   assert.equal(ui.active_panel, null, "no Research panel opens on the hand");
@@ -103,6 +105,7 @@ test("VR cyber interface use shows the Research MFD in the interface", {
   assert.ok(ui.active_panel.elements.some(e => e.texture?.toLowerCase() === "iface/research.pcx"),
     "the interface MFD shows the Research GUI");
   assert.equal(await uiBodies(game), 0, "no world-space panel quad");
+  assert.equal(await researching(game), false);
 });
 
 test("VR held specimen trigger with the tricorder drawn shows research on its screen", {
@@ -112,12 +115,17 @@ test("VR held specimen trigger with the tricorder drawn shows research on its sc
   await game.step({ frames: 60 });
   const organ = await hold(game, ORGAN);
   await drawPersonalCard(game, "left");
-  await game.input.set("right_hand.trigger", 1);
+  // A scan of the held specimen begins research on the device screen alone.
+  await aimMfdAt(game, (await game.entities.detail(organ)).position, .25, 1, 0, { hand: "left" });
+  await pullTrigger(game, "left");
   await game.step({ frames: 2 });
-  await game.input.set("right_hand.trigger", 0);
+  assert.equal((await game.info()).player.hand_feedback?.body_gear?.personal_card.last_scan, organ);
+  assert.equal(await researching(game), false, "the device shows research; no HUD line");
+  await pullTrigger(game);
   await game.step({ frames: 2 });
   const ui = await game.ui.state();
   assert.equal(ui.active_panel?.entity_id, organ);
   assert.ok(ui.active_panel.elements.some(e => e.texture?.toLowerCase() === "iface/research.pcx"));
   assert.equal(await uiBodies(game), 0, "no world-space panel quad");
+  assert.equal(await researching(game), false);
 });

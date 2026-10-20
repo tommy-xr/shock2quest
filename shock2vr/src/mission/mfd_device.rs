@@ -367,18 +367,21 @@ mod tests {
     fn vr_research_never_opens_a_world_quad() {
         use PanelRoute::*;
         // (vr, device, interface_open, shares_interface, researchable)
-        let route = |vr, device, interface, shares, research| {
-            panel_route(vr, device, interface, shares, research)
-        };
-        assert_eq!(route(true, true, false, false, true), Some(Device));
-        assert_eq!(route(true, false, true, false, true), Some(Interface));
-        assert_eq!(route(true, false, false, false, true), None);
+        assert_eq!(panel_route(true, true, false, false, true), Some(Device));
+        assert_eq!(panel_route(true, false, true, false, true), Some(Interface));
+        assert_eq!(panel_route(true, false, false, false, true), None);
         // Other guis keep their routes.
-        assert_eq!(route(true, false, false, false, false), Some(World));
-        assert_eq!(route(true, false, true, false, false), Some(World));
-        assert_eq!(route(true, false, false, true, false), Some(Interface));
-        assert_eq!(route(false, false, false, false, true), Some(Flat));
-        assert_eq!(route(false, false, false, true, false), Some(Interface));
+        assert_eq!(panel_route(true, false, false, false, false), Some(World));
+        assert_eq!(panel_route(true, false, true, false, false), Some(World));
+        assert_eq!(
+            panel_route(true, false, false, true, false),
+            Some(Interface)
+        );
+        assert_eq!(panel_route(false, false, false, false, true), Some(Flat));
+        assert_eq!(
+            panel_route(false, false, false, true, false),
+            Some(Interface)
+        );
     }
 
     #[test]
