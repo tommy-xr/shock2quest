@@ -102,11 +102,15 @@ section 3).
   look and behave as they do in flat.
 - **Tricorder screen:** opened by scanning, or by frobbing a replicator,
   trainer or O/S upgrade. It is 252x296, the 188 body plus the plug, so a
-  panel and its sidecar fit with no VR-specific layout.
+  panel and its sidecar fit with no VR-specific layout. A scanned GamePig
+  shows the ordinary query panel, never its games, with the hack plug beside
+  it while it can be hacked (`hrm_plug::query_plug`). The plug opens the
+  GamePig's own board there; BACK returns to the query.
 - **A held device's own screen (GamePig):** only the body's content window is
   mapped onto the model's aperture, so no sidecar shows. Actions that live on
-  a sidecar (hack) stay reachable through the cyber interface or tricorder
-  (a GamePig scanned in the other hand needs a free hand to click the plug).
+  a sidecar (hack) stay reachable through the cyber interface or the
+  tricorder's query plug (a GamePig scanned in the other hand needs a free
+  hand to click it).
 - **Keypads** keep their in-world UI.
 
 Before building a panel action, decide which hosts expose it. Never squeeze a
@@ -134,8 +138,8 @@ the plug.
   credential-locked doors/readers accept either frob or scanning; both use the
   normal key checks. Replicators, trainers and O/S upgrades also accept frob,
   opening the held tricorder or the cyber interface when stowed. A scanned
-  GamePig (on the floor or in the other hand) opens on the tricorder without
-  being picked up. Keypads retain
+  GamePig (on the floor or in the other hand) shows its query panel, plus the
+  hack plug while hackable, and is never picked up. Keypads retain
   their in-world UI. Other supported machines still require scanning. Opening a
   machine interface never purchases anything. Require withdrawal before another scan. This design
   supersedes the immediate-VR-pickup/no-wielding rule and PR #1387's optional card.
