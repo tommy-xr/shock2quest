@@ -62,8 +62,11 @@ for (const vr of [false, true]) test(`research lab supplies, interaction, and re
         await game.player.give(sample.id);
         await game.entities.sendMessage(sample.id, { type: "Frob" });
         await game.step({ frames: 2 });
-        assert.equal((await game.ui.state()).active_panel?.entity_id, sample.id,
-          `${sample.name} opens its research panel`);
+        // VR has no Research MFD without the tricorder or cyber interface up.
+        const ui = await game.ui.state();
+        assert.equal(ui.active_panel?.entity_id ?? null, vr ? null : sample.id,
+          `${sample.name} ${vr ? "opens no panel" : "opens its research panel"}`);
+        if (vr) assert.ok(ui.messages.length > 0, `${sample.name} reports on the HUD`);
       }
       // Toxin is now active; consume one dose from the lab's actual Sb stack.
       await game.step({ frames: 150 });
