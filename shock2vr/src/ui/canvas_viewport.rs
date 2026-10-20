@@ -120,19 +120,18 @@ pub fn place_through(placed: &[PlacedElement], viewports: &[CanvasViewport]) -> 
     out
 }
 
+/// Whether `window` keeps an element drawn at `rect`: croppable art may
+/// straddle its edge, anything else only when centered inside it.
+pub fn keeps(window: Rect, rect: Rect, croppable: bool) -> bool {
+    let overlaps = rect.x < window.x + window.w
+        && window.x < rect.x + rect.w
+        && rect.y < window.y + window.h
+        && window.y < rect.y + rect.h;
+    overlaps && (croppable || window.contains(rect.center()))
+}
+
 fn clip(element: &PlacedElement, window: Rect) -> Option<PlacedElement> {
     let r = element.rect;
-    let (x0, y0) = (r.x.max(window.x), r.y.max(window.y));
-    let (x1, y1) = (
-        (r.x + r.w).min(window.x + window.w),
-        (r.y + r.h).min(window.y + window.h),
-    );
-    if x1 <= x0 || y1 <= y0 {
-        return None;
-    }
-    if x0 == r.x && y0 == r.y && x1 == r.x + r.w && y1 == r.y + r.h {
-        return Some(element.clone());
-    }
     let croppable_uv = match &element.content {
         PlacedContent::Image { kind, .. } => match kind {
             ImageKind::Ui => Some((vec2(0.0, 0.0), vec2(1.0, 1.0))),
@@ -141,8 +140,19 @@ fn clip(element: &PlacedElement, window: Rect) -> Option<PlacedElement> {
         },
         _ => None,
     };
+    if !keeps(window, r, croppable_uv.is_some()) {
+        return None;
+    }
+    let (x0, y0) = (r.x.max(window.x), r.y.max(window.y));
+    let (x1, y1) = (
+        (r.x + r.w).min(window.x + window.w),
+        (r.y + r.h).min(window.y + window.h),
+    );
+    if x0 == r.x && y0 == r.y && x1 == r.x + r.w && y1 == r.y + r.h {
+        return Some(element.clone());
+    }
     let Some((uv0, uv1)) = croppable_uv else {
-        return window.contains(r.center()).then(|| element.clone());
+        return Some(element.clone());
     };
     // Linear in both axes, so the clipped fraction of the rect is the clipped
     // fraction of its UV span.

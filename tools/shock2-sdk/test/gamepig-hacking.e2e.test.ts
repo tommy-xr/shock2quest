@@ -6,16 +6,14 @@ import { openGamePig } from "./helpers/gamepig.js";
 import { winHack } from "./helpers/hack.js";
 import { carriedNaniteTotal } from "./helpers/nanites.js";
 import { savedGamePath } from "./helpers/save.js";
-import { clickCanvasWithRay, clickUiElement } from "./helpers/ui.js";
+import { canvasCenter, clickCanvasWithRay, clickUiElement, requirePanelPose } from "./helpers/ui.js";
 import { aimMfdAt, drawPersonalCard } from "./helpers/vr-hand.js";
 
 const skip = process.env.SHOCK2_E2E !== "1";
 type Click = (game: GameServer, element: UiElement) => Promise<void>;
 /** Aim the free right hand's ray at an element of the VR host's canvas. */
-const rayClick: Click = async (g, element) => {
-  const [x, y, w, h] = element.rect;
-  await clickCanvasWithRay(g, (await g.ui.state()).panel_pose!, [x + w / 2, y + h / 2]);
-};
+const rayClick: Click = async (g, element) =>
+  clickCanvasWithRay(g, requirePanelPose(await g.ui.state()), canvasCenter(element));
 
 const elements = async (game: GameServer) => (await game.ui.state()).active_panel!.elements;
 async function button(game: GameServer, label: string) {
@@ -105,7 +103,7 @@ test("VR cyber interface opens a backpack GamePig with the flat canvas and its p
   const ui = await game.ui.state();
   const slot = ui.strip!.elements.find(e => e.entity_id === handheld.entity_id);
   assert.ok(slot, "the GamePig is in the backpack");
-  await clickCanvasWithRay(game, ui.panel_pose!, [slot.rect[0] + slot.rect[2] / 2, slot.rect[1] + slot.rect[3] / 2]);
+  await clickCanvasWithRay(game, requirePanelPose(ui), canvasCenter(slot));
   await game.step({ frames: 10 });
   const opened = await game.ui.state();
   assert.equal(opened.mode, "use");

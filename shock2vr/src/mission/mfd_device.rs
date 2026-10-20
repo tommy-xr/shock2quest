@@ -532,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn scanning_a_gamepig_opens_it_with_its_plug_on_the_screen() {
+    fn gamepig_fills_the_tricorder_screen_and_is_not_frobbed() {
         use crate::gui::Gui;
         let mut world = shipyard::World::new();
         let gamepig = world.add_entity(dark::properties::PropScripts {
@@ -636,10 +636,7 @@ pub(super) fn is_gamepig(world: &shipyard::World, entity: shipyard::EntityId) ->
 /// A GamePig shows on its own screen only while a hand holds it. Opened from
 /// the backpack it uses the MFD canvas, plug included, like flat.
 pub(super) fn gamepig_uses_mfd(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
-    is_gamepig(world, entity)
-        && [crate::Handedness::Left, crate::Handedness::Right]
-            .into_iter()
-            .all(|hand| crate::wielded_weapon::held_by_hand(world, hand) != Some(entity))
+    is_gamepig(world, entity) && !crate::wielded_weapon::held_in_hand(world, entity)
 }
 
 /// Only existing reader/panel scripts receive Frob; all other objects are queried.

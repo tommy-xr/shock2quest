@@ -24,7 +24,7 @@ for(const vr of [false,true]){
     const selectClub=async()=>{
       await click(game,await control("golf-club-0"));
       if(vr) await press("LeftHandUpperButton");else await click(game,await control("golf-club-1"));
-      assert.ok((await elements()).some(e=>e.kind==="fill"&&Math.abs(e.rect[0]-(field.rect[0]+28))<0.01&&e.rect[2]===28&&e.rect[3]===1),"club selection outline follows control");
+      assert.ok((await elements()).some(e=>e.kind==="fill"&&Math.abs(e.rect[0]-(field.rect[0]+28))<0.01&&Math.abs(e.rect[2]-28)<0.01&&Math.abs(e.rect[3]-1)<0.01),"club selection outline follows control");
     };
     await selectClub();
     if(vr){
