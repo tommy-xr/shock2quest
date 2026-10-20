@@ -62,6 +62,8 @@ const GAZE_CONE_DEGREES: [(f32, f32); 9] = [
 pub struct Landing {
     pub center: Vector3<f32>,
     pub floor_y: f32,
+    /// The floor's surface normal there, for laying the footprint on it.
+    pub normal: Vector3<f32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,15 +268,13 @@ pub fn resolve(
             ClimbGripKind::Ladder | ClimbGripKind::Surface
         )
     });
-    // An untracked head reports a zero quaternion: no gaze then.
-    let head_tracked = input.pose_tracking.is_none_or(|tracking| tracking.head)
-        && input.head.rotation.magnitude2() > 1e-6;
-    let gaze = (exits_a_ladder && head_tracked).then(|| {
-        let view = pawn_rotation * input.head.rotation;
+    let head = crate::util::tracked_rotation(input.head.rotation)
+        .filter(|_| input.pose_tracking.is_none_or(|tracking| tracking.head));
+    let gaze = head.filter(|_| exits_a_ladder).map(|head| {
         physics.gaze_landing(
             player,
             center + pawn_rotation.rotate_vector(input.head.position),
-            &gaze_rays(view.rotate_vector(vec3(0.0, 0.0, -1.0))),
+            &gaze_rays((pawn_rotation * head).rotate_vector(vec3(0.0, 0.0, -1.0))),
             feet_y,
             previous.assisted(),
         )
@@ -326,6 +326,7 @@ mod tests {
         Landing {
             center: vec3(x, floor_y + 1.24, z),
             floor_y,
+            normal: Vector3::unit_y(),
         }
     }
 

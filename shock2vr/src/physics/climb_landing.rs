@@ -25,12 +25,13 @@ pub(crate) struct GazeLanding {
 impl PhysicsWorld {
     /// The resting body centre on a floor point, for the stance the player
     /// lands in. A slope lifts the rounded bottom clear of the uphill side.
-    fn landing_on(floor: Vector<Real>, normal_y: Real, standing: bool) -> Landing {
+    fn landing_on(floor: Vector<Real>, normal: Vector<Real>, standing: bool) -> Landing {
         let radius = PLAYER_STANDING_RADIUS / SCALE_FACTOR;
-        let lift = player_center_above_floor(!standing) + radius * (1.0 / normal_y - 1.0);
+        let lift = player_center_above_floor(!standing) + radius * (1.0 / normal.y - 1.0);
         Landing {
             center: nvec_to_cgmath(floor + Vector::y() * lift),
             floor_y: floor.y,
+            normal: nvec_to_cgmath(normal),
         }
     }
 
@@ -178,9 +179,17 @@ impl PhysicsWorld {
                 rejection.get_or_insert(GazeRejection::NotWalkable);
                 continue;
             }
-            if let Some(held) =
-                held.filter(|held| climb_release::keeps_held(*held, nvec_to_cgmath(aimed)))
-            {
+            // A held landing must still be in range: climbing down while
+            // staring at a deck must not turn it into a climb up.
+            if let Some(held) = held.filter(|held| {
+                climb_release::keeps_held(*held, nvec_to_cgmath(aimed))
+                    && climb_release::range_rejection(
+                        body,
+                        feet_y,
+                        vec3(held.center.x, held.floor_y, held.center.z),
+                    )
+                    .is_none()
+            }) {
                 match self.assisted_route(player, start, held, false) {
                     Ok(_) => {
                         return GazeLanding {
@@ -227,7 +236,7 @@ impl PhysicsWorld {
                 {
                     continue;
                 }
-                let landing = Self::landing_on(floor, floor_hit.normal.y, standing);
+                let landing = Self::landing_on(floor, floor_hit.normal, standing);
                 let unsnapped = offset.x == 0.0 && offset.z == 0.0;
                 if let Some(reason) =
                     climb_release::range_rejection(body, feet_y, nvec_to_cgmath(floor))
@@ -304,40 +313,55 @@ impl PhysicsWorld {
                         compute_impact_geometry_on_penetration: true,
                     },
                 )
-                .map(|(_, hit)| (from + delta / distance * hit.time_of_impact, hit.normal1))
+                .map(|(_, hit)| {
+                    (
+                        from + delta / distance * hit.time_of_impact,
+                        hit.normal1.into_inner(),
+                    )
+                })
         };
-        let landed = |at: Vector<Real>| {
+        let landed = |at: Vector<Real>, normal: Vector<Real>| {
             let floor_y = shape
                 .compute_aabb(&Isometry::translation(at.x, at.y, at.z))
                 .mins
                 .y;
-            Self::landing_on(vector![at.x, floor_y, at.z], 1.0, true)
+            Self::landing_on(vector![at.x, floor_y, at.z], normal, true)
         };
         for _ in 0..NATURAL_ARC_FRAMES {
             // Falling straight from here on: one cast finds the floor.
-            if across == Vector::zeros() && rise.is_none_or(|v| v <= 0.0) {
+            if across.norm() < 1e-4 && rise.is_none_or(|v| v <= 0.0) {
                 let depth = position.y - (start.y - NATURAL_MAX_DROP);
                 let (at, normal) = cast(position, -Vector::y() * depth.max(1e-3))?;
-                return is_walkable_normal(normal.y).then(|| landed(at));
+                return is_walkable_normal(normal.y).then(|| landed(at, normal));
             }
             // An arc integrates like a jump.
             let mut v = rise.unwrap_or(0.0);
             let delta = across * dt + Vector::y() * v * dt;
             match cast(position, delta) {
                 Some((at, normal)) => {
-                    position = at;
                     if delta.y < 0.0 && is_walkable_normal(normal.y) {
-                        return Some(landed(at));
+                        return Some(landed(at, normal));
                     }
-                    // A wall stops the drift and a ceiling the rise.
-                    across = Vector::zeros();
-                    v = v.min(0.0);
+                    // Like the controller: the drift slides along a wall and a
+                    // ceiling ends the rise. Step off the face so the next
+                    // cast does not start in contact with it.
+                    position = at + normal * 1e-3;
+                    let wall = vector![normal.x, 0.0, normal.z];
+                    if wall.norm() > 1e-4 {
+                        let wall = wall.normalize();
+                        across -= wall * across.dot(&wall).min(0.0);
+                    }
+                    if normal.y < 0.0 {
+                        v = v.min(0.0);
+                    }
                 }
                 None => position += delta,
             }
             rise = Some(
-                (v - PLAYER_JUMP_GRAVITY / SCALE_FACTOR * dt)
-                    .max(-PLAYER_MAX_FALL_SPEED / SCALE_FACTOR),
+                (v - PLAYER_JUMP_GRAVITY / SCALE_FACTOR
+                    * dt
+                    * self.world_time_scale.max(SLOW_TIME_JUMP_GRAVITY_FLOOR))
+                .max(-PLAYER_MAX_FALL_SPEED / SCALE_FACTOR),
             );
         }
         None
@@ -354,16 +378,7 @@ impl PhysicsWorld {
         let Ok(route) = self.assisted_route(player, start, landing, true) else {
             return false;
         };
-        self.set_player_crouch_hanging(true, player);
-        // A stance change may reset the queued translation; keep the start.
-        self.rigid_body_set[player.character_handle].set_next_kinematic_translation(start);
-        player.top_out = Some(route);
-        sync_top_out_collider(
-            &mut self.collider_set,
-            &mut self.rigid_body_set,
-            false,
-            player,
-        );
+        self.start_hand_route(route, player);
         true
     }
 }
@@ -478,6 +493,29 @@ mod tests {
         let (world, player) = fixture(&[(vec3(0.75, 4.5, 0.0), vec3(0.2, 1.0, 4.0))]);
         let blocked = aim(&world, &player, vec3(1.9, 4.0, 0.2), Some(first));
         assert!(blocked.landing.is_err());
+    }
+
+    #[test]
+    fn a_held_landing_out_of_range_from_lower_feet_is_dropped() {
+        let (world, player) = fixture(&[]);
+        let first = aim(&world, &player, vec3(1.7, 4.0, 0.0), None)
+            .landing
+            .unwrap();
+        // The same aim, but the feet are now 1.5 below the deck: too high.
+        let rays = climb_release::gaze_rays(vec3(1.7, 4.0, 0.0) - eye());
+        let lower = world.gaze_landing(&player, eye(), &rays, 2.5, Some(first));
+        assert_eq!(lower.landing, Err(GazeRejection::TooHigh));
+    }
+
+    #[test]
+    fn a_throw_into_a_wall_slides_along_it_like_the_controller() {
+        // A wall just ahead in +x, above the platform's edge.
+        let (world, player) = fixture(&[(vec3(1.0, 7.0, 0.0), vec3(0.2, 6.0, 20.0))]);
+        let thrown = world
+            .natural_landing(&player, Some(vec3(2.0, 1.0, 2.0)))
+            .expect("floor");
+        assert!(thrown.floor_y.abs() < 0.05, "{thrown:?}");
+        assert!(thrown.center.z > 1.2, "kept sliding: {thrown:?}");
     }
 
     #[test]

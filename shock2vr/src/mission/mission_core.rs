@@ -5620,9 +5620,10 @@ impl MissionCore {
                                 / crate::METERS_PER_WORLD_UNIT,
                         )
                     });
-            let view = new_rotation * input_context.head.rotation;
-            let forward = view.rotate_vector(vec3(0.0, 0.0, -1.0));
-            self.climb_release_yaw = (-forward.x).atan2(-forward.z);
+            if let Some(head) = crate::util::tracked_rotation(input_context.head.rotation) {
+                let forward = (new_rotation * head).rotate_vector(vec3(0.0, 0.0, -1.0));
+                self.climb_release_yaw = (-forward.x).atan2(-forward.z);
+            }
             self.interaction
                 .set_climb_release_safe(self.climb_release.safe());
             moved
@@ -18717,6 +18718,7 @@ impl MissionCore {
             scene.push(self.landing_marker.object(
                 outcome.landing.center,
                 outcome.landing.floor_y,
+                outcome.landing.normal,
                 self.climb_release_yaw,
                 outcome.safe,
             ));

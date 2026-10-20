@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use cgmath::{Deg, Matrix4, Vector3, vec3};
+use cgmath::{Deg, Matrix4, Quaternion, Vector3, vec3};
 use engine::{
     scene::{SceneObject, basic_material},
     texture::{TextureOptions, TextureTrait, init_from_memory2},
@@ -124,12 +124,13 @@ pub struct LandingMarker {
 }
 
 impl LandingMarker {
-    /// The footprint lying on the floor at `center` (x/z) and `floor_y`,
-    /// toes along `yaw` (radians about +Y; 0 faces -Z).
+    /// The footprint lying on the floor at `center` (x/z) and `floor_y`, on a
+    /// surface facing `normal`, toes along `yaw` (radians about +Y; 0 faces -Z).
     pub fn object(
         &mut self,
         center: Vector3<f32>,
         floor_y: f32,
+        normal: Vector3<f32>,
         yaw: f32,
         safe: bool,
     ) -> SceneObject {
@@ -152,7 +153,9 @@ impl LandingMarker {
             Box::new(engine::scene::quad::create()),
         );
         object.set_transform(
-            Matrix4::from_translation(vec3(center.x, floor_y + FLOOR_LIFT, center.z))
+            Matrix4::from_translation(vec3(center.x, floor_y, center.z) + normal * FLOOR_LIFT)
+                // Tilted onto a sloped floor, so no part of it sinks in.
+                * Matrix4::from(Quaternion::from_arc(Vector3::unit_y(), normal, None))
                 * Matrix4::from_angle_y(cgmath::Rad(yaw))
                 * Matrix4::from_angle_x(Deg(-90.0))
                 * Matrix4::from_scale(MARKER_SIZE),
