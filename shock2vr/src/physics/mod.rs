@@ -7544,7 +7544,8 @@ impl PhysicsWorld {
                 InternalCollisionGroups::PLAYER.bits.into(),
                 (InternalCollisionGroups::WORLD.bits
                     | InternalCollisionGroups::ENTITY.bits
-                    | InternalCollisionGroups::SELECTABLE.bits)
+                    | InternalCollisionGroups::SELECTABLE.bits
+                    | InternalCollisionGroups::CLIMBABLE.bits)
                     .into(),
                 Default::default(),
             ))
@@ -7556,6 +7557,20 @@ impl PhysicsWorld {
             &self.collider_set,
             filter,
         );
+        let ball = Ball::new(CLIMB_GRIP_RADIUS);
+        let ball_pos = Isometry::translation(point.x, point.y, point.z);
+        // A hand inside a ladder's box is between its rungs: the wall behind
+        // is not a hold, or a closed hand climbing past would latch onto it.
+        let climbable =
+            |_handle: ColliderHandle, collider: &Collider| !collider_is_not_climbable(collider);
+        if queries
+            .with_filter(filter.predicate(&climbable))
+            .intersect_shape(ball_pos, &ball)
+            .next()
+            .is_some()
+        {
+            return None;
+        }
         // Level geometry has no body; static bodies never move.
         let is_terrain = |collider: &Collider| {
             collider
@@ -7582,8 +7597,6 @@ impl PhysicsWorld {
             }
         }
 
-        let ball = Ball::new(CLIMB_GRIP_RADIUS);
-        let ball_pos = Isometry::translation(point.x, point.y, point.z);
         queries
             .intersect_shape(ball_pos, &ball)
             .filter(|(_, collider)| is_terrain(collider))
@@ -14807,6 +14820,24 @@ mod tests {
                 .surface_grip_at(vec3(-4.85, 3.0, 0.0), vec3(-4.0, 3.0, 0.0))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn the_wall_behind_a_ladder_is_no_surface_grip_between_its_rungs() {
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, Some(u32::MAX));
+        // Wall face 0.05 behind the ladder's back face (x = -5.05).
+        let wall = world.create_static_body(Isometry::translation(-5.6, 3.0, 0.0), None);
+        world.attach_collider(
+            wall,
+            SharedShape::cuboid(0.5, 3.0, 3.0),
+            1.0,
+            CollisionGroup::entity(),
+        );
+        step(&mut world, &mut player, 1);
+        let at = |z: f32| world.surface_grip_at(vec3(-4.98, 3.0, z), vec3(-4.0, 3.0, z));
+        assert!(at(0.0).is_none(), "between the rungs");
+        assert!(at(0.75).is_some(), "the wall beside the ladder");
     }
 
     #[test]

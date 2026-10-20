@@ -183,6 +183,10 @@ pub struct HandClimb {
     /// Grace grabs spent since the last fresh ladder grab. Releasing a grace
     /// hold refunds nothing, so a held ladder cannot mint a second first grab.
     grace_used: u8,
+    /// Holds taken last frame. One the same squeeze lets go of for an item
+    /// was a reach for the item, not a grace grab: it refunds.
+    fresh: [bool; 2],
+    was_grounded: bool,
 }
 
 impl HandClimb {
@@ -258,6 +262,9 @@ impl HandClimb {
                     // took a hold can also close on an item; a full hand lets
                     // go of the ladder rather than holding both.
                     if !squeezing || !hand.is_empty || over_stretched || gone {
+                        if !hand.is_empty && self.fresh[index] && anchor.grace > 0 {
+                            self.grace_used = self.grace_used.min(anchor.grace - 1);
+                        }
                         self.armed[index] = false;
                         self.grips[index] = None;
                         let_go_cleanly[index] = !squeezing && !over_stretched && !gone;
@@ -270,6 +277,7 @@ impl HandClimb {
         // above, before either acquires: a broken, deleted, released or newly
         // occupied hand cannot authorize a contextual grab, and a hold taken
         // this frame cannot authorize one either, whatever the hand order.
+        self.fresh = [false; 2];
         let acquired: [_; 2] = std::array::from_fn(|index| {
             (self.grips[index].is_none() && self.armed[index])
                 .then(|| self.probe_grip(HANDS[index], hand_world[index], &probe))
@@ -285,6 +293,7 @@ impl HandClimb {
                 self.grace_used = grace;
             }
             self.armed[index] = false;
+            self.fresh[index] = true;
             self.grips[index] = Some(GripAnchor {
                 grip,
                 hand_world_at_grab: hand_world[index],
@@ -387,10 +396,14 @@ impl HandClimb {
         GRACE_GRABS - self.grace_used
     }
 
-    /// Standing on something ends the departure: the next climb starts with
-    /// a full allowance.
-    pub fn reset_grace(&mut self) {
-        self.grace_used = 0;
+    /// Landing ends the departure: the next climb starts with a full
+    /// allowance. Only the landing - standing at a ladder's foot with a hand
+    /// on it must not re-mint a first grace grab every frame.
+    pub fn set_grounded(&mut self, grounded: bool) {
+        if grounded && !self.was_grounded {
+            self.grace_used = 0;
+        }
+        self.was_grounded = grounded;
     }
 
     /// Consume only the part of a ledge or surface pull that collision prevented. The
@@ -1655,7 +1668,7 @@ mod tests {
         };
         let mut climb = HandClimb::default();
         exhaust(&mut climb);
-        climb.reset_grace();
+        climb.set_grounded(true);
         assert_eq!(climb.grace_remaining(), 2);
 
         let mut climb = HandClimb::default();
@@ -1668,6 +1681,55 @@ mod tests {
         exhaust(&mut climb);
         climb.release_all();
         assert_eq!(climb.grace_remaining(), 2);
+    }
+
+    #[test]
+    fn only_landing_resets_grace_not_standing_at_the_ladder_foot() {
+        let mut climb = HandClimb::default();
+        climb.set_grounded(true);
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        climb.set_grounded(true);
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+        assert_eq!(grace_of(&climb, 1), Some(1));
+        for grounded in [true, true, false, false] {
+            climb.set_grounded(grounded);
+            grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        }
+        climb.set_grounded(false);
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+        assert_eq!(
+            grace_of(&climb, 1),
+            None,
+            "the held ladder re-minted grace 1"
+        );
+        climb.set_grounded(true);
+        assert_eq!(climb.grace_remaining(), 2, "landing resets");
+    }
+
+    #[test]
+    fn a_squeeze_that_closes_on_an_item_refunds_its_grace_grab() {
+        for frames_held in [0, 1] {
+            let mut climb = HandClimb::default();
+            grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+            grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+            for _ in 0..frames_held {
+                grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+            }
+            // The hand update took an item with the same squeeze.
+            let mut full = hand(WALL[0], SQUEEZE);
+            full.is_empty = false;
+            climb.update(
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                DT,
+                [hand(RUNG, SQUEEZE), full],
+                grace_world,
+                |_| true,
+            );
+            assert_eq!(grace_of(&climb, 1), None);
+            let refunded = frames_held == 0;
+            assert_eq!(climb.grace_remaining(), if refunded { 2 } else { 1 });
+        }
     }
 
     #[test]

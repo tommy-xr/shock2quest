@@ -1679,9 +1679,7 @@ impl PlayerInteraction for VrInteraction {
                 .climbable_grip_during_transfer_at(point, ctx.feet_y),
             crate::vr_climb::GripProbe::Surface => ctx.physics.surface_grip_at(point, ctx.pawn_pos),
         };
-        if ctx.grounded {
-            self.hand_climb.reset_grace();
-        }
+        self.hand_climb.set_grounded(ctx.grounded);
         let frame = self.hand_climb.update(
             ctx.pawn_pos,
             ctx.pawn_rotation,
@@ -1700,13 +1698,10 @@ impl PlayerInteraction for VrInteraction {
         );
         // After the update, so the glow answers with the holds the next grab
         // will be judged against - by the same rule acquisition uses.
-        let held: [bool; 2] =
-            std::array::from_fn(|i| self.hand_climb.grips().any(|(h, _)| h as usize == i));
         self.climb_anticipation = std::array::from_fn(|i| {
             let hand = [&self.left_hand, &self.right_hand][i];
             let input = [&ctx.input.left_hand, &ctx.input.right_hand][i];
-            !held[i]
-                && hand_input(i, hand, input).is_empty
+            hand_input(i, hand, input).is_empty
                 && ctx.input.pose_tracking.is_none_or(|p| p.head && p.hands[i])
                 && (GripPose {
                     position: input.position,
