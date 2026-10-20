@@ -700,6 +700,9 @@ fn main() {
     let debug_input = debug_input::DebugInputServer::start_if_configured(&mission);
     let mut vr_crouch = VrCrouchDetector::default();
     let mut pending_stage_change_time = None;
+    // Guardian play-area size; the outer `None` means not queried yet, so the
+    // first answer (even "unavailable") is logged.
+    let mut roomscale_bounds: Option<Option<[f32; 2]>> = None;
     // Button-crouch alternative to the physical detector: left thumbstick
     // click toggles a latched crouch request. Either source requests the
     // crouch; the game's headroom-gated stand-up still decides when standing
@@ -792,6 +795,11 @@ fn main() {
                         frame_profiler.reset();
                         let _ = shock2vr::perf::take_report();
                     }
+                    // Guardian setup happens in a system overlay while the
+                    // app is unfocused, so re-check bounds on regaining focus.
+                    if next_session_focused && !session_focused {
+                        refresh_roomscale_bounds(&session, &mut roomscale_bounds);
+                    }
                     session_focused = next_session_focused;
                     match e.state() {
                         xr::SessionState::READY => {
@@ -803,6 +811,7 @@ fn main() {
                             }
                             pending_frame.reset();
                             session_running = true;
+                            refresh_roomscale_bounds(&session, &mut roomscale_bounds);
                             let available_refresh_rates = session
                                 .enumerate_display_refresh_rates()
                                 .unwrap_or_default();
@@ -961,6 +970,8 @@ fn main() {
                 vr_crouch.reset();
                 tracking_origin_changed = true;
                 pending_stage_change_time = None;
+                // A redefined STAGE can come with a redrawn guardian.
+                refresh_roomscale_bounds(&session, &mut roomscale_bounds);
                 // The reference space was redefined; drop the latched button
                 // crouch along with the height calibration.
                 crouch_toggled = false;
@@ -1233,6 +1244,7 @@ fn main() {
         input_context.head.position = tracking.stage_to_pawn(head_stage);
         input_context.tracking = Some(tracking);
         input_context.tracking_origin_changed = tracking_origin_changed;
+        input_context.roomscale_bounds = roomscale_bounds.flatten();
         let tracked_pose_flags = xr::SpaceLocationFlags::POSITION_VALID
             | xr::SpaceLocationFlags::POSITION_TRACKED
             | xr::SpaceLocationFlags::ORIENTATION_VALID
@@ -2053,6 +2065,27 @@ fn enable_multiview(egl: &egl::DynamicInstance<egl::EGL1_4>, requested: bool) ->
         "SHOCK2QUEST_MULTIVIEW requested={requested} supported={supported} effective={effective}"
     );
     effective
+}
+
+/// Re-query the STAGE bounds rect (guardian play area) and log a change. An
+/// error, no bounds or an empty extent all read as unavailable.
+fn refresh_roomscale_bounds(
+    session: &xr::Session<xr::OpenGlEs>,
+    bounds: &mut Option<Option<[f32; 2]>>,
+) {
+    let next = session
+        .reference_space_bounds_rect(xr::ReferenceSpaceType::STAGE)
+        .ok()
+        .flatten()
+        .filter(|extent| extent.width > 0.0 && extent.height > 0.0)
+        .map(|extent| [extent.width, extent.height]);
+    if *bounds != Some(next) {
+        match next {
+            Some([width, depth]) => println!("roomscale bounds: {width:.1} x {depth:.1} m"),
+            None => println!("roomscale bounds: unavailable"),
+        }
+        *bounds = Some(next);
+    }
 }
 
 /// The dev-params eye-height offset, in meters of STAGE space.

@@ -509,6 +509,9 @@ pub struct InputState {
     /// Flat-only held lean request, -1 left to +1 right.
     #[serde(default)]
     pub lean: f32,
+    /// Guardian play-area `[width, depth]` metres (`roomscale.bounds`); `None` = unavailable.
+    #[serde(default)]
+    pub roomscale_bounds: Option<[f32; 2]>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -546,6 +549,7 @@ impl Default for InputState {
             crouch: false,
             jump: false,
             lean: 0.0,
+            roomscale_bounds: None,
         }
     }
 }
@@ -938,6 +942,7 @@ pub struct PlayerInfo {
 pub struct InputSnapshot {
     pub head_rotation: [f32; 4], // Quaternion [x, y, z, w]
     pub hands: HandsSnapshot,
+    pub roomscale_bounds: Option<[f32; 2]>,
 }
 
 /// Hand input state

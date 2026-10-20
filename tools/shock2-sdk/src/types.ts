@@ -66,6 +66,8 @@ export interface InputState {
   crouch: boolean;
   jump: boolean;
   lean: number;
+  /** Guardian play-area [width, depth] in metres (`roomscale.bounds`); null = unavailable. */
+  roomscale_bounds: [number, number] | null;
 }
 
 export interface Position {

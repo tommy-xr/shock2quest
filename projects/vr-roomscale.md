@@ -76,6 +76,9 @@ pause/recenter transitions and a stationary-guardian gate remain follow-up work.
 - [ ] Integrate physical walking with hand climbing and throw velocity history.
 - [ ] Verify moving platforms, stairs, low ceilings and off-origin turning.
 - [ ] Decide whether strict correction is comfortable enough to enable by default.
+- [x] Report the guardian play-area size as `InputContext.roomscale_bounds`
+  (Quest STAGE bounds rect; debug runtime `roomscale.bounds` channel). A
+  follow-up user option consumes it to gate roomscale on a room-sized guardian.
 
 ## Spike validation — September 21, 2026
 
