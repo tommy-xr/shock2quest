@@ -398,6 +398,14 @@ impl Script for WeaponScript {
                 )
             }
             MessagePayload::TriggerPull => {
+                // Wielding an unresearched weapon is allowed; firing it is not,
+                // and does not start research either.
+                if crate::research::is_unresearched(world, entity_id) {
+                    self.burst = None;
+                    return Effect::ShowMessage {
+                        text: super::gui::research::unresearched_message(world),
+                    };
+                }
                 if let Some(requirement) =
                     crate::weapon_requirements::unmet_weapon_skill(world, entity_id)
                 {
@@ -1296,6 +1304,29 @@ mod tests {
                 required: 6, current: 0, ..
             },
         } if entity_id == weapon));
+    }
+
+    /// Flat and VR both fire through `TriggerPull`, so this one gate covers
+    /// both; research outranks an unmet weapon skill.
+    #[test]
+    fn an_unresearched_weapon_refuses_to_fire_with_a_message() {
+        let (mut world, physics, weapon, target) = flat_melee_fixture();
+        world.add_component(weapon, dark::properties::PropBaseWeaponDesc([0, 0, 0, 1]));
+        world.add_component(
+            weapon,
+            dark::properties::PropObjState(dark::properties::ObjectState::Unresearched),
+        );
+        let effect = WeaponScript::new().handle_message(
+            weapon,
+            &world,
+            &physics,
+            &MessagePayload::TriggerPull,
+        );
+        assert!(
+            matches!(&effect, Effect::ShowMessage { text } if text == "This item is not yet researched."),
+            "got {effect:?}"
+        );
+        assert!(!includes_damage_to(effect, target));
     }
 
     use cgmath::{Quaternion, point3, vec3};

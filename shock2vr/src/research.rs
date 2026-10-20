@@ -117,6 +117,13 @@ pub fn offers_research(world: &World, entity_id: EntityId) -> bool {
             && is_unresearched(world, entity_id))
 }
 
+/// Whether using `entity_id` from the inventory researches it instead: an
+/// unresearched weapon specimen (Worm Launcher, Crystal Shard) opens its
+/// Research MFD rather than being wielded.
+pub fn researches_on_use(world: &World, entity_id: EntityId) -> bool {
+    is_unresearched(world, entity_id) && offers_research(world, entity_id)
+}
+
 fn backfill_component<T>(
     world: &mut World,
     entity_id: EntityId,

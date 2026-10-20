@@ -201,8 +201,9 @@ pub fn offers_to(world: &World, tool: EntityId, target: EntityId) -> bool {
         )
 }
 
-/// What using one carried item does: wield a weapon, apply a maintenance tool
-/// to the weapon already wielded, or Frob anything else where it stands.
+/// What using one carried item does: wield a researched weapon, apply a
+/// maintenance tool to the weapon already wielded, or Frob anything else where
+/// it stands - an unresearched weapon's Frob opens its Research MFD.
 ///
 /// This is the whole of the flat inventory's use gesture - the strip's
 /// double-click and the backpack panel's click, which are the same action and
@@ -210,7 +211,9 @@ pub fn offers_to(world: &World, tool: EntityId, target: EntityId) -> bool {
 /// onto an inventory weapon names that target explicitly through the same
 /// `apply` function.
 pub fn use_carried_item(world: &World, item: EntityId) -> Effect {
-    if crate::virtual_hand::is_wieldable_weapon(world, item) {
+    if crate::virtual_hand::is_wieldable_weapon(world, item)
+        && !crate::research::researches_on_use(world, item)
+    {
         return Effect::GrabEntity {
             entity_id: item,
             hand: crate::vr_config::Handedness::Right,
@@ -451,6 +454,44 @@ mod tests {
                 } if to == hypo
             ),
             "an item that is neither a weapon nor a tool keeps its own Frob"
+        );
+    }
+
+    /// A Crystal Shard-shaped weapon specimen: melee arm, research MFD script.
+    fn weapon_specimen(world: &mut World, state: ObjectState) -> EntityId {
+        world.add_entity((
+            dark::properties::PropLimbModel("shard_h".into()),
+            PropScripts {
+                scripts: vec!["ResearchableScript".into()],
+                inherits: true,
+            },
+            PropObjState(state),
+        ))
+    }
+
+    #[test]
+    fn using_an_unresearched_weapon_researches_it_instead_of_wielding() {
+        let mut world = World::new();
+        let shard = weapon_specimen(&mut world, ObjectState::Unresearched);
+
+        let effect = use_carried_item(&world, shard);
+        assert!(
+            matches!(&effect, Effect::Send { msg: crate::scripts::Message {
+                payload: crate::scripts::MessagePayload::Frob, to,
+            }} if *to == shard),
+            "the Frob opens the Research MFD; got {effect:?}"
+        );
+    }
+
+    #[test]
+    fn using_a_researched_weapon_specimen_wields_it() {
+        let mut world = World::new();
+        let shard = weapon_specimen(&mut world, ObjectState::Normal);
+
+        let effect = use_carried_item(&world, shard);
+        assert!(
+            matches!(effect, Effect::GrabEntity { entity_id, .. } if entity_id == shard),
+            "got {effect:?}"
         );
     }
 
