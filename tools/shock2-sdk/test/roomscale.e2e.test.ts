@@ -100,28 +100,30 @@ test("roomscale walking never activates the comfort vignette", { skip }, async (
   assert.ok((await mask()).length > 0, "stick travel still vignettes");
 });
 
-// Moves the head 0.2 sideways and reports whether the body followed.
-async function walks(game: GameServer, bounds: [number, number] | null, vr = true) {
+// Moves the tracked head 0.2 sideways from `fromX` and reports whether the
+// body followed.
+async function walks(game: GameServer, bounds: [number, number] | null, fromX: number, vr = true) {
   await game.input.set("roomscale.bounds", bounds);
   await game.step({ frames: 3 });
   const before = (await game.info()).player;
-  const x = before.camera_offset[0] + 0.2;
+  const x = fromX + 0.2;
   await game.input.set("head.position", [x, 1.04, 0]);
   await game.step({ frames: 3 });
   const after = (await game.info()).player;
   const moved = Math.hypot(after.position[0] - before.position[0], after.position[2] - before.position[2]);
-  // A still body leaves the step in the rig; a walking one recentres it.
+  // A still body leaves the head offset in the rig; a walking one recentres it.
   close(after.camera_offset[0], moved > 0.01 || !vr ? 0 : x);
   return moved > 0.01;
 }
 
-test("Auto roomscale needs a room-sized guardian", { skip }, async () => {
-  await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+test("Auto roomscale needs a room-sized guardian", { skip }, async (t) => {
+  await using game = await launchWithSettings(t, { vr: { roomscale: "Auto" } },
+    { mission: "debug_ladder", debugFlags: ["--vr"] });
   await game.player.teleport({ x: 0, y: 1, z: -16 });
   await game.step({ frames: 30 });
-  assert.equal(await walks(game, null), false, "no bounds is stationary");
-  assert.equal(await walks(game, [1, 1]), false, "a cramped guardian is stationary");
-  assert.equal(await walks(game, [2, 2]), true, "a room-sized guardian walks");
+  assert.equal(await walks(game, null, 0), false, "no bounds is stationary");
+  assert.equal(await walks(game, [1, 1], 0.2), false, "a cramped guardian is stationary");
+  assert.equal(await walks(game, [2, 2], 0.4), true, "a room-sized guardian walks");
 });
 
 test("Off roomscale ignores the guardian; flat ignores On", { skip }, async (t) => {
@@ -129,11 +131,11 @@ test("Off roomscale ignores the guardian; flat ignores On", { skip }, async (t) 
     await using game = await launchWithSettings(t, { vr: { roomscale: "Off" } },
       { mission: "debug_ladder", debugFlags: ["--vr"] });
     await game.step({ frames: 30 });
-    assert.equal(await walks(game, [2, 2]), false);
+    assert.equal(await walks(game, [2, 2], 0), false);
   }
   {
     await using game = await launchWithSettings(t, ON, { mission: "debug_ladder" });
     await game.step({ frames: 30 });
-    assert.equal(await walks(game, [2, 2], false), false);
+    assert.equal(await walks(game, [2, 2], 0, false), false);
   }
 });

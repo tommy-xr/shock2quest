@@ -326,10 +326,8 @@ mod tests {
             panel.hit(&layout, vec2(reset.x + 1.0, reset.y + 1.0)),
             Some(OptionsEvent::Row(9))
         );
-        assert!(
-            reset.y + reset.h <= FRAME[1].y + FRAME[1].h,
-            "inside the frame"
-        );
+        // Clear of the save-error line drawn 38 px above the frame's bottom.
+        assert!(reset.y + reset.h <= FRAME[1].y + FRAME[1].h - 38.0);
         let mut settings = UserSettings::default();
         assert_eq!(settings.vr.roomscale, RoomscaleMode::Auto);
         panel.change(&mut settings, 8);

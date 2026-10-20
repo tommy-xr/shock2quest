@@ -51,7 +51,7 @@ The debug renderer uses injected VR head positions to exercise actual view motio
 
 Roomscale centers the head over the capsule. It does **not** yet provide independent
 leaning or a head sweep: ceilings, overhangs or poses outside the capsule can still
-clip. This is a body-following experiment, not complete head protection.
+clip. It follows the body; it is not complete head protection.
 
 Invalid tracking and explicit OpenXR origin changes reset delta history. A
 single-sample horizontal jump over 0.5 metres is also treated as a discontinuity.
