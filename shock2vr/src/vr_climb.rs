@@ -87,14 +87,19 @@ pub fn vault_ready(
 /// the wall clock: one sample of travel per game update becomes one physics
 /// step of flight, so dividing by anything else makes the throw faster or
 /// slower than the pull that produced it at any frame rate but 60 Hz.
-pub(crate) fn release_velocity(travel: &[Vector3<f32>], step_dt: f32) -> Option<Vector3<f32>> {
-    if travel.is_empty() || step_dt <= 0.0 {
+pub(crate) fn release_velocity<'a>(
+    travel: impl IntoIterator<Item = &'a Vector3<f32>>,
+    step_dt: f32,
+) -> Option<Vector3<f32>> {
+    let (sum, count) = travel
+        .into_iter()
+        .fold((Vector3::zero(), 0), |(sum, count), delta| {
+            (sum + delta, count + 1)
+        });
+    if count == 0 || step_dt <= 0.0 {
         return None;
     }
-    let mean = travel
-        .iter()
-        .fold(Vector3::zero(), |sum, delta| sum + delta)
-        / travel.len() as f32;
+    let mean = sum / count as f32;
     let mut velocity = -mean / step_dt;
     let speed = velocity.magnitude();
     if speed > CLIMB_RELEASE_MAX_SPEED {
@@ -327,7 +332,7 @@ impl HandClimb {
             && self.anchor.is_none()
             && previous_anchor.is_some_and(|hand| let_go_cleanly[slot(hand)]);
         let launch = released
-            .then(|| release_velocity(self.recent_anchor_travel.make_contiguous(), step_dt))
+            .then(|| release_velocity(&self.recent_anchor_travel, step_dt))
             .flatten();
 
         // A new anchor starts a fresh history: the travel so far is the other
@@ -359,8 +364,7 @@ impl HandClimb {
 
     /// The throw opening the anchor hand now would give, from its pull so far.
     pub fn predicted_release_velocity(&self, step_dt: f32) -> Option<Vector3<f32>> {
-        let travel: Vec<_> = self.recent_anchor_travel.iter().copied().collect();
-        release_velocity(&travel, step_dt)
+        release_velocity(&self.recent_anchor_travel, step_dt)
     }
 
     /// What a free `hand` at `point` would take, and which grace grab (0 for

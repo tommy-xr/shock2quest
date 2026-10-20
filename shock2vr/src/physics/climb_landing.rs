@@ -10,8 +10,8 @@ const NATURAL_ARC_FRAMES: usize = 240;
 const NATURAL_MAX_DROP: f32 = 40.0;
 /// Snap and hysteresis searches run for at most this many aimed points a frame.
 const GAZE_SNAPPED_RAYS: usize = 3;
-/// Support checks settle the body for many frames; cap them per query.
-const GAZE_SUPPORT_CHECKS: usize = 4;
+/// Support checks settle the body for many frames; one per query.
+const GAZE_SUPPORT_CHECKS: usize = 1;
 /// Fraction of the body radius the footprint probes stand out from the centre.
 const FOOTPRINT_PROBE: f32 = 0.8;
 
@@ -38,14 +38,14 @@ impl PhysicsWorld {
     /// The glide an assisted release takes from `start` to `landing`: tucked,
     /// up to the higher of the two, across, then down onto it. A landing below
     /// the start ends the glide above it and leaves the descent to an ordinary
-    /// fall, so a long drop keeps its consequences. Every leg is swept; the
-    /// standing body must fit and, with `support`, rest on the landing.
+    /// fall, so a long drop keeps its consequences. Every leg is swept and the
+    /// body must fit with its footprint on the floor; see also
+    /// [`Self::landing_is_supported`].
     fn assisted_route(
         &self,
         player: &PlayerHandle,
         start: Vector<Real>,
         landing: Landing,
-        support: bool,
     ) -> Result<ClimbTopOut, GazeRejection> {
         let filter = player_movement_filter(player.character_handle);
         let not_climbable =
@@ -83,17 +83,6 @@ impl PhysicsWorld {
         }) {
             return Err(GazeRejection::Unsupported);
         }
-        if support
-            && !shape_has_stable_support(
-                &player.controller,
-                &queries,
-                &final_shape,
-                target,
-                self.integration_parameters.dt,
-            )
-        {
-            return Err(GazeRejection::Unsupported);
-        }
         let cross_y = start.y.max(target.y);
         let raised = vector![start.x, cross_y, start.z];
         let crossed = vector![target.x, cross_y, target.z];
@@ -129,11 +118,25 @@ impl PhysicsWorld {
         })
     }
 
-    fn player_start(&self, player: &PlayerHandle) -> Vector<Real> {
-        self.rigid_body_set[player.character_handle]
-            .next_position()
-            .translation
-            .vector
+    /// The landing body settles there under ordinary gravity. Costly (many
+    /// controller steps), so it runs after every cheaper check has passed.
+    fn landing_is_supported(&self, player: &PlayerHandle, landing: Landing) -> bool {
+        let queries = self.player_movement_queries(
+            self.narrow_phase.query_dispatcher(),
+            player_movement_filter(player.character_handle),
+        );
+        let shape = if player.tracking_is_crouched() {
+            crouched_player_capsule()
+        } else {
+            standing_player_capsule()
+        };
+        shape_has_stable_support(
+            &player.controller,
+            &queries,
+            &shape,
+            vec_to_nvec(landing.center),
+            self.integration_parameters.dt,
+        )
     }
 
     /// The assisted landing the head is aimed at from `eye` along `rays`
@@ -149,7 +152,7 @@ impl PhysicsWorld {
         feet_y: f32,
         held: Option<Landing>,
     ) -> GazeLanding {
-        let start = self.player_start(player);
+        let start = vec_to_nvec(self.get_player_next_translation(player));
         let body = nvec_to_cgmath(start);
         let standing = !player.tracking_is_crouched();
         let filter = player_movement_filter(player.character_handle);
@@ -190,7 +193,7 @@ impl PhysicsWorld {
                     )
                     .is_none()
             }) {
-                match self.assisted_route(player, start, held, false) {
+                match self.assisted_route(player, start, held) {
                     Ok(_) => {
                         return GazeLanding {
                             landing: Ok(held),
@@ -246,16 +249,17 @@ impl PhysicsWorld {
                     }
                     continue;
                 }
-                let verdict =
-                    self.assisted_route(player, start, landing, false)
-                        .and_then(|route| {
-                            if support_checks == GAZE_SUPPORT_CHECKS {
-                                return Err(GazeRejection::Unsupported);
-                            }
-                            support_checks += 1;
-                            self.assisted_route(player, start, landing, true)
-                                .map(|_| route)
-                        });
+                let verdict = self.assisted_route(player, start, landing).and_then(|_| {
+                    if support_checks == GAZE_SUPPORT_CHECKS {
+                        return Err(GazeRejection::Unsupported);
+                    }
+                    support_checks += 1;
+                    if self.landing_is_supported(player, landing) {
+                        Ok(())
+                    } else {
+                        Err(GazeRejection::Unsupported)
+                    }
+                });
                 match verdict {
                     Ok(_) => {
                         return GazeLanding {
@@ -295,7 +299,7 @@ impl PhysicsWorld {
         // Hanging beside a ladder: falling past it is not landing on it.
         let queries = all_queries.with_filter(filter.predicate(&not_climbable));
         let dt = self.integration_parameters.dt;
-        let start = self.player_start(player);
+        let start = vec_to_nvec(self.get_player_next_translation(player));
         let mut position = start;
         let mut across = velocity.map_or_else(Vector::zeros, |v| vector![v.x, 0.0, v.z]);
         let mut rise = velocity.map(|v| v.y);
@@ -320,12 +324,16 @@ impl PhysicsWorld {
                     )
                 })
         };
+        // The body's lowest point already sits on the slope: no slope lift.
         let landed = |at: Vector<Real>, normal: Vector<Real>| {
             let floor_y = shape
                 .compute_aabb(&Isometry::translation(at.x, at.y, at.z))
                 .mins
                 .y;
-            Self::landing_on(vector![at.x, floor_y, at.z], normal, true)
+            Landing {
+                normal: nvec_to_cgmath(normal),
+                ..Self::landing_on(vector![at.x, floor_y, at.z], Vector::y(), true)
+            }
         };
         for _ in 0..NATURAL_ARC_FRAMES {
             // Falling straight from here on: one cast finds the floor.
@@ -374,10 +382,13 @@ impl PhysicsWorld {
         if player.top_out.is_some() {
             return false;
         }
-        let start = self.player_start(player);
-        let Ok(route) = self.assisted_route(player, start, landing, true) else {
+        let start = vec_to_nvec(self.get_player_next_translation(player));
+        let Ok(route) = self.assisted_route(player, start, landing) else {
             return false;
         };
+        if !self.landing_is_supported(player, landing) {
+            return false;
+        }
         self.start_hand_route(route, player);
         true
     }

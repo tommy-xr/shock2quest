@@ -268,8 +268,13 @@ pub fn resolve(
             ClimbGripKind::Ladder | ClimbGripKind::Surface
         )
     });
-    let head = crate::util::tracked_rotation(input.head.rotation)
-        .filter(|_| input.pose_tracking.is_none_or(|tracking| tracking.head));
+    // The same tracking a release needs to commit: never show an assisted
+    // landing the release would then refuse.
+    let head = crate::util::tracked_rotation(input.head.rotation).filter(|_| {
+        input
+            .pose_tracking
+            .is_none_or(|tracking| tracking.head && tracking.hands == [true; 2])
+    });
     let gaze = head.filter(|_| exits_a_ladder).map(|head| {
         physics.gaze_landing(
             player,
