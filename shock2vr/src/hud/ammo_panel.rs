@@ -20,7 +20,7 @@
 
 use cgmath::{Vector2, vec2};
 use dark::properties::ObjectState;
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use shipyard::{EntityId, Get, View, World};
 
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 
@@ -328,12 +328,8 @@ impl AmmoReadout {
             can_cycle_ammo: weapon
                 .is_some_and(|w| crate::scripts::script_util::can_cycle_ammo(world, w)),
             // An energy weapon has no magazine to swap - it recharges - so it
-            // shows no reload control, exactly as the original. VR reloads by
-            // physically swapping the magazine, so it has no reload control.
-            can_reload: weapon.is_some_and(|w| !crate::wielded_weapon::is_energy_weapon(world, w))
-                && !world
-                    .borrow::<UniqueView<crate::mission::GlobalPresentationMode>>()
-                    .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr),
+            // shows no reload control, exactly as the original.
+            can_reload: weapon.is_some_and(|w| !crate::wielded_weapon::is_energy_weapon(world, w)),
             reload_label: super::hud_strings(world).reload_label,
             show_buttons,
         }
@@ -728,12 +724,6 @@ mod tests {
         world.add_unique(PsiPowerSelection { index: 0 });
         let gun_readout = AmmoReadout::for_weapon(&world, Some(gun), false);
         let amp_readout = AmmoReadout::for_weapon(&world, Some(amp), false);
-        assert!(gun_readout.can_reload, "flat reloads from the readout");
-        // VR swaps the magazine by hand, so the readout offers no reload.
-        world.add_unique(crate::mission::GlobalPresentationMode(
-            crate::PresentationMode::Vr,
-        ));
-        assert!(!AmmoReadout::for_weapon(&world, Some(gun), false).can_reload);
         assert_eq!(gun_readout.ammo, Some(12));
         assert_eq!(gun_readout.psi_power, None);
         assert_eq!(gun_readout.psi_charge, None);
