@@ -7624,6 +7624,7 @@ impl MissionCore {
                         effects.push(Effect::UseResearchChemical {
                             entity_id: entity,
                             specimen: None,
+                            released: false,
                         });
                     } else if !inspect_only && crate::research::offers_research(&self.world, entity)
                     {
@@ -7811,11 +7812,7 @@ impl MissionCore {
                             to,
                             payload: MessagePayload::ProvideForConsumption { entity },
                         },
-                } if crate::scripts::script_util::entity_has_script(
-                    &self.world,
-                    *entity,
-                    "Chemical",
-                ) && self.script_world.accepts_tool(*to, &self.world, *entity)
+                } if crate::research::chemical_ready_for(&self.world, *entity, *to)
                     && interaction_msgs.iter().any(|effect| {
                         matches!(effect, VirtualHandEffect::DropItem { entity_id, .. } if entity_id == entity)
                     }) =>
@@ -7842,6 +7839,7 @@ impl MissionCore {
             Effect::UseResearchChemical {
                 entity_id,
                 specimen: Some(specimen),
+                released: true,
             }
         }));
         // Releases offered to a target: an accepted item is confirmed below
@@ -12755,6 +12753,7 @@ impl MissionCore {
                 Effect::UseResearchChemical {
                     entity_id,
                     specimen,
+                    released,
                 } => {
                     let scanned = self.flat_ui.device
                         && self.personal_card.last_scan == Some(entity_id)
@@ -12771,19 +12770,14 @@ impl MissionCore {
                             });
                     // A chemical out of reach (not carried, not scanned close by)
                     // was never offered to research: no verdict to report. One
-                    // released onto a held specimen is offered to that specimen.
-                    if specimen.is_none()
+                    // just released onto a held specimen is offered to it.
+                    if !released
                         && !scanned
                         && !crate::scripts::script_util::player_carried_items(&self.world)
                             .contains(&entity_id)
                     {
                         continue;
                     }
-                    // A dose released onto a held specimen comes here straight
-                    // from the hand, still unplaced (see `doses` in `update`).
-                    // Ask the hands: `PlayerInfo` mirrors them once per update.
-                    let released =
-                        specimen.is_some() && self.interaction.holding_hand(entity_id).is_none();
                     let consumed = apply_research_chemical(&self.world, entity_id, specimen);
                     if consumed {
                         let stack = self
@@ -12833,6 +12827,7 @@ impl MissionCore {
                                     .drop_entity_into_container(backpack, entity_id)
                                     .is_none()
                                 {
+                                    effects.push_back(backpack_full_feedback(entity_id));
                                     self.drop_held_item_into_world(entity_id);
                                 }
                             }

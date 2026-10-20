@@ -254,6 +254,7 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
             return Some(Effect::UseResearchChemical {
                 entity_id: provided_entity_id,
                 specimen: Some(entity_id),
+                released: false,
             });
         }
         crate::scripts::script_util::entity_has_script(world, provided_entity_id, "Chemical")

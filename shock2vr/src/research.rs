@@ -697,7 +697,7 @@ mod tests {
         assert!(gui.accepts_tool(specimen, &world, needed));
         assert!(matches!(
             gui.on_provide_for_consumption(specimen, &world, needed),
-            Some(Effect::UseResearchChemical { entity_id, specimen: Some(target) })
+            Some(Effect::UseResearchChemical { entity_id, specimen: Some(target), released: false })
                 if entity_id == needed && target == specimen
         ));
         assert!(!gui.accepts_tool(specimen, &world, wrong));

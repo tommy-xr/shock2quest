@@ -24,6 +24,7 @@ impl Script for ChemicalScript {
             MessagePayload::Frob => Effect::UseResearchChemical {
                 entity_id,
                 specimen: None,
+                released: false,
             },
             _ => Effect::NoEffect,
         }
