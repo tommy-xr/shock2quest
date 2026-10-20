@@ -156,6 +156,9 @@ where
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
+            MessagePayload::OpenHackBoard => {
+                self.gui.open_hack_board(entity_id, world, &mut self.state)
+            }
             MessagePayload::HandheldInput(control) => {
                 self.gui
                     .handheld_input(entity_id, world, &mut self.state, *control)

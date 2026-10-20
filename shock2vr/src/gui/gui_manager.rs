@@ -19,7 +19,7 @@ use crate::{
 
 use super::handheld_screen::HandheldScreen;
 use crate::gui::*;
-use crate::ui::{Rect, UiCanvas};
+use crate::ui::{ImageKind, Rect, UiCanvas, canvas_viewport};
 
 /// Depth given to each successive panel element so a label does not z-fight
 /// with the art behind it. Canvas-local +Z faces the viewer (the root
@@ -383,6 +383,8 @@ impl GuiManager {
             return Vec::new();
         };
         let panel = Rect::new(0.0, 0.0, info.canvas_size_px.x, info.canvas_size_px.y);
+        let window = HandheldScreen::for_entity(world, info.parent_entity)
+            .map(|screen| screen.viewport().src);
         info.components
             .iter()
             .filter(|component| {
@@ -391,6 +393,19 @@ impl GuiManager {
                     GuiComponentRenderInfo::Image { texture, .. }
                         if texture.eq_ignore_ascii_case("cursor.pcx")
                 )
+            })
+            // Report only what a mounted screen draws (e.g. no plug).
+            .filter(|component| {
+                window.is_none_or(|w| {
+                    let croppable = matches!(
+                        component,
+                        GuiComponentRenderInfo::Image {
+                            kind: ImageKind::Ui | ImageKind::Crop { .. },
+                            ..
+                        }
+                    );
+                    canvas_viewport::keeps(w, component.canvas_rect(panel), croppable)
+                })
             })
             .map(|component| {
                 let rect = component.canvas_rect(panel);

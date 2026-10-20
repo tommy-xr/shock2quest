@@ -306,6 +306,9 @@ pub enum MessagePayload {
     /// opened by `ReadLastUnreadLog` instead, and any panel may later be opened
     /// without a frob.
     PanelOpened,
+    /// Open the panel's HRM hack board, as its plug beside the query panel
+    /// asks. Sent after `PanelOpened`.
+    OpenHackBoard,
 
     // Physics events
     SensorBeginIntersect {

@@ -10192,6 +10192,16 @@ impl MissionCore {
             }
             FlatUiDragAction::ToggleMap => vec![Effect::ToggleMap],
             FlatUiDragAction::OpenPdaEntry(entry) => vec![Effect::ReadPdaEntry(entry)],
+            // Open the object's own panel, then ask it for its board.
+            FlatUiDragAction::OpenHackBoard(entity) => vec![
+                Effect::OpenPanel { entity },
+                Effect::Send {
+                    msg: Message {
+                        to: entity,
+                        payload: MessagePayload::OpenHackBoard,
+                    },
+                },
+            ],
             FlatUiDragAction::Place(entity_id) => vec![crate::scripts::script_util::announce(
                 entity_id,
                 "place_item",
@@ -12536,15 +12546,27 @@ impl MissionCore {
                     ));
                     effects.push_front(Effect::SpendPsiPoints { amount: cost });
                 }
+                Effect::InspectEntity { entity_id } => {
+                    self.flat_ui.close();
+                    self.flat_ui.utilities.inspect_entity(entity_id);
+                    // Effects run after the regular utility refresh. Fill
+                    // the reader before this frame renders its title.
+                    self.flat_ui
+                        .utilities
+                        .refresh(&self.world, asset_cache, &self.entity_info);
+                }
                 Effect::OpenPanel { entity } => {
                     self.world
                         .add_component(entity, crate::runtime_props::RuntimePropSearched);
                     if self.flat_ui.utilities.has_left_panel() {
                         self.flat_ui.utilities = Default::default();
                     }
-                    // Machines share the cyber interface unless the handheld
-                    // MFD already owns the panel. Frob never toggles it closed.
-                    let machine = super::mfd_device::machine_uses_mfd(&self.world, entity);
+                    // Machines, and in VR a GamePig no hand holds, share the
+                    // cyber interface unless the handheld MFD already owns the
+                    // panel. Frob never toggles it closed.
+                    let machine = super::mfd_device::machine_uses_mfd(&self.world, entity)
+                        || (game_options.presentation_mode == crate::PresentationMode::Vr
+                            && super::mfd_device::gamepig_uses_mfd(&self.world, entity));
                     match game_options.presentation_mode {
                         crate::PresentationMode::Vr if self.flat_ui.device => {
                             // Hand frobs and scans share one panel owner, even
