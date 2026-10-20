@@ -182,6 +182,8 @@ pub struct ReadoutButtonSpec {
     /// Cyan [`FONT`] for a control on the black readout, a chrome font for a
     /// caption on a grey plate.
     pub font: &'static str,
+    /// Label height in canvas pixels; 0 draws the font's native size.
+    pub font_size: f32,
     /// Nine-patch the texture (its authored size, then its bevel borders) so
     /// a plate wider than its art keeps an undistorted bevel.
     pub nine_slice: Option<([f32; 2], [f32; 4])>,
@@ -203,7 +205,14 @@ pub(crate) fn draw_button(canvas: &mut UiCanvas, button: &ReadoutButtonSpec, rec
     if let Some(text) = &button.text {
         // Ellipsized: labels are data (a localized MISC.STR string, an authored
         // `P$SHead` header), and an over-wide one would spill onto the gauge.
-        canvas.text_native_fit(rect, text, button.font, HAlign::Center, VAlign::Middle);
+        canvas.text_fit(
+            rect,
+            text,
+            button.font,
+            button.font_size,
+            HAlign::Center,
+            VAlign::Middle,
+        );
     }
 }
 
@@ -341,6 +350,7 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
         texture,
         text: text.map(str::to_owned),
         font: FONT,
+        font_size: 0.0,
         nine_slice: None,
     };
     if !readout.show_buttons {

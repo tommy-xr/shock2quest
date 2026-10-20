@@ -78,7 +78,7 @@ const LOG_BUTTON: Rect = Rect::new(383.0, 432.0, 38.0, 36.0);
 /// (`(2,124)`, 188x300) and its close gadget, left of the reserved right slot
 /// (x 450), and above both bottom readouts (y 414) - and horizontally centred
 /// on the canvas.
-pub(crate) const SYSTEM_BUTTON: Rect = Rect::new(282.0, 372.0, 76.0, 36.0);
+pub(crate) const SYSTEM_BUTTON: Rect = Rect::new(288.0, 372.0, 64.0, 36.0);
 
 /// IFBTN00.PCX's authored size and bevel widths (left, top, right, bottom).
 const PLATE_ART: ([f32; 2], [f32; 4]) = ([38.0, 36.0], [4.0, 4.0, 5.0, 4.0]);
@@ -89,11 +89,12 @@ pub(crate) fn system_button() -> ReadoutButtonSpec {
     ReadoutButtonSpec {
         button: ReadoutButton::SystemMenu,
         rect: SYSTEM_BUTTON,
-        // The original's blank interface-button plate, nine-patched wide
-        // enough for METAFONT's native "MENU" to sit inside the bevel.
+        // The original's blank interface-button plate, nine-patched so the
+        // widened plate keeps its bevel; the label is sized to sit well inside.
         texture: Some("IFBTN00.PCX"),
         text: Some("MENU".to_owned()),
         font: crate::ui::CHROME_BOLD_FONT,
+        font_size: 8.0,
         nine_slice: Some(PLATE_ART),
     }
 }
@@ -106,6 +107,7 @@ pub(crate) fn exit_button() -> ReadoutButtonSpec {
         texture: Some("iface/ml0.png"),
         text: None,
         font: FONT,
+        font_size: 0.0,
         nine_slice: None,
     }
 }
@@ -317,6 +319,7 @@ fn hand_selectors(readouts: &UseModeReadouts) -> [ReadoutButtonSpec; 2] {
             texture: Some("IFBTN00.PCX"),
             text: Some(format!("{} {value}", ["LEFT", "RIGHT"][slot])),
             font: crate::ui::CHROME_FONT,
+            font_size: 0.0,
             nine_slice: None,
         }
     })
@@ -337,6 +340,7 @@ pub(crate) fn buttons(readouts: &UseModeReadouts) -> Vec<ReadoutButtonSpec> {
         texture: Some("iface/ifbtn00.pcx"),
         text: None,
         font: FONT,
+        font_size: 0.0,
         nine_slice: None,
     };
     ammo_panel::buttons(&readouts.ammo)
