@@ -222,6 +222,65 @@ mod tests {
     }
 
     #[test]
+    fn only_a_squeeze_at_a_slot_pins_the_belt_heading() {
+        for squeeze in [0.0, 1.0] {
+            let (mut h, mut input, ids) = setup();
+            input.right_hand.position = h.centers.unwrap()[0];
+            input.right_hand.squeeze_value = squeeze;
+            let slots = [Some(ids[0]), None];
+            h.update(
+                &input, [None; 2], [false; 2], slots, 1, [false; 2], [false; 2], true, 0.016,
+            );
+            assert_eq!(h.near[1], Some(0));
+            input.head.rotation =
+                <Quaternion<f32> as cgmath::Rotation3>::from_angle_y(cgmath::Deg(-90.0));
+            for _ in 0..60 {
+                h.update(
+                    &input,
+                    [None; 2],
+                    [false; 2],
+                    slots,
+                    1,
+                    [false; 2],
+                    [false; 2],
+                    true,
+                    1.0 / 60.0,
+                );
+            }
+            let yaw = h.body_pose.unwrap().yaw.abs();
+            if squeeze > 0.5 {
+                assert!(yaw < 1e-3, "a grab pins the heading, got {yaw}");
+                // The release frame still sees the pinned slot; the next one follows.
+                input.right_hand.squeeze_value = 0.0;
+                for expect_pinned in [true, false] {
+                    h.update(
+                        &input,
+                        [None; 2],
+                        [false; 2],
+                        slots,
+                        1,
+                        [false; 2],
+                        [false; 2],
+                        true,
+                        1.0 / 60.0,
+                    );
+                    let yaw = h.body_pose.unwrap().yaw.abs();
+                    assert_eq!(
+                        yaw < 1e-3,
+                        expect_pinned,
+                        "release frame pinning, got {yaw}"
+                    );
+                }
+            } else {
+                assert!(
+                    (yaw - std::f32::consts::FRAC_PI_2).abs() < 0.05,
+                    "a resting hand must not stop the follow, got {yaw}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn empty_hands_ignore_empty_holsters() {
         let (mut holsters, mut input, _) = setup();
         input.left_hand.position = holsters.centers.unwrap()[0];
@@ -548,7 +607,8 @@ pub(super) struct Holsters {
     pub poses: crate::vr_holster::HolsterLibrary,
     poses_loaded: bool,
     pub body_pose: Option<super::body_inventory::BodyPose>,
-    pub freeze_heading: bool,
+    /// Hands at another target sharing this heading (ammo pouch, chest mounts).
+    pub near_other_target: [bool; 2],
     pub pouch_priority: [bool; 2],
     pub shoulder_priority: [bool; 2],
     yaw: Option<f32>,
@@ -570,7 +630,7 @@ impl Default for Holsters {
             poses: Default::default(),
             poses_loaded: false,
             body_pose: None,
-            freeze_heading: false,
+            near_other_target: [false; 2],
             pouch_priority: [false; 2],
             shoulder_priority: [false; 2],
             yaw: None,
@@ -855,12 +915,14 @@ impl Holsters {
         let yaw = if self.chest && self.body_pose.is_some() {
             self.body_pose.unwrap().yaw
         } else {
-            followed_yaw(
-                self.yaw,
-                direction.x.atan2(-direction.z),
-                self.freeze_heading || self.near.iter().any(Option::is_some),
-                dt,
-            )
+            // Pin the heading while a hand squeezes at a slot and on its release
+            // frame (which stores), so the slot cannot swing away mid-grab; a hand
+            // merely hanging there must not stop it.
+            let grabbing = (0..2).any(|i| {
+                (self.near[i].is_some() || self.near_other_target[i])
+                    && (hands[i].squeeze_value >= 0.5 || self.pressed[i])
+            });
+            followed_yaw(self.yaw, direction.x.atan2(-direction.z), grabbing, dt)
         };
         self.yaw = Some(yaw);
         self.body_pose = Some(super::body_inventory::BodyPose {
