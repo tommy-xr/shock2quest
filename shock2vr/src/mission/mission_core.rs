@@ -4881,7 +4881,10 @@ impl MissionCore {
             .sample(
                 input_context,
                 game_options.presentation_mode == crate::PresentationMode::Vr
-                    && crate::dev_params::get_bool(crate::dev_params::VR_ROOMSCALE),
+                    && crate::user_settings::get()
+                        .vr
+                        .roomscale
+                        .enabled(input_context.roomscale_bounds),
                 !time.elapsed.is_zero(),
                 self.player_is_alive()
                     && self.player_controls_enabled

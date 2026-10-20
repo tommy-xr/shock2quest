@@ -336,13 +336,18 @@ lean including roll. The maximum roll remains 7 degrees. Like other developer
 parameters, the value resets when the app restarts. The debug API can set it via
 `POST /v1/dev-params` with `{"key":"flat_lean_distance","value":2.0}`.
 
-### Roomscale VR spike
+### Roomscale VR
 
-Enable **Pause → Developer → Camera & view → Roomscale spike** to test physical
-horizontal walking through the player controller. It defaults off. The debug API
-equivalent is `POST /v1/dev-params` with `{"key":"vr_roomscale","value":1}`.
-Run `cargo dbgr --mission debug_ladder --vr` and inject incremental head and hand
-positions with zero stick input. Strict correction discards blocked travel and
+**Options → Comfort → Roomscale** (`Auto` / `On` / `Off`, saved as
+`vr.roomscale` in the user settings file) controls whether physical horizontal
+walking moves the player controller in VR. `Auto`, the default, enables it only
+when the guardian play area is at least 1.5 m on both sides; stationary and
+boundary-less guardians report no bounds and stay stationary. The debug runtime
+reports no bounds unless the `roomscale.bounds` input channel is set
+(`[width, depth]` metres, or `null`). To test, run
+`cargo dbgr --mission debug_ladder --vr`, set `roomscale.bounds` to `[2, 2]` (or
+the setting to `On`), and inject incremental head and hand positions with zero
+stick input. Strict correction discards blocked travel and
 retains the resulting tracking offset on retreat. Independent leaning and head
 collision are follow-up work; see [the roomscale project](projects/vr-roomscale.md).
 

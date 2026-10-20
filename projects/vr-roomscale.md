@@ -18,18 +18,22 @@ physical spot, the player ends up farther from the virtual wall. The user
 confirmed this matches their roomscale experience. Do not automatically undo
 that offset on retreat; reserve rebasing for explicit lifecycle/origin changes.
 
-## Initial spike
+## User option
 
-Enable **Pause → Developer → Camera & view → Roomscale spike**, or use
-`POST /v1/dev-params` with `{"key":"vr_roomscale","value":1}`. It defaults off,
-is VR-only, and resets on process restart. Harness:
+**Options → Comfort → Roomscale** cycles `Auto` / `On` / `Off` (user setting
+`vr.roomscale`, VR-only). `Auto`, the default, enables roomscale when
+`InputContext.roomscale_bounds` is present and both sides are at least 1.5 m
+(`user_settings::ROOMSCALE_MIN_SIDE_M`). Stationary and boundary-less modes
+report no bounds, and a cramped rect is treated as stationary. The resolver is
+`RoomscaleMode::enabled`. Harness:
 
 ```sh
 cargo dbgr --mission debug_ladder --vr --port 0
 ```
 
-Inject incremental `head.position` and both hand positions through the SDK with
-both sticks zero. These channels use pawn-local world units, not metres.
+Set `roomscale.bounds` to `[2, 2]` (the debug runtime reports no bounds by
+default), then inject incremental `head.position` and both hand positions through
+the SDK with both sticks zero. These channels use pawn-local world units, not metres.
 Physical tracking converts through `METERS_PER_WORLD_UNIT`.
 
 The first valid pose anchors horizontal tracking over the capsule. Subsequent
@@ -45,7 +49,7 @@ corrects head/hand input and the shared camera resolver applies the same offset
 to every rendered eye. Crouch remains a separate shared vertical stance conversion.
 The debug renderer uses injected VR head positions to exercise actual view motion.
 
-The spike centers the head over the capsule. It does **not** yet provide independent
+Roomscale centers the head over the capsule. It does **not** yet provide independent
 leaning or a head sweep: ceilings, overhangs or poses outside the capsule can still
 clip. This is a body-following experiment, not complete head protection.
 
@@ -56,9 +60,9 @@ is not added while dead, control-locked, free-camera enabled, gripping or toppin
 out; those steps are corrected like a wall, so the rig stays on the capsule.
 Physical travel is excluded from the comfort vignette and reference grid. While
 swimming the request is scaled with the rest of locomotion, so the body covers
-less ground than the wearer walks (accepted for the spike). Pause discards delta
-history so it cannot replay after resuming. Seamless leaning, climbing,
-pause/recenter transitions and a stationary-guardian gate remain follow-up work.
+less ground than the wearer walks (accepted for now). Pause discards delta
+history so it cannot replay after resuming. Seamless leaning, climbing
+and pause/recenter transitions remain follow-up work.
 
 ## Work tracking
 
@@ -75,10 +79,10 @@ pause/recenter transitions and a stationary-guardian gate remain follow-up work.
 - [ ] Complete pause, death, teleport, recenter and tracking-recovery continuity.
 - [ ] Integrate physical walking with hand climbing and throw velocity history.
 - [ ] Verify moving platforms, stairs, low ceilings and off-origin turning.
-- [ ] Decide whether strict correction is comfortable enough to enable by default.
 - [x] Report the guardian play-area size as `InputContext.roomscale_bounds`
-  (Quest STAGE bounds rect; debug runtime `roomscale.bounds` channel). A
-  follow-up user option consumes it to gate roomscale on a room-sized guardian.
+  (Quest STAGE bounds rect; debug runtime `roomscale.bounds` channel).
+- [x] Promote to a user option, `Auto` (default, room-sized guardian) / `On` / `Off`.
+- [ ] Verify in-headset that strict correction suits the `Auto` default.
 
 ## Spike validation — September 21, 2026
 
