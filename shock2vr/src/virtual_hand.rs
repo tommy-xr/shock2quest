@@ -386,7 +386,7 @@ impl VirtualHand {
             held_by_other_hand
                 .filter(|target| {
                     (hand_position - other_hand_position).magnitude() <= TWO_HAND_TOOL_REACH
-                        && crate::item_tools::offers_to(world, tool, *target)
+                        && crate::item_tools::offers_to_held(world, tool, *target)
                 })
                 .or_else(|| {
                     result.as_ref().and_then(|hit| {
@@ -400,11 +400,13 @@ impl VirtualHand {
 
         // Opening the hand offers the held item here; resolved once for the
         // release itself and for the cue that predicts it.
+        // An ordinary item (a chemical) offered to the other hand's item goes
+        // there too.
         let release_target = prev.get_held_entity().and_then(|held| {
             if crate::item_tools::is_tool(world, held) {
                 maintenance_target
             } else {
-                result.as_ref().and_then(|hit| hit.maybe_entity_id)
+                maintenance_target.or_else(|| result.as_ref().and_then(|hit| hit.maybe_entity_id))
             }
         });
 

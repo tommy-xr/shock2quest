@@ -238,6 +238,25 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
         tracing::info!(?entity_id, "researchable frob opened Research MFD");
         Effect::BeginResearch { entity_id }
     }
+
+    /// A chemical this specimen's research waits on (VR: brought to it in the
+    /// other hand) is taken as a tool; any other offer keeps the default path.
+    fn accepts_tool(&self, entity_id: EntityId, world: &World, tool: EntityId) -> bool {
+        crate::research::chemical_ready_for(world, tool, entity_id)
+    }
+
+    fn on_provide_for_consumption(
+        &self,
+        entity_id: EntityId,
+        world: &World,
+        provided_entity_id: EntityId,
+    ) -> Option<Effect> {
+        self.accepts_tool(entity_id, world, provided_entity_id)
+            .then_some(Effect::UseResearchChemical {
+                entity_id: provided_entity_id,
+                specimen: Some(entity_id),
+            })
+    }
 }
 
 fn research_status(world: &World, entity_id: EntityId) -> ResearchStatus {

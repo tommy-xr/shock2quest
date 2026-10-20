@@ -7621,7 +7621,10 @@ impl MissionCore {
                     };
                     if !inspect_only && has_script("Chemical") {
                         self.flat_ui.utilities.open_research(None);
-                        effects.push(Effect::UseResearchChemical { entity_id: entity });
+                        effects.push(Effect::UseResearchChemical {
+                            entity_id: entity,
+                            specimen: None,
+                        });
                     } else if !inspect_only && crate::research::offers_research(&self.world, entity)
                     {
                         let template = crate::scripts::script_util::entity_class_template_id(
@@ -12664,17 +12667,7 @@ impl MissionCore {
                     ) else {
                         continue;
                     };
-                    let required = self
-                        .world
-                        .borrow::<View<dark::properties::PropBaseTechDesc>>()
-                        .unwrap()
-                        .get(entity_id)
-                        .map(|skills| skills.0.research().max(1))
-                        .unwrap_or(1);
-                    let skill = crate::scripts::script_util::player_skill_level(
-                        &self.world,
-                        crate::player_stats::Skill::Research,
-                    );
+                    let (required, skill) = crate::research::research_skill(&self.world, entity_id);
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                     let result = quests.research_mut().begin(template_id, required, skill);
                     drop(quests);
@@ -12713,7 +12706,10 @@ impl MissionCore {
                     }
                 }
 
-                Effect::UseResearchChemical { entity_id } => {
+                Effect::UseResearchChemical {
+                    entity_id,
+                    specimen,
+                } => {
                     let scanned = self.flat_ui.device
                         && self.personal_card.last_scan == Some(entity_id)
                         && self
@@ -12728,14 +12724,16 @@ impl MissionCore {
                                 })
                             });
                     // A chemical out of reach (not carried, not scanned close by)
-                    // was never offered to research: no verdict to report.
-                    if !scanned
+                    // was never offered to research: no verdict to report. One
+                    // released onto a held specimen is offered to that specimen.
+                    if specimen.is_none()
+                        && !scanned
                         && !crate::scripts::script_util::player_carried_items(&self.world)
                             .contains(&entity_id)
                     {
                         continue;
                     }
-                    let consumed = apply_research_chemical(&self.world, entity_id);
+                    let consumed = apply_research_chemical(&self.world, entity_id, specimen);
                     if consumed {
                         let stack = self
                             .world
@@ -12743,12 +12741,24 @@ impl MissionCore {
                             .ok()
                             .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
                         let last_dose = stack.unwrap_or(1) <= 1;
-                        // Before the destroy below: the cue reads the held transform.
-                        effects.extend(crate::scripts::script_util::hand_dissolve_cue(
-                            &self.world,
-                            entity_id,
-                            last_dose,
-                        ));
+                        // A dose released onto a held specimen left the other hand.
+                        let holding =
+                            |item| crate::wielded_weapon::vr_hand_holding(&self.world, item);
+                        let hand = holding(entity_id).or_else(|| {
+                            specimen.and_then(holding).map(|hand| match hand {
+                                crate::Handedness::Left => crate::Handedness::Right,
+                                crate::Handedness::Right => crate::Handedness::Left,
+                            })
+                        });
+                        // Before the destroy below: the cue reads the item's transform.
+                        if let Some(hand) = hand {
+                            effects.extend(crate::scripts::script_util::dissolve_cue_in_hand(
+                                &self.world,
+                                entity_id,
+                                hand,
+                                last_dose,
+                            ));
+                        }
                         if !last_dose {
                             let mut stacks = self
                                 .world
@@ -20867,7 +20877,27 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
     effects
 }
 
-fn apply_research_chemical(world: &World, chemical_entity: EntityId) -> bool {
+fn apply_research_chemical(
+    world: &World,
+    chemical_entity: EntityId,
+    specimen: Option<EntityId>,
+) -> bool {
+    // Offered to a specific specimen: resume its project, then dose it.
+    if let Some(specimen) = specimen {
+        if !crate::research::chemical_ready_for(world, chemical_entity, specimen) {
+            return false;
+        }
+        let Some(template_id) =
+            crate::scripts::script_util::entity_class_template_id(world, specimen)
+        else {
+            return false;
+        };
+        let (required, skill) = crate::research::research_skill(world, specimen);
+        let Ok(mut quests) = world.borrow::<UniqueViewMut<QuestInfo>>() else {
+            return false;
+        };
+        quests.research_mut().begin(template_id, required, skill);
+    }
     let chemical_name = world
         .borrow::<View<dark::properties::PropSymName>>()
         .ok()

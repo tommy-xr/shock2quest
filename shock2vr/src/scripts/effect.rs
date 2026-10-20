@@ -510,10 +510,12 @@ pub enum Effect {
     /// Explicit research MFD suspend control.
     SuspendResearch,
 
-    /// Offer one carried chemical to the active research project. The handler
-    /// consumes it only when it matches the currently authored gate.
+    /// Offer one carried chemical to the active research project, or to
+    /// `specimen`'s (which then becomes the active one). The handler consumes
+    /// it only when it matches that project's currently authored gate.
     UseResearchChemical {
         entity_id: EntityId,
+        specimen: Option<EntityId>,
     },
 
     /// Record an audio log the player just frobbed into the persistent
