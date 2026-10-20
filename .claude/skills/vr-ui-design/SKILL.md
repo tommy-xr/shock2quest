@@ -105,7 +105,8 @@ section 3).
   panel and its sidecar fit with no VR-specific layout.
 - **A held device's own screen (GamePig):** only the body's content window is
   mapped onto the model's aperture, so no sidecar shows. Actions that live on
-  a sidecar (hack) stay reachable through the cyber interface or tricorder.
+  a sidecar (hack) stay reachable through the cyber interface or tricorder
+  (a GamePig scanned in the other hand needs a free hand to click the plug).
 - **Keypads** keep their in-world UI.
 
 Before building a panel action, decide which hosts expose it. Never squeeze a
