@@ -96,7 +96,7 @@ const FONT: &str = crate::ui::MFD_FONT;
 /// well - the original's wait glyph is a static hourglass, its loading disc
 /// 272 px - so it is drawn from plain fills.
 const SPINNER_SEGMENTS: usize = 8;
-const SPINNER_LIT: [u8; 3] = [0, 255, 190];
+const SPINNER_LIT: [u8; 3] = crate::ui::MFD_TINT;
 const SPINNER_TRACK: [u8; 3] = [0, 60, 45];
 
 /// The condition badges, best first: a green "10" down through a red "1", then
@@ -290,8 +290,8 @@ pub(crate) fn reload_spinner(is_vr: bool, reload: Option<&RuntimePropReloading>)
 }
 
 /// Draw the reload spinner centred in the count `well`: its ring lights
-/// clockwise from twelve o'clock, one lead segment from the press, and is
-/// full as the trigger unlocks.
+/// clockwise from twelve o'clock, one lead segment from the press and the
+/// last for the lockout's final eighth; the count's return marks the unlock.
 fn emit_reload_spinner(canvas: &mut UiCanvas, well: Rect, progress: f32) {
     let side = well.w.min(well.h);
     let segment = (side / 5.0).round().max(2.0);
@@ -464,11 +464,7 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
     // The fire-mode button is shown for every gun with a magazine, energy
     // weapons included - only a gun whose data names no mode has none.
     if let Some(header) = &readout.gun_setting_header {
-        out.push(plated(
-            ReadoutButton::GunSetting,
-            SETTING_BUTTON,
-            Some(header),
-        ));
+        out.push(plated(ReadoutButton::GunSetting, SETTING_BUTTON, Some(header)));
     }
     if readout.can_reload {
         out.push(plated(
@@ -1317,10 +1313,7 @@ mod tests {
             .collect();
         for (position, size, _) in &fills {
             assert!(
-                position.x >= well.x
-                    && position.y >= well.y
-                    && position.x + size.x <= well.x + well.w
-                    && position.y + size.y <= well.y + well.h,
+                well.contains(*position) && well.contains(*position + *size),
                 "spinner segment {position:?}+{size:?} must sit in the count well {well:?}"
             );
         }
@@ -1360,8 +1353,8 @@ mod tests {
             };
             spinner_in(&readout, COMPACT_COUNT).1
         };
-        // A lead segment is lit from the press, and the ring is full as the
-        // trigger unlocks.
+        // A lead segment is lit from the press; the last lights for the
+        // lockout's final eighth.
         assert_eq!(lit(0.0), 1);
         assert_eq!(lit(0.49), 4);
         assert_eq!(lit(0.5), 5);

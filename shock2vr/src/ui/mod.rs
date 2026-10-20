@@ -93,7 +93,7 @@ pub const CHROME_BOLD_FONT: &str = "@shock-chrome-bold";
 /// 25AE's `vector_blueaa.fon` also declares), and MAINAA tops out at index 209
 /// `(0,255,191)`.
 const TITLE_TINT: [u8; 3] = [1, 194, 147];
-const MFD_TINT: [u8; 3] = [0, 255, 190];
+pub(crate) const MFD_TINT: [u8; 3] = [0, 255, 190];
 /// A cool grey a step below the bevel highlight, so chrome labels sit on the
 /// plate instead of glowing off it.
 const CHROME_TINT: [u8; 3] = [168, 176, 172];
