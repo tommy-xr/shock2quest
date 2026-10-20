@@ -45,10 +45,7 @@ impl TrackingTransform {
     pub fn rebase_input(input: &mut crate::input_context::InputContext, center: f32, cap: f32) {
         if let Some(old) = input.tracking {
             let new = old.with_stance(center, cap);
-            let delta = new.translation - old.translation;
-            input.head.position += delta;
-            input.left_hand.position += delta;
-            input.right_hand.position += delta;
+            input.shift_rig(new.translation - old.translation);
             input.tracking = Some(new);
         }
     }
@@ -135,15 +132,8 @@ impl RoomscaleState {
             .map_or(Vector3::zero(), |state| state.offset)
     }
 
-    /// The same translation is consumed by input and the shared camera resolver.
-    pub fn apply(input: &mut crate::input_context::InputContext, offset: Vector3<f32>) {
-        input.head.position += offset;
-        input.left_hand.position += offset;
-        input.right_hand.position += offset;
-    }
-
-    /// A Game-level pause skips mission updates entirely. Reset only the delta
-    /// history so movement during that interval cannot become a resumed step.
+    /// Pause, focus loss and save-load skip mission updates. Reset only the
+    /// delta history so movement during that interval cannot become a resumed step.
     pub fn invalidate(world: &World) {
         if let Ok(mut state) = world.borrow::<shipyard::UniqueViewMut<Self>>() {
             state.previous_head = None;
@@ -171,7 +161,7 @@ mod tests {
             input.right_hand.position.x += 0.05;
             body += state.sample(&input, true, true, true);
             let mut resolved = input.clone();
-            RoomscaleState::apply(&mut resolved, state.offset);
+            resolved.shift_rig(state.offset);
             assert!(resolved.head.position.x.abs() < 1e-5);
             for (raw, corrected) in [
                 (input.left_hand.position, resolved.left_hand.position),

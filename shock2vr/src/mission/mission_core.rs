@@ -4890,10 +4890,7 @@ impl MissionCore {
                     && !self.player_handle.is_topping_out(),
             );
         let mut roomscale_input = input_context.clone();
-        crate::vr_tracking::RoomscaleState::apply(
-            &mut roomscale_input,
-            crate::vr_tracking::RoomscaleState::offset(&self.world),
-        );
+        roomscale_input.shift_rig(crate::vr_tracking::RoomscaleState::offset(&self.world));
         let input_context = &roomscale_input;
 
         // A dead player's actionable channels are neutral until
@@ -25156,6 +25153,7 @@ impl crate::game_scene::GameScene for MissionCore {
         self.reference_grid.reset();
         self.dismiss_amp_carousel();
         crate::vr_psi_sway::suspend(&self.world);
+        crate::vr_tracking::RoomscaleState::invalidate(&self.world);
         self.flat_ui.cancel_item_use();
     }
 
