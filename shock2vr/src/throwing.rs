@@ -1,7 +1,7 @@
 //! Tracked release motion and bounded, one-impact damage for player-thrown props.
 use std::collections::{HashMap, VecDeque};
 
-use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, Zero};
+use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, Zero, vec3};
 use dark::properties::{PropHitPoints, PropMaterial, PropPhysAttr};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
@@ -60,6 +60,27 @@ impl ThrowTuning {
 pub(crate) struct ReleaseMotion {
     pub linear: Vector3<f32>,
     pub angular: Vector3<f32>,
+}
+
+/// How a fumbled weapon leaves the hand: up and back from the contact it was
+/// refused at, tumbling - a visible spring out of the grip that lands about
+/// a unit away rather than across the room. Straight up without a contact.
+pub(crate) fn fumble_motion(
+    weapon: Vector3<f32>,
+    away_from: Option<Vector3<f32>>,
+) -> ReleaseMotion {
+    const OUT_SPEED: f32 = 1.5;
+    const UP_SPEED: f32 = 2.5;
+    const SPIN: f32 = 6.0;
+    let out = away_from
+        .map(|contact| vec3(weapon.x - contact.x, 0.0, weapon.z - contact.z))
+        .filter(|out| out.magnitude2() > 1e-8)
+        .map_or(Vector3::zero(), |out| out.normalize());
+    let up = Vector3::unit_y();
+    ReleaseMotion {
+        linear: out * OUT_SPEED + up * UP_SPEED,
+        angular: up.cross(out) * SPIN,
+    }
 }
 
 impl Default for ReleaseMotion {
@@ -526,6 +547,22 @@ impl ThrownItems {
 mod tests {
     use super::*;
     use cgmath::vec3;
+
+    /// A fumbled weapon springs up and back from the contact - horizontally
+    /// away from it, never toward the victim - and straight up without one.
+    #[test]
+    fn a_fumble_springs_up_and_away_from_the_contact() {
+        let weapon = vec3(1.0, 1.5, 0.0);
+        let motion = fumble_motion(weapon, Some(vec3(2.0, 1.2, 0.0)));
+        assert!(motion.linear.x < 0.0 && motion.linear.z.abs() < 1e-6);
+        assert!(motion.linear.y > 0.0);
+        assert!(motion.linear.magnitude() < 4.0, "a spring, not a throw");
+
+        let straight = fumble_motion(weapon, None);
+        assert_eq!(straight.linear, vec3(0.0, straight.linear.y, 0.0));
+        assert!(straight.linear.y > 0.0);
+    }
+
     fn identity() -> Quaternion<f32> {
         Quaternion::new(1.0, 0.0, 0.0, 0.0)
     }

@@ -221,6 +221,12 @@ pub trait PlayerInteraction {
     /// A held entity was destroyed; release it.
     fn on_entity_destroyed(&mut self, entity_id: EntityId);
 
+    /// Knock `entity_id` out of the VR hands holding or supporting it; they
+    /// ignore trigger and grip until released. False when no hand holds it.
+    fn fumble(&mut self, _entity_id: EntityId) -> bool {
+        false
+    }
+
     /// Which hand is holding `entity_id`, if any. A VR wield needs this to
     /// pick which way round to draw a first-person arm rig (they are all
     /// authored right-handed). Flat has one wield hand and reports it as the
@@ -2205,6 +2211,22 @@ impl PlayerInteraction for VrInteraction {
                 }
             });
         [primary, support]
+    }
+
+    fn fumble(&mut self, entity_id: EntityId) -> bool {
+        let hands = self.haptic_hands(entity_id);
+        if hands[0].is_none() {
+            return false;
+        }
+        self.on_entity_destroyed(entity_id);
+        for hand in hands.into_iter().flatten() {
+            let slot = match hand {
+                Handedness::Left => &mut self.left_hand,
+                Handedness::Right => &mut self.right_hand,
+            };
+            *slot = slot.spent_until_release();
+        }
+        true
     }
 
     fn holding_hand(&self, entity_id: EntityId) -> Option<Handedness> {

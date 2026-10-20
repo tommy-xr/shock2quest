@@ -346,6 +346,12 @@ pub(crate) fn unresearched_message(world: &World) -> String {
     )
 }
 
+/// HUD line for an unresearched weapon that jumped out of a VR hand at a blow.
+pub(crate) fn unhandled_weapon_message(world: &World, entity_id: EntityId) -> String {
+    let name = short_name(world, entity_id).unwrap_or_else(|| unresearched_name(world));
+    format!("Research needed to handle {name}")
+}
+
 /// HUD line for a chemical the player used: taken by the active project or not.
 pub(crate) fn chemical_message(world: &World, consumed: bool) -> String {
     if consumed {

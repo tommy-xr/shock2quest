@@ -15160,6 +15160,28 @@ impl MissionCore {
                         .unwrap()
                         .request(hand, pulse);
                 }
+                Effect::FumbleHeldItem {
+                    entity_id,
+                    away_from,
+                } => {
+                    let hand = self.interaction.holding_hand(entity_id);
+                    if let Some(hand) = hand.filter(|_| self.interaction.fumble(entity_id)) {
+                        self.drop_held_item_into_world(entity_id);
+                        if let Some(position) = self.entity_world_position(entity_id) {
+                            let motion = crate::throwing::fumble_motion(position, away_from);
+                            self.physics.release_motion(entity_id, motion);
+                            self.thrown_items.track_existing_motion(
+                                &self.world,
+                                &self.physics,
+                                entity_id,
+                            );
+                        }
+                        effects.push_back(Effect::HandHaptic {
+                            hand,
+                            pulse: crate::haptics::WEAPON_FUMBLE,
+                        });
+                    }
+                }
                 Effect::EjectWeaponCasings { entity_id } => {
                     if self.interaction.viewmodel_entity() == Some(entity_id)
                         || (crate::vr_shotgun_pump::enabled(&self.world, entity_id)
