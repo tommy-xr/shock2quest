@@ -2808,6 +2808,7 @@ fn capture_frame_snapshot(
                     .as_ref()
                     .map(|s| s.explored_map_locations.clone())
                     .unwrap_or_default(),
+                active_research_template: state.as_ref().and_then(|s| s.active_research_template),
                 hand_feedback: game
                     .debug_scene()
                     .map(|s| s.hand_feedback())

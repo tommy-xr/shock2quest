@@ -802,6 +802,8 @@ export interface PlayerSnapshot {
   /** The automap locations explored in the current mission (ascending).
    * Persisted per mission in QuestInfo; survives save/load. */
   explored_map_locations: number[];
+  /** Archetype (template id) of the research project in progress, if any. */
+  active_research_template: number | null;
   /** Climb state: ladder/hand climbing, and (VR) the hands holding on. */
   climb: ClimbState;
   /** Resolved per-hand glove feedback; null in flat presentation. */

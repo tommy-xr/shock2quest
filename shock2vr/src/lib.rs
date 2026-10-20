@@ -974,6 +974,8 @@ pub struct PlayerStateSnapshot {
     /// Empty when the scene has no `QuestInfo` or no automap. Persisted per
     /// mission in `QuestInfo`.
     pub explored_map_locations: Vec<i32>,
+    /// Archetype of the research project in progress, if any.
+    pub active_research_template: Option<i32>,
 }
 
 /// Live player pose attached to a save refusal so automation can diagnose and
@@ -1195,6 +1197,10 @@ impl Game {
                 .ok()
                 .map(|q| q.explored_map_locations(self.scene_name()))
                 .unwrap_or_default(),
+            active_research_template: world
+                .borrow::<UniqueView<QuestInfo>>()
+                .ok()
+                .and_then(|q| q.research().active_template_id()),
         })
     }
 

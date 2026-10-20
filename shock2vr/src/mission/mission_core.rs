@@ -17478,10 +17478,14 @@ impl MissionCore {
     /// it is drawn with. Only for an entity a ray can hit - one with a body -
     /// so a decal reports no bounds rather than a frame it can never show.
     /// The surface is the bind pose, as frob rays test it, so a jointed object
-    /// (a camera mid-pan) is framed at rest, as its collider was before.
+    /// (a camera mid-pan) is framed at rest, as its collider was before. An
+    /// item held in a VR hand has no body but is framed too: it is bracketed
+    /// while it will take the item in the other hand.
     fn model_surface_bounds(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
         use collision::Aabb as _;
-        if !self.id_to_physics.contains_key(&entity_id) {
+        if !self.id_to_physics.contains_key(&entity_id)
+            && crate::wielded_weapon::vr_hand_holding(&self.world, entity_id).is_none()
+        {
             return None;
         }
         let local = self.id_to_model.get(&entity_id)?.surface_bounds()?;
