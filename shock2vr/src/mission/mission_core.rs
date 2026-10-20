@@ -6318,14 +6318,17 @@ impl MissionCore {
         let (left_hand_held, right_hand_held) = self.interaction.held_entities();
         let hand_empty = [left_hand_held.is_none(), right_hand_held.is_none()];
         let mut on_panel = [false; 2];
-        // The strip specifically, for the release-deposit below: the rest of
-        // the canvas is not a drop target, so a release there stays an
-        // ordinary world drop.
+        // The strip specifically, for the release-deposit below: apart from
+        // the paperdoll holster wells, the rest of the canvas is not a drop
+        // target, so a release there stays an ordinary world drop.
         let mut on_strip = [false; 2];
         // The strip cell each on-strip hand's ray currently lands on, for the
         // release-deposit below - retail drops the item into the cell the
         // player is pointing at rather than always the first free one.
         let mut strip_cell: [Option<(usize, usize)>; 2] = [None; 2];
+        // The paperdoll holster well each hand's ray lands on (storage slot),
+        // for the release-to-holster below.
+        let mut holster_well: [Option<usize>; 2] = [None; 2];
         if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
             for ray in pass.rays.iter() {
                 let Some(canvas_hit) = ray.canvas_hit else {
@@ -6343,6 +6346,10 @@ impl MissionCore {
                     on_strip[hand_slot(ray.handedness)] = true;
                     strip_cell[hand_slot(ray.handedness)] =
                         self.flat_ui.strip_cell_at(canvas_hit, &self.world);
+                }
+                if game_options.presentation_mode == crate::PresentationMode::Vr {
+                    holster_well[hand_slot(ray.handedness)] =
+                        self.flat_ui.holster_slot_at(canvas_hit);
                 }
             }
         }
@@ -6540,6 +6547,16 @@ impl MissionCore {
             && self.player_is_alive()
             && self.player_controls_enabled
             && crate::cyber_interface::installed(&self.world);
+        let holster_posed = held.map(|entity| {
+            entity.is_some_and(|entity| {
+                self.holsters
+                    .poses
+                    .for_entity(&self.world, entity)
+                    .is_some()
+            })
+        });
+        // Last frame's tracked squeeze, for the paperdoll release edge below.
+        let gripped = self.holsters.pressed_item;
         let holster_actions = self.holsters.update(
             &body_input,
             held,
@@ -6555,14 +6572,7 @@ impl MissionCore {
                     crate::virtual_hand::is_wieldable_weapon(&self.world, entity)
                 })
             }),
-            held.map(|entity| {
-                entity.is_some_and(|entity| {
-                    self.holsters
-                        .poses
-                        .for_entity(&self.world, entity)
-                        .is_some()
-                })
-            }),
+            holster_posed,
             body_gear,
             tick.elapsed.as_secs_f32(),
         );
@@ -6602,6 +6612,36 @@ impl MissionCore {
                 self.shoulder_backpack.near[i] = false;
                 self.shoulder_backpack.entered[i] = false;
                 self.shoulder_backpack.draws[i] = None;
+            }
+        }
+        // Releasing a held item over a paperdoll holster well stores it there.
+        // The ray crosses the strip, so this must claim the release before the
+        // strip deposit would; the claim then flows through the physical
+        // holster's Store/Refuse handling below.
+        let holster_actions = super::holsters::paperdoll_actions(
+            if body_gear { holster_well } else { [None; 2] },
+            held,
+            // A real release edge, as the thigh holster requires: a grip held
+            // open by a retain or restore never squeezed, so it never claims.
+            // Downloads and logs keep their collecting release.
+            std::array::from_fn(|i| {
+                held[i].is_some_and(|entity| {
+                    gripped[i] == Some(entity)
+                        && [&hands_input.left_hand, &hands_input.right_hand][i].squeeze_value
+                            < crate::ui::VR_TRIGGER_THRESHOLD
+                        && chest_actions[i].is_none()
+                        && !crate::scripts::script_util::is_always_collected(&self.world, entity)
+                        && !crate::scripts::script_util::is_download_pickup(&self.world, entity)
+                })
+            }),
+            holster_posed,
+            super::holsters::occupants(&self.world),
+            holster_actions,
+        );
+        for (i, action) in holster_actions.iter().enumerate() {
+            // Same as a refused thigh deposit: keep the item until a re-grip.
+            if let Some(super::holsters::Action::Refuse { entity }) = *action {
+                self.holsters.retained.retain(i, entity);
             }
         }
         let chest_merge_targets = std::array::from_fn::<_, 2, _>(|i| {
@@ -8003,7 +8043,10 @@ impl MissionCore {
                 .find(|ray| hand_slot(ray.handedness) == slot)?;
             let item = hand_items[slot]?;
             let point = ray.canvas_hit?;
-            if !self.flat_ui.strip_contains(point) {
+            // A release over a paperdoll holster well holsters instead.
+            if !self.flat_ui.strip_contains(point)
+                || (body_gear && self.flat_ui.holster_slot_at(point).is_some())
+            {
                 return None;
             }
             let container = self.flat_ui.strip_entity()?;
