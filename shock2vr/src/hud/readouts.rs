@@ -300,7 +300,10 @@ pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
 fn hand_selectors(readouts: &UseModeReadouts) -> [ReadoutButtonSpec; 2] {
     std::array::from_fn(|slot| {
         let hand = &readouts.hands[slot];
-        let value = if let Some(ammo) = hand.ammo {
+        // A gun locked mid-reload claims no rounds, as its count well does.
+        let value = if hand.reload_progress.is_some() {
+            "--".into()
+        } else if let Some(ammo) = hand.ammo {
             ammo.to_string()
         } else if hand.psi_power.is_some() {
             "PSI".into()
@@ -610,5 +613,18 @@ mod tests {
         };
         assert_eq!(gauge(readouts(None, true)), 0);
         assert_eq!(gauge(readouts(Some(0), true)), 1);
+    }
+
+    #[test]
+    fn a_reloading_hand_tab_claims_no_rounds() {
+        let mut r = readouts(Some(12), true);
+        r.hands[1] = AmmoReadout {
+            ammo: Some(12),
+            reload_progress: Some(0.3),
+            ..Default::default()
+        };
+        assert_eq!(hand_selectors(&r)[1].text.as_deref(), Some("RIGHT --"));
+        r.hands[1].reload_progress = None;
+        assert_eq!(hand_selectors(&r)[1].text.as_deref(), Some("RIGHT 12"));
     }
 }
