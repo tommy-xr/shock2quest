@@ -80,9 +80,6 @@ const LOG_BUTTON: Rect = Rect::new(383.0, 432.0, 38.0, 36.0);
 /// on the canvas.
 pub(crate) const SYSTEM_BUTTON: Rect = Rect::new(288.0, 372.0, 64.0, 36.0);
 
-/// IFBTN00.PCX's authored size and bevel widths (left, top, right, bottom).
-const PLATE_ART: ([f32; 2], [f32; 4]) = ([38.0, 36.0], [4.0, 4.0, 5.0, 4.0]);
-
 /// The system button as one spec, so [`emit_use_mode`] draws exactly what
 /// [`buttons`] hit-tests.
 pub(crate) fn system_button() -> ReadoutButtonSpec {
@@ -95,7 +92,7 @@ pub(crate) fn system_button() -> ReadoutButtonSpec {
         text: Some("MENU".to_owned()),
         font: crate::ui::CHROME_BOLD_FONT,
         font_size: 8.0,
-        nine_slice: Some(PLATE_ART),
+        nine_slice: Some(ammo_panel::PLATE_ART),
     }
 }
 

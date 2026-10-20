@@ -20,7 +20,7 @@
 
 use cgmath::{Vector2, vec2};
 use dark::properties::ObjectState;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 
@@ -58,6 +58,10 @@ pub(crate) const CYCLE_BUTTON: Rect = Rect::new(186.0, 15.0, 12.0, 41.0);
 pub(crate) const SETTING_BUTTON: Rect = Rect::new(118.0, 15.0, 66.0, 20.0);
 /// The RELOAD button - the same thing the Reload key does.
 pub(crate) const RELOAD_BUTTON: Rect = Rect::new(118.0, 37.0, 66.0, 20.0);
+
+/// IFBTN00.PCX, the interface's blank button plate: its authored size and
+/// bevel widths (left, top, right, bottom), for nine-patching onto a control.
+pub(crate) const PLATE_ART: ([f32; 2], [f32; 4]) = ([38.0, 36.0], [4.0, 4.0, 5.0, 4.0]);
 
 /// Psi tier badge (AmPsi&lt;tier&gt;1.PCX, 32x19), in the gauge well while the
 /// amp is wielded - the amp has no clip, so this replaces the ammo readout.
@@ -324,8 +328,12 @@ impl AmmoReadout {
             can_cycle_ammo: weapon
                 .is_some_and(|w| crate::scripts::script_util::can_cycle_ammo(world, w)),
             // An energy weapon has no magazine to swap - it recharges - so it
-            // shows no reload control, exactly as the original.
-            can_reload: weapon.is_some_and(|w| !crate::wielded_weapon::is_energy_weapon(world, w)),
+            // shows no reload control, exactly as the original. VR reloads by
+            // physically swapping the magazine, so it has no reload control.
+            can_reload: weapon.is_some_and(|w| !crate::wielded_weapon::is_energy_weapon(world, w))
+                && !world
+                    .borrow::<UniqueView<crate::mission::GlobalPresentationMode>>()
+                    .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr),
             reload_label: super::hud_strings(world).reload_label,
             show_buttons,
         }
@@ -352,6 +360,15 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
         font: FONT,
         font_size: 0.0,
         nine_slice: None,
+    };
+    // The fire-mode and reload controls read as pressable: on the plate the
+    // interface's other buttons use, nine-patched to the control's rect, with
+    // the grey caption a plate takes.
+    let plated = |button, rect, text: Option<&str>| ReadoutButtonSpec {
+        texture: Some("IFBTN00.PCX"),
+        font: crate::ui::CHROME_FONT,
+        nine_slice: Some(PLATE_ART),
+        ..spec(button, rect, None, text)
     };
     if !readout.show_buttons {
         return Vec::new();
@@ -397,18 +414,12 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
     // The fire-mode button is shown for every gun with a magazine, energy
     // weapons included - only a gun whose data names no mode has none.
     if let Some(header) = &readout.gun_setting_header {
-        out.push(spec(
-            ReadoutButton::GunSetting,
-            SETTING_BUTTON,
-            None,
-            Some(header),
-        ));
+        out.push(plated(ReadoutButton::GunSetting, SETTING_BUTTON, Some(header)));
     }
     if readout.can_reload {
-        out.push(spec(
+        out.push(plated(
             ReadoutButton::Reload,
             RELOAD_BUTTON,
-            None,
             Some(&readout.reload_label),
         ));
     }
@@ -718,6 +729,12 @@ mod tests {
         world.add_unique(PsiPowerSelection { index: 0 });
         let gun_readout = AmmoReadout::for_weapon(&world, Some(gun), false);
         let amp_readout = AmmoReadout::for_weapon(&world, Some(amp), false);
+        assert!(gun_readout.can_reload, "flat reloads from the readout");
+        // VR swaps the magazine by hand, so the readout offers no reload.
+        world.add_unique(crate::mission::GlobalPresentationMode(
+            crate::PresentationMode::Vr,
+        ));
+        assert!(!AmmoReadout::for_weapon(&world, Some(gun), false).can_reload);
         assert_eq!(gun_readout.ammo, Some(12));
         assert_eq!(gun_readout.psi_power, None);
         assert_eq!(gun_readout.psi_charge, None);
@@ -1198,8 +1215,12 @@ mod tests {
                 spec.button
             );
         }
-        // count + icon + type + 3 buttons
-        assert_eq!(canvas.element_count(), 3 + specs.len());
+        // count + icon + type, then each button's plate and label
+        let button_elements: usize = specs
+            .iter()
+            .map(|spec| usize::from(spec.texture.is_some()) + usize::from(spec.text.is_some()))
+            .sum();
+        assert_eq!(canvas.element_count(), 3 + button_elements);
     }
 
     #[test]
