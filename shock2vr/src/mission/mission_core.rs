@@ -5371,6 +5371,9 @@ impl MissionCore {
             self.personal_card.hand == Some(0),
             self.personal_card.hand == Some(1),
         ]);
+        if !tick.elapsed.is_zero() && self.climb_exit_teleport.is_some() {
+            self.interaction.suspend_hand_climb(input_context);
+        }
         let hand_climb = (!tick.elapsed.is_zero()
             && !self.player_handle.is_topping_out()
             && self.climb_exit_teleport.is_none())
@@ -5499,7 +5502,9 @@ impl MissionCore {
                     self.climb_exit_teleport = None;
                 }
             }
-            if self.climb_exit_teleport.is_some_and(|exit| !exit.moved()) {
+            // The whole transition owns the body: no stick walking, before
+            // the move or through the fade-in after it.
+            if self.climb_exit_teleport.is_some() {
                 hand_climb.translation = Some(vec3(0.0, 0.0, 0.0));
             }
             // Apply the crouch request before moving: swaps the capsule size

@@ -296,6 +296,34 @@ test(
 );
 
 test(
+  "debug_ladder (VR): a stick and a squeeze held through the exit fade neither walk nor grab",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+    const { anchor } = await climbAt(game, SIDE_Z, 5.3);
+    const shown = await (await aimer(game))([-6.3, PLATFORM_Y, SIDE_Z + 2.0]);
+    assert.equal(shown.mode, "assisted", JSON.stringify(shown));
+    // Walking forward the whole time; the hand closes again right after release.
+    await game.input.set("left_hand.thumbstick", [0, 1]);
+    await game.input.set(`${anchor}_hand.squeeze`, 0);
+    await game.step({ frames: 1 });
+    await game.input.set(`${anchor}_hand.squeeze`, 1);
+    let { player } = await game.info();
+    for (let frame = 0; frame < 30 && (frame < 3 || player.climb.release.exit_fade > 0); frame += 1) {
+      await game.step({ frames: 1 });
+      ({ player } = await game.info());
+      assert.equal(player.climb.grips.length, 0, `no hold during the fade (frame ${frame})`);
+    }
+    assert.equal(player.climb.release.exit_fade, 0, "faded in");
+    assert.ok(horizontal(player.position, shown.landing!) < 0.01, `still on the footprint: ${player.position}`);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
+    // The squeeze held through the fade is no fresh press.
+    await game.step({ frames: 10 });
+    assert.equal((await game.info()).player.climb.grips.length, 0, "no grab after the fade");
+  },
+);
+
+test(
   "debug_ladder (VR): a teleport elsewhere during the exit fade cancels the exit",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
