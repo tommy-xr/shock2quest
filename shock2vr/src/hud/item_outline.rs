@@ -453,12 +453,28 @@ mod tests {
 
     #[test]
     fn item_name_sits_above_brackets_and_fits_the_screen() {
-        let rect = bracket_name_rect(extents((200.0, 100.0), (350.0, 300.0)), 120.0, SCREEN);
+        let rect =
+            bracket_name_rect(extents((200.0, 100.0), (350.0, 300.0)), 120.0, SCREEN).unwrap();
         assert_eq!((rect.x, rect.y, rect.w, rect.h), (200.0, 86.0, 120.0, 10.0));
-        let edge = bracket_name_rect(extents((740.0, 14.0), (790.0, 300.0)), 120.0, SCREEN);
+        let edge =
+            bracket_name_rect(extents((740.0, 14.0), (790.0, 300.0)), 120.0, SCREEN).unwrap();
         assert_eq!((edge.x, edge.y), (670.0, 0.0));
-        let long = bracket_name_rect(extents((200.0, 100.0), (350.0, 300.0)), 1000.0, SCREEN);
+        let long =
+            bracket_name_rect(extents((200.0, 100.0), (350.0, 300.0)), 1000.0, SCREEN).unwrap();
         assert_eq!((long.x, long.w), (10.0, 780.0));
+    }
+
+    #[test]
+    fn offscreen_brackets_do_not_pin_a_name_to_the_viewport() {
+        for bounds in [
+            extents((-200.0, 100.0), (-50.0, 300.0)),
+            extents((850.0, 100.0), (1000.0, 300.0)),
+            extents((200.0, -200.0), (350.0, -50.0)),
+            extents((200.0, 650.0), (350.0, 800.0)),
+        ] {
+            assert_eq!(bracket_name_rect(bounds, 120.0, SCREEN), None);
+        }
+        assert!(bracket_name_rect(extents((-50.0, 100.0), (50.0, 300.0)), 120.0, SCREEN).is_some());
     }
 
     #[test]
@@ -469,7 +485,20 @@ mod tests {
             world_action: FrobFlag::MOVE,
             ..frob_info()
         });
-        assert!(collects_on_trigger(&world, item));
+        assert!(collects_on_trigger(
+            &world,
+            item,
+            BracketStyle::Selected,
+            true
+        ));
+        assert!(
+            !collects_on_trigger(&world, item, BracketStyle::Selected, false),
+            "psi-pull alone does not collect"
+        );
+        assert!(
+            !collects_on_trigger(&world, item, BracketStyle::AcceptsHeldItem(item), true),
+            "a tool target is not a pickup hint"
+        );
         world.add_component(
             item,
             PropFrobInfo {
@@ -478,14 +507,22 @@ mod tests {
             },
         );
         assert!(
-            !collects_on_trigger(&world, item),
+            !collects_on_trigger(&world, item, BracketStyle::Selected, true),
             "a script owns this frob"
         );
         let decoration = world.add_entity(());
-        assert!(!collects_on_trigger(&world, decoration));
+        assert!(!collects_on_trigger(
+            &world,
+            decoration,
+            BracketStyle::Selected,
+            true
+        ));
         for kind in crate::test_support::CollectedKind::ALL {
             let pickup = crate::test_support::spawn_collected(&mut world, kind);
-            assert!(collects_on_trigger(&world, pickup), "{kind:?}");
+            assert!(
+                collects_on_trigger(&world, pickup, BracketStyle::Selected, true),
+                "{kind:?}"
+            );
         }
     }
 
@@ -1013,7 +1050,7 @@ pub fn bracket_hint(
     world: &World,
     entity_id: EntityId,
     style: BracketStyle,
-    presentation: crate::PresentationMode,
+    free_hand_target: bool,
 ) -> Option<String> {
     let verb = match style {
         BracketStyle::AcceptsHeldItem(tool) => crate::item_tools::tool_verb_key(world, tool),
@@ -1037,13 +1074,20 @@ pub fn bracket_hint(
         misc.as_deref().unwrap_or(&empty),
     )
     .or_else(|| {
-        (presentation == crate::PresentationMode::Vr && collects_on_trigger(world, entity_id))
-            .then(|| "Collect".to_owned())
+        collects_on_trigger(world, entity_id, style, free_hand_target).then(|| "Collect".to_owned())
     })
 }
 
 /// Free-hand trigger sends Frob: only advertise collection when that path owns pickup.
-fn collects_on_trigger(world: &World, entity: EntityId) -> bool {
+fn collects_on_trigger(
+    world: &World,
+    entity: EntityId,
+    style: BracketStyle,
+    free_hand_target: bool,
+) -> bool {
+    if !free_hand_target || style != BracketStyle::Selected {
+        return false;
+    }
     use crate::scripts::script_util::{
         is_always_collected, is_download_pickup, player_carried_items,
     };
@@ -1156,16 +1200,22 @@ pub fn draw_item_outline(
         use crate::ui::{HAlign, ScaleMode, UiCanvas, VAlign};
         let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
         let width = engine::measure_text_width(&**font, name, LABEL_HEIGHT);
-        let mut canvas = UiCanvas::new(screen_size);
-        canvas.text_fit(
-            bracket_name_rect(extents, width, screen_size),
-            name,
-            "mainfont.fon",
-            LABEL_HEIGHT,
-            HAlign::Left,
-            VAlign::Top,
-        );
-        objects.extend(canvas.render_screen_space(asset_cache, screen_size, ScaleMode::Stretch));
+        if let Some(rect) = bracket_name_rect(extents, width, screen_size) {
+            let mut canvas = UiCanvas::new(screen_size);
+            canvas.text_fit(
+                rect,
+                name,
+                "mainfont.fon",
+                LABEL_HEIGHT,
+                HAlign::Left,
+                VAlign::Top,
+            );
+            objects.extend(canvas.render_screen_space(
+                asset_cache,
+                screen_size,
+                ScaleMode::Stretch,
+            ));
+        }
     }
     if let Some(hint) = hint {
         let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
@@ -1187,14 +1237,22 @@ fn bracket_name_rect(
     extents: Aabb2<f32>,
     text_width: f32,
     screen_size: Vector2<f32>,
-) -> crate::ui::Rect {
+) -> Option<crate::ui::Rect> {
+    // A hand can aim outside the head's view; do not detach its label from offscreen brackets.
+    if extents.max.x < 0.0
+        || extents.max.y < 0.0
+        || extents.min.x > screen_size.x
+        || extents.min.y > screen_size.y
+    {
+        return None;
+    }
     let width = text_width.min((screen_size.x - 20.0).max(0.0));
-    crate::ui::Rect::new(
+    Some(crate::ui::Rect::new(
         extents.min.x.min(screen_size.x - width - 10.0).max(10.0),
         (extents.min.y - LABEL_HEIGHT - 4.0).max(0.0),
         width,
         LABEL_HEIGHT,
-    )
+    ))
 }
 
 /// Keep a projected extent on screen, so an object bigger than the view still

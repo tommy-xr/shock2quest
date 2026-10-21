@@ -17514,7 +17514,8 @@ impl MissionCore {
         // object's runtime entity id, which has no other in-world readout and
         // is most needed for exactly the fixtures the gate excludes - so the
         // debug overlay deliberately bypasses it.
-        let mut highlighted = self.interaction.highlighted_entities();
+        let directly_highlighted = self.interaction.highlighted_entities();
+        let mut highlighted = directly_highlighted.clone();
         // Recently-damaged creatures show the same overlay without being
         // looked at, so a shot that lands off to the side still reads.
         //
@@ -17547,8 +17548,8 @@ impl MissionCore {
                 highlighted.push(*target);
             }
         }
-        // Flat only: VR names objects above their brackets. While
-        // the bar is up (use mode) it owns the readout in both presentations.
+        // Flat's fixed name frame yields to the inventory bar in use mode.
+        // VR keeps item names attached to their brackets.
         if options.presentation_mode != crate::PresentationMode::Vr
             && self.flat_ui.strip_entity().is_none()
         {
@@ -17577,7 +17578,9 @@ impl MissionCore {
                 &self.world,
                 hit_entity,
                 style,
-                options.presentation_mode,
+                options.presentation_mode == crate::PresentationMode::Vr
+                    && directly_highlighted.contains(&hit_entity)
+                    && !self.psi_pull_aim.contains(&hit_entity),
             );
             // The strip above the brackets holds either health or the VR item name.
             let name = (options.presentation_mode == crate::PresentationMode::Vr
