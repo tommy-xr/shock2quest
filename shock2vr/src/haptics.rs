@@ -28,6 +28,11 @@ pub const TOOL_APPLIED: HapticPulse = HapticPulse {
     amplitude: 0.7,
     duration_ms: 90,
 };
+/// An unresearched weapon jumped out of the hand: a hard jolt.
+pub const WEAPON_FUMBLE: HapticPulse = HapticPulse {
+    amplitude: 0.9,
+    duration_ms: 110,
+};
 
 /// Ready cue on the entered edge only, like the shoulder slot: `next` is the
 /// accepting release target this frame, `previous` last frame's.

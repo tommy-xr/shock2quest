@@ -1067,6 +1067,13 @@ pub enum Effect {
         hand: crate::Handedness,
         pulse: crate::haptics::HapticPulse,
     },
+    /// A held weapon the player cannot handle springs out of the VR hand
+    /// holding it, away from `away_from` (the contact it was refused at),
+    /// with a jolt on that hand. No-op unless a VR hand holds it.
+    FumbleHeldItem {
+        entity_id: EntityId,
+        away_from: Option<Vector3<f32>>,
+    },
     /// Set an entity's `PropScale` and the rendered transform built from it
     /// (a scale tweq's per-frame size).
     SetScale {

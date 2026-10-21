@@ -164,7 +164,15 @@ impl Script for HeldMeleeWeapon {
                 .flatten();
 
                 let mut effects = Vec::new();
-                if let Some(amount) = damage {
+                // An unresearched weapon cannot be handled: the blow it would
+                // land throws it out of the hand instead. The swing cooldown
+                // `may_damage` armed keeps it to one per contact.
+                if damage.is_some() && crate::research::is_unresearched(world, entity_id) {
+                    effects.push(Effect::FumbleHeldItem {
+                        entity_id,
+                        away_from: contact.map(|contact| contact.point),
+                    });
+                } else if let Some(amount) = damage {
                     effects.push(self.charge.landed(entity_id));
                     // In VR a qualifying strike is the attack gesture; merely
                     // repositioning a tracked hand must not break stealth.
@@ -1340,5 +1348,68 @@ mod tests {
             collide(&mut script, &world, weapon, target),
             Effect::NoEffect
         ));
+    }
+
+    fn unresearched(world: &mut World, weapon: EntityId) {
+        world.add_component(
+            weapon,
+            dark::properties::PropObjState(dark::properties::ObjectState::Unresearched),
+        );
+    }
+
+    fn fumbles(effect: &Effect, weapon: EntityId) -> usize {
+        count_effects(
+            effect,
+            |effect| matches!(effect, Effect::FumbleHeldItem { entity_id, .. } if *entity_id == weapon),
+        )
+    }
+
+    /// Negative-first: an unresearched weapon's landed blow dealt full damage
+    /// in VR. It now asks to spring out of the hand, away from the contact -
+    /// once per contact.
+    #[test]
+    fn an_unresearched_weapon_jumps_out_of_the_hand_instead_of_landing_a_blow() {
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        unresearched(&mut world, weapon);
+        let mut script = HeldMeleeWeapon::new();
+
+        let effect = collide(&mut script, &world, weapon, target);
+        assert_eq!(damage_count(&effect), 0, "no damage: {effect:?}");
+        let Effect::Multiple(effects) = &effect else {
+            panic!("expected fumble effects");
+        };
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::FumbleHeldItem { entity_id, away_from: Some(point) }
+                if *entity_id == weapon && *point == vec3(2.0, 3.0, 4.0)
+        )));
+
+        let again = collide(&mut script, &world, weapon, target);
+        assert_eq!(fumbles(&again, weapon), 0, "one fumble per contact");
+    }
+
+    /// A graze that would not have damaged does not fumble either, and once
+    /// researched the weapon lands its blow.
+    #[test]
+    fn only_a_damaging_blow_with_an_unresearched_weapon_fumbles() {
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        unresearched(&mut world, weapon);
+        let graze = collide_at_speed(
+            &mut HeldMeleeWeapon::new(),
+            &world,
+            weapon,
+            target,
+            &swinging(weapon),
+        );
+        assert_eq!(fumbles(&graze, weapon), 0);
+
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        world.add_component(
+            weapon,
+            dark::properties::PropObjState(dark::properties::ObjectState::Normal),
+        );
+        let blow = collide(&mut HeldMeleeWeapon::new(), &world, weapon, target);
+        assert_eq!(fumbles(&blow, weapon), 0);
+        assert_eq!(damage_count(&blow), 1);
     }
 }

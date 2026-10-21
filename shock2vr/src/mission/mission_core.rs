@@ -15238,6 +15238,43 @@ impl MissionCore {
                         .unwrap()
                         .request(hand, pulse);
                 }
+                Effect::FumbleHeldItem {
+                    entity_id,
+                    away_from,
+                } => {
+                    // Only while a hand still holds it: a release earlier this
+                    // frame, or a second victim struck before the drop lands,
+                    // fumbles nothing and says nothing.
+                    if let Some(hand) = self.interaction.fumble(entity_id) {
+                        let (left, right) = self.interaction.held_entities();
+                        {
+                            let mut player =
+                                self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
+                            player.left_hand_entity_id = left;
+                            player.right_hand_entity_id = right;
+                        }
+                        self.drop_held_item_into_world(entity_id);
+                        if let Some(position) = self.entity_world_position(entity_id) {
+                            let motion = crate::throwing::fumble_motion(position, away_from);
+                            self.physics.release_motion(entity_id, motion);
+                            self.thrown_items.track_existing_motion(
+                                &self.world,
+                                &self.physics,
+                                entity_id,
+                            );
+                        }
+                        effects.push_back(Effect::HandHaptic {
+                            hand,
+                            pulse: crate::haptics::WEAPON_FUMBLE,
+                        });
+                        effects.push_back(Effect::ShowMessage {
+                            text: crate::scripts::gui::unhandled_weapon_message(
+                                &self.world,
+                                entity_id,
+                            ),
+                        });
+                    }
+                }
                 Effect::EjectWeaponCasings { entity_id } => {
                     if self.interaction.viewmodel_entity() == Some(entity_id)
                         || (crate::vr_shotgun_pump::enabled(&self.world, entity_id)

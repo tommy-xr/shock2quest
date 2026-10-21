@@ -253,6 +253,16 @@ impl VirtualHand {
         self.get_held_entity() == Some(entity_id)
     }
 
+    /// Deaf to trigger and grip until both are let go: a hand an item was
+    /// knocked out of must not re-grab or frob it while still closed.
+    pub(crate) fn spent_until_release(&self) -> Self {
+        debug_assert!(self.get_held_entity().is_none());
+        let mut hand = self.clone();
+        hand.spent_until_release = true;
+        hand.reset_throw_motion();
+        hand
+    }
+
     pub fn get_position(&self) -> Vector3<f32> {
         self.position
     }
