@@ -330,7 +330,12 @@ impl PhysicsWorld {
                     == grip.entity_id)
                 .then_some((floor, hit.normal))
         };
-        let planes = [Vector::y(), vec_to_nvec(grip.normal)];
+        let held_plane = vec_to_nvec(grip.normal);
+        let planes: &[Vector<Real>] = if held_plane.y > 0.999 {
+            &[Vector::y()]
+        } else {
+            &[Vector::y(), held_plane]
+        };
         // On the held surface all the way from the hand: no gap to another
         // platform, sampled every 0.2.
         let connected = |plane: Vector<Real>, landing: &Landing| {
@@ -651,6 +656,40 @@ mod tests {
             .held_floor_landing(&player, &edge, None)
             .expect("the level deck");
         assert!((landing.floor_y - 6.0).abs() < 0.01, "{landing:?}");
+    }
+
+    #[test]
+    fn steps_behind_a_held_edge_are_not_a_held_ramp() {
+        // Terrain (one level entity): a 0.4-wide sill held at its edge (the
+        // corner's 45-degree normal), and a step 0.4 higher just behind it:
+        // the bevelled plane meets the step, but the step is no ramp from
+        // the hold (and the body's footprint would straddle the riser).
+        let (mut world, mut player) = fixture(&[]);
+        let terrain = EntityId::from_inner(500).unwrap();
+        world.add_collider(
+            terrain,
+            ColliderBuilder::cuboid(0.2, 1.0, 2.0)
+                .translation(vector![1.2, 5.0, 0.0])
+                .build(),
+        );
+        world.add_collider(
+            terrain,
+            ColliderBuilder::cuboid(1.0, 1.2, 2.0)
+                .translation(vector![2.4, 5.2, 0.0])
+                .build(),
+        );
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        world.set_player_translation(vec3(0.0, 4.0 + FEET_ABOVE_CENTER, 0.0), &mut player);
+        let edge = ClimbGrip {
+            entity_id: Some(terrain),
+            normal: vec3(
+                -std::f32::consts::FRAC_1_SQRT_2,
+                std::f32::consts::FRAC_1_SQRT_2,
+                0.0,
+            ),
+            ..ledge(vec3(1.02, 6.0, 0.0))
+        };
+        assert_eq!(world.held_floor_landing(&player, &edge, None), None);
     }
 
     #[test]
