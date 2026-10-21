@@ -5502,9 +5502,9 @@ impl MissionCore {
                     self.climb_exit_teleport = None;
                 }
             }
-            // The whole transition owns the body: no stick walking, before
-            // the move or through the fade-in after it.
-            if self.climb_exit_teleport.is_some() {
+            // The body waits, held in place, until it moves; through the
+            // fade-in after, gravity runs but the stick does not walk (below).
+            if self.climb_exit_teleport.is_some_and(|exit| !exit.moved()) {
                 hand_climb.translation = Some(vec3(0.0, 0.0, 0.0));
             }
             // Apply the crouch request before moving: swaps the capsule size
@@ -5593,14 +5593,20 @@ impl MissionCore {
                 || std::mem::take(&mut self.button_jump)
                 || self.button_jump_held;
             let (medium, water_current) = self.player_water_state(jump);
+            // No walking or jumping until a climb exit's fade is over.
+            let exit_fading = self.climb_exit_teleport.is_some();
             let request = match hand_climb.translation {
                 Some(translation) => crate::physics::PlayerMoveRequest::HandClimb { translation },
                 None => crate::physics::PlayerMoveRequest::Walk {
-                    movement: forward
-                        + new_rotation.rotate_vector(roomscale_movement)
-                        + cgmath::vec3(0.0, up_value, 0.0),
+                    movement: if exit_fading {
+                        vec3(0.0, 0.0, 0.0)
+                    } else {
+                        forward
+                            + new_rotation.rotate_vector(roomscale_movement)
+                            + cgmath::vec3(0.0, up_value, 0.0)
+                    },
                     facing,
-                    jump_pressed: jump,
+                    jump_pressed: jump && !exit_fading,
                     // Push-to-climb is the FLAT climb input; VR's hands are
                     // its own (see `vr_climb`).
                     push_to_climb: game_options.presentation_mode == crate::PresentationMode::Flat,
