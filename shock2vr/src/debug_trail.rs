@@ -156,6 +156,7 @@ fn serialize_hold_kind<S: serde::Serializer>(
     s.serialize_str(match kind {
         ClimbGripKind::Ladder => "ladder",
         ClimbGripKind::Ledge => "ledge",
+        ClimbGripKind::Surface => "surface",
     })
 }
 

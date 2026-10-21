@@ -422,6 +422,8 @@ pub struct DebugClimbHold {
     pub kind: &'static str,
     pub entity_id: Option<i32>,
     pub point: [f32; 3],
+    /// Which grace grab took this hold (1 or 2); 0 for an ordinary hold.
+    pub grace: u8,
 }
 
 /// The player's hand-climb state (see `crate::vr_climb`), reported by
@@ -436,6 +438,10 @@ pub struct DebugClimbState {
     /// The hand currently moving the body ("left"/"right"), if any.
     pub anchor_hand: Option<&'static str>,
     pub grips: Vec<DebugClimbHold>,
+    /// Grace grabs left in this ladder departure.
+    pub grace_remaining: u8,
+    /// Free (left, right) gloves glowing in reach of a hold they would take.
+    pub reach: [bool; 2],
 }
 
 /// Raycast mask for collision group filtering

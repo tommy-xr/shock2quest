@@ -24,6 +24,9 @@
 //!   hand grabs.
 //! - `z = -16` wall: a plain block, same size as the ledge's, with no ladder.
 //!   The negative case.
+//! - `z = -26` mid-ladder exits (#2376): a 16' ladder up a wall too tall to
+//!   top out, with a landing beside it and a deck slab behind the climber,
+//!   both at mid-ladder height.
 //!
 //! Repro stations, one per ladder bug seen in a shipped mission, rebuilt from
 //! raycast measurements (heights re-based so the lowest floor is `y = 0`):
@@ -102,6 +105,47 @@ const MANTLE_Z: f32 = 24.0;
 const MANTLE_HEIGHT: f32 = 3.0;
 
 const WALL_Z: f32 = -16.0;
+
+const SIDE_Z: f32 = -26.0;
+/// Above the ladder's 6.4 cap, so the only way off is a mid-ladder exit.
+const SIDE_WALL_HEIGHT: f32 = 8.0;
+const SIDE_WALL_W: [f32; 2] = [-4.0, 4.0];
+/// Both landings sit near the ladder's middle.
+const SIDE_PLATFORM_TOP: f32 = 4.0;
+/// Beside the ladder: 1.0 clear of its +w rail (rails at w = +-0.4).
+const SIDE_PLATFORM_D: [f32; 2] = [0.0, 2.5];
+const SIDE_PLATFORM_W: [f32; 2] = [1.4, 3.9];
+/// Behind the climber: a slab 1.2 out from the ladder face, over the approach.
+const BEHIND_DECK_D: [f32; 2] = [1.3, 3.8];
+const BEHIND_DECK_W: [f32; 2] = [-1.0, 1.0];
+const BEHIND_DECK_THICKNESS: f32 = 0.6;
+
+fn side_platform_boxes() -> Vec<SceneBox> {
+    let top = SIDE_PLATFORM_TOP;
+    vec![
+        lane_box(
+            WALL_COLOR,
+            SIDE_Z,
+            [-1.0, 0.0],
+            [0.0, SIDE_WALL_HEIGHT],
+            SIDE_WALL_W,
+        ),
+        lane_box(
+            FLOOR_COLOR,
+            SIDE_Z,
+            SIDE_PLATFORM_D,
+            [0.0, top],
+            SIDE_PLATFORM_W,
+        ),
+        lane_box(
+            FLOOR_COLOR,
+            SIDE_Z,
+            BEHIND_DECK_D,
+            [top - BEHIND_DECK_THICKNESS, top],
+            BEHIND_DECK_W,
+        ),
+    ]
+}
 
 /// The repro lanes reach this far along +z; the floor covers them.
 const FLOOR_MAX_Z: f32 = 122.0;
@@ -637,6 +681,7 @@ pub fn create_debug_ladder_scene(
         block(vec3(0.35, 0.35, 0.35), WALL_Z, LEDGE_HEIGHT, LEDGE_DEPTH),
     ];
     boxes.extend(repro_boxes());
+    boxes.extend(side_platform_boxes());
 
     let scene_objects = boxes
         .iter()
@@ -677,7 +722,8 @@ pub fn create_debug_ladder_scene(
         "[debug_ladder] Climbing stations ahead (-X), one per lane along z:\n\
          z=0 ledge (16' ladder, top-out onto the block), z=8 arch (ladder both\n\
          faces), z=-8 stack (11 stacked rungs), z=16 short 4' ladder, z=24 low\n\
-         mantle block (no ladder), z=-16 plain wall (not climbable). Ladders are the shipped templates, so their\n\
+         mantle block (no ladder), z=-16 plain wall (not climbable), z=-26 mid-ladder\n\
+         exits (landing beside, deck behind). Ladders are the shipped templates, so their\n\
          climbable flag and colliders are the production ones. Mission repros: z=36 capped ladder\n\
          (rick1 532), z=48 setback pit under a deck (rick1 488), z=60 deck hole (rick1 499),\n\
          z=72 trench ladder (eng1 317), z=84 mid-ladder mount (hydro2 551), z=96 jump grab\n\
@@ -751,6 +797,10 @@ impl DebugSceneHooks for LadderHooks {
             spawn_ladder(
                 LADDER_16,
                 Point3::new(flush_x, LADDER_16_HEIGHT / 2.0, ARCH_Z),
+            ),
+            spawn_ladder(
+                LADDER_16,
+                Point3::new(flush_x, LADDER_16_HEIGHT / 2.0, SIDE_Z),
             ),
             spawn_ladder(
                 LADDER_16,
@@ -1050,6 +1100,23 @@ fn guides() -> Vec<Guide> {
         ("jump", [1.286, 15.9, -1.269]),
     ];
 
+    let mut side = Guide::basic(
+        SIDE_Z,
+        [
+            "MID-LADDER EXITS (z -26)",
+            "landing beside, deck behind - #2376",
+            "Climb to the landings' height,",
+            "then get off onto either one.",
+        ],
+        None,
+    );
+    // Clear of the behind deck, which spans the approach.
+    side.sign[0] = BEHIND_DECK_D[1] + 1.0;
+    side.goal = vec![
+        on([0.5, 2.0], SIDE_PLATFORM_TOP, [2.0, 3.3]),
+        on([2.0, 3.1], SIDE_PLATFORM_TOP, [-0.6, 0.6]),
+    ];
+
     let top_of = |depth: f32| [-depth + 0.5, -0.8];
     vec![
         Guide::basic(
@@ -1112,6 +1179,7 @@ fn guides() -> Vec<Guide> {
             ],
             None,
         ),
+        side,
         capped,
         setback,
         recess,

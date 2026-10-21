@@ -5366,6 +5366,7 @@ impl MissionCore {
                                     && !self.player_handle.is_hanging_crouched(),
                             ),
                         step_dt: self.physics.player_step_dt(),
+                        grounded: self.player_handle.is_grounded(),
                     })
             })
             .unwrap_or_default();
@@ -22311,6 +22312,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             kind: match grip.kind {
                 crate::physics::ClimbGripKind::Ladder => "ladder",
                 crate::physics::ClimbGripKind::Ledge => "ledge",
+                crate::physics::ClimbGripKind::Surface => "surface",
             },
             entity_id: grip.entity_id.map(|id| id.inner() as i32),
             entity_name,
@@ -22411,6 +22413,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     kind: match anchor.grip.kind {
                         crate::physics::ClimbGripKind::Ladder => "ladder",
                         crate::physics::ClimbGripKind::Ledge => "ledge",
+                        crate::physics::ClimbGripKind::Surface => "surface",
                     },
                     entity_id: anchor.grip.entity_id.map(|id| id.inner() as i32),
                     point: [
@@ -22418,8 +22421,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         anchor.grip.point.y,
                         anchor.grip.point.z,
                     ],
+                    grace: anchor.grace,
                 })
                 .collect(),
+            grace_remaining: climb.map_or(0, |climb| climb.grace_remaining()),
+            reach: self.interaction.climb_reach(),
         })
     }
 

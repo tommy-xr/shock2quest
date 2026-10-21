@@ -59,6 +59,8 @@ pub struct ClimbContext<'a> {
     pub pawn_rotation: Quaternion<f32>,
     /// World height of the player's feet, for the ledge grip test.
     pub feet_y: f32,
+    /// Standing on something ends a ladder departure's grace grabs.
+    pub grounded: bool,
     /// The fixed timestep the coming movement frame integrates with, for the
     /// release velocity (NOT the wall clock - see `vr_climb`).
     pub step_dt: f32,
@@ -114,6 +116,11 @@ pub trait PlayerInteraction {
     /// Hand-climb state, for debug introspection (`/v1/info`).
     fn hand_climb(&self) -> Option<&crate::vr_climb::HandClimb> {
         None
+    }
+
+    /// Which free (left, right) gloves glow in reach of a hold they would take.
+    fn climb_reach(&self) -> [bool; 2] {
+        [false; 2]
     }
 
     /// Feed collision-resolved motion back into the held tracking reference.
@@ -1662,6 +1669,35 @@ impl PlayerInteraction for VrInteraction {
                     && !self.body_tool_hands[index],
             }
         };
+        let probe = |point: Vector3<f32>, rule: crate::vr_climb::GripProbe| match rule {
+            crate::vr_climb::GripProbe::Ordinary => {
+                ctx.physics
+                    .climbable_grip_at(point, crate::physics::CLIMB_GRIP_RADIUS, ctx.feet_y)
+            }
+            crate::vr_climb::GripProbe::Transfer => ctx
+                .physics
+                .climbable_grip_during_transfer_at(point, ctx.feet_y),
+            crate::vr_climb::GripProbe::Surface => ctx.physics.surface_grip_at(point, ctx.pawn_pos),
+        };
+        self.hand_climb.set_grounded(ctx.grounded);
+        let frame = self.hand_climb.update(
+            ctx.pawn_pos,
+            ctx.pawn_rotation,
+            ctx.step_dt,
+            [
+                hand_input(0, &self.left_hand, &ctx.input.left_hand),
+                hand_input(1, &self.right_hand, &ctx.input.right_hand),
+            ],
+            probe,
+            // "Cannot check" is not "gone" - a failed borrow keeps the hold.
+            |entity_id| {
+                ctx.world
+                    .borrow::<EntitiesView>()
+                    .map_or(true, |entities| entities.is_alive(entity_id))
+            },
+        );
+        // After the update, so the glow answers with the holds the next grab
+        // will be judged against - by the same rule acquisition uses.
         self.climb_anticipation = std::array::from_fn(|i| {
             let hand = [&self.left_hand, &self.right_hand][i];
             let input = [&ctx.input.left_hand, &ctx.input.right_hand][i];
@@ -1672,42 +1708,15 @@ impl PlayerInteraction for VrInteraction {
                     rotation: input.rotation,
                 })
                 .is_tracked()
-                && ctx
-                    .physics
-                    .climbable_grip_at(
+                && self
+                    .hand_climb
+                    .probe_grip(
+                        crate::vr_climb::HANDS[i],
                         hand_world_position(ctx.pawn_pos, ctx.pawn_rotation, input.position),
-                        crate::physics::CLIMB_GRIP_RADIUS,
-                        ctx.feet_y,
+                        probe,
                     )
                     .is_some()
         });
-        let frame = self.hand_climb.update(
-            ctx.pawn_pos,
-            ctx.pawn_rotation,
-            ctx.step_dt,
-            [
-                hand_input(0, &self.left_hand, &ctx.input.left_hand),
-                hand_input(1, &self.right_hand, &ctx.input.right_hand),
-            ],
-            |point, transferring| {
-                if transferring {
-                    ctx.physics
-                        .climbable_grip_during_transfer_at(point, ctx.feet_y)
-                } else {
-                    ctx.physics.climbable_grip_at(
-                        point,
-                        crate::physics::CLIMB_GRIP_RADIUS,
-                        ctx.feet_y,
-                    )
-                }
-            },
-            // "Cannot check" is not "gone" - a failed borrow keeps the hold.
-            |entity_id| {
-                ctx.world
-                    .borrow::<EntitiesView>()
-                    .map_or(true, |entities| entities.is_alive(entity_id))
-            },
-        );
         let previous_members = self.climb_members;
         self.climb_members = [None; 2];
         for (hand, anchor) in self.hand_climb.grips() {
@@ -1733,6 +1742,10 @@ impl PlayerInteraction for VrInteraction {
 
     fn hand_climb(&self) -> Option<&crate::vr_climb::HandClimb> {
         Some(&self.hand_climb)
+    }
+
+    fn climb_reach(&self) -> [bool; 2] {
+        self.climb_reach
     }
 
     fn resolve_hand_climb(&mut self, requested: Vector3<f32>, applied: Vector3<f32>) {
