@@ -346,11 +346,15 @@ impl ExitTeleport {
     }
 
     /// Advance by `dt`; `true` exactly once, when the view is black and the
-    /// body should move.
+    /// body should move. That frame renders fully black whatever `dt` was;
+    /// the fade-in starts on the next.
     pub fn advance(&mut self, dt: f32) -> bool {
         self.elapsed += dt;
         let move_now = !self.moved && self.elapsed >= EXIT_FADE_OUT - 1e-4;
-        self.moved |= move_now;
+        if move_now {
+            self.moved = true;
+            self.elapsed = EXIT_FADE_OUT;
+        }
         move_now
     }
 
@@ -492,6 +496,13 @@ mod tests {
         // About 0.1 s out and 0.15 s in.
         assert!((14..=17).contains(&frames), "{frames}");
         assert_eq!(exit.alpha(), 0.0);
+
+        // A long or uneven frame still moves under full black.
+        for dt in [0.3, 1.0 / 72.0] {
+            let mut exit = ExitTeleport::new(outcome);
+            while !exit.advance(dt) {}
+            assert_eq!(exit.alpha(), 1.0, "black on the move frame at dt {dt}");
+        }
     }
 
     #[test]

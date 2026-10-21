@@ -296,6 +296,27 @@ test(
 );
 
 test(
+  "debug_ladder (VR): a teleport elsewhere during the exit fade cancels the exit",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+    const { anchor } = await climbAt(game, SIDE_Z, 5.3);
+    const shown = await (await aimer(game))([-6.3, PLATFORM_Y, SIDE_Z + 2.0]);
+    assert.equal(shown.mode, "assisted", JSON.stringify(shown));
+    await game.input.set(`${anchor}_hand.squeeze`, 0);
+    await game.step({ frames: 2 });
+    assert.ok((await release(game)).exit_fade > 0, "fading out");
+    // Below the ladder: from here the old landing would still be reachable.
+    await teleportVerified(game, { x: -6.48, y: 1.5, z: SIDE_Z });
+    await game.step({ frames: 30 });
+    const { player } = await game.info();
+    assert.ok(horizontal(player.position, [-6.48, 0, SIDE_Z]) < 0.1, `stayed where sent: ${player.position}`);
+    assert.ok(player.position[1] < 2, `on the floor: ${player.position}`);
+    assert.equal(player.climb.release.exit_fade, 0);
+  },
+);
+
+test(
   "debug_ladder (VR): climb_exit_motion=glide keeps the collision-checked glide",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {

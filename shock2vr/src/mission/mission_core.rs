@@ -4549,6 +4549,8 @@ impl MissionCore {
         if !self.player_is_alive() {
             return Vec::new();
         }
+        // A dead body is not carried onto a climb exit's landing.
+        self.climb_exit_teleport = None;
 
         if let Ok(mut status) = self
             .world
@@ -5487,6 +5489,10 @@ impl MissionCore {
                         .is_some()
                     {
                         self.player_footsteps.reset();
+                    } else {
+                        // Refused: the body drops from here, so stop showing
+                        // a landing it will not reach.
+                        self.climb_release_glide = None;
                     }
                 }
                 if exit.done() {
@@ -5561,12 +5567,12 @@ impl MissionCore {
                         .and_then(|climb| climb.anchor())
                         .map(|hand| (hand, grip.into()));
                     self.interaction.release_climb_grips();
-                    hand_climb.translation = None;
+                    // A vault committed as a teleport waits held in place.
+                    hand_climb.translation = self
+                        .climb_exit_teleport
+                        .is_some()
+                        .then(|| vec3(0.0, 0.0, 0.0));
                 }
-            }
-            // A vault just committed as a teleport waits held in place too.
-            if self.climb_exit_teleport.is_some_and(|exit| !exit.moved()) {
-                hand_climb.translation = Some(vec3(0.0, 0.0, 0.0));
             }
             // Letting go of the last hold throws the body with the momentum of
             // the pull, so a hard haul-and-release sails on past the hold.
@@ -15625,6 +15631,7 @@ impl MissionCore {
                 } => {
                     self.physics
                         .set_player_translation(position, &mut self.player_handle);
+                    self.climb_exit_teleport = None;
                     // Scripted teleports, level load and quickload all land
                     // here, and none of them ran a movement frame: forget the
                     // stride and the fall in progress so the arrival is silent
@@ -22586,6 +22593,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         // Apply the teleportation using the same logic as Effect::SetPlayerPosition
         self.physics
             .set_player_translation(position, &mut self.player_handle);
+        // A relocation cancels a climb exit in progress, or it would move the
+        // body back to its landing.
+        self.climb_exit_teleport = None;
         self.player_footsteps.reset();
 
         // Keep PlayerInfo.pos consistent with the body immediately. It otherwise

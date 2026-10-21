@@ -45,8 +45,14 @@ const DECK_MID: Vec3 = [-7.3, 6.05, LEDGE_Z];
 /** Scripted top-out substeps are capped at 0.067 wu/frame. */
 const MAX_SCRIPTED_STEP = 0.1;
 
-const launchVr = () =>
-  GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+// These assert the continuous scripted route, so a ladder exit's committed
+// landing glides (`climb_exit_motion`) instead of the default fade-and-teleport,
+// which vr-landing-assist covers.
+const launchVr = async () => {
+  const game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+  await game.devParams.set("climb_exit_motion", 1);
+  return game;
+};
 
 async function standAt(game: GameServer, at: Vec3) {
   await game.step({ frames: 5 });

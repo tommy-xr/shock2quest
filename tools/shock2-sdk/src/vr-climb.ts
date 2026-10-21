@@ -262,20 +262,23 @@ export async function vrTopOut(
  * vault never lands.
  */
 export async function vrVault(game: Game, hand: Hand): Promise<{ heights: number[]; landed: Vec3 }> {
-  const heights = (await vrPull(game, hand, [0, -1.2, 0], 40, (p) => p.climb.vaulting)).map((p) => p[1]);
+  // A vault onto a ladder exit's shown landing commits it instead: a teleport
+  // by default (`climb_exit_motion`), which never reports `vaulting`.
+  const committed = (p: PlayerSnapshot) => p.climb.vaulting || p.climb.release.gliding_to !== null;
+  const heights = (await vrPull(game, hand, [0, -1.2, 0], 40, committed)).map((p) => p[1]);
   const { player } = await game.info();
-  if (!player.climb.vaulting) {
+  if (!committed(player)) {
     throw new Error(`vrVault: pulling the ${hand} hand never vaulted (body at y=${player.position[1].toFixed(2)})`);
   }
   await game.input.set("left_hand.squeeze", 0);
   await game.input.set("right_hand.squeeze", 0);
-  // The scripted vault to its landing, then a second to settle.
+  // The scripted vault (or exit fade) to its landing, then a second to settle.
   let settled = 0;
   for (let frame = 0; frame < 300 && settled < 60; frame += 1) {
     await game.step({ frames: 1 });
     const { player } = await game.info();
     heights.push(player.position[1]);
-    if (!player.climb.vaulting) settled += 1;
+    if (!player.climb.vaulting && player.climb.release.exit_fade === 0) settled += 1;
   }
   if (settled < 60) throw new Error("vrVault: the vault did not land within 300 frames");
   return { heights, landed: (await game.info()).player.position };
