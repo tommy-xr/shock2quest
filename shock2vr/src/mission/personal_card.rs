@@ -13,15 +13,21 @@ pub(crate) fn is_reader(world: &World, entity: EntityId) -> bool {
         .borrow::<View<dark::properties::PropKeyDst>>()
         .is_ok_and(|keys| keys.get(entity).is_ok())
         || super::mfd_device::machine_uses_mfd(world, entity)
-        || ["Computer", "SecurityComputer", "ResurrectMachine"]
-            .iter()
-            .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))
+        || [
+            "Computer",
+            "SecurityComputer",
+            "EnergyStation",
+            "ResurrectMachine",
+        ]
+        .iter()
+        .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))
 }
 
-/// Key targets and MFD machines accept frob as well as scanning.
+/// Key targets, MFD machines and chargers accept frob as well as scanning.
 pub(crate) fn requires_scan(world: &World, entity: EntityId) -> bool {
     is_reader(world, entity)
         && !super::mfd_device::machine_uses_mfd(world, entity)
+        && !crate::scripts::script_util::entity_has_script(world, entity, "EnergyStation")
         && !world
             .borrow::<View<dark::properties::PropKeyDst>>()
             .is_ok_and(|keys| keys.get(entity).is_ok())
@@ -431,6 +437,34 @@ fn download_bit_texture(one: bool) -> Rc<dyn engine::texture::TextureTrait> {
 mod tests {
     use super::*;
     use cgmath::Rotation3;
+
+    #[test]
+    fn charging_station_accepts_frob_and_remains_scannable() {
+        use dark::properties::{FrobFlag, PropFrobInfo, PropScripts};
+        let mut world = World::new();
+        let station = world.add_entity((
+            PropScripts {
+                scripts: vec!["EnergyStation".into()],
+                inherits: false,
+            },
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+        ));
+        assert!(
+            is_reader(&world, station),
+            "card scans still reach the charger"
+        );
+        assert!(super::super::mfd_device::opens_panel(&world, station));
+        assert!(!requires_scan(&world, station));
+        assert_eq!(
+            crate::hand_feedback::HandTarget::resolve(&world, station, true).affordance,
+            crate::hand_feedback::HandAffordance::Frobbable,
+        );
+    }
+
     fn fixture() -> (PersonalCard, InputContext, BodyPose) {
         let mut input = InputContext::default();
         input.head.rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
