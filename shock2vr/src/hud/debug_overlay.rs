@@ -15,6 +15,7 @@ use crate::ui::{HAlign, PanelPlacement, Rect, UiCanvas, VAlign, WorldPanel};
 /// Full-width so the readout is centered on the canvas; the rows sit in the
 /// gap between the psi-overload meter and the flat HUD's bottom panels.
 const READOUT: Rect = Rect::new(0.0, 352.0, CANVAS_SIZE.x, 54.0);
+const HEIGHT_READOUT: Rect = Rect::new(0.0, 316.0, CANVAS_SIZE.x, 36.0);
 /// Start beyond the glove so the beam emerges from the pointing hand.
 const BEAM_HAND_CLEARANCE: f32 = 0.25;
 
@@ -24,6 +25,12 @@ pub(crate) struct DebugHeightReadout {
     /// Raw tracked eye height above STAGE; None for synthetic or lost tracking.
     pub tracked_meters: Option<f32>,
     pub crouched: bool,
+}
+
+/// Resolve the eye against the same floor anchor that converts the tracked rig.
+pub(crate) fn eye_above_floor_meters(eye_y: f32, tracking_crouched: bool) -> f32 {
+    (eye_y + crate::physics::player_center_above_floor(tracking_crouched))
+        * crate::METERS_PER_WORLD_UNIT
 }
 
 /// One sample drives the labels, beams and surface spots. Debug rays have
@@ -161,9 +168,9 @@ pub(crate) fn build_debug_overlay_canvas(
         {
             canvas.text_native(
                 Rect::new(
-                    READOUT.x,
-                    READOUT.y - 36.0 + i as f32 * 18.0,
-                    READOUT.w,
+                    HEIGHT_READOUT.x,
+                    HEIGHT_READOUT.y + i as f32 * 18.0,
+                    HEIGHT_READOUT.w,
                     18.0,
                 ),
                 &text,
@@ -258,7 +265,7 @@ mod tests {
             None,
             [None; 2],
             Some(DebugHeightReadout {
-                eye_meters: Some((eye.y + center) * crate::METERS_PER_WORLD_UNIT),
+                eye_meters: Some(eye_above_floor_meters(eye.y, true)),
                 tracked_meters: Some(tracking.head_height_meters()),
                 crouched: true,
             }),
@@ -389,6 +396,8 @@ mod tests {
         // canvas - so the row must clear them and sit below the canvas center.
         assert!(READOUT.y + READOUT.h <= crate::hud::readouts::BIO_ORIGIN.y);
         assert!(READOUT.center().y > CANVAS_SIZE.y / 2.0);
+        assert!(HEIGHT_READOUT.y + HEIGHT_READOUT.h <= READOUT.y);
+        assert!(HEIGHT_READOUT.y > CANVAS_SIZE.y / 2.0);
     }
 
     #[test]

@@ -18185,14 +18185,13 @@ impl MissionCore {
             let eye = self
                 .flat_eye
                 .map_or(self.last_head_position, |eye| eye.position);
-            let floor_to_center = crate::physics::player_center_above_floor(
-                self.player_handle.tracking_is_crouched(),
-            );
             crate::hud::DebugHeightReadout {
-                eye_meters: self
-                    .player_handle
-                    .is_grounded()
-                    .then_some((eye.y + floor_to_center) * crate::METERS_PER_WORLD_UNIT),
+                eye_meters: self.player_handle.is_grounded().then(|| {
+                    crate::hud::eye_above_floor_meters(
+                        eye.y,
+                        self.player_handle.tracking_is_crouched(),
+                    )
+                }),
                 tracked_meters: self.last_tracked_eye_height,
                 crouched: self.player_handle.is_crouched(),
             }
