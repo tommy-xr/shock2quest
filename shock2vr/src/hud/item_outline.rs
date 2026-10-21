@@ -338,7 +338,7 @@ fn mini_frame_canvas(screen_size: Vector2<f32>, name: Option<&str>) -> crate::ui
 }
 
 /// Draw once per eye, from the active rollover (never the damaged-object list).
-/// Flat only; VR names objects in the inventory bar's mini-frame.
+/// Flat only; VR names objects above their brackets and in the inventory bar.
 pub fn draw_item_name(
     asset_cache: &mut AssetCache,
     entity_id: Option<EntityId>,
@@ -449,6 +449,44 @@ mod tests {
             hud_use_position(right_edge, 120.0, 800.0),
             vec2(670.0, 304.0)
         );
+    }
+
+    #[test]
+    fn item_name_sits_above_brackets_and_fits_the_screen() {
+        let rect = bracket_name_rect(extents((200.0, 100.0), (350.0, 300.0)), 120.0, SCREEN);
+        assert_eq!((rect.x, rect.y, rect.w, rect.h), (200.0, 86.0, 120.0, 10.0));
+        let edge = bracket_name_rect(extents((740.0, 14.0), (790.0, 300.0)), 120.0, SCREEN);
+        assert_eq!((edge.x, edge.y), (670.0, 0.0));
+        let long = bracket_name_rect(extents((200.0, 100.0), (350.0, 300.0)), 1000.0, SCREEN);
+        assert_eq!((long.x, long.w), (10.0, 780.0));
+    }
+
+    #[test]
+    fn collect_hint_only_advertises_known_pickup_paths() {
+        use dark::properties::FrobFlag;
+        let mut world = World::new();
+        let item = world.add_entity(PropFrobInfo {
+            world_action: FrobFlag::MOVE,
+            ..frob_info()
+        });
+        assert!(collects_on_trigger(&world, item));
+        world.add_component(
+            item,
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE | FrobFlag::SCRIPT,
+                ..frob_info()
+            },
+        );
+        assert!(
+            !collects_on_trigger(&world, item),
+            "a script owns this frob"
+        );
+        let decoration = world.add_entity(());
+        assert!(!collects_on_trigger(&world, decoration));
+        for kind in crate::test_support::CollectedKind::ALL {
+            let pickup = crate::test_support::spawn_collected(&mut world, kind);
+            assert!(collects_on_trigger(&world, pickup), "{kind:?}");
+        }
     }
 
     #[test]
@@ -902,8 +940,8 @@ fn hit_point_pool(world: &World, entity_id: EntityId) -> Option<(i32, u32)> {
 
 /// The bar's fill ratio when `entity_id` will draw one at all, else `None`.
 ///
-/// The strip above the selection rect belongs exclusively to this bar.
-fn health_bar_fill(world: &World, entity_id: EntityId) -> Option<f32> {
+/// When present, this bar owns the strip above the selection rect.
+pub(crate) fn health_bar_fill(world: &World, entity_id: EntityId) -> Option<f32> {
     if !shows_hit_points(world, entity_id) {
         return None;
     }
@@ -969,12 +1007,13 @@ fn resolve_hud_use(
 
 /// The text in an object's HUD use slot, decided once for flat and VR. While
 /// it will take a held tool, the slot reads retail's tech verb alone ("Hack");
-/// otherwise its authored `P$HUDUse`.
+/// otherwise its authored `P$HUDUse`. VR pickups without one show "Collect".
 pub fn bracket_hint(
     asset_cache: &mut AssetCache,
     world: &World,
     entity_id: EntityId,
     style: BracketStyle,
+    presentation: crate::PresentationMode,
 ) -> Option<String> {
     let verb = match style {
         BracketStyle::AcceptsHeldItem(tool) => crate::item_tools::tool_verb_key(world, tool),
@@ -997,6 +1036,22 @@ pub fn bracket_hint(
         huduse.as_deref().unwrap_or(&empty),
         misc.as_deref().unwrap_or(&empty),
     )
+    .or_else(|| {
+        (presentation == crate::PresentationMode::Vr && collects_on_trigger(world, entity_id))
+            .then(|| "Collect".to_owned())
+    })
+}
+
+/// Free-hand trigger sends Frob: only advertise collection when that path owns pickup.
+fn collects_on_trigger(world: &World, entity: EntityId) -> bool {
+    use crate::scripts::script_util::{
+        is_always_collected, is_download_pickup, player_carried_items,
+    };
+    let collects = is_download_pickup(world, entity)
+        || is_always_collected(world, entity)
+        || (crate::virtual_hand::can_grab_item(world, entity)
+            && !crate::virtual_hand::uses_scripted_world_frob(world, entity));
+    collects && !player_carried_items(world).contains(&entity)
 }
 
 /// A resolvable verb key wins over the authored HUDUse hint.
@@ -1055,6 +1110,7 @@ pub fn draw_item_outline(
     bounds: Aabb3<f32>,
     style: BracketStyle,
     hint: Option<&str>,
+    name: Option<&str>,
     view: Matrix4<f32>,
     projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
@@ -1077,7 +1133,11 @@ pub fn draw_item_outline(
     let extents = clamp_extents_to_screen(
         project_aabb3(&aabb, view, projection, screen_size),
         screen_size,
-        size.x,
+        if name.is_some() {
+            LABEL_HEIGHT + 4.0
+        } else {
+            size.x
+        },
     );
     let tint = style.tint();
     let bracket =
@@ -1092,6 +1152,21 @@ pub fn draw_item_outline(
         bottom_right_brack_obj,
         top_right_brack_obj,
     ];
+    if let Some(name) = name {
+        use crate::ui::{HAlign, ScaleMode, UiCanvas, VAlign};
+        let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
+        let width = engine::measure_text_width(&**font, name, LABEL_HEIGHT);
+        let mut canvas = UiCanvas::new(screen_size);
+        canvas.text_fit(
+            bracket_name_rect(extents, width, screen_size),
+            name,
+            "mainfont.fon",
+            LABEL_HEIGHT,
+            HAlign::Left,
+            VAlign::Top,
+        );
+        objects.extend(canvas.render_screen_space(asset_cache, screen_size, ScaleMode::Stretch));
+    }
     if let Some(hint) = hint {
         let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
         let width = engine::measure_text_width(&**font, hint, LABEL_HEIGHT);
@@ -1106,6 +1181,20 @@ pub fn draw_item_outline(
         ));
     }
     objects
+}
+
+fn bracket_name_rect(
+    extents: Aabb2<f32>,
+    text_width: f32,
+    screen_size: Vector2<f32>,
+) -> crate::ui::Rect {
+    let width = text_width.min((screen_size.x - 20.0).max(0.0));
+    crate::ui::Rect::new(
+        extents.min.x.min(screen_size.x - width - 10.0).max(10.0),
+        (extents.min.y - LABEL_HEIGHT - 4.0).max(0.0),
+        width,
+        LABEL_HEIGHT,
+    )
 }
 
 /// Keep a projected extent on screen, so an object bigger than the view still

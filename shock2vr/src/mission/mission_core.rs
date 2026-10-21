@@ -17547,7 +17547,7 @@ impl MissionCore {
                 highlighted.push(*target);
             }
         }
-        // Flat only: VR names objects solely in the inventory bar's frame. While
+        // Flat only: VR names objects above their brackets. While
         // the bar is up (use mode) it owns the readout in both presentations.
         if options.presentation_mode != crate::PresentationMode::Vr
             && self.flat_ui.strip_entity().is_none()
@@ -17572,12 +17572,24 @@ impl MissionCore {
             };
 
             let style = BracketStyle::for_entity(hit_entity, &self.tool_ready);
-            let hint = bracket_hint(asset_cache, &self.world, hit_entity, style);
+            let hint = bracket_hint(
+                asset_cache,
+                &self.world,
+                hit_entity,
+                style,
+                options.presentation_mode,
+            );
+            // The strip above the brackets holds either health or the VR item name.
+            let name = (options.presentation_mode == crate::PresentationMode::Vr
+                && crate::hud::health_bar_fill(&self.world, hit_entity).is_none())
+            .then(|| crate::hud::resolve_item_name(asset_cache, &self.world, hit_entity))
+            .flatten();
             ret.extend(draw_item_outline(
                 asset_cache,
                 bounds,
                 style,
                 hint.as_deref(),
+                name.as_deref(),
                 view,
                 projection,
                 screen_size,
