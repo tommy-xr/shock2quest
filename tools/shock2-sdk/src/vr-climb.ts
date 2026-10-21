@@ -273,7 +273,12 @@ export async function vrReleaseOnto(game: Game): Promise<{ heights: number[]; la
   const anchor = climb.anchor_hand ?? "right";
   const heights: number[] = [];
   let committed: Vec3 | null = null;
+  // Letting go of the other hand first is a handoff, which may move the
+  // landing on show onto the floor the anchor holds: the last release must
+  // commit the landing on show just before it.
+  let shown: Vec3 | null = landing;
   for (const hand of [otherHand(anchor), anchor]) {
+    if (hand === anchor) shown = (await game.info()).player.climb.release.landing;
     await game.input.set(`${hand}_hand.squeeze`, 0);
     await game.input.set(`${hand}_hand.world_target`, null);
     await game.step({ frames: 1 });
@@ -281,7 +286,9 @@ export async function vrReleaseOnto(game: Game): Promise<{ heights: number[]; la
     heights.push(player.position[1]);
     committed ??= player.climb.release.gliding_to;
   }
-  if (committed === null) throw new Error(`vrReleaseOnto: letting go did not commit the landing ${fmt(landing)}`);
+  if (committed === null || shown === null || Math.hypot(committed[0] - shown[0], committed[1] - shown[1], committed[2] - shown[2]) > 1e-3) {
+    throw new Error(`vrReleaseOnto: letting go committed ${committed ? fmt(committed) : "nothing"}, not the landing on show ${shown ? fmt(shown) : "(none)"}`);
+  }
   let settled = 0;
   for (let frame = 0; frame < 300 && settled < 30; frame += 1) {
     await game.step({ frames: 1 });
@@ -290,8 +297,6 @@ export async function vrReleaseOnto(game: Game): Promise<{ heights: number[]; la
     const moving = player.climb.vaulting || player.climb.release.exit_fade > 0;
     settled = moving ? 0 : settled + 1;
   }
-  // The landing the last release committed: letting go of the other hand
-  // first may have moved it onto the floor the anchor holds.
   const landed = (await game.info()).player.position;
   if (settled < 30 || Math.hypot(landed[0] - committed[0], landed[2] - committed[2]) > 0.1 || Math.abs(landed[1] - committed[1]) > 0.15) {
     throw new Error(`vrReleaseOnto: came to rest at ${fmt(landed)}, not the committed landing ${fmt(committed)}`);

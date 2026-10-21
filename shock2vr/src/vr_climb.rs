@@ -315,7 +315,7 @@ impl HandClimb {
             };
             if grip.kind == ClimbGripKind::Ladder {
                 self.reset_grace();
-            } else if grace == 1 && self.grace_used >= 1 {
+            } else if grace == 1 && self.grace_used == 1 {
                 self.regrab_spent = true;
             } else if grace > 0 {
                 self.grace_used = grace;
@@ -453,8 +453,11 @@ impl HandClimb {
             Some((_, 1)) => 2,
             _ => return None,
         };
-        // Off the ladder once more, grace 1 again: the one free re-grab.
-        let free_regrab = grace == 1 && !self.regrab_spent;
+        // Grace 1 again, while a hand is still on the ladder: the one free
+        // re-grab. A ladder let go of this frame does not count.
+        let free_regrab = grace == 1
+            && !self.regrab_spent
+            && held.is_some_and(|held| held.grip.kind == ClimbGripKind::Ladder);
         if self.grace_used >= grace && !free_regrab {
             return None;
         }
@@ -1884,6 +1887,72 @@ mod tests {
             grace_step(&mut climb, a, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
             assert_eq!(grace_of(&climb, b), Some(1));
         }
+    }
+
+    #[test]
+    fn the_free_regrab_needs_a_hand_still_on_the_ladder() {
+        for a in 0..2 {
+            let b = 1 - a;
+            let step =
+                |climb: &mut HandClimb, hand_a: (Vector3<f32>, f32), other: (Vector3<f32>, f32)| {
+                    let mut hands = [other, other];
+                    hands[a] = hand_a;
+                    climb.update(
+                        Vector3::zero(),
+                        Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                        DT,
+                        hands.map(|(at, squeeze)| hand(at, squeeze)),
+                        deck_world,
+                        |_| true,
+                    );
+                };
+            let mut climb = HandClimb::default();
+            step(&mut climb, (RUNG, SQUEEZE), (WALL[0], OPEN));
+            step(&mut climb, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+            assert_eq!(grace_of(&climb, b), Some(1));
+            step(&mut climb, (RUNG, SQUEEZE), (WALL[0], OPEN));
+            // The ladder hand opens the same frame the other re-grabs the floor.
+            step(&mut climb, (RUNG, OPEN), (WALL[0], SQUEEZE));
+            assert_eq!(
+                grace_of(&climb, b),
+                None,
+                "hand {a}: no free re-grab off the ladder"
+            );
+        }
+    }
+
+    #[test]
+    fn a_free_regrab_that_closes_on_an_item_refunds_the_regrab_not_grace() {
+        let mut climb = HandClimb::default();
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+        assert_eq!(grace_of(&climb, 1), Some(1), "the free re-grab");
+        // That squeeze closes on an item instead: the re-grab comes back,
+        // grace 1 stays spent.
+        climb.update(
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            DT,
+            [
+                hand(RUNG, SQUEEZE),
+                ClimbHandInput {
+                    is_empty: false,
+                    ..hand(WALL[0], SQUEEZE)
+                },
+            ],
+            grace_world,
+            |_| true,
+        );
+        assert_eq!(grace_of(&climb, 1), None);
+        assert_eq!(climb.grace_remaining(), 1);
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+        assert_eq!(grace_of(&climb, 1), Some(1), "the re-grab, again");
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+        assert_eq!(grace_of(&climb, 1), None, "and no more");
     }
 
     #[test]
