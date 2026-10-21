@@ -315,15 +315,12 @@ impl PhysicsWorld {
         let all_queries =
             self.player_movement_queries(self.narrow_phase.query_dispatcher(), filter);
         let queries = all_queries.with_filter(filter.predicate(&not_climbable));
-        // The held surface's floor under (x, z), if it is there at the hold's height.
-        // Following the held plane, so a ramp counts as continuous: its
-        // height where (x, z) meets it.
-        let normal = vec_to_nvec(grip.normal);
-        let expected_y = |x: Real, z: Real| {
-            held.y - (normal.x * (x - held.x) + normal.z * (z - held.z)) / normal.y
-        };
-        let floor_at = |x: Real, z: Real| {
-            let expected = expected_y(x, z);
+        // The held surface's floor under (x, z), if it is there where `plane`
+        // through the hold puts it: level first, then along the held normal,
+        // so a ramp counts as continuous - but a box edge's bevelled normal
+        // does not hide the level deck beyond it.
+        let floor_at = |plane: Vector<Real>, x: Real, z: Real| {
+            let expected = held.y - (plane.x * (x - held.x) + plane.z * (z - held.z)) / plane.y;
             let ray = Ray::new(point![x, expected + 0.3, z], -Vector::y());
             let (handle, hit) = queries.cast_ray_and_get_normal(&ray, 0.6, true)?;
             let floor = ray.point_at(hit.time_of_impact).coords;
@@ -333,30 +330,35 @@ impl PhysicsWorld {
                     == grip.entity_id)
                 .then_some((floor, hit.normal))
         };
+        let planes = [Vector::y(), vec_to_nvec(grip.normal)];
         // On the held surface all the way from the hand: no gap to another
         // platform, sampled every 0.2.
-        let connected = |landing: &Landing| {
+        let connected = |plane: Vector<Real>, landing: &Landing| {
             let to = vector![landing.center.x - held.x, 0.0, landing.center.z - held.z];
             let steps = (to.norm() / 0.2).ceil().max(1.0) as usize;
             to.norm() <= HELD_FLOOR_INSETS[HELD_FLOOR_INSETS.len() - 1] + 0.1
                 && (1..=steps).all(|i| {
                     let at = held + to * (i as Real / steps as Real);
-                    floor_at(at.x, at.z).is_some()
+                    floor_at(plane, at.x, at.z).is_some()
                 })
         };
-        if let Some(previous) = previous.filter(|previous| connected(previous)) {
+        if let Some(previous) =
+            previous.filter(|previous| planes.iter().any(|plane| connected(*plane, previous)))
+        {
             if self.assisted_route(player, start, previous).is_ok() {
                 return Some(previous);
             }
         }
         let standing = !player.tracking_is_crouched();
         // One support settle at most: the nearest inset that passes the rest.
-        let landing = HELD_FLOOR_INSETS.iter().find_map(|inset| {
-            let at = held + direction * *inset;
-            let (floor, normal) = floor_at(at.x, at.z)?;
-            let landing = Self::landing_on(floor, normal, standing);
-            (connected(&landing) && self.assisted_route(player, start, landing).is_ok())
-                .then_some(landing)
+        let landing = planes.iter().find_map(|plane| {
+            HELD_FLOOR_INSETS.iter().find_map(|inset| {
+                let at = held + direction * *inset;
+                let (floor, normal) = floor_at(*plane, at.x, at.z)?;
+                let landing = Self::landing_on(floor, normal, standing);
+                (connected(*plane, &landing) && self.assisted_route(player, start, landing).is_ok())
+                    .then_some(landing)
+            })
         })?;
         self.landing_is_supported(player, landing)
             .then_some(landing)
@@ -629,6 +631,26 @@ mod tests {
         };
         let (world, player) = fixture(&[]);
         assert_eq!(world.held_floor_landing(&player, &wall, None), None);
+    }
+
+    #[test]
+    fn a_hold_on_a_box_edge_with_a_bevelled_normal_lands_level() {
+        // A deck 2 above the feet held at its edge: the contact reports the
+        // corner's 45-degree normal, not the level top beyond it.
+        let (world, player) = fixture(&[(vec3(3.0, 5.0, 0.0), vec3(4.0, 2.0, 4.0))]);
+        let edge = ClimbGrip {
+            entity_id: EntityId::from_inner(102),
+            normal: vec3(
+                -std::f32::consts::FRAC_1_SQRT_2,
+                std::f32::consts::FRAC_1_SQRT_2,
+                0.0,
+            ),
+            ..ledge(vec3(1.05, 6.0, 0.0))
+        };
+        let landing = world
+            .held_floor_landing(&player, &edge, None)
+            .expect("the level deck");
+        assert!((landing.floor_y - 6.0).abs() < 0.01, "{landing:?}");
     }
 
     #[test]
