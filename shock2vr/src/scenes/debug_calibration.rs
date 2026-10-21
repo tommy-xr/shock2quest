@@ -15,7 +15,7 @@ use shipyard::EntityId;
 
 use super::debug_common::{DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks};
 use crate::{
-    GameOptions, METERS_PER_WORLD_UNIT,
+    GameOptions, METERS_PER_WORLD_UNIT, SpawnLocation,
     game_scene::GameScene,
     mission::{GlobalContext, mission_core::MissionCore},
     ui::{HAlign, Rect, UiCanvas, VAlign, WorldPanel},
@@ -95,7 +95,10 @@ pub fn create_debug_calibration_scene(
     );
     let hybrid_x = -2.0 / METERS_PER_WORLD_UNIT;
     for object in &mut objects {
-        object.set_transform(Matrix4::from_translation(vec3(hybrid_x, -sole_y, 0.0)));
+        object.set_transform(
+            Matrix4::from_translation(vec3(hybrid_x, -sole_y, 0.0))
+                * Matrix4::from_angle_y(Deg(90.0)),
+        );
     }
     crate::util::tag_render_source(&mut objects, "calibration_hybrid");
 
@@ -154,7 +157,10 @@ pub fn create_debug_calibration_scene(
         .translation(vector![0.0, -0.1, 0.0])
         .build();
     DebugSceneBuilder::new("debug_calibration")
-        .with_default_spawn_location()
+        .with_spawn_location(SpawnLocation::PositionRotation(
+            vec3(0.0, 2.0, 0.0),
+            Quaternion::from_angle_y(Deg(-90.0)),
+        ))
         .with_physics_geometry(floor)
         .build_with_hooks(
             DebugSceneBuildOptions {
