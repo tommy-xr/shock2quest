@@ -232,8 +232,7 @@ impl VrInteraction {
     pub(super) fn slide_grip(&self) -> Option<(usize, crate::vr_grip::ResolvedGrip)> {
         let s = self.slide.as_ref()?;
         let mut grip = self.fitted_grips[s.primary].as_ref()?.resolved.clone()?;
-        grip.curls = profile().curls;
-        grip.trigger_curls = None;
+        grip.fingers = crate::vr_grip::FingerPose::curls(profile().curls);
         Some((1 - s.primary, grip))
     }
 

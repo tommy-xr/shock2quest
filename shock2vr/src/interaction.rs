@@ -641,7 +641,8 @@ impl VrInteraction {
                         self.grip_library
                             .as_ref()?
                             .lookup(&model, if i == 0 { "left" } else { "right" })
-                            .map(|grip| grip.curls)
+                            // Bone poses pre-curl with the generic grab shape.
+                            .and_then(|grip| grip.fingers.rest_curls().copied())
                     })
                     .unwrap_or([0.85, 0.6, 0.9, 0.9, 0.9]);
                 Target::Grab(curls)
@@ -1677,7 +1678,7 @@ impl PlayerInteraction for VrInteraction {
                 })
             });
             Some(serde_json::json!({"slide": self.slide_diagnostics(grip.entity), "glove_pose": self.visual_hands[i], "support": support, "hand": if i == 0 {"left"} else {"right"}, "entity_id": grip.entity.inner() as i32,
-                "visual_trigger": visual_triggers[i], "finger_curls": grip.resolved.as_ref().map(|g| g.curls_at(visual_triggers[i])),
+                "visual_trigger": visual_triggers[i], "finger_curls": grip.resolved.as_ref().and_then(|g| g.fingers.curls_at(visual_triggers[i])),
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
                 "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm_in_world()), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal)}))
@@ -1988,8 +1989,11 @@ impl PlayerInteraction for VrInteraction {
                     .as_ref()?
                     .resolved
                     .clone()?;
-                grip.curls = self.support_preview.as_ref()?.profile.curls;
-                grip.trigger_curls = self.support_preview.as_ref()?.profile.trigger_curls;
+                let profile = &self.support_preview.as_ref()?.profile;
+                grip.fingers = crate::vr_grip::FingerPose::Curls {
+                    curls: profile.curls,
+                    trigger_curls: profile.trigger_curls,
+                };
                 Some((1 - support.primary, grip))
             })
         });
@@ -2028,7 +2032,7 @@ impl PlayerInteraction for VrInteraction {
                     glove_renderer.as_deref_mut(),
                     grip.map(|grip| {
                         (
-                            grip.finger_amounts_at(hand.get_trigger_value()),
+                            grip.fingers.hand_shape_at(hand.get_trigger_value()),
                             self.support
                                 .as_ref()
                                 .filter(|s| {
@@ -2624,8 +2628,7 @@ mod tests {
                 pose_family: "cylindrical".into(),
                 offset: vec3(0.0, 0.0, 0.0),
                 rotation: identity(),
-                curls: [0.5; 5],
-                trigger_curls: None,
+                fingers: crate::vr_grip::FingerPose::curls([0.5; 5]),
                 contacts: [None; 5],
                 anchor: [0.0; 3],
                 score: 0.0,

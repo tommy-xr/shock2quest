@@ -6,7 +6,7 @@ use eframe::egui;
 use shock2vr::{
     Handedness,
     scenes::debug_interactions::INTERACTION_FIXTURES,
-    vr_grip::{BakedGripEntry, GripHints, GripLibrary, ResolvedGrip},
+    vr_grip::{BakedGripEntry, FingerPose, GripHints, GripLibrary, ResolvedGrip},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -896,7 +896,7 @@ impl GripEditor {
                 !busy,
             );
             let mut visual_grip = entry.grip.clone();
-            visual_grip.curls = entry.grip.curls_at(self.curl_editor.preview);
+            visual_grip.fingers = entry.grip.fingers.at(self.curl_editor.preview);
             let scene = PreviewScene::Grip(
                 hand,
                 visual_grip,
@@ -1099,12 +1099,25 @@ impl GripEditor {
                     *last = entry.grip.rotation;
                 }
                 columns[2].strong("Finger curls");
-                self.curl_editor.show(
-                    &mut columns[2],
-                    &mut entry.grip.curls,
-                    &mut entry.grip.trigger_curls,
-                    "Primary trigger preview",
-                );
+                match &mut entry.grip.fingers {
+                    FingerPose::Curls {
+                        curls,
+                        trigger_curls,
+                    } => self.curl_editor.show(
+                        &mut columns[2],
+                        curls,
+                        trigger_curls,
+                        "Primary trigger preview",
+                    ),
+                    FingerPose::Bones { trigger_bones, .. } => {
+                        columns[2].small("Bone pose captured in VR; curls do not apply.");
+                        if trigger_bones.is_some() {
+                            columns[2].label("Primary trigger preview");
+                            columns[2]
+                                .add(egui::Slider::new(&mut self.curl_editor.preview, 0.0..=1.0));
+                        }
+                    }
+                }
             });
             ui.horizontal(|ui| {
                 ui.label("Rotation nudge step");
@@ -1129,7 +1142,7 @@ impl GripEditor {
         // Build first, then select the requested camera so the initial model
         // framing cannot overwrite it. show() keeps the same camera on edits.
         let mut visual_grip = entry.grip.clone();
-        visual_grip.curls = entry.grip.curls_at(self.curl_editor.preview);
+        visual_grip.fingers = entry.grip.fingers.at(self.curl_editor.preview);
         let scene = PreviewScene::Grip(
             hand,
             visual_grip,
@@ -1219,6 +1232,15 @@ pub(crate) fn tweak_slider(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn curls_mut(grip: &mut ResolvedGrip) -> (&mut [f32; 5], &mut Option<[f32; 5]>) {
+        match &mut grip.fingers {
+            FingerPose::Curls {
+                curls,
+                trigger_curls,
+            } => (curls, trigger_curls),
+            FingerPose::Bones { .. } => panic!("expected a curl pose"),
+        }
+    }
     fn document() -> (tempfile::TempDir, GripDocument) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("grips.json");
@@ -1235,8 +1257,8 @@ mod tests {
             .find(|(name, _)| *name == "Thumbs up")
             .unwrap()
             .1;
-        doc.library.entries[0].grip.curls = thumbs_up;
-        doc.library.entries[0].grip.trigger_curls = Some([-1.0, 0.8, 1.0, 1.0, 1.0]);
+        *curls_mut(&mut doc.library.entries[0].grip).0 = thumbs_up;
+        *curls_mut(&mut doc.library.entries[0].grip).1 = Some([-1.0, 0.8, 1.0, 1.0, 1.0]);
         doc.save().unwrap();
         let restored = GripDocument::load(doc.path.clone()).unwrap();
         assert_eq!(
@@ -1270,7 +1292,7 @@ mod tests {
             entry.model = "atek_h_magazine".into();
             entry.hand = hand.into();
             entry.grip.offset.x = if hand == "left" { -0.12 } else { 0.15 };
-            entry.grip.curls[0] = 0.42;
+            curls_mut(&mut entry.grip).0[0] = 0.42;
             entry.grip.item_scale = 0.55;
             doc.library.entries.push(entry);
         }
@@ -1318,7 +1340,7 @@ mod tests {
             .find(|e| e.hand == "left")
             .unwrap();
         left.grip.offset.x += 0.025;
-        left.grip.curls[0] = 0.42;
+        curls_mut(&mut left.grip).0[0] = 0.42;
         let adjusted = left.grip.clone();
         doc.save().unwrap();
         let saved = GripDocument::load(path).unwrap();
@@ -1332,8 +1354,8 @@ mod tests {
         let (_dir, mut doc) = document();
         let mut source = doc.library.entries[0].grip.clone();
         source.item_scale = 0.63;
-        source.curls = [0.1, 0.2, 0.3, 0.4, 0.5];
-        source.trigger_curls = Some([0.6, 0.7, 0.3, 0.4, 0.5]);
+        *curls_mut(&mut source).0 = [0.1, 0.2, 0.3, 0.4, 0.5];
+        *curls_mut(&mut source).1 = Some([0.6, 0.7, 0.3, 0.4, 0.5]);
         let identity = doc.library.entries[1].clone();
         transfer_grip(&source, &mut doc.library.entries[1], None).unwrap();
         let target = &doc.library.entries[1];
@@ -1353,8 +1375,7 @@ mod tests {
                 &identity.hints_hash
             )
         );
-        assert_eq!(target.grip.curls, source.curls);
-        assert_eq!(target.grip.trigger_curls, source.trigger_curls);
+        assert_eq!(target.grip.fingers, source.fingers);
         assert_eq!(target.grip.item_scale, 0.63);
         assert_eq!(target.grip.contacts, [None; 5]);
         assert!(target.authored);
@@ -1385,8 +1406,8 @@ mod tests {
                 .unwrap();
             source.grip.offset.x = 0.1 + index as f32 * 0.2;
             source.grip.item_scale = 0.55 + index as f32 * 0.1;
-            source.grip.curls = [0.2 + index as f32 * 0.3; 5];
-            source.grip.trigger_curls = (index == 0).then_some([0.8; 5]);
+            *curls_mut(&mut source.grip).0 = [0.2 + index as f32 * 0.3; 5];
+            *curls_mut(&mut source.grip).1 = (index == 0).then_some([0.8; 5]);
         }
         let poses = copy_model_poses(&doc.library, "mug").unwrap();
         // The clipboard is a snapshot, independent of subsequent source edits.
@@ -1396,14 +1417,14 @@ mod tests {
             .find(|e| e.model == "mug")
             .unwrap()
             .grip
-            .curls = [0.9; 5];
+            .fingers = FingerPose::curls([0.9; 5]);
         for target in doc
             .library
             .entries
             .iter_mut()
             .filter(|e| e.model == "medpatch")
         {
-            target.grip.trigger_curls = Some([0.1; 5]);
+            *curls_mut(&mut target.grip).1 = Some([0.1; 5]);
         }
         let before = doc.library.entries.clone();
         paste_model_poses(&poses, &mut doc.library, "medpatch").unwrap();
@@ -1458,7 +1479,7 @@ mod tests {
         source.offset = cgmath::vec3(0.12, -0.08, 0.03);
         source.rotation = Quaternion::from(Euler::new(Deg(23.0), Deg(-37.0), Deg(11.0)));
         source.item_scale = 0.7;
-        source.trigger_curls = Some([0.2, 0.8, 0.3, 0.4, 0.5]);
+        *curls_mut(&mut source).1 = Some([0.2, 0.8, 0.3, 0.4, 0.5]);
         // Guns reflect Z; posed melee reflects X around its contact origin.
         let contact = cgmath::vec3(0.15, 0.2, -0.1);
         for mirror in [
@@ -1469,7 +1490,7 @@ mod tests {
         ] {
             transfer_grip(&source, &mut target, Some(mirror)).unwrap();
             assert!(target.grip.is_valid());
-            assert_eq!(target.grip.trigger_curls, source.trigger_curls);
+            assert_eq!(target.grip.fingers, source.fingers);
             for point in [
                 cgmath::Point3::new(0.2, 0.1, 0.4),
                 cgmath::Point3::new(-0.1, 0.4, -0.3),
@@ -1527,8 +1548,7 @@ mod tests {
             transfer_grip(&mirrored, &mut target, Some(mirror)).unwrap();
             assert!((target.grip.offset - source.offset).magnitude() < 1e-5);
             assert!((target.grip.rotation.dot(source.rotation).abs() - 1.0).abs() < 1e-5);
-            assert_eq!(target.grip.curls, source.curls);
-            assert_eq!(target.grip.trigger_curls, source.trigger_curls);
+            assert_eq!(target.grip.fingers, source.fingers);
             assert!(
                 (cgmath::Vector3::from(target.grip.anchor) - cgmath::Vector3::from(source.anchor))
                     .magnitude()
@@ -1545,7 +1565,7 @@ mod tests {
         let entry = &mut doc.library.entries[0];
         entry.authored = true;
         entry.grip.offset.y += 0.01;
-        entry.grip.curls[0] = 0.3;
+        curls_mut(&mut entry.grip).0[0] = 0.3;
         let expected = entry.grip.clone();
         assert!(doc.dirty());
         doc.save().unwrap();

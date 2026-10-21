@@ -56,7 +56,32 @@ impl FingerAmounts {
     }
 }
 
+/// Number of finger bones (SteamVR bones 2..=25) a [`FingerBones`] stores.
+pub const FINGER_BONE_COUNT: usize = LAST_POSED_JOINT - FIRST_POSED_JOINT + 1;
+
+/// Parent-relative rotations of the posed finger bones (SteamVR bones
+/// 2..=25, right hand) - the only part of a [`Pose`] the glove consumes.
+pub type FingerBones = [Quaternion<f32>; FINGER_BONE_COUNT];
+
+/// A hand shape to render: per-finger curls (open -> fist), or explicit bones.
+#[derive(Debug, Clone)]
+pub enum HandShape {
+    Curls(FingerAmounts),
+    Pose(Pose),
+}
+
 impl Pose {
+    /// The open hand with its finger bones replaced by `bones`.
+    pub fn from_finger_bones(bones: &FingerBones) -> Pose {
+        let mut pose = open_right_hand();
+        pose.bone_rotations[FIRST_POSED_JOINT..=LAST_POSED_JOINT].copy_from_slice(bones);
+        pose
+    }
+
+    pub fn finger_bones(&self) -> FingerBones {
+        std::array::from_fn(|i| self.bone_rotations[FIRST_POSED_JOINT + i])
+    }
+
     /// Interpolate between two poses (0.0 = self, 1.0 = other). Drives analog
     /// hand state, e.g. open hand -> fist by grip squeeze.
     /// (Positions are blended alongside rotations for completeness, but

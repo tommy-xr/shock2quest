@@ -1,6 +1,6 @@
 //! Presentation-only attachment; controller poses remain the climbing input.
 use crate::{
-    hand_pose::FingerAmounts,
+    hand_pose::{FingerAmounts, HandShape},
     ladder_holds::{LadderMember, MemberKind},
     physics::ClimbGrip,
     vr_config::Handedness,
@@ -80,16 +80,16 @@ impl ClimbVisual {
         })
     }
 
-    pub fn fingers(&self) -> Option<(FingerAmounts, f32)> {
+    pub fn fingers(&self) -> Option<(HandShape, f32)> {
         self.attached.map(|_| {
             (
-                FingerAmounts {
+                HandShape::Curls(FingerAmounts {
                     thumb: 0.8,
                     index: 0.65,
                     middle: 0.65,
                     ring: 0.65,
                     pinky: 0.65,
-                },
+                }),
                 self.weight,
             )
         })
