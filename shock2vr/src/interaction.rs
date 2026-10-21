@@ -1246,6 +1246,13 @@ impl PlayerInteraction for VrInteraction {
                     .entries
                     .extend(magazines.entries);
             }
+            // Read from the data root directly: a loose file there is shadowed
+            // by the bundled assets when going through the asset cache.
+            if let Some(overrides) = crate::vr_grip::GripLibrary::load_overrides(
+                &crate::paths::data_root().join(crate::vr_grip::GRIP_OVERRIDES_FILE),
+            ) {
+                self.grip_library.as_mut().unwrap().prepend(overrides);
+            }
             self.grip_hints = assets
                 .get_opt(&TEXT_IMPORTER, "astra-vr-grip-hints.json")
                 .and_then(|text| serde_json::from_str(&text).ok())

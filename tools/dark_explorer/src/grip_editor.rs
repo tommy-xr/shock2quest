@@ -6,7 +6,7 @@ use eframe::egui;
 use shock2vr::{
     Handedness,
     scenes::debug_interactions::INTERACTION_FIXTURES,
-    vr_grip::{BakedGripEntry, FingerPose, GripHints, GripLibrary, ResolvedGrip},
+    vr_grip::{BakedGripEntry, FingerPose, GRIP_RESOURCES, GripHints, GripLibrary, ResolvedGrip},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -95,6 +95,51 @@ impl CurlPoseEditor {
 
 pub fn default_library_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/vr-grips.json")
+}
+
+/// Each override replaces the pose the runtime would pick for its model and
+/// hand (keeping that entry's provenance), or joins the pickup library.
+fn merge_overrides(libraries: &mut [GripLibrary], overrides: GripLibrary) -> Result<(), String> {
+    for entry in overrides.entries {
+        let existing = libraries.iter_mut().find_map(|library| {
+            library
+                .entries
+                .iter_mut()
+                .find(|e| e.model == entry.model && e.hand == entry.hand)
+        });
+        match existing {
+            Some(target) => transfer_grip(&entry.grip, target, None)?,
+            None => libraries[0].entries.push(BakedGripEntry {
+                authored: true,
+                ..entry
+            }),
+        }
+    }
+    Ok(())
+}
+
+pub fn merge_override_file(path: PathBuf) -> Result<(), String> {
+    let overrides = GripDocument::load(path)?.library;
+    let count = overrides.entries.len();
+    let dir = default_library_path()
+        .parent()
+        .ok_or("Missing assets directory")?
+        .to_owned();
+    let mut docs = GRIP_RESOURCES
+        .iter()
+        .map(|name| GripDocument::load(dir.join(name)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut libraries: Vec<_> = docs.iter().map(|doc| doc.library.clone()).collect();
+    merge_overrides(&mut libraries, overrides)?;
+    for (doc, library) in docs.iter_mut().zip(libraries) {
+        doc.library = library;
+        if doc.dirty() {
+            doc.save()?;
+            println!("updated {}", doc.path.display());
+        }
+    }
+    println!("merged {count} grip overrides");
+    Ok(())
 }
 
 pub struct GripDocument {
@@ -1232,6 +1277,38 @@ pub(crate) fn tweak_slider(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn overrides_replace_the_entry_the_runtime_picks_or_join_pickups() {
+        let (_dir, doc) = document();
+        let shipped = doc.library.entries[0].clone();
+        let mut weapons = GripLibrary::default();
+        weapons.entries.push(BakedGripEntry {
+            model: "pistol_h".into(),
+            ..shipped.clone()
+        });
+        let mut libraries = vec![doc.library.clone(), weapons];
+        let mut overrides = GripLibrary::default();
+        let mut replaced = shipped.clone();
+        replaced.surface_hash = "device".into();
+        replaced.grip.item_scale = 0.5;
+        let mut weapon = replaced.clone();
+        weapon.model = "pistol_h".into();
+        let mut added = replaced.clone();
+        added.model = "new_item".into();
+        overrides.entries = vec![replaced, weapon, added];
+        merge_overrides(&mut libraries, overrides).unwrap();
+
+        let pickup = &libraries[0].entries[0];
+        assert_eq!(pickup.grip.item_scale, 0.5);
+        assert_eq!(pickup.surface_hash, shipped.surface_hash, "provenance kept");
+        assert!(pickup.authored);
+        assert_eq!(libraries[1].entries[0].grip.item_scale, 0.5);
+        assert_eq!(libraries[1].entries.len(), 1);
+        let new = libraries[0].entries.last().unwrap();
+        assert_eq!((new.model.as_str(), new.authored), ("new_item", true));
+        assert_eq!(libraries[0].entries.len(), doc.library.entries.len() + 1);
+    }
+
     fn curls_mut(grip: &mut ResolvedGrip) -> (&mut [f32; 5], &mut Option<[f32; 5]>) {
         match &mut grip.fingers {
             FingerPose::Curls {

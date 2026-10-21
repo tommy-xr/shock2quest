@@ -161,6 +161,11 @@ enum Commands {
         /// collapses basenames, or a namespace-qualified name like "iface/log.pcx"
         name: String,
     },
+    /// Merge headset grip overrides (`dark_vr_tool grips pull`) into assets/
+    MergeGrips {
+        /// Pulled vr-grip-overrides.json
+        overrides: std::path::PathBuf,
+    },
 }
 
 fn ls(family: Option<String>, filter: Option<String>, limit: usize) {
@@ -341,5 +346,11 @@ fn main() {
             select_entry,
         }),
         Commands::Which { name } => which(name),
+        Commands::MergeGrips { overrides } => {
+            if let Err(error) = grip_editor::merge_override_file(overrides) {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
     }
 }

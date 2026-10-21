@@ -23,6 +23,8 @@ const PACKAGE: &str = "com.tommybuilds.shock2quest";
 const APP_PRIVATE_SAVE_VERSIONS: [&str; 4] = ["0.0.3", "0.0.4", "0.0.5", "0.1.0"];
 const DEBUG_PORT: &str = "/sdcard/shock2quest/debug-port.txt";
 const RECORDINGS: &str = "/sdcard/shock2quest/recordings";
+/// Written by the in-VR pose tool (`shock2vr::vr_grip::GRIP_OVERRIDES_FILE`).
+const GRIP_OVERRIDES: &str = "/sdcard/shock2quest/vr-grip-overrides.json";
 
 #[derive(Parser)]
 #[command(about = "Shock2Quest device dashboard and CLI", version)]
@@ -131,6 +133,22 @@ enum Action {
         #[arg(long, default_value = "recordings")]
         out: PathBuf,
     },
+    /// Grip poses saved by the in-VR pose tool
+    Grips {
+        #[command(subcommand)]
+        action: Grips,
+    },
+}
+
+#[derive(Subcommand)]
+enum Grips {
+    /// Copy the headset's overrides; merge them with `cargo dx merge-grips <file>`
+    Pull {
+        #[arg(long, default_value = "vr-grip-overrides.json")]
+        out: PathBuf,
+    },
+    /// Delete the headset's overrides (after merging, so they stop shadowing assets/)
+    Clear,
 }
 
 #[derive(Subcommand)]
@@ -303,6 +321,18 @@ fn main() -> Result<()> {
             }
         }
         Action::PullRecording { name, out } => device.pull_recording(name.as_deref(), &out)?,
+        Action::Grips { action } => match action {
+            Grips::Pull { out } => {
+                output(device.adb().arg("pull").arg(GRIP_OVERRIDES).arg(&out))
+                    .with_context(|| format!("no {GRIP_OVERRIDES} on the headset?"))?;
+                println!(
+                    "{}\nMerge: cargo dx merge-grips {}",
+                    out.display(),
+                    out.display()
+                );
+            }
+            Grips::Clear => device.write(GRIP_OVERRIDES, None)?,
+        },
         Action::Tui | Action::Devices | Action::Build => unreachable!(),
     }
     Ok(())
