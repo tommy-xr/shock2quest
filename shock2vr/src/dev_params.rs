@@ -265,7 +265,8 @@ dev_params! {
     GLOVE_FIT_VISIBLE = Fit::bool("glove_fit_visible", "Fit gloves", true),
     /// Quest only: compare grip pose against gameplay's current aim pose.
     GLOVE_FIT_GRIP_POSE = Fit::bool("glove_fit_grip_pose", "Hand pose", false, "Aim", "Grip"),
-    /// Quest only: show the room behind debug_gloves/debug_psi_fit. Other scenes stay opaque.
+    /// Quest only: show the room behind debug_gloves/debug_psi_fit.
+    /// debug_calibration always requests passthrough independently of this toggle.
     GLOVE_FIT_PASSTHROUGH = Fit::bool("glove_fit_passthrough", "Fit passthrough", true),
     /// Live VR amp fit, relative to the authored hand placement. Also used by debug_psi_fit.
     PSI_AMP_FORWARD_CM = Hands::float("psi_amp_forward_cm", "Psi amp forward cm", 2.0, -20.0, 20.0, 0.5),

@@ -1579,13 +1579,12 @@ fn main() {
             ));
         }
 
-        fit_passthrough.update(
-            &session,
-            matches!(&game, shock2vr::App::Ready(game) if game.scene_name() == "debug_calibration")
-                || ((passthrough::is_fit_scene(&game)
-                || matches!(&game, shock2vr::App::Ready(game) if game.scene_name() == "debug_psi_fit"))
-                && shock2vr::dev_params::get_bool(shock2vr::dev_params::GLOVE_FIT_PASSTHROUGH)),
-        );
+        let calibration_passthrough =
+            matches!(&game, shock2vr::App::Ready(game) if game.scene_name() == "debug_calibration");
+        let fitting_passthrough = (passthrough::is_fit_scene(&game)
+            || matches!(&game, shock2vr::App::Ready(game) if game.scene_name() == "debug_psi_fit"))
+            && shock2vr::dev_params::get_bool(shock2vr::dev_params::GLOVE_FIT_PASSTHROUGH);
+        fit_passthrough.update(&session, calibration_passthrough || fitting_passthrough);
         let tracking = tracking.with_stance(
             game.player_center_above_floor(),
             game.player_eye_cap_above_center(),
