@@ -4921,6 +4921,20 @@ impl MissionCore {
         let mut roomscale_input = input_context.clone();
         roomscale_input.shift_rig(crate::vr_tracking::RoomscaleState::offset(&self.world));
         let input_context = &roomscale_input;
+        // The grip pose tool holds its posing hand still and gripping for
+        // every system reading the hands (holsters and deposits included), so
+        // setting its controller down releases nothing.
+        let (pawn_pos, pawn_rotation) = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            (player.pos, player.rotation)
+        };
+        let posed_input = self.interaction.pose_tool_input(
+            input_context,
+            pawn_pos,
+            pawn_rotation,
+            tick.elapsed.as_secs_f32(),
+        );
+        let input_context = posed_input.as_ref().unwrap_or(input_context);
 
         // A dead player's actionable channels are neutral until
         // reconstruction. A scripted control lock is subtler: tracked poses
@@ -12455,6 +12469,8 @@ impl MissionCore {
                         Some(action) => warn!("unroutable hand button action: {action}"),
                     }
                 }
+
+                Effect::ToggleGripPoseTool => self.interaction.toggle_grip_pose_tool(),
 
                 Effect::ToggleUseMode => {
                     match game_options.presentation_mode {

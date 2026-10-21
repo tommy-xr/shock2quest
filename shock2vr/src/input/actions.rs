@@ -97,6 +97,9 @@ pub enum InputAction {
     /// a second toggle. No-op in VR.
     ToggleUseMode,
 
+    /// Start or stop the VR grip pose tool on the held item (developer).
+    ToggleGripPoseTool,
+
     /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
     /// `M` key). No-op in VR.
     ToggleMap,
@@ -189,6 +192,7 @@ impl InputAction {
             InputAction::DebugForceChase,
             InputAction::DebugStartHordeWave,
             InputAction::ToggleUseMode,
+            InputAction::ToggleGripPoseTool,
             InputAction::ReadLastUnreadLog,
             InputAction::ToggleMap,
             InputAction::TogglePauseMenu,
@@ -239,6 +243,7 @@ impl InputAction {
             InputAction::DebugForceChase => "DebugForceChase",
             InputAction::DebugStartHordeWave => "DebugStartHordeWave",
             InputAction::ToggleUseMode => "ToggleUseMode",
+            InputAction::ToggleGripPoseTool => "ToggleGripPoseTool",
             InputAction::ReadLastUnreadLog => "ReadLastUnreadLog",
             InputAction::ToggleMap => "ToggleMap",
             InputAction::TogglePauseMenu => "TogglePauseMenu",

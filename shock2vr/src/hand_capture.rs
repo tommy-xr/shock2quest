@@ -113,12 +113,26 @@ pub fn grip_transform(
     item_position: Vector3<f32>,
     item_rotation: Quaternion<f32>,
 ) -> Option<(Vector3<f32>, Quaternion<f32>)> {
+    let (hand_position, hand_rotation) = hand_pose(tracked, glove)?;
+    let to_hand = hand_rotation.invert();
+    Some((
+        to_hand.rotate_vector(item_position - hand_position),
+        (to_hand * item_rotation).normalize(),
+    ))
+}
+
+/// The controller-grip pose that draws the glove (`glove`, its joints in
+/// controller-grip space) over a tracked hand, or `None` for degenerate joints.
+pub fn hand_pose(
+    tracked: &HandJoints,
+    glove: &HandJoints,
+) -> Option<(Vector3<f32>, Quaternion<f32>)> {
     let (tracked_origin, tracked_rotation) = hand_frame(tracked)?;
     let (glove_origin, glove_rotation) = hand_frame(glove)?;
-    let to_glove = glove_rotation * tracked_rotation.invert();
+    let rotation = (tracked_rotation * glove_rotation.invert()).normalize();
     Some((
-        glove_origin + to_glove.rotate_vector(item_position - tracked_origin),
-        (to_glove * item_rotation).normalize(),
+        tracked_origin - rotation.rotate_vector(glove_origin),
+        rotation,
     ))
 }
 
@@ -303,6 +317,9 @@ mod tests {
             .unwrap();
             assert!((o - offset).magnitude() < 1e-5, "{hand:?}");
             assert!(r.dot(rotation).abs() > 1.0 - 1e-5, "{hand:?}");
+            let (p, q) = hand_pose(&tracked, &glove).unwrap();
+            assert!((p - controller_position).magnitude() < 1e-5, "{hand:?}");
+            assert!(q.dot(controller).abs() > 1.0 - 1e-5, "{hand:?}");
         }
     }
 }

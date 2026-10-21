@@ -2406,6 +2406,7 @@ impl Game {
                         toxin: action == CheatAction::AddToxin,
                         amount: 10.0,
                     },
+                    CheatAction::GripPoseTool => Effect::ToggleGripPoseTool,
                     CheatAction::ClearExposure => Effect::Multiple(vec![
                         Effect::ClearHazard { toxin: false },
                         Effect::ClearHazard { toxin: true },
