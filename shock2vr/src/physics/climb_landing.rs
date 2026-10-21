@@ -364,9 +364,9 @@ impl PhysicsWorld {
                 let at = held + direction * *inset;
                 let (floor, normal) = floor_at(*plane, at.x, at.z)?;
                 let landing = Self::landing_on(floor, normal, standing);
-                if !connected(*plane, &landing)
+                if *settles == 0
+                    || !connected(*plane, &landing)
                     || self.assisted_route(player, start, landing).is_err()
-                    || *settles == 0
                 {
                     return None;
                 }
@@ -740,7 +740,7 @@ mod tests {
             ),
             ..ledge(vec3(1.02, 6.0, 0.0))
         };
-        assert_eq!(world.held_floor_landing(&player, &edge, None), None);
+        assert_eq!(world.held_floor_landing(&player, &edge, None, &mut 2), None);
     }
 
     #[test]

@@ -148,6 +148,9 @@ pub struct ReleasePreview {
     pub gaze_rejection: Option<GazeRejection>,
     /// Which held floor the next held-floor search leads with.
     held_turn: bool,
+    /// The held-floor search ran out of settles before finding a landing:
+    /// one may still exist, so the vault does not stand in for it yet.
+    held_search_incomplete: bool,
 }
 
 impl ReleasePreview {
@@ -248,6 +251,7 @@ pub fn resolve(
     // ordinary ledge pull keeps its vault.
     let exits_a_ladder = climb.on_ladder_departure();
     let held_turn = !previous.held_turn;
+    let mut held_search_incomplete = false;
     // The same tracking a release needs to commit: never show an assisted
     // landing the release would then refuse.
     let tracked = input
@@ -280,22 +284,26 @@ pub fn resolve(
                         .collect();
                     // A landing found before is kept while it is still valid
                     // on a held floor, with no settle.
-                    floors
-                        .iter()
-                        .find_map(|grip| {
-                            physics.held_floor_landing(player, grip, previous.assisted(), &mut 0)
+                    let kept = previous.assisted().and_then(|previous| {
+                        floors.iter().find_map(|grip| {
+                            physics.held_floor_landing(player, grip, Some(previous), &mut 0)
                         })
-                        .or_else(|| {
-                            // Else a bounded search (settles across both floors),
-                            // leading with the other floor each frame: one that
-                            // never settles cannot starve the other.
-                            let mut settles = HELD_FLOOR_SETTLES;
-                            held_search_order(&floors, held_turn)
-                                .iter()
-                                .find_map(|grip| {
-                                    physics.held_floor_landing(player, grip, None, &mut settles)
-                                })
-                        })
+                    });
+                    kept.or_else(|| {
+                        // Else a bounded search (settles across both floors),
+                        // leading with the other floor each frame: one that
+                        // never settles cannot starve the other.
+                        let mut settles = HELD_FLOOR_SETTLES;
+                        let mut order = floors.clone();
+                        if held_turn {
+                            order.reverse();
+                        }
+                        let found = order.iter().find_map(|grip| {
+                            physics.held_floor_landing(player, grip, None, &mut settles)
+                        });
+                        held_search_incomplete = found.is_none() && settles == 0;
+                        found
+                    })
                 })
                 .flatten()
         });
@@ -316,6 +324,7 @@ pub fn resolve(
     ReleasePreview {
         outcome,
         held_turn,
+        held_search_incomplete,
         gaze_candidate: gaze.as_ref().and_then(|gaze| gaze.candidate),
         gaze_rejection: match gaze {
             Some(gaze) => gaze.landing.err(),
@@ -383,14 +392,16 @@ impl ExitTeleport {
 }
 
 /// The hold a pull-up vault may go over: an ordinary ledge, or - only while
-/// no assisted landing shows, so there is one destination at a time - a
-/// grace hold on a floor (a ladder top whose held floor offers no landing).
+/// no assisted landing shows, after a complete search, so there is one
+/// destination at a time - a grace hold on a floor (a ladder top whose held
+/// floor offers no landing).
 pub fn vault_hold(grip: ClimbGrip, preview: &ReleasePreview) -> Option<ClimbGrip> {
     match grip.kind {
         ClimbGripKind::Ledge => Some(grip),
         ClimbGripKind::Surface
             if crate::physics::is_walkable_normal(grip.normal.y)
-                && preview.assisted().is_none() =>
+                && preview.assisted().is_none()
+                && !preview.held_search_incomplete =>
         {
             Some(ClimbGrip {
                 kind: ClimbGripKind::Ledge,
@@ -399,15 +410,6 @@ pub fn vault_hold(grip: ClimbGrip, preview: &ReleasePreview) -> Option<ClimbGrip
         }
         _ => None,
     }
-}
-
-/// `floors` (anchor's first), led on alternate `turn`s by the next one.
-fn held_search_order<T: Copy>(floors: &[T], turn: bool) -> Vec<T> {
-    let mut order = floors.to_vec();
-    if turn && !order.is_empty() {
-        order.rotate_left(1);
-    }
-    order
 }
 
 /// How long a fresh hold flashes cyan before showing the release's colour.
@@ -564,23 +566,15 @@ mod tests {
             vault_hold(grip(ClimbGripKind::Surface, 1.0), &none).map(|g| g.kind),
             Some(ClimbGripKind::Ledge)
         );
+        // Not while a search that ran out of settles may still find one.
+        let incomplete = ReleasePreview {
+            held_search_incomplete: true,
+            ..Default::default()
+        };
+        assert!(vault_hold(grip(ClimbGripKind::Surface, 1.0), &incomplete).is_none());
         // Never a wall or a ladder.
         assert!(vault_hold(grip(ClimbGripKind::Surface, 0.0), &none).is_none());
         assert!(vault_hold(grip(ClimbGripKind::Ladder, 1.0), &none).is_none());
-    }
-
-    #[test]
-    fn the_held_floor_search_leads_with_each_floor_in_turn() {
-        assert_eq!(
-            held_search_order(&["anchor", "other"], false),
-            ["anchor", "other"]
-        );
-        assert_eq!(
-            held_search_order(&["anchor", "other"], true),
-            ["other", "anchor"]
-        );
-        assert_eq!(held_search_order(&["anchor"], true), ["anchor"]);
-        assert!(held_search_order::<u8>(&[], true).is_empty());
     }
 
     #[test]

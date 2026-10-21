@@ -16,23 +16,25 @@ interface Top {
   top: Vec3;
   /** Where the free hand took the floor in the sweep (searched around). */
   hold: Vec3;
+  /** How it exits: a release onto an assisted landing, or the vault fallback. */
+  exit: "assisted" | "vault";
 }
 
 const TOPS: Top[] = [
-  { mission: "medsci1.mis", top: [-17.54, -1.59, 14.45], hold: [-17.54, -1.6, 14.25] },
-  { mission: "eng2.mis", top: [4.85, -12.8, -278.35], hold: [4.65, -12.8, -278.35] },
-  { mission: "rec1.mis", top: [22.24, -4.96, -232.81], hold: [22.44, -5.2, -232.81] },
-  { mission: "rick1.mis", top: [94.48, 55.6, -6.38], hold: [94.28, 56.0, -6.68] },
+  { mission: "medsci1.mis", top: [-17.54, -1.59, 14.45], hold: [-17.54, -1.6, 14.25], exit: "assisted" },
+  { mission: "eng2.mis", top: [4.85, -12.8, -278.35], hold: [4.65, -12.8, -278.35], exit: "assisted" },
+  { mission: "rec1.mis", top: [22.24, -4.96, -232.81], hold: [22.44, -5.2, -232.81], exit: "assisted" },
+  { mission: "rick1.mis", top: [94.48, 55.6, -6.38], hold: [94.28, 56.0, -6.68], exit: "assisted" },
   // Its held floor offers no landing: the vault takes over.
-  { mission: "rick1.mis", top: [94.48, 55.6, -14.38], hold: [94.28, 56.0, -14.68] },
+  { mission: "rick1.mis", top: [94.48, 55.6, -14.38], hold: [94.28, 56.0, -14.68], exit: "vault" },
 ];
 
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const horizontal = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[2] - b[2]);
 
-for (const { mission, top, hold } of TOPS) {
+for (const { mission, top, hold, exit } of TOPS) {
   test(
-    `${mission} (VR): the ladder top at ${top.join(",")} exits onto its floor`,
+    `${mission} (VR): the ladder top at ${top.join(",")} exits onto its floor by ${exit === "assisted" ? "a release" : "the vault"}`,
     { skip: !e2eEnabled, timeout: 600_000 },
     async () => {
       await using game = await GameServer.launch({ mission, debugFlags: ["--vr"] });
@@ -81,9 +83,11 @@ for (const { mission, top, hold } of TOPS) {
       assert.ok(held, "the floor at the top is in reach");
       assert.equal(held.kind, "surface", "the floor off a ladder is a grace hold");
       await game.input.set(`${free}_hand.world_target`, null);
-      await game.step({ frames: 2 });
+      // Let the bounded held-floor search settle.
+      await game.step({ frames: 6 });
       const shown = (await game.info()).player.climb.release;
-      if (shown.mode === "assisted") {
+      assert.equal(shown.mode === "assisted" ? "assisted" : "vault", exit, JSON.stringify(shown));
+      if (exit === "assisted") {
         const { landed } = await vrReleaseOnto(game);
         assert.ok(landed[1] > top[1] - 0.5, `landed on the floor at the top: ${landed}`);
       } else {
