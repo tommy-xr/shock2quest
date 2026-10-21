@@ -69,20 +69,22 @@ impl PhysicsWorld {
             return Err(GazeRejection::NoFit);
         }
         // The whole footprint stands on the landing, not just a rim the
-        // rounded bottom balances on: probe the floor around the body.
+        // rounded bottom balances on: probe the floor around the body, along
+        // the landing's plane (a ramp rises under one side).
         let reach = final_shape.radius * FOOTPRINT_PROBE;
         let footprint = [(reach, 0.0), (-reach, 0.0), (0.0, reach), (0.0, -reach)];
+        let plane = landing.normal;
         if !footprint.iter().all(|(x, z)| {
+            let floor_y = landing.floor_y - (plane.x * x + plane.z * z) / plane.y;
             let ray = Ray::new(point![target.x + x, target.y, target.z + z], -Vector::y());
             queries
                 .cast_ray(
                     &ray,
-                    target.y - landing.floor_y + climb_release::GAZE_SNAP_MAX_STEP,
+                    target.y - floor_y + climb_release::GAZE_SNAP_MAX_STEP,
                     true,
                 )
                 .is_some_and(|(_, toi)| {
-                    (ray.point_at(toi).y - landing.floor_y).abs()
-                        <= climb_release::GAZE_SNAP_MAX_STEP
+                    (ray.point_at(toi).y - floor_y).abs() <= climb_release::GAZE_SNAP_MAX_STEP
                 })
         }) {
             return Err(GazeRejection::Unsupported);
@@ -314,12 +316,19 @@ impl PhysicsWorld {
             self.player_movement_queries(self.narrow_phase.query_dispatcher(), filter);
         let queries = all_queries.with_filter(filter.predicate(&not_climbable));
         // The held surface's floor under (x, z), if it is there at the hold's height.
+        // Following the held plane, so a ramp counts as continuous: its
+        // height where (x, z) meets it.
+        let normal = vec_to_nvec(grip.normal);
+        let expected_y = |x: Real, z: Real| {
+            held.y - (normal.x * (x - held.x) + normal.z * (z - held.z)) / normal.y
+        };
         let floor_at = |x: Real, z: Real| {
-            let ray = Ray::new(point![x, held.y + 0.3, z], -Vector::y());
+            let expected = expected_y(x, z);
+            let ray = Ray::new(point![x, expected + 0.3, z], -Vector::y());
             let (handle, hit) = queries.cast_ray_and_get_normal(&ray, 0.6, true)?;
             let floor = ray.point_at(hit.time_of_impact).coords;
             (is_walkable_normal(hit.normal.y)
-                && (floor.y - held.y).abs() <= climb_release::GAZE_SNAP_MAX_STEP
+                && (floor.y - expected).abs() <= climb_release::GAZE_SNAP_MAX_STEP
                 && EntityId::from_inner(self.collider_set[handle].user_data as u64)
                     == grip.entity_id)
                 .then_some((floor, hit.normal))
@@ -608,10 +617,11 @@ mod tests {
     fn a_held_floor_that_cannot_take_the_body_or_is_not_a_floor_gives_nothing() {
         // A 0.3-wide sill: the hand holds it, the body does not fit on it.
         let (world, player) = fixture(&[(vec3(0.75, 5.0, 0.0), vec3(0.3, 2.0, 4.0))]);
-        assert_eq!(
-            world.held_floor_landing(&player, &ledge(vec3(0.75, 6.0, 0.0)), None),
-            None
-        );
+        let sill = ClimbGrip {
+            entity_id: EntityId::from_inner(102),
+            ..ledge(vec3(0.75, 6.0, 0.0))
+        };
+        assert_eq!(world.held_floor_landing(&player, &sill, None), None);
         let wall = ClimbGrip {
             kind: ClimbGripKind::Surface,
             normal: vec3(-1.0, 0.0, 0.0),
@@ -619,6 +629,40 @@ mod tests {
         };
         let (world, player) = fixture(&[]);
         assert_eq!(world.held_floor_landing(&player, &wall, None), None);
+    }
+
+    #[test]
+    fn a_held_ramp_lands_up_its_slope() {
+        // A 30-degree ramp rising away from the body (+x), held at x = 1.4.
+        let tilt = Quaternion::from(cgmath::Euler::new(
+            cgmath::Rad(0.0),
+            cgmath::Rad(0.0),
+            cgmath::Rad(std::f32::consts::FRAC_PI_6),
+        ));
+        let (mut world, mut player) = fixture(&[]);
+        world.add_kinematic(
+            EntityId::from_inner(102).unwrap(),
+            vec3(3.0, 6.808, 0.0),
+            tilt,
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 0.5, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        world.set_player_translation(vec3(0.0, 4.0 + FEET_ABOVE_CENTER, 0.0), &mut player);
+        let (s, c) = std::f32::consts::FRAC_PI_6.sin_cos();
+        let hold = vec3(1.4, 7.0245 + (1.4 - 2.875) * s / c, 0.0);
+        let grip = ClimbGrip {
+            entity_id: EntityId::from_inner(102),
+            normal: vec3(-s, c, 0.0),
+            ..ledge(hold)
+        };
+        let landing = world
+            .held_floor_landing(&player, &grip, None)
+            .expect("up the ramp");
+        assert!(landing.floor_y > hold.y + 0.1, "{landing:?}");
+        assert!(world.plan_assisted_release(landing, &mut player));
     }
 
     #[test]
