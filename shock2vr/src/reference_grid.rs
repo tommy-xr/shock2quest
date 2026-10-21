@@ -98,7 +98,7 @@ fn cage_transform(
     stage_floor: Vector3<f32>,
     size_meters: f32,
 ) -> Matrix4<f32> {
-    let size = size_meters / crate::METERS_PER_WORLD_UNIT;
+    let size = size_meters / crate::world_scale::meters_per_world_unit();
     Matrix4::from_translation(position)
         * Matrix4::from(rotation)
         * Matrix4::from_translation(stage_floor)

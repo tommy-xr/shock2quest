@@ -64,10 +64,11 @@ impl HolsterPose {
     pub fn model_transform(&self, min: Vector3<f32>, max: Vector3<f32>) -> Matrix4<f32> {
         let size = max - min;
         let scale = self.length_m
-            / crate::METERS_PER_WORLD_UNIT
+            / crate::world_scale::meters_per_world_unit()
             / size.x.max(size.y).max(size.z).max(0.0001);
-        Matrix4::from_translation(Vector3::from(self.position_m) / crate::METERS_PER_WORLD_UNIT)
-            * Matrix4::from_angle_x(Deg(self.rotation_degrees[0]))
+        Matrix4::from_translation(
+            Vector3::from(self.position_m) / crate::world_scale::meters_per_world_unit(),
+        ) * Matrix4::from_angle_x(Deg(self.rotation_degrees[0]))
             * Matrix4::from_angle_y(Deg(self.rotation_degrees[1]))
             * Matrix4::from_angle_z(Deg(self.rotation_degrees[2]))
             * Matrix4::from_scale(scale)

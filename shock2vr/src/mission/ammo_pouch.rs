@@ -4,7 +4,9 @@ use crate::{input_context::InputContext, vr_support::GripPose};
 use cgmath::{InnerSpace, Quaternion, Rotation, Vector3};
 use shipyard::EntityId;
 
-pub(super) const RADIUS: f32 = 0.10 / crate::METERS_PER_WORLD_UNIT;
+pub(super) fn radius() -> f32 {
+    0.10 / crate::world_scale::meters_per_world_unit()
+}
 // The new belt includes its pouch; target its interior behind the front face.
 const POUCH_OFFSET: f32 = -0.025;
 
@@ -93,7 +95,7 @@ impl AmmoPouch {
                 && !self.shoulder_priority[i]
                 && active_center.is_some_and(|center| {
                     (hand.position - center).magnitude2()
-                        <= (RADIUS + super::body_inventory::hand_radius()).powi(2)
+                        <= (radius() + super::body_inventory::hand_radius()).powi(2)
                 });
             self.incompatible[i] = self.near[i] && held[i].is_some() && !ammo[i];
             if tracked && !pressed {
@@ -145,7 +147,7 @@ impl AmmoPouch {
     ) -> serde_json::Value {
         serde_json::json!({
             "center": self.world_center(position, rotation).map(|p| [p.x,p.y,p.z]),
-            "radius": RADIUS, "near": self.near, "refused": self.refused,
+            "radius": radius(), "near": self.near, "refused": self.refused,
             "refusal_flash": self.refusal_flash, "incompatible": self.incompatible,
             "offers": self.offers.map(|o| o.map(|o| serde_json::json!({
                 "reserve": o.reserve.inner() as i32, "template": o.template, "rounds": o.rounds, "stock": o.stock
@@ -168,7 +170,7 @@ impl AmmoPouch {
         );
         let mut objects = vec![dark::hit_box::draw_debug_wire_sphere(
             center,
-            RADIUS,
+            radius(),
             color.truncate(),
         )];
         crate::util::tag_render_source(&mut objects, crate::util::render_source::PLAYER_HANDS);

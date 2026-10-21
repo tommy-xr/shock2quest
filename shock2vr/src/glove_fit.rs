@@ -10,7 +10,7 @@ pub(crate) fn forward_translation(rotation: Quaternion<f32>, forward_cm: f32) ->
         rotation.rotate_vector(vec3(
             0.0,
             0.0,
-            -forward_cm * 0.01 / crate::METERS_PER_WORLD_UNIT,
+            -forward_cm * 0.01 / crate::world_scale::meters_per_world_unit(),
         ))
     })
 }
@@ -65,7 +65,7 @@ impl GloveFit {
     /// both hands can be fitted symmetrically. Scale about the shifted origin.
     pub fn transform(self, pose: GripPose, side: Handedness) -> Matrix4<f32> {
         let offset = side.mirror_point(vec3(self.side_cm, self.up_cm, 0.0))
-            * (0.01 / crate::METERS_PER_WORLD_UNIT);
+            * (0.01 / crate::world_scale::meters_per_world_unit());
         Matrix4::from_translation(pose.position)
             * Matrix4::from(pose.rotation)
             * Matrix4::from_translation(offset)

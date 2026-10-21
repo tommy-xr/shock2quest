@@ -2060,6 +2060,17 @@ impl Game {
             action_effects,
         );
 
+        // A live scale/stance change must also move eye-attached render layers.
+        if input_context.tracking.is_some() {
+            let mut rendered_input = input_context.clone();
+            vr_tracking::TrackingTransform::rebase_input(
+                &mut rendered_input,
+                self.player_center_above_floor(),
+                self.player_eye_cap_above_center(),
+            );
+            self.head_pose = (rendered_input.head.position, rendered_input.head.rotation);
+        }
+
         let audio_profile = perf::scope(perf::Phase::Audio);
         // `time` is the player's clock; world sounds follow the scene's
         // slowed world clock.
@@ -2686,6 +2697,7 @@ impl Game {
 
         let is_crouched = self.active_game_scene.player_is_crouched();
         let (position, rotation) = self.player_standing_transform()?;
+        let position = position - vec3(0.0, physics::player_scale_center_offset(), 0.0);
 
         let quest_info = self
             .active_game_scene

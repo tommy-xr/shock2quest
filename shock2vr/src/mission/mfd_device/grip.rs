@@ -47,7 +47,7 @@ pub(super) fn tuning(hand: usize) -> Tuning {
             3 => Edge::Right,
             _ => Edge::Bottom,
         },
-        offset: vec3(x, y, z) / crate::METERS_PER_WORLD_UNIT,
+        offset: vec3(x, y, z) / crate::world_scale::meters_per_world_unit(),
         rotation: Quaternion::from_angle_z(Deg(roll))
             * Quaternion::from_angle_y(Deg(yaw))
             * Quaternion::from_angle_x(Deg(pitch)),
@@ -66,7 +66,7 @@ pub(super) fn margin(hand: usize) -> f32 {
                 VR_MFD_LEFT_GRIP_CLEARANCE
             } else {
                 VR_MFD_RIGHT_GRIP_CLEARANCE
-            }) / crate::METERS_PER_WORLD_UNIT
+            }) / crate::world_scale::meters_per_world_unit()
         }
 }
 

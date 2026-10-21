@@ -169,7 +169,8 @@ impl SupportProfile {
         };
         let rotation = model.rotation * grip.rotation.conjugate() * q;
         GripPose {
-            position: model.point(scaled_anchor) - rotation.rotate_vector(support_rig.palm),
+            position: model.point(scaled_anchor)
+                - rotation.rotate_vector(support_rig.palm_in_world()),
             rotation,
         }
     }

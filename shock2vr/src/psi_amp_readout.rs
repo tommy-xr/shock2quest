@@ -162,9 +162,9 @@ pub(crate) fn wrist(world: &World, amp: EntityId, hand: Handedness) -> Option<(M
     // Apply physical centimetres after resolving the mirrored/scaled model,
     // along its wrist axis. Both bio bands and the implant use this result.
     let forward = crate::dev_params::get(crate::dev_params::PSI_BAND_FORWARD_CM)
-        * (0.01 / crate::METERS_PER_WORLD_UNIT);
+        * (0.01 / crate::world_scale::meters_per_world_unit());
     let back = crate::dev_params::get(crate::dev_params::PSI_BAND_BACK_CM)
-        * (0.01 / crate::METERS_PER_WORLD_UNIT);
+        * (0.01 / crate::world_scale::meters_per_world_unit());
     Some((
         wrist_frame(transform) * Matrix4::from_translation(vec3(0.0, forward, back)),
         AMP_FOREARM_RADIUS

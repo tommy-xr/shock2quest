@@ -53,14 +53,16 @@ impl BeltCardPose {
             * Quaternion::from_angle_z(Deg(self.rotation_degrees[2]))
     }
     pub fn transform(&self) -> Matrix4<f32> {
-        Matrix4::from_translation(Vector3::from(self.position_m) / crate::METERS_PER_WORLD_UNIT)
-            * self.rotation()
+        Matrix4::from_translation(
+            Vector3::from(self.position_m) / crate::world_scale::meters_per_world_unit(),
+        ) * self.rotation()
     }
 }
 /// Scale the original card model to an 8.5 cm long edge, held or resting.
 pub fn card_model_scale(min: Vector3<f32>, max: Vector3<f32>) -> f32 {
     let size = max - min;
-    (0.085 / crate::METERS_PER_WORLD_UNIT) / size.x.max(size.y).max(size.z).max(0.001)
+    (0.085 / crate::world_scale::meters_per_world_unit())
+        / size.x.max(size.y).max(size.z).max(0.001)
 }
 /// Center the card for the shared belt/editor mounting transform.
 pub fn card_model_transform(min: Vector3<f32>, max: Vector3<f32>) -> Matrix4<f32> {

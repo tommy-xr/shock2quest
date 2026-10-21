@@ -35,7 +35,12 @@ fn posed_vertical_bounds(
         })
 }
 
-struct CalibrationHooks(Vec<SceneObject>);
+struct CalibrationHooks {
+    hybrid: Vec<SceneObject>,
+    ruler: Vec<SceneObject>,
+    height_world: f32,
+    scale: crate::world_scale::WorldScale,
+}
 
 fn spawn_rotation(presentation: PresentationMode) -> Quaternion<f32> {
     // Desktop's neutral head looks -X; a neutral headset looks -Z. Both
@@ -53,7 +58,7 @@ impl DebugSceneHooks for CalibrationHooks {
         objects: &mut Vec<SceneObject>,
         _camera_position: &mut Vector3<f32>,
         _camera_rotation: &mut Quaternion<f32>,
-        _assets: &mut AssetCache,
+        assets: &mut AssetCache,
         _options: &GameOptions,
     ) {
         // Leave the room visible, retaining the optional height/crouch readout.
@@ -61,7 +66,13 @@ impl DebugSceneHooks for CalibrationHooks {
             object.debug_tag().and_then(|tag| tag.source.as_deref())
                 == Some(crate::util::render_source::DEBUG_OVERLAY)
         });
-        objects.extend(self.0.iter().cloned());
+        let scale = crate::world_scale::WorldScale::active();
+        if scale != self.scale {
+            self.ruler = calibration_ruler(assets, self.height_world);
+            self.scale = scale;
+        }
+        objects.extend(self.hybrid.iter().cloned());
+        objects.extend(self.ruler.iter().cloned());
     }
 }
 
@@ -96,12 +107,6 @@ pub fn create_debug_calibration_scene(
         AnimationPlayer::from_pose(asset_cache.get(&ANIMATION_CLIP_IMPORTER, "ogpstd_.mc"), 0);
     let mut objects = model.to_animated_scene_objects(&pose);
     let (sole_y, crown_y) = posed_vertical_bounds(&vertices, &objects[0].skinning_data);
-    let height_m = (crown_y - sole_y) * METERS_PER_WORLD_UNIT;
-    tracing::info!(
-        height_m,
-        height_ft = height_m / 0.3048,
-        "SHOCK2QUEST_CALIBRATION grunt_p ogpstd frame 0"
-    );
     let hybrid_x = -2.0 / METERS_PER_WORLD_UNIT;
     for object in &mut objects {
         object.set_transform(
@@ -111,6 +116,45 @@ pub fn create_debug_calibration_scene(
     }
     crate::util::tag_render_source(&mut objects, "calibration_hybrid");
 
+    let ruler = calibration_ruler(asset_cache, crown_y - sole_y);
+
+    // The invisible collision floor's TOP, the soles and the ruler zero agree.
+    let floor = ColliderBuilder::cuboid(10.0, 0.1, 10.0)
+        .translation(vector![0.0, -0.1, 0.0])
+        .build();
+    DebugSceneBuilder::new("debug_calibration")
+        .with_spawn_location(SpawnLocation::PositionRotation(
+            vec3(0.0, 2.0, 0.0),
+            spawn_rotation(game_options.presentation_mode),
+        ))
+        .with_physics_geometry(floor)
+        .build_with_hooks(
+            DebugSceneBuildOptions {
+                global_context,
+                game_options,
+                asset_cache,
+                audio_context,
+            },
+            CalibrationHooks {
+                hybrid: objects,
+                ruler,
+                height_world: crown_y - sole_y,
+                scale: crate::world_scale::WorldScale::active(),
+            },
+        )
+}
+
+fn calibration_ruler(asset_cache: &mut AssetCache, height_world: f32) -> Vec<SceneObject> {
+    let scale = crate::world_scale::WorldScale::active();
+    let unit = scale.meters_per_world_unit();
+    let height_m = height_world * unit;
+    let hybrid_x = -2.0 / METERS_PER_WORLD_UNIT;
+    tracing::info!(
+        scale = scale.factor(),
+        height_m,
+        height_ft = height_m / 0.3048,
+        "SHOCK2QUEST_CALIBRATION grunt_p ogpstd frame 0"
+    );
     // One pixel layout for both presentations; 400 pixels represent one metre.
     let mut ruler = UiCanvas::new(vec2(400.0, 1000.0));
     ruler.fill(Rect::new(0.0, 0.0, 3.0, 1000.0), [180, 220, 255]);
@@ -147,39 +191,22 @@ pub fn create_debug_calibration_scene(
         HAlign::Left,
         VAlign::Middle,
     );
+    ruler.text_native(
+        Rect::new(65.0, 105.0, 330.0, 24.0),
+        &format!("World scale: {:.2}x", scale.factor()),
+        "mainfont.fon",
+        HAlign::Left,
+        VAlign::Middle,
+    );
     let panel = WorldPanel {
-        center: vec3(
-            hybrid_x,
-            1.25 / METERS_PER_WORLD_UNIT,
-            -1.15 / METERS_PER_WORLD_UNIT,
-        ),
+        center: vec3(hybrid_x, 1.25 / unit, -1.15 / unit),
         rotation: Quaternion::from_angle_y(Deg(90.0)),
-        size: vec2(1.0, 2.5) / METERS_PER_WORLD_UNIT,
+        size: vec2(1.0, 2.5) / unit,
     };
     let mut ruler_objects =
         ruler.render_world_space(asset_cache, panel.transform(), None, None, 0.001);
     crate::util::tag_render_source(&mut ruler_objects, "calibration_ruler");
-    objects.extend(ruler_objects);
-
-    // The invisible collision floor's TOP, the soles and the ruler zero agree.
-    let floor = ColliderBuilder::cuboid(10.0, 0.1, 10.0)
-        .translation(vector![0.0, -0.1, 0.0])
-        .build();
-    DebugSceneBuilder::new("debug_calibration")
-        .with_spawn_location(SpawnLocation::PositionRotation(
-            vec3(0.0, 2.0, 0.0),
-            spawn_rotation(game_options.presentation_mode),
-        ))
-        .with_physics_geometry(floor)
-        .build_with_hooks(
-            DebugSceneBuildOptions {
-                global_context,
-                game_options,
-                asset_cache,
-                audio_context,
-            },
-            CalibrationHooks(objects),
-        )
+    ruler_objects
 }
 
 #[cfg(test)]

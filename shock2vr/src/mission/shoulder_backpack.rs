@@ -11,7 +11,8 @@ const DROP: f32 = 0.10 / SCALE;
 const BEHIND: f32 = 0.06 / SCALE;
 
 fn radius() -> f32 {
-    crate::dev_params::get(crate::dev_params::VR_BACKPACK_RADIUS) / SCALE
+    crate::dev_params::get(crate::dev_params::VR_BACKPACK_RADIUS)
+        / crate::world_scale::meters_per_world_unit()
 }
 
 pub(super) struct ShoulderBackpack {
@@ -147,8 +148,12 @@ impl ShoulderBackpack {
         self.yaw = Some(yaw);
         let forward = vec3(yaw.sin(), 0.0, -yaw.cos());
         let right = forward.cross(Vector3::unit_y());
-        let center = head.position - forward * BEHIND - Vector3::unit_y() * DROP;
-        let centers = [center - right * SIDE, center + right * SIDE];
+        let personal = crate::world_scale::WorldScale::active().personal();
+        let center = head.position - (forward * BEHIND + Vector3::unit_y() * DROP) * personal;
+        let centers = [
+            center - right * SIDE * personal,
+            center + right * SIDE * personal,
+        ];
         self.centers = Some(centers);
         let mut released = [false; 2];
         for i in 0..2 {
@@ -158,26 +163,26 @@ impl ShoulderBackpack {
             // the controller. Exclude the face and ordinary forward gestures.
             let offset = hand.position - head.position;
             self.near_slot[i] = (tracked
-                && offset.dot(forward) < 0.08 / SCALE
-                && offset.dot(right).abs() > 0.10 / SCALE)
-                .then(|| {
-                    centers
-                        .iter()
-                        .enumerate()
-                        // Empty hands can only interact with stocked slots.
-                        .filter(|(slot, c)| {
-                            (held[i].is_some() || self.stocked[*slot])
-                                && (hand.position - **c).magnitude2()
-                                    <= (radius() + super::body_inventory::hand_radius()).powi(2)
-                        })
-                        .min_by(|(_, a), (_, b)| {
-                            (hand.position - **a)
-                                .magnitude2()
-                                .total_cmp(&(hand.position - **b).magnitude2())
-                        })
-                        .map(|(slot, _)| slot)
-                })
-                .flatten();
+                && offset.dot(forward) < 0.08 / crate::world_scale::meters_per_world_unit()
+                && offset.dot(right).abs() > 0.10 / crate::world_scale::meters_per_world_unit())
+            .then(|| {
+                centers
+                    .iter()
+                    .enumerate()
+                    // Empty hands can only interact with stocked slots.
+                    .filter(|(slot, c)| {
+                        (held[i].is_some() || self.stocked[*slot])
+                            && (hand.position - **c).magnitude2()
+                                <= (radius() + super::body_inventory::hand_radius()).powi(2)
+                    })
+                    .min_by(|(_, a), (_, b)| {
+                        (hand.position - **a)
+                            .magnitude2()
+                            .total_cmp(&(hand.position - **b).magnitude2())
+                    })
+                    .map(|(slot, _)| slot)
+            })
+            .flatten();
             self.near[i] = self.near_slot[i].is_some();
             if let Some(slot) = self.near_slot[i] {
                 self.outside_time[i] = 0.0;

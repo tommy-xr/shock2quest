@@ -258,7 +258,8 @@ impl GloveRenderer {
                 )
             }));
         }
-        self.wrist_frames.unwrap()[if hand == Handedness::Left { 0 } else { 1 }]
+        Matrix4::from_scale(crate::world_scale::WorldScale::active().personal())
+            * self.wrist_frames.unwrap()[if hand == Handedness::Left { 0 } else { 1 }]
     }
 
     /// Build the posed glove scene objects for one hand at its world transform.
@@ -396,7 +397,8 @@ impl GloveRenderer {
         // this rotation.
         let world = Matrix4::from_translation(position)
             * Matrix4::from(rotation)
-            * crate::vr_grip::glove_to_hand(handedness);
+            * crate::vr_grip::glove_to_hand(handedness)
+            * Matrix4::from_scale(crate::world_scale::WorldScale::active().personal());
 
         let mut objects = model.to_scene_objects_with_skinning();
         for (object, material) in objects.iter_mut().zip(materials) {

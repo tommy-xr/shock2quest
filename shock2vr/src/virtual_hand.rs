@@ -102,6 +102,7 @@ pub enum VirtualHandEffect {
         entity_id: EntityId,
         size: Vector3<f32>,
         center: Vector3<f32>,
+        scale: f32,
     },
     SetPositionRotation {
         entity_id: EntityId,
@@ -512,9 +513,14 @@ impl VirtualHand {
                         entity_id,
                         // The offset is hand-local (e.g. seating a weapon's
                         // grip in the palm), so it must rotate with the hand
-                        position: hand_position + hand_rotation.rotate_vector(vr_offsets.offset),
+                        position: hand_position
+                            + hand_rotation.rotate_vector(
+                                vr_offsets.offset
+                                    * crate::world_scale::WorldScale::active().personal(),
+                            ),
                         rotation: hand_rotation * vr_offsets.rotation,
-                        scale: vec3(1.0, 1.0, 1.0),
+                        scale: vec3(1.0, 1.0, 1.0)
+                            * crate::world_scale::WorldScale::active().personal(),
                     });
 
                     let updated_hand = VirtualHand {
@@ -687,7 +693,7 @@ impl VirtualHand {
             - cgmath::Point3::new(self.position.x, self.position.y, self.position.z))
         .magnitude();
         (self.feedback.observed == HandAffordance::Grabbable
-            && distance * crate::METERS_PER_WORLD_UNIT <= 0.45)
+            && distance * crate::world_scale::meters_per_world_unit() <= 0.45)
             .then_some(hit.maybe_entity_id)
             .flatten()
     }

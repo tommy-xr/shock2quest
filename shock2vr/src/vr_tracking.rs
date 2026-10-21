@@ -181,6 +181,19 @@ mod tests {
     use cgmath::InnerSpace;
 
     #[test]
+    fn recordings_without_scale_keep_the_original_conversion() {
+        let original =
+            TrackingTransform::new_with_scale(1.2, 1.1, 1.7, 0.0, crate::METERS_PER_WORLD_UNIT);
+        let mut json = serde_json::to_value(original).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .remove("meters_per_world_unit");
+        let restored: TrackingTransform = serde_json::from_value(json).unwrap();
+        let hand = vec3(0.25, 1.4, -0.4);
+        assert_eq!(original.stage_to_pawn(hand), restored.stage_to_pawn(hand));
+    }
+
+    #[test]
     fn roomscale_counts_free_travel_once_and_preserves_rig_geometry() {
         let mut state = RoomscaleState::default();
         let mut input = crate::input_context::InputContext::default();
