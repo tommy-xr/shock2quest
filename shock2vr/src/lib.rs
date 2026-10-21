@@ -10,6 +10,7 @@ pub mod game_scene;
 pub mod golf_courses;
 pub mod golf_game;
 pub mod hand_buttons;
+pub mod hand_capture;
 pub mod hand_pose;
 pub mod hand_pose_library;
 pub mod handheld_input;
