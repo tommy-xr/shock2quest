@@ -245,6 +245,7 @@ const PLAYER_STAND_TEST_MARGIN: f32 = 0.05;
 /// while crouched doesn't reload a standing capsule embedded in the floor.
 pub fn player_crouch_center_shift() -> f32 {
     (PLAYER_STANDING_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR
+        * crate::world_scale::WorldScale::active().personal()
 }
 
 /// What holds a crouching player up, and therefore what stays put as the
@@ -285,11 +286,12 @@ const PLAYER_EYE_CAP_MARGIN: f32 = 0.2;
 /// only an unusually tall player ever reaches, so tracking stays 1:1 in
 /// practice.
 pub fn player_eye_cap_above_center(crouched: bool) -> f32 {
-    if crouched {
+    let height = if crouched {
         crate::PLAYER_CROUCH_EYE_HEIGHT / SCALE_FACTOR
     } else {
         (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_EYE_CAP_MARGIN) / SCALE_FACTOR
-    }
+    };
+    height * crate::world_scale::WorldScale::active().personal()
 }
 
 /// Height (world units) of the collider CENTER above the surface the player
@@ -302,15 +304,25 @@ pub fn player_center_above_floor(crouched: bool) -> f32 {
     } else {
         PLAYER_STANDING_HEIGHT
     };
-    (height / 2.0 + PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR
+    (height * crate::world_scale::WorldScale::active().personal() / 2.0
+        + PLAYER_CONTACT_OFFSET
+        + PLAYER_REST_LIFT)
+        / SCALE_FACTOR
 }
 
 /// The player's standing collision capsule, in world units.
 fn standing_player_capsule() -> Capsule {
-    Capsule::new_y(
-        (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR,
-        PLAYER_STANDING_RADIUS / SCALE_FACTOR,
-    )
+    scaled_player_capsule(false, crate::world_scale::WorldScale::active())
+}
+
+fn scaled_player_capsule(crouched: bool, scale: crate::world_scale::WorldScale) -> Capsule {
+    let (height, radius) = if crouched {
+        (PLAYER_CROUCH_HEIGHT, PLAYER_CROUCH_RADIUS)
+    } else {
+        (PLAYER_STANDING_HEIGHT, PLAYER_STANDING_RADIUS)
+    };
+    let unit = scale.personal() / SCALE_FACTOR;
+    Capsule::new_y((height / 2.0 - radius) * unit, radius * unit)
 }
 
 /// [`standing_player_capsule`] as a collider shape.
@@ -320,10 +332,7 @@ fn standing_player_shared_shape() -> SharedShape {
 
 /// The player's crouched collision capsule, in world units.
 fn crouched_player_capsule() -> Capsule {
-    Capsule::new_y(
-        (PLAYER_CROUCH_HEIGHT / 2.0 - PLAYER_CROUCH_RADIUS) / SCALE_FACTOR,
-        PLAYER_CROUCH_RADIUS / SCALE_FACTOR,
-    )
+    scaled_player_capsule(true, crate::world_scale::WorldScale::active())
 }
 
 /// Canonical standing/crouched capsule for asset-authoring previews, in world units.
@@ -3615,6 +3624,7 @@ pub struct PlayerHandle {
     // Player
     controller: KinematicCharacterController,
     character_handle: RigidBodyHandle,
+    world_scale: crate::world_scale::WorldScale,
     // Whether the collider is currently the crouched capsule. Mutated only by
     // `PhysicsWorld::set_player_crouch`, which keeps the shape and this flag
     // in sync.
@@ -6606,10 +6616,7 @@ impl PhysicsWorld {
         let character_handle = self.rigid_body_set.insert(rigid_body);
         // Dark's standing player is six SS2 feet tall and 2.4 feet wide. A
         // capsule is the continuous equivalent of its vertical sphere stack.
-        let mut collider = ColliderBuilder::capsule_y(
-            (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR,
-            PLAYER_STANDING_RADIUS / SCALE_FACTOR,
-        );
+        let mut collider = ColliderBuilder::new(standing_player_shared_shape());
         collider = collider.collision_groups(InteractionGroups::new(
             InternalCollisionGroups::PLAYER.bits.into(),
             InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
@@ -6627,6 +6634,7 @@ impl PhysicsWorld {
         PlayerHandle {
             controller,
             character_handle,
+            world_scale: crate::world_scale::WorldScale::active(),
             is_crouched: false,
             is_hanging_crouched: false,
             tracking_crouched: false,
@@ -6643,6 +6651,56 @@ impl PhysicsWorld {
             ladder_grip: None,
             fatal_fall: FatalFallTracker::new(start_pos.y),
         }
+    }
+
+    /// Accept a world-size edit only when a standing player fits at the same
+    /// feet position. Level geometry stays in its original simulation units.
+    pub fn update_world_scale(&mut self, player: &mut PlayerHandle) -> bool {
+        let requested = crate::world_scale::WorldScale::requested();
+        if requested == player.world_scale
+            || !self.has_stepped
+            || !player.is_grounded
+            || player.is_crouched
+            || player.is_climbing
+            || player.top_out.is_some()
+        {
+            return false;
+        }
+        let body_handle = player.character_handle;
+        let body = &self.rigid_body_set[body_handle];
+        let collider_handle = body.colliders()[0];
+        let half_height = PLAYER_STANDING_HEIGHT / (2.0 * SCALE_FACTOR);
+        let mut position = *body.translation();
+        position.y += half_height * (requested.personal() - player.world_scale.personal());
+        let capsule = scaled_player_capsule(false, requested);
+        let margin = PLAYER_STAND_TEST_MARGIN / SCALE_FACTOR;
+        let test_shape = Capsule::new(
+            capsule.segment.a,
+            capsule.segment.b,
+            capsule.radius - margin,
+        );
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            QueryFilter::new()
+                .groups(InteractionGroups::new(
+                    InternalCollisionGroups::PLAYER.bits.into(),
+                    InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+                    Default::default(),
+                ))
+                .exclude_rigid_body(body_handle)
+                .exclude_sensors(),
+        );
+        if !capsule_pose_is_clear(&queries, position + Vector::y() * margin, &test_shape) {
+            return false;
+        }
+        self.collider_set[collider_handle].set_shape(SharedShape::new(capsule));
+        self.rigid_body_set[body_handle].set_translation(position, true);
+        player.fatal_fall = FatalFallTracker::new(position.y);
+        player.world_scale = requested;
+        requested.activate();
+        true
     }
 
     /// Set the player's crouch state, resizing the capsule with the feet
@@ -6728,9 +6786,11 @@ impl PhysicsWorld {
             let standing_pos = Translation::from(
                 Vector::y() * (center_shift + PLAYER_STAND_TEST_MARGIN / SCALE_FACTOR),
             ) * self.rigid_body_set[character_handle].position();
-            let test_shape = Capsule::new_y(
-                (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR,
-                (PLAYER_STANDING_RADIUS - PLAYER_STAND_TEST_MARGIN) / SCALE_FACTOR,
+            let standing = standing_player_capsule();
+            let test_shape = Capsule::new(
+                standing.segment.a,
+                standing.segment.b,
+                standing.radius - PLAYER_STAND_TEST_MARGIN / SCALE_FACTOR,
             );
             let filter = QueryFilter::new()
                 .groups(InteractionGroups::new(

@@ -30,7 +30,7 @@ pub(crate) struct DebugHeightReadout {
 /// Resolve the eye against the same floor anchor that converts the tracked rig.
 pub(crate) fn eye_above_floor_meters(eye_y: f32, tracking_crouched: bool) -> f32 {
     (eye_y + crate::physics::player_center_above_floor(tracking_crouched))
-        * crate::METERS_PER_WORLD_UNIT
+        * crate::world_scale::meters_per_world_unit()
 }
 
 /// One sample drives the labels, beams and surface spots. Debug rays have

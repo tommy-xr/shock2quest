@@ -4827,6 +4827,16 @@ impl MissionCore {
         command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
         let _profile = crate::perf::scope(crate::perf::Phase::MissionUpdate);
+        let mut scaled_input = input_context.clone();
+        if self.physics.update_world_scale(&mut self.player_handle) {
+            crate::vr_tracking::RoomscaleState::invalidate(&self.world);
+        }
+        crate::vr_tracking::TrackingTransform::rebase_input(
+            &mut scaled_input,
+            crate::physics::player_center_above_floor(self.player_handle.tracking_is_crouched()),
+            crate::physics::player_eye_cap_above_center(self.player_handle.tracking_is_crouched()),
+        );
+        let input_context = &scaled_input;
         // Two time domains: `tick` is the player's (locomotion, hands, held
         // items, weapon cadence, UI); `time` is the world's, slowed by
         // `world_time_scale` and speed boosts (AI, scripts, animation,

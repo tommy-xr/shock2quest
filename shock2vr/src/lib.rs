@@ -147,6 +147,7 @@ pub mod vr_support;
 pub mod vr_tracking;
 pub mod vr_weapon_grip;
 mod wielded_weapon;
+pub mod world_scale;
 pub mod zip_asset_path;
 
 use scenes::{
@@ -211,11 +212,9 @@ pub(crate) fn resolve_fov_deg(base: f32) -> f32 {
     }
 }
 
-/// Real-world meters per world unit: 1 world unit is `dark::SCALE_FACTOR`
-/// (2.5) SS2 feet, and an SS2 foot is a real foot (0.3048 m). VR runtimes
-/// divide floor-relative tracked poses (meters) by this before feeding them
-/// to the game so the world renders at true scale and a tracked eye N meters
-/// above the physical floor lands the equivalent height above the game floor.
+/// Default metres per world unit, treating an authored SS2 foot as 0.3048 m.
+/// Physical tracking uses [`world_scale::meters_per_world_unit`] so world
+/// size can be tuned independently of authored geometry and personal equipment.
 pub const METERS_PER_WORLD_UNIT: f32 = 0.3048 * dark::SCALE_FACTOR;
 
 /// The single mapping from crouch state to eye height. The render camera and
@@ -223,11 +222,12 @@ pub const METERS_PER_WORLD_UNIT: f32 = 0.3048 * dark::SCALE_FACTOR;
 /// [`Game::player_eye_height`], which wraps it) so shots stay on the
 /// crosshair.
 pub fn player_eye_height_for(crouched: bool) -> f32 {
-    if crouched {
+    let height = if crouched {
         PLAYER_CROUCH_EYE_HEIGHT
     } else {
         PLAYER_EYE_HEIGHT
-    }
+    };
+    height * world_scale::WorldScale::active().personal()
 }
 
 use std::{
