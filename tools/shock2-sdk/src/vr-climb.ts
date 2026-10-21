@@ -260,22 +260,28 @@ export async function vrTopOut(
 /**
  * Let go of every hold onto the assisted landing on show (a held floor or a
  * gaze target): the other hands first, then the anchor, then wait for the
- * exit (a teleport, or a glide under `climb_exit_motion`) to land. Throws when
- * no assisted landing shows or the exit never lands.
+ * exit (a teleport, or a glide under `climb_exit_motion`) to land there.
+ * Throws when no assisted landing shows, the release does not commit it, or
+ * the body does not come to rest on it.
  */
 export async function vrReleaseOnto(game: Game): Promise<{ heights: number[]; landed: Vec3 }> {
   const { climb } = (await game.info()).player;
-  if (climb.release.mode !== "assisted") {
+  const landing = climb.release.landing;
+  if (climb.release.mode !== "assisted" || landing === null) {
     throw new Error(`vrReleaseOnto: no assisted landing on show (${JSON.stringify(climb.release)})`);
   }
   const anchor = climb.anchor_hand ?? "right";
   const heights: number[] = [];
+  let committed: Vec3 | null = null;
   for (const hand of [otherHand(anchor), anchor]) {
     await game.input.set(`${hand}_hand.squeeze`, 0);
     await game.input.set(`${hand}_hand.world_target`, null);
     await game.step({ frames: 1 });
-    heights.push((await game.info()).player.position[1]);
+    const { player } = await game.info();
+    heights.push(player.position[1]);
+    committed ??= player.climb.release.gliding_to;
   }
+  if (committed === null) throw new Error(`vrReleaseOnto: letting go did not commit the landing ${fmt(landing)}`);
   let settled = 0;
   for (let frame = 0; frame < 300 && settled < 30; frame += 1) {
     await game.step({ frames: 1 });
@@ -284,8 +290,11 @@ export async function vrReleaseOnto(game: Game): Promise<{ heights: number[]; la
     const moving = player.climb.vaulting || player.climb.release.exit_fade > 0;
     settled = moving ? 0 : settled + 1;
   }
-  if (settled < 30) throw new Error("vrReleaseOnto: the exit did not land within 300 frames");
-  return { heights, landed: (await game.info()).player.position };
+  const landed = (await game.info()).player.position;
+  if (settled < 30 || Math.hypot(landed[0] - landing[0], landed[2] - landing[2]) > 0.1 || Math.abs(landed[1] - landing[1]) > 0.15) {
+    throw new Error(`vrReleaseOnto: came to rest at ${fmt(landed)}, not the landing ${fmt(landing)}`);
+  }
+  return { heights, landed };
 }
 
 /**

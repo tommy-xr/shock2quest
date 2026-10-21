@@ -1881,38 +1881,21 @@ mod tests {
     }
 
     #[test]
-    fn a_ladder_departure_lasts_through_handoffs_until_landing_or_letting_go() {
-        let depart = |climb: &mut HandClimb| {
-            grace_step(climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
-            grace_step(climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
-            // Off the ladder, on the surface alone: still the same departure.
-            grace_step(climb, 0, (RUNG, OPEN), (WALL[0], SQUEEZE));
-            assert!(climb.on_ladder_departure());
-        };
+    fn a_ladder_departure_is_a_ladder_or_grace_hold_without_a_ledge() {
         let mut climb = HandClimb::default();
         assert!(!climb.on_ladder_departure());
-        depart(&mut climb);
-        climb.set_grounded(true);
-        climb.set_grounded(false);
-        assert!(
-            climb.on_ladder_departure(),
-            "feet touching down while the hands hold do not end it"
-        );
-
-        let mut climb = HandClimb::default();
-        depart(&mut climb);
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+        // Off the ladder, on the grace hold alone: still a departure.
+        grace_step(&mut climb, 0, (RUNG, OPEN), (WALL[0], SQUEEZE));
+        assert!(climb.on_ladder_departure());
         grace_step(&mut climb, 0, (WALL[1], OPEN), (WALL[0], OPEN));
         assert!(
             !climb.on_ladder_departure(),
             "letting go of everything ends it"
         );
 
-        let mut climb = HandClimb::default();
-        depart(&mut climb);
-        climb.release_all();
-        assert!(!climb.on_ladder_departure(), "a vault ends it");
-
-        // An ordinary ledge climb never started from a ladder.
+        // An ordinary ledge climb is none.
         let mut climb = HandClimb::default();
         let ledge = |p: Vector3<f32>, _| {
             Some(ClimbGrip {

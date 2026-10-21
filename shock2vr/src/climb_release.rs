@@ -269,13 +269,20 @@ pub fn resolve(
             (exits_a_ladder && tracked)
                 .then(|| {
                     let anchor_hand = climb.anchor();
+                    // Settles across both held floors and their insets.
+                    let mut settles = HELD_FLOOR_SETTLES;
                     climb
                         .grips()
                         .filter(|(hand, _)| Some(*hand) == anchor_hand)
                         .chain(climb.grips().filter(|(hand, _)| Some(*hand) != anchor_hand))
                         .map(|(_, anchor)| anchor)
                         .find_map(|anchor| {
-                            physics.held_floor_landing(player, &anchor.grip, previous.assisted())
+                            physics.held_floor_landing(
+                                player,
+                                &anchor.grip,
+                                previous.assisted(),
+                                &mut settles,
+                            )
                         })
                 })
                 .flatten()
@@ -303,6 +310,10 @@ pub fn resolve(
         },
     }
 }
+
+/// Landing settles (see `PhysicsWorld::held_floor_landing`) a frame may spend
+/// on held floors: enough for both insets of one floor.
+const HELD_FLOOR_SETTLES: usize = 2;
 
 /// Seconds an exit teleport takes to fade to black, and back in after moving.
 pub const EXIT_FADE_OUT: f32 = 0.1;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer, otherHand, vrClimbLadder, vrGrab, vrPull, vrReleaseOnto, vrTopOut } from "../src/index.js";
+import { GameServer, otherHand, vrClimbLadder, vrGrab, vrPull, vrReleaseOnto, vrTopOut, vrVault } from "../src/index.js";
 import type { Hand, Vec3 } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { ledgeLadderHold, vrHandLocalDelta } from "./helpers/vr-climb.js";
@@ -78,7 +78,9 @@ test(
 
     // The block top is above a standing arm's reach; its lip is not. Haul
     // down until the head clears the lip, which vaults and lets go.
-    const { heights, landed } = await vrTopOut(game, "right", MANTLE_LIP);
+    // Not reached from a ladder, it is an ordinary ledge, which vaults.
+    assert.equal((await vrGrab(game, "right", MANTLE_LIP)).kind, "ledge");
+    const { heights, landed } = await vrVault(game, "right");
 
     const climb = (await game.info()).player.climb;
     assert.equal(climb.vaulting, false);
