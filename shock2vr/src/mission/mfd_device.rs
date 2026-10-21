@@ -19,7 +19,9 @@ pub fn panel(
     hand: usize,
 ) -> Option<WorldPanel> {
     let grip = grip?;
-    let (base, contact) = authored_panel(position, rotation, grip, face_size());
+    // The runtime grip already carries the world-size compensation.
+    let authored_size = face_size() / crate::world_scale::WorldScale::active().personal();
+    let (base, contact) = authored_panel(position, rotation, grip, authored_size);
     Some(grip::place(
         base,
         contact,

@@ -39,7 +39,7 @@ impl HeldRecoveryContext {
             // Conservative chest-to-grip corridor; the head's tracked lateral
             // offset follows roomscale movement, and head pitch does not tilt it.
             arm_origin: pawn + rotation.rotate_vector(input.head.position)
-                - vec3(0.0, 0.25 / crate::METERS_PER_WORLD_UNIT, 0.0),
+                - vec3(0.0, 0.25 / crate::world_scale::meters_per_world_unit(), 0.0),
             grip_anchor,
             elapsed_seconds,
         })
@@ -113,7 +113,10 @@ impl PhysicsWorld {
         let anchor = Point::from(vec_to_nvec(context.grip_anchor));
         let from = current * anchor;
         let to = controller * anchor;
-        if !blocked || !drive.seated || (to - from).norm() < SEPARATION {
+        if !blocked
+            || !drive.seated
+            || (to - from).norm() < SEPARATION * crate::world_scale::WorldScale::active().personal()
+        {
             drive.recovery.blocked_seconds = 0.0;
             return false;
         }
@@ -173,7 +176,8 @@ impl PhysicsWorld {
                 .exclude_sensors()
                 .predicate(&obstacle),
         );
-        let arm = Ball::new(ARM_RADIUS);
+        let arm_radius = ARM_RADIUS * crate::world_scale::WorldScale::active().personal();
+        let arm = Ball::new(arm_radius);
         let from = vec_to_nvec(context.arm_origin);
         let to = (pose * Point::from(vec_to_nvec(context.grip_anchor))).coords;
         if shape_intersects(&queries, from, &arm)
@@ -185,7 +189,7 @@ impl PhysicsWorld {
         #[cfg(feature = "lazy-hitboxes")]
         {
             // A capsule is the swept arm sphere, including both endpoints.
-            let corridor = Capsule::new(Point::from(from), Point::from(to), ARM_RADIUS);
+            let corridor = Capsule::new(Point::from(from), Point::from(to), arm_radius);
             if self
                 .query_hitboxes
                 .intersects(&Isometry::identity(), &corridor, &|_| true)

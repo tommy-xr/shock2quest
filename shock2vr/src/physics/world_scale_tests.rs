@@ -77,7 +77,30 @@ fn live_scale_preserves_floor_tracking_and_native_geometry_and_defers_blocked_gr
     input.head.position = tracking.stage_to_pawn(head);
     input.right_hand.position = tracking.stage_to_pawn(hand);
 
+    let library: crate::vr_grip::GripLibrary =
+        serde_json::from_str(include_str!("../../../assets/vr-tricorder-grips.json")).unwrap();
+    let panels = |unit: f32| {
+        ["left", "right"].map(|hand| {
+            let grip = library
+                .lookup("tricorder", hand)
+                .unwrap()
+                .clone()
+                .for_world_scale();
+            let panel = crate::mission::mfd_device::panel(
+                vec3(0.0, 0.0, 0.0),
+                cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                Some(&grip),
+                usize::from(hand == "right"),
+            )
+            .unwrap();
+            (panel.size * unit, panel.center * unit)
+        })
+    };
+    let baseline_panels = panels(crate::METERS_PER_WORLD_UNIT);
+
     for factor in [0.82, 1.0, 0.82, 1.0] {
+        let canonical_before =
+            world.get_player_translation(&player).y - crate::physics::player_scale_center_offset();
         dev_params::set(dev_params::WORLD_SCALE, factor);
         assert!(world.update_world_scale(&mut player));
         assert!(!world.update_world_scale(&mut player), "apply once");
@@ -85,6 +108,16 @@ fn live_scale_preserves_floor_tracking_and_native_geometry_and_defers_blocked_gr
         let cap = crate::physics::player_eye_cap_above_center(false);
         crate::vr_tracking::TrackingTransform::rebase_input(&mut input, center, cap);
         let unit = crate::world_scale::meters_per_world_unit();
+        for (current, baseline) in panels(unit).iter().zip(&baseline_panels) {
+            assert!(
+                (current.0 - baseline.0).magnitude() < 1e-5,
+                "MFD physical size"
+            );
+            assert!(
+                (current.1 - baseline.1).magnitude() < 1e-5,
+                "MFD grip placement"
+            );
+        }
         assert!(((input.head.position.y + center) * unit - head.y).abs() < 1e-5);
         assert!(
             ((input.right_hand.position - input.head.position) * unit - (hand - head)).magnitude()
@@ -96,8 +129,25 @@ fn live_scale_preserves_floor_tracking_and_native_geometry_and_defers_blocked_gr
         assert!((ipd.magnitude() * unit - 0.064).abs() < 1e-5);
         let position = world.get_player_translation(&player);
         assert!(
-            (position.y - crate::physics::player_scale_center_offset() - before.y).abs() < 1e-5,
+            (position.y - crate::physics::player_scale_center_offset() - canonical_before).abs()
+                < 1e-5,
             "save center and floor must stay fixed"
+        );
+        for _ in 0..60 {
+            world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        }
+        assert!(player.is_grounded());
+        assert!(
+            (world.get_player_translation(&player).y - position.y).abs() < 0.001,
+            "the resized collider must settle on the same floor anchor"
+        );
+        assert!(
+            (world.get_player_translation(&player).y
+                - crate::physics::player_scale_center_offset()
+                - before.y)
+                .abs()
+                < 0.001,
+            "contact tolerance cannot accumulate floor drift"
         );
         assert_eq!(
             native,
@@ -109,4 +159,7 @@ fn live_scale_preserves_floor_tracking_and_native_geometry_and_defers_blocked_gr
                 .collect::<Vec<_>>()
         );
     }
+    dev_params::set(dev_params::WORLD_SCALE, 0.82);
+    assert!(world.update_world_scale(&mut player));
+    super::tests::player_tops_out_from_a_ladder_onto_an_upper_landing();
 }

@@ -1758,7 +1758,7 @@ impl Game {
             simulation_focused: true,
             hit_feedback: hit_feedback::HitFeedback::new(),
             head_pose: (
-                vec3(0.0, input_context::DEFAULT_HEAD_HEIGHT, 0.0),
+                vec3(0.0, player_eye_height_for(false) / dark::SCALE_FACTOR, 0.0),
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
             ),
             input_recorder: None,

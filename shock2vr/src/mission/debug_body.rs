@@ -67,7 +67,9 @@ impl DebugBody {
             // front facing -Z. Face it away from the torso, just above the belt.
             let mount = Matrix4::from_translation(belt_center)
                 * heading
-                * Matrix4::from_translation(vec3(0.0, 0.23, 0.02) / crate::world_scale::meters_per_world_unit())
+                * Matrix4::from_translation(
+                    vec3(0.0, 0.23, 0.02) / crate::world_scale::meters_per_world_unit(),
+                )
                 * Matrix4::from_angle_y(Deg(180.0))
                 * Matrix4::from_scale(1.0 / crate::world_scale::meters_per_world_unit());
             let mut pack = backpack.clone_scene_objects();

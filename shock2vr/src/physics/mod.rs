@@ -601,11 +601,18 @@ const CLIMB_TOP_OUT_MAX_RECOVERY_RETREAT: f32 = 4.0 / SCALE_FACTOR;
 /// controller gap: rick1's vertical cast stops with the capsule crown just over
 /// one half-height below the authored top, before the nominal crown-only
 /// threshold can ever become true.
-const CLIMB_TOP_OUT_TOP_REACH: f32 = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
-    + CLIMB_TOP_OUT_SUBSTEP
-    + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
-const CLIMB_TOP_OUT_COLUMN_LOOKAHEAD: f32 =
-    CLIMB_TOP_OUT_UP + PLAYER_STANDING_HEIGHT / SCALE_FACTOR;
+fn climb_top_out_top_reach() -> f32 {
+    PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+        * crate::world_scale::WorldScale::active().personal()
+        + CLIMB_TOP_OUT_SUBSTEP
+        + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+}
+
+fn climb_top_out_column_lookahead() -> f32 {
+    CLIMB_TOP_OUT_UP
+        + PLAYER_STANDING_HEIGHT / SCALE_FACTOR
+            * crate::world_scale::WorldScale::active().personal()
+}
 
 /// Dark's jump-through phase moves at ten SS2 feet per second. The physics
 /// runtime advances at a fixed 60 Hz.
@@ -8121,7 +8128,7 @@ impl PhysicsWorld {
                 ]);
                 let column_probe = Cuboid::new(vector![
                     capsule.radius + CLIMB_REACH,
-                    half_height + CLIMB_TOP_OUT_COLUMN_LOOKAHEAD,
+                    half_height + climb_top_out_column_lookahead(),
                     capsule.radius + CLIMB_REACH
                 ]);
                 let column_top = queries
@@ -8129,7 +8136,7 @@ impl PhysicsWorld {
                     .map(|(_, collider)| collider.compute_aabb().maxs.y)
                     .fold(f32::NEG_INFINITY, f32::max);
                 let character_top = character_pos.translation.vector.y + half_height;
-                let near_column_top = column_top - character_top <= CLIMB_TOP_OUT_TOP_REACH;
+                let near_column_top = column_top - character_top <= climb_top_out_top_reach();
                 // Grip the closest climbable within reach, by contact distance,
                 // and take the contact's *face normal* as the climb direction.
                 // (The collider-center direction is wrong when the player is
@@ -15563,7 +15570,7 @@ mod tests {
     /// ladder. Before top-out handling the player remains on the shaft side at
     /// x ~= -5.4 indefinitely.
     #[test]
-    fn player_tops_out_from_a_ladder_onto_an_upper_landing() {
+    pub(super) fn player_tops_out_from_a_ladder_onto_an_upper_landing() {
         let quad = |x0: f32, x1: f32, y: f32| {
             let verts = vec![
                 point![x0, y, -100.0],
