@@ -116,6 +116,13 @@ impl InputContext {
         suppressed.lean = 0.0;
         suppressed
     }
+
+    /// Translate the head and both hands by `offset`, keeping the rig's shape.
+    pub fn shift_rig(&mut self, offset: Vector3<f32>) {
+        self.head.position += offset;
+        self.left_hand.position += offset;
+        self.right_hand.position += offset;
+    }
 }
 
 fn suppress_hand_controls(hand: &mut Hand, holds_item: bool) {

@@ -1049,6 +1049,16 @@ impl Game {
         Some((info.pos, info.rotation))
     }
 
+    /// The roomscale shift the game adds to the tracked head and hands, in
+    /// pawn space. Zero while a save loads: the loading scene has no rig offset.
+    pub fn roomscale_offset(&self) -> Vector3<f32> {
+        if self.pending_save_load.is_none() {
+            vr_tracking::RoomscaleState::offset(self.active_game_scene.world())
+        } else {
+            vec3(0.0, 0.0, 0.0)
+        }
+    }
+
     /// A snapshot of the player (position, look rotation, held/wielded entities)
     /// for debug tooling, or `None` if the active scene has no player (e.g. a
     /// menu). Reads the `PlayerInfo` unique from the active world.
@@ -1950,7 +1960,6 @@ impl Game {
             // Without this a minute spent in the menu expires every AI deadline
             // and jumps every total-time-driven animation the moment the world
             // comes back.
-            vr_tracking::RoomscaleState::invalidate(self.active_game_scene.world());
             self.time_suspended += time.elapsed;
             actions.clear_triggered();
             return;
@@ -2327,10 +2336,7 @@ impl Game {
         }
 
         let mut pause_input = input_context.clone();
-        vr_tracking::RoomscaleState::apply(
-            &mut pause_input,
-            vr_tracking::RoomscaleState::offset(self.active_game_scene.world()),
-        );
+        pause_input.shift_rig(self.roomscale_offset());
         let action = self.pause_menu.update(
             time.elapsed,
             &pause_input,
@@ -3142,12 +3148,7 @@ impl Game {
         head_offset: Vector3<f32>,
         head_rotation: Quaternion<f32>,
     ) -> death_camera::CameraPose {
-        // The loading scene must not inherit the old mission's rig offset.
-        let head_offset = if self.pending_save_load.is_none() {
-            head_offset + vr_tracking::RoomscaleState::offset(self.active_game_scene.world())
-        } else {
-            head_offset
-        };
+        let head_offset = head_offset + self.roomscale_offset();
         death_camera::resolve(
             pawn_position,
             pawn_rotation,

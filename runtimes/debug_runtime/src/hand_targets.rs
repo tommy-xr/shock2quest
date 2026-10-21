@@ -59,11 +59,14 @@ fn resolve(
     let (pawn_position, pawn_rotation) = game
         .player_pose()
         .ok_or_else(|| "no player in this scene".to_owned())?;
+    // The game shifts the patched rig by the roomscale offset: solve from the
+    // shifted head, then hand back the unshifted pose it will shift.
+    let offset = game.roomscale_offset();
     resolve_world_target(
         SIDES[index],
         target,
         hand(input, index),
-        input.head.position,
+        input.head.position + offset,
         input.head.rotation,
         game.player_eye_cap_above_center(),
         pawn_position,
@@ -71,7 +74,7 @@ fn resolve(
         dev_params::get(dev_params::GLOVE_FORWARD_CM),
     )
     // Patched hands are standing poses; the update lowers them by the crouch.
-    .map(|local| local + crate::crouch_drop(game, input, true))
+    .map(|local| local - offset + crate::crouch_drop(game, input, true))
 }
 
 impl HandTargets {
@@ -158,15 +161,15 @@ impl HandTargets {
         input: &InputContext,
     ) -> [(Option<[f32; 3]>, Option<[f32; 3]>); 2] {
         let pose = game.player_pose().filter(|_| self.vr);
-        let drop = crate::crouch_drop(game, input, self.vr);
+        let shift = game.roomscale_offset() - crate::crouch_drop(game, input, self.vr);
         let world = |hand: &Hand| {
             pose.map(|(position, rotation)| {
-                let lowered = Hand {
-                    position: hand.position - drop,
+                let shifted = Hand {
+                    position: hand.position + shift,
                     ..hand.clone()
                 };
                 let p = hand_world_point(
-                    &lowered,
+                    &shifted,
                     position,
                     rotation,
                     dev_params::get(dev_params::GLOVE_FORWARD_CM),

@@ -1008,7 +1008,8 @@ fn run_game_blocking(
             let game_time = if let Some(frame) = &replay_frame {
                 // The recording holds what the game saw, already lowered for
                 // a crouch; keep the standing pose so paused updates match.
-                current_input = shift_rig(&frame.input, crouch_drop(&game, &frame.input, args.vr));
+                current_input = frame.input.clone();
+                current_input.shift_rig(crouch_drop(&game, &frame.input, args.vr));
                 action_state = frame.actions();
                 Time {
                     elapsed: Duration::from_secs_f32(frame.dt),
@@ -2414,21 +2415,14 @@ pub(crate) fn crouch_drop(game: &Game, input: &InputContext, vr: bool) -> Vector
     vec3(0.0, drop, 0.0)
 }
 
-/// `input` with its head and hands moved by `offset`.
-fn shift_rig(input: &InputContext, offset: Vector3<f32>) -> InputContext {
-    let mut input = input.clone();
-    input.head.position += offset;
-    input.left_hand.position += offset;
-    input.right_hand.position += offset;
-    input
-}
-
 /// The input `game.update` sees: a crouch lowers the patched head and hands
 /// together, as Quest's button crouch lowers its tracked rig, rather than
 /// leaving the hands above a crouched eye (#2378). It reads the stance before
 /// the update, so the rig trails a crouch or stand by one frame.
 fn crouched_rig(game: &Game, input: &InputContext, vr: bool) -> InputContext {
-    shift_rig(input, -crouch_drop(game, input, vr))
+    let mut crouched = input.clone();
+    crouched.shift_rig(-crouch_drop(game, input, vr));
+    crouched
 }
 
 /// The camera this frame renders from: the crouch-aware eye height shared with
