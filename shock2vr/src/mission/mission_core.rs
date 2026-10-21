@@ -6636,8 +6636,8 @@ impl MissionCore {
             held[1 - i].filter(|gun| self.magazine_capacity(*gun).is_some())
         });
         self.holsters.pouch_priority = pouch_weapons.map(|weapon| weapon.is_some());
-        self.holsters.freeze_heading = self.ammo_pouch.near.iter().any(|near| *near)
-            || self.chest_slots.near.iter().any(Option::is_some);
+        self.holsters.near_other_target =
+            std::array::from_fn(|i| self.ammo_pouch.near[i] || self.chest_slots.near[i].is_some());
         self.holsters.load_poses(asset_cache);
         // Belt, holsters and chest mounts are cyber-interface gear (hidden on Earth).
         let body_gear = game_options.presentation_mode == crate::PresentationMode::Vr
