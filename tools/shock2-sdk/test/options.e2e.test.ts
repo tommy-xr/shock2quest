@@ -114,7 +114,7 @@ for (const vr of [false, true]) {
     const click = vr ? vrClickCanvasPoint : clickCanvas;
     const debugFlags = vr ? ["--vr"] : [];
     const saved = async () => JSON.parse(await readFile(path, "utf8")) as {
-      vr: { vignette: string; turning: string; snap_angle: number; reference_grid: string; grid_opacity: number; grid_spacing: number; grid_size: number };
+      vr: { vignette: string; turning: string; snap_angle: number; reference_grid: string; grid_opacity: number; grid_spacing: number; grid_size: number; roomscale: string };
     };
     try {
       {
@@ -152,7 +152,10 @@ for (const vr of [false, true]) {
         assert.equal((await saved()).vr.grid_opacity, 0.5);
         assert.equal((await saved()).vr.grid_spacing, 2);
         assert.equal((await saved()).vr.grid_size, 12);
-        await click(game, [333, 314]); // Reset comfort, keeping turning settings
+        await click(game, [333, 314]); // Roomscale Auto -> On
+        assert.equal((await saved()).vr.roomscale, "On");
+        await click(game, [333, 343]); // Reset comfort, keeping turning settings
+        assert.equal((await saved()).vr.roomscale, "Auto");
         assert.equal((await saved()).vr.reference_grid, "Off");
         assert.equal((await saved()).vr.grid_opacity, 0.3);
         assert.equal((await saved()).vr.grid_spacing, 1);

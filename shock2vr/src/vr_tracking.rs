@@ -58,7 +58,7 @@ impl TrackingTransform {
     }
 }
 
-/// Opt-in horizontal roomscale spike. Tracking history is transient and belongs
+/// Horizontal roomscale walking (`user_settings::RoomscaleMode`). Tracking history is transient and belongs
 /// to the mission, so a new mission/save establishes its own physical origin.
 #[derive(Unique)]
 pub struct RoomscaleState {
@@ -113,7 +113,7 @@ impl RoomscaleState {
             return Vector3::zero();
         };
         let delta = head - previous;
-        // Reject discontinuities, not ordinary walking speed. This is a spike
+        // Reject discontinuities, not ordinary walking speed. This is a coarse
         // fallback; OpenXR reference-space changes also explicitly reset above.
         if delta.magnitude() > 0.5 / crate::METERS_PER_WORLD_UNIT {
             self.offset = -head;

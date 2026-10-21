@@ -103,6 +103,50 @@ impl SpeedBoostMode {
     }
 }
 
+/// Smallest guardian side, in metres, that Auto treats as room-sized.
+/// Stationary and boundary-less modes report no bounds; a cramped rect is
+/// treated as stationary too.
+pub const ROOMSCALE_MIN_SIDE_M: f32 = 1.5;
+
+/// Whether physical walking moves the body in VR.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoomscaleMode {
+    /// On when the guardian play area is room-sized.
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+impl RoomscaleMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Auto => Self::On,
+            Self::On => Self::Off,
+            Self::Off => Self::Auto,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::On => "On",
+            Self::Off => "Off",
+        }
+    }
+
+    /// `bounds` is the guardian play area `[width, depth]` in metres.
+    pub fn enabled(self, bounds: Option<[f32; 2]>) -> bool {
+        match self {
+            Self::On => true,
+            Self::Off => false,
+            Self::Auto => {
+                bounds.is_some_and(|[w, d]| w >= ROOMSCALE_MIN_SIDE_M && d >= ROOMSCALE_MIN_SIDE_M)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VrSettings {
@@ -119,6 +163,7 @@ pub struct VrSettings {
     /// The psi amp's aim beam: its muzzle axis is not where a hand seems to point.
     pub psi_pointer: bool,
     pub speed_boosts: SpeedBoostMode,
+    pub roomscale: RoomscaleMode,
 }
 
 impl Default for VrSettings {
@@ -136,6 +181,7 @@ impl Default for VrSettings {
             grid_size: 10.0,
             psi_pointer: true,
             speed_boosts: SpeedBoostMode::SlowWorld,
+            roomscale: RoomscaleMode::Auto,
         }
     }
 }
@@ -275,5 +321,30 @@ mod tests {
         );
         fs::write(&path, "not json").unwrap();
         assert_eq!(SettingsStore::load(path).value, UserSettings::default());
+    }
+
+    #[test]
+    fn settings_without_roomscale_default_to_auto() {
+        let value: UserSettings = serde_json::from_str(r#"{"vr":{"turning":"Smooth"}}"#).unwrap();
+        assert_eq!(value.vr.roomscale, RoomscaleMode::Auto);
+        assert_eq!(value.vr.turning, TurnMode::Smooth);
+    }
+
+    #[test]
+    fn roomscale_auto_needs_a_room_sized_guardian() {
+        use RoomscaleMode::*;
+        for bounds in [None, Some([2.0, 2.0]), Some([1.0, 1.0])] {
+            assert!(On.enabled(bounds));
+            assert!(!Off.enabled(bounds));
+        }
+        assert!(Auto.enabled(Some([2.0, 3.0])));
+        assert!(Auto.enabled(Some([1.5, 1.5])));
+        assert!(!Auto.enabled(None));
+        assert!(!Auto.enabled(Some([1.0, 1.0])));
+        assert!(!Auto.enabled(Some([3.0, 1.4])));
+        assert!(!Auto.enabled(Some([1.4, 3.0])));
+        assert_eq!(Auto.next().next().next(), Auto);
+        assert_eq!(Auto.next(), On);
+        assert_eq!(On.next(), Off);
     }
 }

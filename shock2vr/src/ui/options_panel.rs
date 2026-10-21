@@ -16,7 +16,7 @@ const FRAME: [Rect; 2] = [
     Rect::new(20.0, 67.0, 601.0, 335.0),
 ];
 // Keep retail audio's five rows; extend its pitch for additional controls.
-const ROWS: [Rect; 9] = [
+const ROWS: [Rect; 10] = [
     Rect::new(93.0, 73.0, 481.0, 23.0),
     Rect::new(93.0, 102.0, 481.0, 23.0),
     Rect::new(93.0, 130.0, 481.0, 23.0),
@@ -26,6 +26,7 @@ const ROWS: [Rect; 9] = [
     Rect::new(93.0, 245.0, 481.0, 23.0),
     Rect::new(93.0, 274.0, 481.0, 23.0),
     Rect::new(93.0, 303.0, 481.0, 23.0),
+    Rect::new(93.0, 332.0, 481.0, 23.0),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,7 +134,8 @@ impl OptionsPanel {
             (0, 5) => vr.grid_spacing = cycle(vr.grid_spacing, &[0.5, 1.0, 2.0]),
             (0, 6) => vr.grid_size = cycle(vr.grid_size, &[8.0, 10.0, 12.0, 16.0]),
             (0, 7) => vr.speed_boosts = vr.speed_boosts.next(),
-            (0, 8) => {
+            (0, 8) => vr.roomscale = vr.roomscale.next(),
+            (0, 9) => {
                 vr.vignette = defaults.vignette;
                 vr.vignette_movement = defaults.vignette_movement;
                 vr.vignette_turning = defaults.vignette_turning;
@@ -142,6 +144,7 @@ impl OptionsPanel {
                 vr.grid_spacing = defaults.grid_spacing;
                 vr.grid_size = defaults.grid_size;
                 vr.speed_boosts = defaults.speed_boosts;
+                vr.roomscale = defaults.roomscale;
             }
             (1, 0) => {
                 vr.turning = if vr.turning == TurnMode::Snap {
@@ -202,6 +205,7 @@ impl OptionsPanel {
                 format!("Grid spacing: {} m", settings.grid_spacing),
                 format!("Grid size: {} m", settings.grid_size),
                 format!("Speed boosts: {}", settings.speed_boosts.label()),
+                format!("Roomscale: {}", settings.roomscale.label()),
                 "Reset comfort defaults".to_owned(),
             ]
         } else {
@@ -274,7 +278,7 @@ fn cycle(value: f32, values: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::user_settings::SpeedBoostMode;
+    use crate::user_settings::{RoomscaleMode, SpeedBoostMode};
     #[test]
     fn retail_hit_regions_disable_unimplemented_tabs() {
         let panel = OptionsPanel::default();
@@ -305,8 +309,33 @@ mod tests {
         assert_eq!(settings.vr.speed_boosts, SpeedBoostMode::SlowWorld);
         panel.change(&mut settings, 7);
         assert_eq!(settings.vr.speed_boosts, SpeedBoostMode::Classic);
-        panel.change(&mut settings, 8);
+        panel.change(&mut settings, 9);
         assert_eq!(settings.vr.speed_boosts, SpeedBoostMode::SlowWorld);
+    }
+
+    #[test]
+    fn comfort_cycles_roomscale_and_reset_restores_auto() {
+        let panel = OptionsPanel::default();
+        let layout = OptionsLayout::default();
+        let (row, reset) = (layout.rows[8], layout.rows[9]);
+        assert_eq!(
+            panel.hit(&layout, vec2(row.x + 1.0, row.y + 1.0)),
+            Some(OptionsEvent::Row(8))
+        );
+        assert_eq!(
+            panel.hit(&layout, vec2(reset.x + 1.0, reset.y + 1.0)),
+            Some(OptionsEvent::Row(9))
+        );
+        // Clear of the save-error line drawn 38 px above the frame's bottom.
+        assert!(reset.y + reset.h <= FRAME[1].y + FRAME[1].h - 38.0);
+        let mut settings = UserSettings::default();
+        assert_eq!(settings.vr.roomscale, RoomscaleMode::Auto);
+        panel.change(&mut settings, 8);
+        assert_eq!(settings.vr.roomscale, RoomscaleMode::On);
+        panel.change(&mut settings, 8);
+        assert_eq!(settings.vr.roomscale, RoomscaleMode::Off);
+        panel.change(&mut settings, 9);
+        assert_eq!(settings.vr.roomscale, RoomscaleMode::Auto);
     }
 
     #[test]
