@@ -15,7 +15,7 @@ use shipyard::EntityId;
 
 use super::debug_common::{DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks};
 use crate::{
-    GameOptions, METERS_PER_WORLD_UNIT, SpawnLocation,
+    GameOptions, METERS_PER_WORLD_UNIT, PresentationMode, SpawnLocation,
     game_scene::GameScene,
     mission::{GlobalContext, mission_core::MissionCore},
     ui::{HAlign, Rect, UiCanvas, VAlign, WorldPanel},
@@ -36,6 +36,15 @@ fn posed_vertical_bounds(
 }
 
 struct CalibrationHooks(Vec<SceneObject>);
+
+fn spawn_rotation(presentation: PresentationMode) -> Quaternion<f32> {
+    // Desktop's neutral head looks -X; a neutral headset looks -Z. Both
+    // must face the hybrid at -X after composing the pawn and head rotations.
+    Quaternion::from_angle_y(Deg(match presentation {
+        PresentationMode::Flat => 0.0,
+        PresentationMode::Vr => 90.0,
+    }))
+}
 
 impl DebugSceneHooks for CalibrationHooks {
     fn after_render(
@@ -142,7 +151,7 @@ pub fn create_debug_calibration_scene(
         center: vec3(
             hybrid_x,
             1.25 / METERS_PER_WORLD_UNIT,
-            -0.9 / METERS_PER_WORLD_UNIT,
+            -1.15 / METERS_PER_WORLD_UNIT,
         ),
         rotation: Quaternion::from_angle_y(Deg(90.0)),
         size: vec2(1.0, 2.5) / METERS_PER_WORLD_UNIT,
@@ -159,7 +168,7 @@ pub fn create_debug_calibration_scene(
     DebugSceneBuilder::new("debug_calibration")
         .with_spawn_location(SpawnLocation::PositionRotation(
             vec3(0.0, 2.0, 0.0),
-            Quaternion::from_angle_y(Deg(-90.0)),
+            spawn_rotation(game_options.presentation_mode),
         ))
         .with_physics_geometry(floor)
         .build_with_hooks(
@@ -176,7 +185,21 @@ pub fn create_debug_calibration_scene(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::{Point3, SquareMatrix, Transform};
+    use cgmath::{InnerSpace, Point3, Rotation, SquareMatrix, Transform};
+
+    #[test]
+    fn neutral_desktop_and_headset_views_face_the_hybrid() {
+        for (presentation, head) in [
+            (
+                PresentationMode::Flat,
+                crate::input::remote::head_rotation_from_yaw_pitch(0.0, 0.0),
+            ),
+            (PresentationMode::Vr, Quaternion::from_angle_y(Deg(0.0))),
+        ] {
+            let forward = (spawn_rotation(presentation) * head).rotate_vector(vec3(0.0, 0.0, -1.0));
+            assert!((forward - vec3(-1.0, 0.0, 0.0)).magnitude() < 0.00001);
+        }
+    }
 
     #[test]
     fn posed_soles_ground_without_rescaling_the_mesh() {

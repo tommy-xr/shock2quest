@@ -1106,6 +1106,9 @@ The scene does not recalibrate tracking or resize the hybrid.
 
 Without passthrough support the background is black. For synthetic captures:
 `cargo dbgr --mission debug_calibration --vr` (omit `--vr` for flatscreen).
+The debug runtime starts with desktop mouse-look even in VR mode. Send
+`{"head.rotation": [0, 0, 0, 1]}` to `/v1/control/input` for a neutral headset
+pose facing the hybrid; a real headset supplies that pose itself.
 
 #### Glove fit check (`debug_gloves`)
 
