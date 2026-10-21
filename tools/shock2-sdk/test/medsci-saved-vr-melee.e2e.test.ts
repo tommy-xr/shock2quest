@@ -252,8 +252,7 @@ async function sweepWrenchThrough(
     );
     // End this pull when its real contact is delivered. Continuing through a
     // moving victim for 45 frames can cross the 0.4-second victim cooldown and
-    // legitimately bill a second hit; it also lets a lethal target disappear
-    // into its ragdoll before the caller can inspect the lethal HP transition.
+    // legitimately bill a second hit.
     if ((await damageMessagesSince(game, sequence, target.id)).length > 0) {
       break;
     }
@@ -705,89 +704,6 @@ test(
         Number.isFinite,
       ),
       `dropped Wrench physics must remain finite: ${JSON.stringify(droppedSettled)}`,
-    );
-  },
-);
-
-test(
-  "a lethal VR Wrench contact seeds the death ragdoll along the physical swing",
-  {
-    skip: !e2eEnabled,
-    timeout: 600_000,
-  },
-  async () => {
-    await using game = await GameServer.launch({
-      mission: "medsci1.mis",
-      repoRoot: process.env.SHOCK2_E2E_REPO_ROOT,
-      debugFlags: ["--vr"],
-      experimental: ["ragdoll"],
-      echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
-    });
-
-    const wrench = await game.player.spawnItem(WRENCH_ARCHETYPE);
-    await game.input.set("right_hand.squeeze", 1);
-    await game.input.trigger("EquipWrench");
-    await game.step({ frames: 3 });
-    assert.equal((await game.info()).player.right_hand_entity_id, wrench.entity_id);
-    await measureHeldContactOffset(game);
-
-    const beforeSpawn = await game.entities.list({ filter: "OG-Pipe", limit: 50 });
-    const known = new Set(beforeSpawn.entities.map((entity) => entity.id));
-    await game.input.trigger("SpawnDebugMonster");
-    await game.step({ frames: 30 });
-    const monster = (
-      await game.entities.list({ filter: "OG-Pipe", limit: 50 })
-    ).entities.find((entity) => !known.has(entity.id));
-    assert.ok(monster, "expected a newly spawned OG-Pipe");
-    assert.equal(hitPoints(await game.entities.detail(monster.id)), 12);
-
-    // Leave 1 HP, below even the minimum damaging extremity contact (4 HP).
-    // The setup damage is deliberately directionless and non-lethal.
-    await game.entities.sendMessage(monster.id, { type: "Damage", amount: 11 });
-    await game.step({ frames: 2 });
-    assert.equal(hitPoints(await game.entities.detail(monster.id)), 1);
-    const beforeContact = await game.entities.detail(monster.id);
-
-    // This debug-spawn point sits against the opposite side of the MedSci
-    // corridor from the shipped shotgun doorway; use the clear-side staging
-    // shared by the single-contact targets above.
-    const { sequence, targetId } = await firstWrenchContact(game, monster);
-    const lethalMessages = await damageMessagesSince(game, sequence, targetId);
-    assert.equal(
-      lethalMessages.length,
-      1,
-      "the lethal pull must be a real Wrench contact",
-    );
-    assertContactDamage(
-      beforeContact,
-      await game.entities.detail(targetId),
-      lethalMessages,
-      "lethal native Wrench contact",
-    );
-    assert.equal(
-      hitPoints(await game.entities.detail(targetId)), 0,
-      "the physical contact must kill before waiting for a ragdoll",
-    );
-    const impact = lethalMessages[0].impact;
-    assert.ok(impact, "the physical Wrench contact must carry DamageImpact");
-    assert.ok(
-      Math.abs(dot(impact.direction, impact.direction) - 1) < 1e-4,
-      `the contact direction must be unit length: ${JSON.stringify(impact.direction)}`,
-    );
-    let ragdolls = (await game.physics.ragdolls()).ragdolls;
-    for (let frame = 0; frame < 120 && ragdolls.length === 0; frame++) {
-      await game.step({ frames: 1 });
-      ragdolls = (await game.physics.ragdolls()).ragdolls;
-    }
-    assert.equal(ragdolls.length, 1, "the contact kill should hand off to one ragdoll");
-    await game.step({ frames: 3 });
-    const bodies = await game.physics.bodies({ entityId: ragdolls[0].entity_id });
-    const maxAlongImpact = Math.max(
-      ...bodies.bodies.map((body) => dot(body.velocity, impact.direction)),
-    );
-    assert.ok(
-      maxAlongImpact > 1,
-      `a struck limb should move along DamageImpact, max projection=${maxAlongImpact}`,
     );
   },
 );

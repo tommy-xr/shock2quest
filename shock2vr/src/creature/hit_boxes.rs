@@ -107,7 +107,7 @@ impl HitBoxType {
 const FALLBACK_MIN_HALF_EXTENT: f32 = 0.01;
 
 /// The collision shape for one joint: the *fitted* shape (capsule spanning the
-/// bone toward its child, box otherwise) shared with the ragdoll, falling back
+/// bone toward its child, box otherwise), falling back
 /// to the raw per-joint vertex AABB for a joint (or model) that has none.
 ///
 /// Fitted shapes matter here because these proxies are what melee/projectile

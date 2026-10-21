@@ -13,8 +13,7 @@ pub use shock2vr::game_scene::{
     DebugEntitySummary as EntitySummary, DebugLinkInfo as LinkInfo,
     DebugPhysicsBodyDetail as PhysicsBodyDetailResult,
     DebugPhysicsBodySummary as PhysicsBodySummary, DebugPhysicsJoint as PhysicsJointEntry,
-    DebugRagdollMetrics as RagdollMetricsEntry, DebugRayHit as RayCastResult,
-    DebugTransition as TransitionEntry,
+    DebugRayHit as RayCastResult, DebugTransition as TransitionEntry,
 };
 use tokio::sync::oneshot;
 
@@ -216,7 +215,7 @@ pub enum RuntimeCommand {
     ListPhysicsBodies {
         limit: Option<usize>,
         /// Optional filter: only return bodies owned by this entity id. Useful
-        /// for scoping to the many bodies of a single ragdoll.
+        /// for scoping to the many bodies of a single entity.
         entity_id: Option<i32>,
         reply: oneshot::Sender<PhysicsBodyListResult>,
     },
@@ -239,12 +238,7 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<Option<PhysicsBodyDetailResult>>,
     },
 
-    /// Get per-ragdoll quality/settle metrics
-    RagdollMetrics {
-        reply: oneshot::Sender<RagdollMetricsResult>,
-    },
-
-    /// List impulse + multibody joints with anchor separation + applied impulse
+    /// List impulse joints with anchor separation + applied impulse
     ListPhysicsJoints {
         reply: oneshot::Sender<PhysicsJointsResult>,
     },
@@ -264,7 +258,7 @@ pub enum RuntimeCommand {
     },
 
     /// Apply a world-space impulse to a dynamic physics body (waking it) -
-    /// e.g. poke a settled ragdoll to verify it wakes and reacts.
+    /// e.g. poke a settled crate to verify it wakes and reacts.
     ApplyBodyImpulse {
         body_id: u32,
         impulse: [f32; 3],
@@ -430,12 +424,6 @@ pub struct PhysicsBodyListResult {
     pub player_position: [f32; 3],
 }
 
-/// Per-ragdoll quality/settle metrics
-#[derive(Debug, Serialize)]
-pub struct RagdollMetricsResult {
-    pub ragdolls: Vec<RagdollMetricsEntry>,
-}
-
 /// What a hand at the queried point can hold onto - `grip` is null when
 /// nothing there is grabbable.
 #[derive(Debug, Serialize)]
@@ -469,7 +457,7 @@ pub struct ClimbGripEntry {
     pub normal: [f32; 3],
 }
 
-/// Joint diagnostics (ragdoll constraint health), impulse + multibody.
+/// Impulse joint diagnostics.
 #[derive(Debug, Serialize)]
 pub struct PhysicsJointsResult {
     pub joints: Vec<PhysicsJointEntry>,

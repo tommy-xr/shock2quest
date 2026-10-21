@@ -1194,7 +1194,7 @@ pub fn crowd_bias(
         if other_id == entity_id {
             continue;
         }
-        // Corpses don't crowd (they're ragdolls on the floor)
+        // Corpses don't crowd (they're lying on the floor)
         if v_hit_points
             .get(other_id)
             .map(|hp| hp.hit_points <= 0)
@@ -1355,7 +1355,7 @@ fn resolve_proxy_entity(world: &World, entity_id: EntityId) -> EntityId {
 /// everything but its front rank, leaving sight stricter than line of fire -
 /// and the same has to hold once that packmate dies, or an AI would see
 /// through the body standing up and be blinded by it a second later. Corpses
-/// and ragdoll limbs are `SELECTABLE` rather than `ACTOR`, so deciding this
+/// and compound bodies are `SELECTABLE` rather than `ACTOR`, so deciding this
 /// here rather than by dropping `ACTOR` from the collision mask is what covers
 /// every state from one place. The original engine's sight cast tests world
 /// geometry plus an explicit list of vision-blocking objects (doors and

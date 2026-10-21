@@ -1024,7 +1024,7 @@ mod tests {
     }
 
     /// The physical VR contact must carry the same directional context as the
-    /// flat aim ray so a lethal hit can seed the victim's death ragdoll.
+    /// flat aim ray so a lethal hit can seed the victim's damage readouts.
     #[test]
     fn a_landed_vr_swing_carries_an_impact_for_the_death_reaction() {
         let (world, weapon, target) = test_world(PresentationMode::Vr);

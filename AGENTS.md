@@ -413,7 +413,7 @@ For debugging visual/rendering changes without a full interactive session:
 
    # Inspect physics state (works for full missions AND debug_* scenes).
    # Bodies are enumerated from Rapier directly, so many bodies can share one
-   # entity_id (e.g. ragdoll limbs) - use ?entity_id=N to scope to one entity.
+   # entity_id - use ?entity_id=N to scope to one entity.
    curl "http://127.0.0.1:8080/v1/physics/bodies?entity_id=4"
    curl http://127.0.0.1:8080/v1/physics/bodies/12   # detail by body_id
 
@@ -437,12 +437,11 @@ For debugging visual/rendering changes without a full interactive session:
    curl "http://127.0.0.1:8080/v1/scene?transparent=true"
    curl "http://127.0.0.1:8080/v1/scene?entity_id=246"
 
-   # Inspect impulse joints (ragdoll constraint health): per-joint anchor
-   # separation + applied impulse, labeled by skeleton bone. A healthy ball
+   # Inspect impulse joints (constraint health): per-joint anchor
+   # separation + applied impulse. A healthy ball
    # joint at rest has separation ~0 and a small impulse; persistent values mean
    # the rig is fighting itself.
    curl http://127.0.0.1:8080/v1/physics/joints
-   curl http://127.0.0.1:8080/v1/ragdoll/metrics   # per-ragdoll settle metrics
 
    # Trigger discrete input actions (same actions as desktop keybindings)
    curl http://127.0.0.1:8080/v1/input/actions
@@ -530,7 +529,7 @@ For debugging visual/rendering changes without a full interactive session:
    **Stepping & determinism**: stepping uses a **fixed 60 Hz timestep**, so
    `{"frames": N}` advances exactly `N/60` s of simulation time and
    `{"duration":"3s"}` runs exactly `3 * 60` frames - deterministic and
-   independent of HTTP request timing (a settling ragdoll falls at a real rate
+   independent of HTTP request timing (a settling crate falls at a real rate
    regardless of how fast you poll). Only free-running (not stepping) uses real
    wall-clock dt. One caveat: AI path queries run on a dedicated worker
    thread (`pathfinding::async_queries`), so the exact frame an AI adopts a
@@ -614,8 +613,7 @@ For debugging visual/rendering changes without a full interactive session:
    | ------------------------ | -------------------------------------------- |
    | `debug_camera`           | Test security camera AI behavior             |
    | `debug_turret`           | Test turret AI and targeting                 |
-   | `debug_ragdoll`          | Test ragdoll physics                         |
-   | `debug_hitbox`           | View fitted hitbox shapes vs ragdoll colliders across poses |
+   | `debug_hitbox`           | View fitted hitbox shapes across poses |
    | `debug_gloves`           | Test VR hand/glove rendering                 |
    | `debug_hand_poses`       | 25AE authored hand poses, anchored at a common hand origin |
    | `debug_joint_constraint` | Test physics joint constraints               |
@@ -765,16 +763,6 @@ The project supports experimental flags for gating in-progress features during d
   `simulation-clock.txt` containing `fixed`, or an explicit benchmark fixture.
   Catch-up/input-backlog and interaction/presentation checks remain before default
   promotion; see `projects/quest-120hz.md`.
-
-- **`ragdoll`**: spawn a physics ragdoll on creature death (`SlayEntity`) instead of
-  just removing the entity. Without it, death is unchanged.
-
-- **`ragdoll_impulse`**: make ragdolls fall back to the legacy impulse-joint rig
-  (heavier core, soft locked translation — settles but the hip visibly sags/separates
-  under load). Without it, ragdolls use the default reduced-coordinate (multibody)
-  rig — joints anchored at the limb articulation points, so limbs structurally can't
-  separate — with raised sleep thresholds so the settled corpse goes fully still
-  (and wakes again on contact/impulse).
 
 - **`nav_bridges`**: reconnect the AI navigation mesh for full-map pathfinding. The
   shipped mission data partitions the walk graph into per-area islands with no links

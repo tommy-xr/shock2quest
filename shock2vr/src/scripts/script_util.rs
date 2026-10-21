@@ -137,7 +137,7 @@ pub(crate) fn retain_on_slay(world: &World, entity: EntityId) -> bool {
 }
 
 /// Resolve contact damage and freeze against the owning receiver. Damage goes
-/// through the struck hitbox so limb scaling and ragdoll metadata survive.
+/// through the struck hitbox so limb scaling and impact metadata survive.
 /// Non-damage stims and immune receivers do not emit a zero-damage AI alert.
 pub(crate) fn projectile_contact_effects(
     world: &World,

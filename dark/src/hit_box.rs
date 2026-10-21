@@ -1,7 +1,6 @@
 //! Per-joint collision shapes for creature limbs.
 //!
-//! Both the damage hitboxes (`HitBoxManager`) and the physics ragdoll
-//! (`RagDollManager`) need a per-joint collision volume. Historically both used
+//! Damage hitboxes need a per-joint collision volume. Historically they used
 //! the axis-aligned bounding box of each joint's skinned vertices, but those
 //! cluster around the joint origin (verts are joint-local) and leave the *bone
 //! segments between joints* uncovered (the `hitbox_analyzer` coverage metric
@@ -12,7 +11,7 @@
 //! spanning from the joint toward that child (covering the bone), sized to
 //! enclose the joint's verts; for leaf/branching joints it falls back to the
 //! vertex AABB. This is the single source of truth consumed by the analyzer and
-//! both runtime managers.
+//! the runtime hitbox manager.
 
 use std::collections::HashMap;
 
@@ -161,7 +160,7 @@ const WIRE_SEGMENTS: usize = 12;
 /// the animated mesh. Shared by `dark_viewer --debug-hitboxes` and the
 /// `debug_hitbox` scene so both render exactly what `fit_hit_box_shapes`
 /// produced (no physics round-trip), which separates a fit/mapping bug from a
-/// ragdoll-conversion bug.
+/// transform-conversion bug.
 pub fn draw_debug_hit_box_shapes(
     shapes: &HashMap<JointId, HitBoxShape>,
     world_joints: &[Matrix4<f32>],

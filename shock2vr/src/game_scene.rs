@@ -552,34 +552,18 @@ pub struct DebugPhysicsBodyDetail {
     pub contacts: Vec<u32>,
 }
 
-/// Per-ragdoll quality/settle metrics for the verification harness.
-#[derive(Debug, Serialize, Clone)]
-pub struct DebugRagdollMetrics {
-    pub entity_id: i32,
-    pub body_count: usize,
-    pub max_linear_speed: f32,
-    pub max_angular_speed: f32,
-    pub min_y: f32,
-    pub max_nonadjacent_overlap: f32,
-    pub max_drift: f32,
-}
-
-/// One joint's state, for ragdoll diagnostics. `separation` and the impulses
+/// One joint's state, for joint diagnostics. `separation` and the impulses
 /// staying non-zero at rest mean the constraint can't be satisfied.
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugPhysicsJoint {
     pub body1_id: u32,
     pub body2_id: u32,
-    /// `"impulse"` or `"multibody"` - which joint set this came from.
+    /// Joint kind (`"impulse"`).
     pub joint_type: String,
-    /// Skeleton joint id each body represents, if it's a ragdoll body.
-    pub bone1: Option<u32>,
-    pub bone2: Option<u32>,
     pub anchor1: [f32; 3],
     pub anchor2: [f32; 3],
     pub separation: f32,
-    /// Constraint impulses this step. Rapier does not expose these for
-    /// multibody links, so they read 0 there.
+    /// Constraint impulses this step.
     pub linear_impulse: f32,
     pub angular_impulse: f32,
 }
@@ -1100,22 +1084,14 @@ pub trait DebuggableScene {
     /// Detailed physics body information, or None if body doesn't exist
     fn physics_body_detail(&self, body_id: u32) -> Option<DebugPhysicsBodyDetail>;
 
-    /// Quality/settle metrics for every active ragdoll, for the verification
-    /// harness (settle speeds, floor penetration, non-adjacent interpenetration,
-    /// drift). Empty when the scene has no ragdolls.
-    fn ragdoll_metrics(&self) -> Vec<DebugRagdollMetrics> {
-        Vec::new()
-    }
-
-    /// Every impulse + multibody joint with its anchor separation (+ applied
-    /// impulse for impulse joints), for ragdoll diagnostics. Empty when the
+    /// Every impulse joint with its anchor separation and applied impulse. Empty when the
     /// scene has no joints.
     fn list_physics_joints(&self) -> Vec<DebugPhysicsJoint> {
         Vec::new()
     }
 
     /// Apply a world-space impulse to a dynamic physics body by `body_id`
-    /// (waking it if asleep). Debug hook for poking ragdolls headlessly - e.g.
+    /// (waking it if asleep). Debug hook for poking bodies headlessly - e.g.
     /// verify a sleeping corpse wakes on impact. False = no such dynamic body.
     fn apply_body_impulse(&mut self, _body_id: u32, _impulse: [f32; 3]) -> bool {
         false
@@ -1370,7 +1346,7 @@ pub enum DebugEntityMessage {
     },
     /// Deal `amount` damage (drives `InternalSimpleHealth` / AI health).
     /// `direction` (world-space, need not be normalized) and `point` optionally
-    /// describe the blow so a death ragdoll reacts to it - same data a real
+    /// describe the blow for damage feedback - same data a real
     /// projectile hit carries. Omitted = directionless damage.
     Damage {
         amount: f32,
@@ -1380,7 +1356,7 @@ pub enum DebugEntityMessage {
         point: Option<[f32; 3]>,
         /// Skeleton joint id of the hitbox that was struck, as a real
         /// hitbox-forwarded hit carries. Lets a test exercise the per-limb
-        /// paths (damage readouts, ragdoll reaction) without having to land a
+        /// damage readout paths without having to land a
         /// live shot on a chosen limb.
         #[serde(default)]
         bone: Option<u32>,

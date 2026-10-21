@@ -5,7 +5,7 @@ use crate::{
     motion::{AnimationClip, AnimationPlayer},
     ss2_bin_ai_loader::{self, SystemShock2AIMesh},
     ss2_bin_obj_loader::{self, SystemShock2ObjectMesh, Vhot},
-    ss2_skeleton::{self, AnimationInfo, Bone, Skeleton},
+    ss2_skeleton::{self, AnimationInfo, Skeleton},
 };
 use cgmath::{EuclideanSpace, Matrix4, Point3, SquareMatrix, Transform, Vector2, Vector3};
 use collision::{Aabb, Aabb3};
@@ -406,11 +406,7 @@ impl Model {
         // building the original mesh's scene objects entirely - they would be
         // discarded, and building them uploads a vertex buffer and decodes every
         // original texture per creature. Hitboxes still come from the original
-        // mesh, so damage locations and ragdoll *physics* fitting are untouched.
-        // Ragdoll *rendering* is not automatic: it poses `clone_scene_objects()`
-        // from physics rather than from an `AnimationPlayer`, so it reads
-        // `bind_matrices()` and folds the same product in - see
-        // `RagDoll::renderables`.
+        // mesh, so damage locations are unchanged.
         let high_detail = pmnm.and_then(|pmnm| {
             let objects = ss2_bin_ai_loader::pmnm_to_scene_objects(&pmnm, asset_cache);
             (!objects.is_empty()).then_some(objects)
@@ -521,10 +517,6 @@ impl Model {
     }
 
     /// The per-joint bind-pose undo for a `PMNM` mesh, if this model uses one.
-    ///
-    /// Anything that poses `clone_scene_objects()` itself - the ragdoll, which
-    /// drives joints from physics rather than from an `AnimationPlayer` - must
-    /// fold this in, or a bind-space mesh renders exploded.
     pub fn bind_matrices(&self) -> Option<Rc<[Matrix4<f32>; MAX_SKINNED_JOINTS]>> {
         match &self.inner {
             InnerModel::Animated(animated_model) => animated_model.bind.clone(),
@@ -575,7 +567,7 @@ impl Model {
     }
 
     /// Per-joint fitted collision shapes (capsule-toward-child / box), the shared
-    /// source of truth for the ragdoll and damage hitboxes. Articulated object
+    /// source of truth for damage hitboxes. Articulated object
     /// models opt in through `enable_object_joint_hit_boxes`; static models are empty.
     pub fn hit_box_shapes(&self) -> Rc<HashMap<u32, HitBoxShape>> {
         match &self.inner {
@@ -755,25 +747,6 @@ impl Model {
         }
     }
 
-    pub fn ragdoll_source(&self) -> Option<(Vec<Bone>, Vec<Matrix4<f32>>)> {
-        match &self.inner {
-            InnerModel::Animated(animated_model) => {
-                let bones = animated_model.skeleton.bones().to_vec();
-                let world = animated_model
-                    .skeleton
-                    .world_transforms()
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                Some((bones, world))
-            }
-            InnerModel::Static(_) => None,
-        }
-    }
-
-    pub fn can_create_rag_doll(&self) -> bool {
-        matches!(self.inner, InnerModel::Animated(_))
-    }
-
     pub fn skeleton(&self) -> Option<&Skeleton> {
         match &self.inner {
             InnerModel::Animated(animated_model) => Some(&animated_model.skeleton),
@@ -834,6 +807,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ss2_skeleton::Bone;
     use cgmath::{Point3, vec3};
     use std::cell::RefCell;
 

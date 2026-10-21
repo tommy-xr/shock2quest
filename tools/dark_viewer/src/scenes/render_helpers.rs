@@ -85,7 +85,7 @@ pub fn world_joint_transforms(model: &Model, player: &AnimationPlayer) -> Vec<Ma
 /// articulation markers. The hit-box overlay renders exactly what
 /// `fit_hit_box_shapes` produced, transformed by the live joint transforms - so
 /// it tracks the animated mesh and reveals fit/mapping issues independent of the
-/// physics ragdoll.
+/// damage hitboxes.
 ///
 /// `decorations` (ground plane, axes gizmo) are kept apart from the model's own
 /// objects so that ghosting under an overlay touches only the mesh.

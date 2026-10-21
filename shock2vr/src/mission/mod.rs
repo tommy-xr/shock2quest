@@ -484,10 +484,6 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.physics_body_detail(body_id)
     }
 
-    fn ragdoll_metrics(&self) -> Vec<crate::game_scene::DebugRagdollMetrics> {
-        self.mission_core.ragdoll_metrics()
-    }
-
     fn list_physics_joints(&self) -> Vec<crate::game_scene::DebugPhysicsJoint> {
         self.mission_core.list_physics_joints()
     }

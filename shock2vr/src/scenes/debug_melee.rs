@@ -43,7 +43,7 @@ const MELEE_WEAPONS: &[(i32, &str)] = &[
     (-2291, "Psi Sword"),
 ];
 
-/// The creature the ragdoll scene already spawns; a real actor, so contact
+/// A pipe hybrid: a real actor, so contact
 /// resolves through the authored stim/receptron path rather than a stand-in.
 const TARGET_CREATURE: i32 = -397;
 

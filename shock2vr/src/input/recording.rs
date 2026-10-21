@@ -175,7 +175,7 @@ mod tests {
             scene: "medsci1.mis".into(),
             save: "rec.sav".into(),
             presentation: PresentationMode::Vr,
-            experimental: vec!["ragdoll".into()],
+            experimental: vec!["physical_held_items".into()],
             glove_forward_cm: 4.0,
         };
         let mut input = InputContext::default();

@@ -75,7 +75,7 @@ use tracing::{info, trace, warn};
 
 use crate::{
     GameOptions,
-    creature::{HitBoxManager, RagDollManager, get_creature_definition},
+    creature::{HitBoxManager, get_creature_definition},
     death_camera::{self, DeathCamera, DeathCameraSample},
     game_scene::AmbientAudioState,
     game_scene::PlayerSavePoseError,
@@ -122,10 +122,6 @@ use crate::mission::entity_creator::{CreateEntityOptions, EntityCreationInfo};
 /// (starting hit points, psi pool, base stats, vulnerabilities, ...).
 pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 
-/// Vertical clearance (world units) a death-handoff ragdoll spawns with, so a
-/// floor-lying crumple pose doesn't start deeply interpenetrating the level
-/// trimesh (see `spawn_ragdoll`).
-const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
 /// How far above the water a treading swimmer's body center may sit (1 ft):
 /// well over one frame of swim-up, so surfacing settles instead of bobbing.
 const WATER_SURFACE_BAND: f32 = 1.0 / SCALE_FACTOR;
@@ -3241,7 +3237,6 @@ pub struct MissionCore {
     environment: Option<Rc<engine::texture::CubeTexture>>,
     pub gui: GuiManager,
     pub hit_boxes: HitBoxManager,
-    pub rag_doll_manager: RagDollManager,
     pub debug_lines: Vec<DebugLine>,
     psi_drain_trails: Vec<crate::psi_visuals::DrainTrail>,
     projectile_trails: crate::projectile_trail::ProjectileTrails,
@@ -4418,7 +4413,6 @@ impl MissionCore {
             overload_glows: HashMap::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
-            rag_doll_manager: RagDollManager::new(),
             visibility_engine: abstract_mission.visibility_engine,
             pending_entity_triggers: Vec::new(),
             debug_hand_grabs: Vec::new(),
@@ -5800,17 +5794,10 @@ impl MissionCore {
         // Clear one-shot forces - but only after a step actually consumed
         // them. A paused (zero-dt) frame skips physics.update above, and
         // clearing there would silently erase forces queued between frames
-        // (e.g. a killing-blow impulse on a multibody link, which is applied
-        // as a one-step force) before they ever acted.
+        // before they ever acted.
         if !tick.elapsed.is_zero() {
             self.physics.clear_forces();
         }
-        // A poisoned (transform-diverged) rig is despawned by the manager;
-        // also delete its otherwise-empty corpse entity so it doesn't leak.
-        for poisoned_id in self.rag_doll_manager.update(&mut self.physics) {
-            self.world.delete_entity(poisoned_id);
-        }
-
         let (left_hand_entity_id, right_hand_entity_id) = self.interaction.held_entities();
 
         // Update player info
@@ -11288,8 +11275,6 @@ impl MissionCore {
             &mut self.physics,
             &mut self.id_to_physics,
         );
-        self.rag_doll_manager
-            .remove_entity(entity_id, &mut self.physics);
 
         self.script_world.remove_entity(entity_id);
         self.id_to_bitmap.remove(&entity_id);
@@ -11302,109 +11287,6 @@ impl MissionCore {
         self.physics.remove(entity_id);
 
         self.world.delete_entity(entity_id);
-    }
-
-    /// Spawn a ragdoll from a (dying) creature and remove the original.
-    ///
-    /// The ragdoll is created as a dedicated "corpse" entity seeded from the
-    /// creature's *current* bone world transforms (no offset), then the original
-    /// creature is removed. Using a separate entity id is important: the original
-    /// creature is torn down via `remove_entity`, which also clears any ragdoll
-    /// keyed by that id - so the corpse must live under its own id to survive.
-    /// Replace a creature with a physics ragdoll of its current pose. `use_multibody`
-    /// selects reduced-coordinate (multibody) joints over the legacy impulse joints.
-    /// `crumpled_pose` marks rigs spawned from a finished death crumple (floor-
-    /// lying, limb-overlapping): those spawn without limb self-collision (the
-    /// pose's deep limb-limb contacts can explode the articulated solve - see
-    /// `CollisionGroup::ragdoll_no_self`) and with a small vertical lift so the
-    /// fitted colliders don't start inside the level trimesh. Standing/mid-
-    /// animation spawns (instant slays, the debug scene) pass false and keep
-    /// the full self-colliding rig with no lift.
-    /// Returns the corpse entity id if a ragdoll was spawned (the creature is
-    /// then removed) - the id keys the ragdoll in `rag_doll_manager` (e.g. for
-    /// `apply_impact`).
-    pub fn spawn_ragdoll(
-        &mut self,
-        entity_id: EntityId,
-        use_multibody: bool,
-        crumpled_pose: bool,
-    ) -> Option<EntityId> {
-        let (spawned, ragdoll_id) = {
-            let model = match self.id_to_model.get(&entity_id) {
-                Some(model) if model.can_create_rag_doll() => model,
-                _ => return None,
-            };
-
-            let (root_transform, joint_transforms) = {
-                let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
-                let v_joint_transforms = self
-                    .world
-                    .borrow::<View<RuntimePropJointTransforms>>()
-                    .unwrap();
-
-                let root_transform = match v_transform.get(entity_id) {
-                    Ok(transform) => transform.0,
-                    Err(_) => return None,
-                };
-                let joint_transforms = match v_joint_transforms.get(entity_id) {
-                    Ok(joints) => joints.0,
-                    Err(_) => return None,
-                };
-                (root_transform, joint_transforms)
-            };
-
-            // Per-bone joint limits from the creature definition (empty for
-            // creatures without a humanoid skeleton -> uniform cone fallback).
-            let joint_limits = crate::creature::get_entity_creature(&self.world, entity_id)
-                .map(|creature| creature.joint_limits.clone())
-                .unwrap_or_else(|| std::sync::Arc::new(std::collections::HashMap::new()));
-
-            // Dedicated corpse entity so removing the original creature below does
-            // not tear down the ragdoll (the manager keys ragdolls by entity id).
-            let ragdoll_id = self.world.add_entity(RuntimePropDoNotSerialize {});
-
-            // A crumple pose ends lying ON the floor, so the fitted colliders
-            // start interpenetrating the level trimesh - the deep-penetration
-            // recovery through the articulated solver exploded ~half of
-            // medsci1 handoffs to non-finite positions within a step. A few cm
-            // of clearance lets the rig drop back down instead (imperceptible
-            // at spawn). Standing spawns don't need it.
-            let lift = if crumpled_pose {
-                RAGDOLL_SPAWN_LIFT
-            } else {
-                0.0
-            };
-            // The creature's live capsule velocity IS the crumple's root
-            // motion (animation drives the body through physics velocity), so
-            // it seeds the rig's bulk momentum across the handoff.
-            let seed_velocity = self
-                .physics
-                .get_velocity(entity_id)
-                .unwrap_or_else(Vector3::zero);
-            let spawned = self.rag_doll_manager.add_ragdoll(
-                ragdoll_id,
-                model,
-                root_transform,
-                &joint_transforms,
-                vec3(0.0, lift, 0.0),
-                &joint_limits,
-                use_multibody,
-                seed_velocity,
-                !crumpled_pose,
-                &mut self.physics,
-            );
-            (spawned, ragdoll_id)
-        };
-
-        if spawned {
-            // Replace the creature with the corpse: remove its capsule, hitboxes,
-            // AI scripts, and animated model so only the ragdoll remains.
-            self.remove_entity(entity_id);
-            println!("Spawned ragdoll and removed creature {:?}", entity_id);
-            Some(ragdoll_id)
-        } else {
-            None
-        }
     }
 
     /// Drop out of the flat "use" (metagame) mode: put the inventory strip
@@ -14471,7 +14353,7 @@ impl MissionCore {
                     // Advance every creature to the next pose in a fixed playlist of
                     // distinct biped-human clips, so repeated triggers walk
                     // deterministically through clearly-different poses. Used by the
-                    // `debug_hitbox` scene to inspect per-joint hitbox/ragdoll fit
+                    // `debug_hitbox` scene to inspect per-joint hitbox fit
                     // across poses. We load clips by name directly (as `dark_viewer`
                     // does) rather than via the tag-based motion query, which needs
                     // an AI intent we don't have here.
@@ -15602,79 +15484,12 @@ impl MissionCore {
                             );
                         }
 
-                        // With the `ragdoll` experimental flag, replace the slain
-                        // creature with a physics ragdoll of its death pose (the
-                        // spawn removes the creature itself). The reduced-coordinate
-                        // multibody rig is the default; `ragdoll_impulse` falls back
-                        // to the legacy impulse-joint rig. Without the flag (or for
-                        // non-ragdoll-able entities), fall back to the plain removal.
-                        // An entity replaced by its own Corpse/CorpsePart/Flinderize links
-                        // (a droid's explosion and parts, an Overlord's gibs)
-                        // never ragdolls: the spawned links are the body, and a
-                        // ragdoll on top would leave a corpse the explosion was
-                        // supposed to consume.
-                        let spawned_ragdoll = !has_death_links(&self.world, entity_id)
-                            && game_options.experimental_features.contains("ragdoll")
-                            && self
-                                .spawn_ragdoll(
-                                    entity_id,
-                                    !game_options
-                                        .experimental_features
-                                        .contains("ragdoll_impulse"),
-                                    // Slain mid-animation, usually upright -
-                                    // not a crumpled pose.
-                                    false,
-                                )
-                                .is_some();
-                        if !spawned_ragdoll {
-                            self.remove_entity(entity_id);
-                        }
+                        self.remove_entity(entity_id);
                     }
                 }
-                Effect::SpawnCorpseRagdoll { entity_id, impact } => {
-                    // Death-crumple handoff (AI deaths): shortly after the
-                    // animation starts, replace the animated corpse with a
-                    // physics ragdoll seeded from its current pose. Without
-                    // the experimental flag, keep the animated corpse but
-                    // narrow its capsule to world/selectable collision: it
-                    // remains grounded and lootable without blocking the
-                    // player.
-                    // (Known experimental limitations: the ragdoll corpse is
-                    // not serialized, so it vanishes on save/load; and removing
-                    // the creature entity also removes its creaturecontainer
-                    // loot target.)
-                    let mut spawned_ragdoll = false;
-                    if game_options.experimental_features.contains("ragdoll") {
-                        let ragdoll_id = self.spawn_ragdoll(
-                            entity_id,
-                            !game_options
-                                .experimental_features
-                                .contains("ragdoll_impulse"),
-                            // Finished death crumple: floor-lying and limb-
-                            // overlapping.
-                            true,
-                        );
-                        spawned_ragdoll = ragdoll_id.is_some();
-                        // Seed the corpse with the killing blow: the struck
-                        // limb gets a shove along the shot's direction, so the
-                        // corpse reacts to HOW it died instead of collapsing
-                        // in place.
-                        if let (Some(ragdoll_id), Some(impact)) = (ragdoll_id, impact) {
-                            self.rag_doll_manager.apply_impact(
-                                ragdoll_id,
-                                &impact,
-                                &mut self.physics,
-                            );
-                        }
-                    }
-                    // A successful ragdoll spawn removes the original creature
-                    // and its capsule. In the normal path (or when a model
-                    // cannot make a ragdoll), retain the corpse entity but
-                    // exclude its capsule from player/entity collision.
-                    if !spawned_ragdoll {
-                        self.physics
-                            .set_collision_group(entity_id, CollisionGroup::corpse());
-                    }
+                Effect::MakeCorpseNonBlocking { entity_id } => {
+                    self.physics
+                        .set_collision_group(entity_id, CollisionGroup::corpse());
                 }
                 Effect::SetBackgroundMusic { song } => {
                     initialize_background_music(
@@ -18889,7 +18704,6 @@ impl MissionCore {
             total_model_count
         );
 
-        scene.extend(self.rag_doll_manager.render_scene_objects());
         // Where letting go of every hold lands (VR climbing), or the landing a
         // committed release is gliding to.
         if let Some(outcome) = self.climb_release_glide.or(self.climb_release.outcome) {
@@ -22779,30 +22593,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         })
     }
 
-    fn ragdoll_metrics(&self) -> Vec<crate::game_scene::DebugRagdollMetrics> {
-        self.rag_doll_manager
-            .debug_metrics(&self.physics)
-            .into_iter()
-            .map(|(id, m)| crate::game_scene::DebugRagdollMetrics {
-                entity_id: id.inner() as i32,
-                body_count: m.body_count,
-                max_linear_speed: m.max_linear_speed,
-                max_angular_speed: m.max_angular_speed,
-                min_y: m.min_y,
-                max_nonadjacent_overlap: m.max_nonadjacent_overlap,
-                max_drift: m.max_drift,
-            })
-            .collect()
-    }
-
     fn list_physics_joints(&self) -> Vec<crate::game_scene::DebugPhysicsJoint> {
-        let body_to_bone = self.rag_doll_manager.body_to_joint_id();
         self.physics
             .debug_list_joints()
             .into_iter()
             .map(|j| crate::game_scene::DebugPhysicsJoint {
-                bone1: body_to_bone.get(&j.body1_id).copied(),
-                bone2: body_to_bone.get(&j.body2_id).copied(),
                 body1_id: j.body1_id,
                 body2_id: j.body2_id,
                 joint_type: j.joint_type.to_string(),

@@ -117,7 +117,7 @@ test(
     assert.deepEqual(
       corpseBody.collision_groups,
       ["selectable"],
-      "a non-ragdoll corpse must stay selectable without entity/player collision",
+      "a corpse must stay selectable without entity/player collision",
     );
     const deadPos = (await game.entities.detail(monster.id)).position;
     for (let i = 0; i < 5; i++) {
@@ -193,7 +193,7 @@ test(
     assert.deepEqual(
       savedBody.collision_groups,
       ["selectable"],
-      "a non-ragdoll corpse must stay selectable without entity/player collision",
+      "a corpse must stay selectable without entity/player collision",
     );
     const savedCorpse = await game.entities.detail(monster.id);
     assert.equal(aiProp(savedCorpse, "AIBehavior"), "Dead");

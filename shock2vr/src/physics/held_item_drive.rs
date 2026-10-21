@@ -526,9 +526,7 @@ fn relocating_the_player_is_not_player_velocity() {
 }
 
 /// A swing stopped by a limb reports the blow, and reports it pointing the way
-/// the weapon was going. The contact's normal drives the killing blow's ragdoll
-/// impulse (`rag_doll::apply_killing_blow`), so an inverted one throws the
-/// corpse back at the player.
+/// the weapon was going, so damage consumers receive the correct impact direction.
 ///
 /// Negative-first: `cast_shape` reports the normal *on the limb*, i.e. limb ->
 /// weapon, which is the opposite of what a `CollisionContact` means.

@@ -5,7 +5,7 @@ for (const vr of [false, true]) {
   test(`authored monster worm idle advances independently in ${vr ? "VR" : "flat"}`, {
     skip: process.env.SHOCK2_E2E !== "1", timeout: 240_000,
   }, async () => {
-    await using game = await GameServer.launch({ mission: "debug_ragdoll", debugFlags: vr ? ["--vr"] : [] });
+    await using game = await GameServer.launch({ mission: "debug_hitbox", debugFlags: vr ? ["--vr"] : [] });
     await game.step({ frames: 1 });
     await game.input.trigger("SpawnDebugMonster");
     await game.step({ frames: 2 });

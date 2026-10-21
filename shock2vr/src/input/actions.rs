@@ -30,7 +30,7 @@ pub enum InputAction {
     /// Spawn a debug monster (og-pipe hybrid) in front of the player
     SpawnDebugMonster,
 
-    /// Cycle creatures to their next animation pose (debug hitbox/ragdoll inspection)
+    /// Cycle creatures to their next animation pose (debug hitbox inspection)
     DebugHitboxCyclePose,
 
     /// Spawn and wield the next debug weapon, holstering the previous one.

@@ -263,8 +263,8 @@ use self::{
     weapon_script::WeaponScript,
 };
 
-/// World-space description of the blow behind a `Damage` message, for physics
-/// reactions (ragdoll seeding). None when the source has no meaningful
+/// World-space description of the blow behind a `Damage` message, for damage
+/// feedback. None when the source has no meaningful
 /// direction (scripted damage; radius blasts shove bodies directly).
 #[derive(Clone, Copy, Debug)]
 pub struct DamageImpact {
@@ -406,7 +406,7 @@ pub enum MessagePayload {
     Damage {
         amount: f32,
         /// The blow's direction/point/bone, when the source knows them -
-        /// seeds the death ragdoll's reaction.
+        /// used by damage readouts.
         impact: Option<DamageImpact>,
     }, // damage the entity
 

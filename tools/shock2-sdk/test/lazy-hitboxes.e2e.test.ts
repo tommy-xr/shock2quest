@@ -8,11 +8,10 @@ import { e2ePort } from "./helpers/e2e-port.js";
 const enabled = process.env.SHOCK2_E2E === "1" &&
   process.env.SHOCK2_EXPECT_LAZY_HITBOXES === "1";
 
-test("query-only limbs expose aim points without bodies and are removed at ragdoll handoff",
+test("query-only limbs expose aim points without bodies and remain hittable after death",
   { skip: !enabled, timeout: 600_000 }, async () => {
     await using game = await GameServer.launch({
       mission: "debug_melee",
-      experimental: ["ragdoll"],
       port: e2ePort(0, "SHOCK2_E2E_LAZY_HITBOXES_PORT"),
     });
     await game.step({ frames: 30 });
@@ -35,16 +34,16 @@ test("query-only limbs expose aim points without bodies and are removed at ragdo
 
     await game.entities.sendMessage(creature.id, { type: "Damage", amount: 10000 });
     await game.step({ frames: 180 });
-    assert.ok((await game.physics.ragdolls()).ragdolls.length > 0,
-      "death must actually hand off to a ragdoll before checking removed proxies");
-    const remaining = await game.entities.list({ filter: "OG-Pipe" });
-    assert.ok(!remaining.entities.some((entity) => entity.id === creature.id),
-      "ragdoll handoff must remove the animated creature");
-    for (const point of points) {
-      const [px, py, pz] = point.position;
-      const after = await game.raycast({ start: [px, py, pz - 1], end: [px, py, pz + 1],
-        collision_groups: ["hitbox"] });
-      assert.ok(after.entity_id === null || !proxies.has(after.entity_id),
-        "removed living limb must not absorb later shots");
+    const corpse = await game.entities.detail(creature.id);
+    assert.ok((corpse.aim_points?.length ?? 0) > 1,
+      "animated corpses retain their query-only limbs");
+    for (const point of corpse.aim_points ?? []) {
+      assert.equal(point.body_id, null);
+      assert.ok(proxies.has(point.proxy_entity_id), "the corpse retains its limb proxies");
     }
+    const [cx, cy, cz] = corpse.aim_points![0].position;
+    const after = await game.raycast({ start: [cx, cy, cz - 1], end: [cx, cy, cz + 1],
+      collision_groups: ["hitbox"] });
+    assert.ok(after.hit && after.entity_id !== null && proxies.has(after.entity_id),
+      "the animated corpse remains hittable");
   });

@@ -6,7 +6,7 @@ for (const vr of [false, true]) {
   test(`PMNM named blends remain per instance while skinned in ${vr ? "VR" : "flat"}`, {
     skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000,
   }, async () => {
-    await using game = await GameServer.launch({ mission: "debug_ragdoll", debugFlags: vr ? ["--vr"] : [] });
+    await using game = await GameServer.launch({ mission: "debug_hitbox", debugFlags: vr ? ["--vr"] : [] });
     await game.step({ frames: 1 });
     await game.input.trigger("SpawnDebugMonster");
     await game.step({ frames: 1 });
@@ -59,7 +59,7 @@ for (const vr of [false, true]) {
     assert.equal((await set(first, { MouthShapeA: 1 })).status, 200);
     await game.input.trigger("DebugReloadLevel");
     await game.step({ frames: 2 });
-    assert.equal((await game.info()).mission, "debug_ragdoll");
+    assert.equal((await game.info()).mission, "debug_hitbox");
     const reloaded = (await game.entities.list({ filter: "OG-Pipe", limit: 100 })).entities;
     assert.ok(reloaded.length > 0);
     for (const entity of reloaded) {

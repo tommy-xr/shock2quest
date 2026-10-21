@@ -1,7 +1,7 @@
 //! hitbox_analyzer
 //!
 //! Analyzes per-joint limb collision fit for System Shock 2 creature meshes
-//! (LGMM `.bin`) — the data the ragdoll uses to build limb colliders.
+//! (LGMM `.bin`) — the data used to build damage hitboxes.
 //!
 //! Mesh verts are stored in *joint-local* space (each joint's verts cluster
 //! around that joint's origin; confirmed by comparing vertex-AABB centers to

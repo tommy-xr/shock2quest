@@ -95,16 +95,6 @@ const FRUSTRATION_COOLDOWN_MAX: f32 = 45.0;
 /// bounds the "thwarted" gesture for an AI whose alert cap keeps it in a
 /// pursuing state even after the give-up's alertness drop.
 const DOOR_GIVEUP_COOLDOWN: f32 = 8.0;
-/// How far into the death crumple the corpse hands off to physics. Near-
-/// instant (a few frames) so the killing-blow impulse lands AT the kill -
-/// any longer and the reaction reads as delayed. The crumple still starts
-/// (its first frames shape the initial pose and root velocity, both of which
-/// the rig inherits - see spawn_ragdoll), but physics owns the death from
-/// here; the ragdoll spawns from the current pose, so there is no snap.
-/// Raise this to let more of the authored death animation play before
-/// physics takes over (at 0.5 the impulse visibly lags the shot).
-const CRUMPLE_HANDOFF_SECONDS: f32 = 0.05;
-
 /// Configuration for monster alertness behavior
 #[derive(Clone)]
 struct MonsterConfig {
@@ -321,16 +311,6 @@ pub struct AnimatedMonsterAI {
     current_behavior: Box<RefCell<dyn Behavior>>,
     current_heading: Deg<f32>,
     is_dead: bool,
-    /// Seconds of sim time since entering death; drives the timed
-    /// crumple->ragdoll handoff.
-    death_elapsed: f32,
-    /// The handoff effect is emitted exactly once (a failed spawn - e.g. a
-    /// non-ragdollable model - must not re-emit every frame).
-    handoff_emitted: bool,
-    /// The blow that killed this creature (direction/point/bone), stashed at
-    /// the lethal Damage so the crumple->ragdoll handoff can seed the corpse's
-    /// physical reaction.
-    death_impact: Option<crate::scripts::DamageImpact>,
     took_damage: bool,
     animation_seq: u32,
     locomotion_seq: u32,
@@ -411,9 +391,6 @@ impl AnimatedMonsterAI {
             stun: None,
             is_dead: false,
             alertness_pinned: false,
-            death_elapsed: 0.0,
-            handoff_emitted: false,
-            death_impact: None,
             took_damage: false,
             current_behavior: Box::new(RefCell::new(IdleBehavior::new())),
             current_heading: Deg(0.0),
@@ -447,9 +424,6 @@ impl AnimatedMonsterAI {
             stun: None,
             is_dead: false,
             alertness_pinned: false,
-            death_elapsed: 0.0,
-            handoff_emitted: false,
-            death_impact: None,
             took_damage: false,
             // Start with IdleBehavior - alertness will drive behavior changes
             current_behavior: Box::new(RefCell::new(IdleBehavior::new())),
@@ -1026,22 +1000,12 @@ impl AnimatedMonsterAI {
         self.stun = None;
         self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
         self.is_dead = true;
-        // Anchor the ragdoll-handoff timer to the crumple's actual start
-        // (kills arriving via the AnimationCompleted fallback enter death
-        // later than they were dealt).
-        self.death_elapsed = 0.0;
-
         // A creature that authors Corpse/CorpsePart/Flinderize links bursts instead of
         // leaving a body: droids link a `Corpse` explosion (plus `Flinderize`
         // parts), and organics that gib - the Overlord's viral explosion and
         // its limb/organ flinders - do the same. `Effect::SlayEntity` spawns
-        // those links, plays the death environmental sound and removes the
-        // entity (its handler skips the ragdoll for link deaths), so there is
-        // no crumple animation and no death speech either. Pre-mark the
-        // handoff so the removed entity is never offered to physics if it
-        // survives a frame.
+        // those links, plays the death environmental sound and removes the entity.
         if crate::scripts::script_util::has_death_links(world, entity_id) {
-            self.handoff_emitted = true;
             return Effect::combine(vec![
                 Effect::GenerateLoot { entity_id },
                 // Notify authored death scripts (for example TriggerDestroy)
@@ -1094,6 +1058,7 @@ impl AnimatedMonsterAI {
             // Before the crumple, so the corpse is already stocked by the
             // time anything can search it.
             Effect::GenerateLoot { entity_id },
+            Effect::MakeCorpseNonBlocking { entity_id },
             death_sound_effect,
             death_animation,
         ])
@@ -1626,9 +1591,6 @@ impl Script for AnimatedMonsterAI {
         {
             self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
             self.is_dead = true;
-            // This corpse did not enter death in this runtime, so it must not
-            // run the timed animated-crumple -> ragdoll handoff either.
-            self.handoff_emitted = true;
             return self.publish_behavior(entity_id);
         }
 
@@ -1691,30 +1653,6 @@ impl Script for AnimatedMonsterAI {
         }
         if self.is_dead || is_killed(entity_id, world) {
             self.stun = None;
-            // A corpse recreated by save/load also latches is_dead so stale
-            // animation completions stay inert, but initialize() pre-marks
-            // its handoff as emitted: it must not ragdoll-ify from whatever
-            // pose the save restored.
-            if self.is_dead {
-                self.death_elapsed += time.elapsed.as_secs_f32();
-            }
-            // Near-instant handoff: once the death animation has had a few
-            // frames, offer the corpse to physics. With ragdolls disabled the
-            // handler makes the animated capsule non-blocking; a successful
-            // ragdoll spawn removes this entity, so at most one emission ever
-            // matters.
-            let handoff_effect = if self.is_dead
-                && !self.handoff_emitted
-                && self.death_elapsed >= CRUMPLE_HANDOFF_SECONDS
-            {
-                self.handoff_emitted = true;
-                Effect::SpawnCorpseRagdoll {
-                    entity_id,
-                    impact: self.death_impact,
-                }
-            } else {
-                Effect::NoEffect
-            };
             let sensor_release_effect = match self.last_hit_sensor.take() {
                 Some(sensor_id) => Effect::Send {
                     msg: Message {
@@ -1725,7 +1663,6 @@ impl Script for AnimatedMonsterAI {
                 None => Effect::NoEffect,
             };
             return Effect::combine(vec![
-                handoff_effect,
                 sensor_release_effect,
                 self.publish_behavior(entity_id),
             ]);
@@ -2157,9 +2094,6 @@ impl Script for AnimatedMonsterAI {
         }
         if matches!(msg, MessagePayload::Resurrected) {
             self.is_dead = false;
-            self.handoff_emitted = false;
-            self.death_elapsed = 0.0;
-            self.death_impact = None;
             self.took_damage = false;
             self.stun = None;
             return self.initialize(entity_id, world);
@@ -2234,7 +2168,7 @@ impl Script for AnimatedMonsterAI {
                 .handle_message(entity_id, world, physics, msg);
         }
         match msg {
-            MessagePayload::Damage { amount, impact } => {
+            MessagePayload::Damage { amount, .. } => {
                 // Corpses don't bleed: no HP churn, aggro, or replayed death
                 // from shooting a dead monster. The world check also covers a
                 // post-load corpse, whose recreated script has is_dead reset
@@ -2275,9 +2209,6 @@ impl Script for AnimatedMonsterAI {
                 // interrupts the in-flight clip (cross-fading from its
                 // current pose) instead of waiting for it to complete
                 let death_effect = if lethal {
-                    // Remember how the killing blow landed for the
-                    // crumple->ragdoll handoff.
-                    self.death_impact = *impact;
                     self.enter_death(world, entity_id)
                 } else {
                     Effect::NoEffect
@@ -2496,10 +2427,6 @@ impl Script for AnimatedMonsterAI {
                 // A pivot's own completion arrives as `TurnClipCompleted`
                 // instead - only the applier can tell whose clip finished.
                 if self.is_dead {
-                    // The crumple->ragdoll handoff is timed from update()
-                    // (CRUMPLE_HANDOFF_SECONDS), not completion-driven - a
-                    // stale completion from the clip the crumple interrupted
-                    // could otherwise hand off from a still-standing pose.
                     Effect::NoEffect
                 } else if is_killed(entity_id, world) {
                     // Fallback for kills that didn't arrive as a Damage
@@ -4466,7 +4393,7 @@ mod tests {
 
     /// A lethal blow on a creature that authors death links (droids link a
     /// `Corpse` explosion and `Flinderize` parts) must slay it into those
-    /// links - no crumple animation, death speech or ragdoll handoff for a
+    /// links - no crumple animation or death speech for a
     /// body that no longer exists.
     #[test]
     fn creature_with_death_links_slays_into_its_links() {
@@ -4487,7 +4414,7 @@ mod tests {
             },
         );
 
-        let (monster, effects) = kill(&world, entity_id);
+        let (_, effects) = kill(&world, entity_id);
 
         assert!(
             effects
@@ -4502,7 +4429,6 @@ mod tests {
             )),
             "a link death has no crumple or death speech, got {effects:?}"
         );
-        assert!(monster.handoff_emitted, "a removed body must not ragdoll");
     }
 
     #[test]
@@ -4593,7 +4519,7 @@ mod tests {
             effect,
             Effect::GenerateLoot { .. }
                 | Effect::SlayEntity { .. }
-                | Effect::SpawnCorpseRagdoll { .. }
+                | Effect::MakeCorpseNonBlocking { .. }
         )));
     }
 
@@ -4616,6 +4542,12 @@ mod tests {
                 .any(|effect| matches!(effect, Effect::PlayAnimationBySchema { .. })),
             "expected the crumple animation, got {effects:?}"
         );
+        assert!(
+            effects.iter().any(|effect| matches!(effect,
+                Effect::MakeCorpseNonBlocking { entity_id: id } if *id == entity_id
+            )),
+            "the animated corpse must stop blocking characters"
+        );
     }
 
     #[test]
@@ -4630,14 +4562,13 @@ mod tests {
         let effects = Effect::flatten(vec![monster.initialize(entity_id, &world)]);
 
         assert!(monster.is_dead);
-        assert!(monster.handoff_emitted);
         assert_eq!(monster.current_behavior.borrow().name(), "Dead");
         assert!(effects.iter().all(|effect| !matches!(
             effect,
             Effect::QueueAnimationBySchema { .. }
                 | Effect::PlayAnimationBySchema { .. }
                 | Effect::PlaySpeech { .. }
-                | Effect::SpawnCorpseRagdoll { .. }
+                | Effect::MakeCorpseNonBlocking { .. }
         )));
     }
 

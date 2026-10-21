@@ -530,7 +530,7 @@ access to `shock2vr`'s options — the same reason `SS2_DEBUG_NORMALS` works thi
 Deliberately conservative:
 
 - **Opt-in.** Default behaviour is byte-for-byte what it was.
-- **Hitboxes still come from the original mesh**, so damage locations and ragdoll fitting are
+- **Hitboxes still come from the original mesh**, so damage locations are
   untouched. The swap is purely what gets drawn.
 - **`read` returns `None` on any structural mismatch**, so an unexpected chunk degrades to
   "no high-detail mesh" rather than to garbage geometry, and every index is range-checked
@@ -760,11 +760,9 @@ It found two real bugs, both invisible on a classic install:
   `strings/German/foo.str`, plus an `rcs/` set). Latent and silent — nothing crashes, the
   wrong table simply wins.
 
-The three remaining full-stack failures are all accounted for and none is a defect:
+The remaining full-stack failures in that audit included:
 
-- `monster-death` and `ragdoll-death` are **pre-existing flaky physics assertions** — both
-  fail intermittently on a *classic* install too (verified: one run failed `ragdoll-death`
-  at `vx=0.83`, the next passed 4/4).
+- `monster-death`: a pre-existing flaky physics assertion, also observed on a classic install.
 - `elevator-panel` asserts the exact vanilla floor label. **SCP renames it**:
   `ElevLevel1` is `"Engineering (1)"` in the original data and `"1: Engineering"` in SCP.
   The MFD is working and showing SCP's label; the test encodes the original text.

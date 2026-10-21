@@ -82,7 +82,7 @@ timestep is unchanged. See [clock results](../benchmarks/results/2026-10-09-ques
   catch-up policy. Do not silently discard simulation time or claim that a
   catch-up cap preserves real-time simulation during sustained overload.
 - [ ] Validate equal simulated time for equal elapsed time, with movement,
-  falling/jumping, doors/platforms, ragdolls, held-item contacts, projectiles,
+  falling/jumping, doors/platforms, held-item contacts, projectiles,
   cooldowns, script timers, animation/root motion, and save round-trips.
 - [x] Latch sampled discrete input edges until consumed by a simulation tick; zero or
   multiple ticks in one rendered frame must not drop or duplicate actions.

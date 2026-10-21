@@ -68,9 +68,8 @@ projectile fixtures run with Rapier hitboxes in the default build and promote
 the same fixture shapes to query-only volumes in the feature build.
 
 The additional backend-specific gameplay test requires aim points with no
-Rapier bodies, verifies that those volumes remain hittable, kills the creature with ragdolls
-enabled, and verifies that the removed limbs no longer absorb queries after
-handoff. Ordinary animated corpses intentionally retain their damage volumes. Existing ranged and
+Rapier bodies and verifies that those volumes remain hittable after death.
+Animated corpses intentionally retain their damage volumes. Existing ranged and
 VR melee tests verify actual damage messages and joint attribution.
 
 Verified on the implementation branch:
@@ -81,8 +80,7 @@ Verified on the implementation branch:
 - **16** targeted gameplay checks passed across the eight files above, including
   ranged joint attribution, VR swing stopping and once-per-creature billing,
   authored corpse fallback, muzzle/world blocking, grub animation/death, and
-  query-only ragdoll cleanup. The cleanup test was corrected to request a
-  ragdoll handoff; ordinary animated corpses intentionally remain hittable.
+  query-only limb coverage. Animated corpses intentionally remain hittable.
 - Rust formatting and whitespace checks passed.
 
 ## Quest measurement and remaining limits

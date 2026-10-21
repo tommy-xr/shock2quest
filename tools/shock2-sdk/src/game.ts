@@ -21,7 +21,6 @@ import type {
   SceneListResult,
   SceneObjectSummary,
   Position,
-  RagdollMetricsResult,
   ClimbGripResult,
   LadderHolds,
   RayCastRequest,
@@ -592,7 +591,7 @@ export class PhysicsApi {
 
   /**
    * List rigid bodies, optionally scoped to one entity id (a single entity
-   * can own several bodies, e.g. ragdoll limbs).
+   * can own several bodies, e.g. compound bodies).
    */
   async bodies(options?: {
     entityId?: number;
@@ -620,11 +619,6 @@ export class PhysicsApi {
       throw new Error(`no physics body with id ${bodyId}`);
     }
     return detail;
-  }
-
-  /** Per-ragdoll settle/quality metrics (empty list when no ragdolls exist). */
-  async ragdolls(): Promise<RagdollMetricsResult> {
-    return this.client.get<RagdollMetricsResult>("/v1/ragdoll/metrics");
   }
 
   /**

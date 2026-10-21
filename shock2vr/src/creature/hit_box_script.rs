@@ -46,8 +46,7 @@ impl Script for HitBoxScript {
                     msg: Message {
                         to: self.parent_entity_id,
                         // Forward to the owning creature, stamping which
-                        // skeleton joint was struck so a death ragdoll can
-                        // react at the right limb.
+                        // skeleton joint was struck for damage readouts.
                         payload: MessagePayload::Damage {
                             amount: *amount * multiplier,
                             impact: impact.map(|i| crate::scripts::DamageImpact {

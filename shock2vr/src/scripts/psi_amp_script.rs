@@ -819,9 +819,8 @@ fn cast_soma_drain(
                 to: drain.target,
                 payload: MessagePayload::Damage {
                     amount: damage,
-                    // Contact point + aim direction seed the victim's
-                    // death-ragdoll reaction, as a melee hit does. No bone:
-                    // hitbox proxies resolve to their parent before the send.
+                    // Preserve contact point and aim direction; hitbox proxies
+                    // resolve to their parent before the send.
                     impact: Some(super::DamageImpact {
                         direction: drain.direction,
                         point: drain.hit_point.to_vec(),

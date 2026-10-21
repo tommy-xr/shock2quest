@@ -453,7 +453,6 @@ async fn start_http_server(
             axum::routing::post(apply_body_impulse),
         )
         .route("/v1/physics/colliders/validate", get(audit_colliders))
-        .route("/v1/ragdoll/metrics", get(get_ragdoll_metrics))
         .route("/v1/control/input", get(get_input_state))
         .route("/v1/control/input", axum::routing::post(set_input_channel))
         .route(
@@ -993,7 +992,7 @@ fn run_game_blocking(
             // Deterministic stepping: while stepping (frame- or time-based) advance
             // the simulation by a FIXED timestep rather than the wall-clock dt
             // between HTTP requests. Real dt makes `{frames:N}` non-deterministic
-            // and lets physics (e.g. a settling ragdoll) lurch in erratic slow-
+            // and lets physics (e.g. a settling crate) lurch in erratic slow-
             // motion. With a fixed step, `{frames:N}` == N/FPS seconds of sim time
             // and `{duration:T}` runs exactly T/dt frames. Free-running (not
             // stepping) still uses real wall-clock dt.
@@ -2188,15 +2187,6 @@ fn process_command(
                 tracing::warn!("Failed to send physics body detail - receiver dropped");
             }
         }
-        RuntimeCommand::RagdollMetrics { reply } => {
-            let ragdolls = game
-                .debug_scene()
-                .map(|scene| scene.ragdoll_metrics())
-                .unwrap_or_default();
-            if let Err(_) = reply.send(commands::RagdollMetricsResult { ragdolls }) {
-                tracing::warn!("Failed to send ragdoll metrics - receiver dropped");
-            }
-        }
         RuntimeCommand::AuditColliders { reply } => {
             let issues: Vec<commands::ColliderIssueEntry> = game
                 .debug_scene()
@@ -2460,7 +2450,7 @@ fn tracked_head(game: &Game, input: &InputContext) -> (Vector3<f32>, Quaternion<
 /// so with a full position, not a small delta. Dividing out the tracked pair
 /// instead would land a placement made during the fall metres away and have
 /// `GET /v1/camera` confidently report a pose that was never rendered - and
-/// "watch where the ragdoll landed" is exactly when an agent reaches for this.
+/// "watch where the crate landed" is exactly when an agent reaches for this.
 ///
 /// The pawn is passed as the identity it is relative to, the same trick
 /// `capture_frame_snapshot` uses: `resolve` never touches the pawn half.
@@ -3051,7 +3041,7 @@ struct BodyImpulseRequest {
 }
 
 /// HTTP handler: apply a world-space impulse to a dynamic physics body,
-/// waking it if asleep. Lets tests poke a settled/sleeping ragdoll headlessly.
+/// waking it if asleep. Lets tests poke a settled/sleeping crate headlessly.
 async fn apply_body_impulse(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
     Path(id): Path<u32>,
@@ -4018,7 +4008,7 @@ async fn list_scene_objects(
 #[derive(Deserialize)]
 struct PhysicsBodyQueryParams {
     limit: Option<usize>,
-    /// Only return bodies whose owning entity id matches (scopes to one ragdoll).
+    /// Only return bodies whose owning entity id matches (scopes to one entity).
     entity_id: Option<i32>,
 }
 
@@ -4079,26 +4069,6 @@ async fn get_physics_body_detail(
         Err(_) => {
             tracing::error!("Failed to receive physics body detail - sender dropped");
             Json(None)
-        }
-    }
-}
-
-/// HTTP handler for per-ragdoll quality metrics
-async fn get_ragdoll_metrics(
-    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-) -> Json<RagdollMetricsResult> {
-    let (reply_tx, reply_rx) = oneshot::channel();
-
-    if let Err(_) = command_tx.send(RuntimeCommand::RagdollMetrics { reply: reply_tx }) {
-        tracing::error!("Failed to send RagdollMetrics command - game loop receiver dropped");
-        return Json(RagdollMetricsResult { ragdolls: vec![] });
-    }
-
-    match reply_rx.await {
-        Ok(result) => Json(result),
-        Err(_) => {
-            tracing::error!("Failed to receive ragdoll metrics - sender dropped");
-            Json(RagdollMetricsResult { ragdolls: vec![] })
         }
     }
 }
@@ -4170,7 +4140,7 @@ async fn ladder_holds(
         .map_err(|reason| (StatusCode::NOT_FOUND, reason))
 }
 
-/// HTTP handler for impulse-joint diagnostics (ragdoll constraint health).
+/// HTTP handler for impulse-joint diagnostics (constraint health).
 async fn list_physics_joints(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
 ) -> Json<commands::PhysicsJointsResult> {

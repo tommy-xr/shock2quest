@@ -825,12 +825,8 @@ pub(super) fn flat_melee_hit(
                 to: target,
                 payload: MessagePayload::Damage {
                     amount,
-                    // Swing direction + contact point seed the victim's
-                    // death-ragdoll reaction. No bone: melee resolves a hitbox
-                    // proxy to its parent BEFORE sending (so HitBoxScript
-                    // never stamps it) - the ragdoll's nearest-body-to-point
-                    // fallback picks the struck limb from the contact point
-                    // instead.
+                    // Preserve the swing direction and contact point. Hitbox
+                    // proxies have already resolved to their owning creature.
                     impact: Some(crate::scripts::DamageImpact {
                         direction: aim.forward.normalize(),
                         point: hit_point.to_vec(),

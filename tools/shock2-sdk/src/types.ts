@@ -204,14 +204,14 @@ export type DebugEntityMessage =
   | {
       type: "Damage";
       amount: number;
-      /** Optional world-space blow direction (seeds a death-ragdoll reaction). */
+      /** Optional world-space blow direction (used by damage readouts). */
       direction?: [number, number, number];
       /** Optional world-space hit point (defaults to the victim's position). */
       point?: [number, number, number];
       /**
        * Optional skeleton joint id of the hitbox struck, as a real
        * hitbox-forwarded hit carries - exercises the per-limb paths (damage
-       * readouts, ragdoll reaction) without landing a live shot on a limb.
+       * readouts) without landing a live shot on a limb.
        */
       bone?: number;
     }
@@ -674,21 +674,6 @@ export interface CameraPlacement {
 export interface DevParamSetResult {
   key: string;
   value: number;
-}
-
-/** Settle/quality metrics for one ragdoll (GET /v1/ragdoll/metrics). */
-export interface RagdollMetrics {
-  entity_id: number;
-  body_count: number;
-  max_linear_speed: number;
-  max_angular_speed: number;
-  min_y: number;
-  max_nonadjacent_overlap: number;
-  max_drift: number;
-}
-
-export interface RagdollMetricsResult {
-  ragdolls: RagdollMetrics[];
 }
 
 /** A climbing hold a hand could take (GET /v1/physics/grip). */

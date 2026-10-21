@@ -43,7 +43,6 @@ pub mod debug_particles;
 mod debug_pool;
 pub mod debug_protocol_droid;
 pub mod debug_psi;
-pub mod debug_ragdoll;
 pub mod debug_research;
 pub mod debug_slot;
 pub mod debug_turret;
@@ -71,7 +70,6 @@ pub use debug_minimal::DebugMinimalScene;
 pub use debug_particles::DebugParticlesScene;
 pub use debug_protocol_droid::DebugProtocolDroidScene;
 pub use debug_psi::create_debug_psi_scene;
-pub use debug_ragdoll::DebugRagdollScene;
 pub use debug_turret::DebugTurretScene;
 pub use debug_weapons::create_debug_weapons_scene;
 pub use developer::DeveloperScene;
@@ -219,7 +217,6 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     ("debug_map", |_global, _options, _assets, _audio| {
         Box::new(DebugMapScene::new())
     }),
-    ("debug_ragdoll", DebugRagdollScene::new),
     ("debug_particles", DebugParticlesScene::new),
     (
         "debug_nd_materials",
@@ -699,7 +696,6 @@ mod tests {
         }
         // A few the docs promise by name, so a rename shows up here.
         for expected in [
-            "debug_ragdoll",
             "debug_hud",
             "debug_weapons",
             "debug_nd_materials",
@@ -713,7 +709,7 @@ mod tests {
         assert!(
             DEBUG_SCENES
                 .iter()
-                .any(|(name, _)| "DEBUG_Ragdoll".eq_ignore_ascii_case(name))
+                .any(|(name, _)| "DEBUG_Hitbox".eq_ignore_ascii_case(name))
         );
         assert!(
             !DEBUG_SCENES

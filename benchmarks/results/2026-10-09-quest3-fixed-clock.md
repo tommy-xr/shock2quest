@@ -37,7 +37,7 @@ Phase means are weighted by calls and are inclusive (physics contains solver wor
 - Three input-buffer tests cover sampled press/release sequences and repeated actions across zero-tick frames, no duplicate actions during catch-up, queued click coordinates, current tracking poses and analog noise. Three profiling tests and 14 Node benchmark tests pass; workspace format check passes.
 - Device pause/resume results are retained in the evidence directory: paused reports contain zero scene updates and solver steps while rendered CPU frames continue; resume remains within one tick of active elapsed time.
 - The rebuilt APK also confirms low FFR with no override file and legacy clock mode when no clock file/fixture exists.
-- Still required before promoting fixed mode: focus-loss/device lifecycle verification, transitions/loading, save/replay round-trips, doors/platforms, ragdolls/projectiles, held-item contacts/throwing/haptics, and wearer assessment of 60 Hz world/hand presentation or interpolation. Refresh remains 90 Hz.
+- Still required before promoting fixed mode: focus-loss/device lifecycle verification, transitions/loading, save/replay round-trips, doors/platforms, projectiles, held-item contacts/throwing/haptics, and wearer assessment of 60 Hz world/hand presentation or interpolation. Refresh remains 90 Hz.
 
 [Raw telemetry, fixtures, asset/APK provenance and pause evidence](2026-10-09-quest3-fixed-clock/results.json). Device serials are redacted.
 
