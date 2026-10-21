@@ -17188,8 +17188,9 @@ impl MissionCore {
     /// mid-magazine swap costs the player a reload rather than converting
     /// standard rounds into AP for free. The only magazine that still has to be
     /// fired off is one whose projectile has no clip archetype to return to
-    /// (`can_cycle_ammo`). Flatscreen then reloads from matching reserve and
-    /// returns its audible cue; a type with no reserve remains selected and empty.
+    /// (`can_cycle_ammo`). It then reloads from matching reserve, in both
+    /// presentations, and returns its audible cue; a type with no reserve
+    /// remains selected and empty for a clip inserted by hand.
     #[must_use]
     fn cycle_ammo(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) -> Effect {
         // Do not eject the rounds that are still being loaded or restart the
@@ -17223,12 +17224,8 @@ impl MissionCore {
         self.world
             .add_component(weapon, RuntimePropSelectedAmmo((current + 1) % count));
         // Commit the type before reloading: reserve matching and the reload cue
-        // must use the new projectile. VR still inserts its clip by hand.
-        if !presentation_is_vr(&self.world) {
-            self.begin_reload(weapon)
-        } else {
-            Effect::NoEffect
-        }
+        // must use the new projectile.
+        self.begin_reload(weapon)
     }
 
     /// Switch `weapon` to fire setting `setting`, keeping the selected ammo

@@ -22,6 +22,7 @@ use cgmath::{Vector2, vec2};
 use dark::properties::ObjectState;
 use shipyard::{EntityId, Get, View, World};
 
+use crate::runtime_props::RuntimePropReloading;
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 
 /// The AMMOFULL panel's authored pixel size.
@@ -89,6 +90,14 @@ pub(crate) const PSI_SELECT: Rect = Rect::new(
 /// The font every readout label uses: the original HUD's antialiased face in
 /// its cyan text palette. Plain `mainfont.fon` is an untinted bitmap and draws white.
 const FONT: &str = crate::ui::MFD_FONT;
+
+/// The reload spinner: a ring of segments lit in the readout's cyan (the
+/// MFD face's own colour) over a dim track. No authored art fits the count
+/// well - the original's wait glyph is a static hourglass, its loading disc
+/// 272 px - so it is drawn from plain fills.
+const SPINNER_SEGMENTS: usize = 8;
+const SPINNER_LIT: [u8; 3] = crate::ui::MFD_TINT;
+const SPINNER_TRACK: [u8; 3] = [0, 60, 45];
 
 /// The condition badges, best first: a green "10" down through a red "1", then
 /// a crossed-out badge for a gun that is not in working order. The shipped art
@@ -238,6 +247,10 @@ pub(crate) struct AmmoReadout {
     pub melee_charge: Option<f32>,
     /// Rounds in the wielded weapon's clip.
     pub ammo: Option<i32>,
+    /// How far this gun's reload lockout has run (0..1), while it still runs.
+    /// The count well shows a spinner in place of the count. See
+    /// [`reload_spinner`].
+    pub reload_progress: Option<f32>,
     /// Progress of this weapon hand's eject hold.
     pub eject_progress: Option<f32>,
     /// The selected ammo type's object-icon bitmap.
@@ -261,6 +274,41 @@ pub(crate) struct AmmoReadout {
     /// leaves it off (the forearm panel has no pointer affordance - that is an
     /// interaction-design decision, not a layout one).
     pub show_buttons: bool,
+}
+
+/// The count well's reload spinner: how far `reload`'s firing lockout has
+/// run, while it still runs.
+///
+/// The one place this readout differs by presentation. Flat shows a reload as
+/// the viewmodel's tilt; a hand-held VR gun has no viewmodel, so without the
+/// spinner its count reads full the frame RELOAD is pressed while the trigger
+/// stays locked for the gun's reload time.
+pub(crate) fn reload_spinner(is_vr: bool, reload: Option<&RuntimePropReloading>) -> Option<f32> {
+    reload
+        .filter(|r| is_vr && !r.is_done())
+        .map(RuntimePropReloading::progress)
+}
+
+/// Draw the reload spinner centred in the count `well`: its ring lights
+/// clockwise from twelve o'clock, one lead segment from the press and the
+/// last for the lockout's final eighth; the count's return marks the unlock.
+fn emit_reload_spinner(canvas: &mut UiCanvas, well: Rect, progress: f32) {
+    let side = well.w.min(well.h);
+    let segment = (side / 5.0).round().max(2.0);
+    let radius = (side - segment) / 2.0;
+    let center = well.center();
+    let lit = 1 + (progress.clamp(0.0, 1.0) * SPINNER_SEGMENTS as f32) as usize;
+    for i in 0..SPINNER_SEGMENTS {
+        let angle = i as f32 * std::f32::consts::TAU / SPINNER_SEGMENTS as f32;
+        let corner = vec2(
+            center.x + radius * angle.sin() - segment / 2.0,
+            center.y - radius * angle.cos() - segment / 2.0,
+        );
+        canvas.fill(
+            Rect::new(corner.x, corner.y, segment, segment),
+            if i < lit { SPINNER_LIT } else { SPINNER_TRACK },
+        );
+    }
 }
 
 /// `weapon`'s condition badge, if it is the kind of weapon that has one.
@@ -321,6 +369,13 @@ impl AmmoReadout {
             ammo: weapon
                 .filter(|w| !crate::wielded_weapon::is_psi_amp(world, *w))
                 .and_then(|w| super::get_weapon_ammo(world, Some(w))),
+            reload_progress: weapon.and_then(|w| {
+                let reloads = world.borrow::<View<RuntimePropReloading>>().ok()?;
+                reload_spinner(
+                    crate::mission::mission_core::presentation_is_vr(world),
+                    reloads.get(w).ok(),
+                )
+            }),
             ammo_icon: super::get_weapon_ammo_icon(world, weapon),
             ammo_type: super::get_weapon_ammo_type(world, weapon),
             gun_setting_header: super::get_weapon_gun_setting(world, weapon)
@@ -486,14 +541,21 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
         );
     } else if let Some(rounds) = readout.ammo {
         let compact = !readout.show_buttons;
-        canvas.text(
-            at(origin, if compact { COMPACT_COUNT } else { COUNT }),
-            &format!("{rounds}"),
-            if compact { "bignum.fon" } else { FONT },
-            if compact { 24.0 } else { 0.0 },
-            HAlign::Center,
-            VAlign::Middle,
-        );
+        let count = at(origin, if compact { COMPACT_COUNT } else { COUNT });
+        // Mid-reload the rounds are already loaded but cannot be fired: the
+        // spinner holds the well until they can.
+        if let Some(progress) = readout.reload_progress {
+            emit_reload_spinner(canvas, count, progress);
+        } else {
+            canvas.text(
+                count,
+                &format!("{rounds}"),
+                if compact { "bignum.fon" } else { FONT },
+                if compact { 24.0 } else { 0.0 },
+                HAlign::Center,
+                VAlign::Middle,
+            );
+        }
         if let Some(icon) = &readout.ammo_icon {
             canvas.fitted_object_icon(at(origin, if compact { COMPACT_ICON } else { ICON }), icon);
         }
@@ -1214,6 +1276,94 @@ mod tests {
             .map(|spec| usize::from(spec.texture.is_some()) + usize::from(spec.text.is_some()))
             .sum();
         assert_eq!(canvas.element_count(), 3 + button_elements);
+    }
+
+    fn reloading(elapsed: f32) -> RuntimePropReloading {
+        RuntimePropReloading {
+            elapsed,
+            down: 0.25,
+            hold: 1.5,
+            up: 0.25,
+            peak_deg: -60.0,
+        }
+    }
+
+    #[test]
+    fn the_spinner_runs_in_vr_exactly_as_long_as_the_firing_lockout() {
+        assert_eq!(reload_spinner(true, Some(&reloading(0.5))), Some(0.25));
+        assert_eq!(reload_spinner(true, Some(&reloading(0.0))), Some(0.0));
+        // `is_done` is what unlocks the trigger; the spinner ends with it.
+        assert_eq!(reload_spinner(true, Some(&reloading(2.0))), None);
+        assert_eq!(reload_spinner(true, None), None);
+        // Flat's viewmodel tilt already shows the reload.
+        assert_eq!(reload_spinner(false, Some(&reloading(0.5))), None);
+    }
+
+    /// The fills the count well holds, and how many are lit.
+    fn spinner_in(readout: &AmmoReadout, well: Rect) -> (usize, usize) {
+        let canvas = build_readout_canvas(readout);
+        let fills: Vec<_> = canvas
+            .elements()
+            .iter()
+            .filter_map(|element| match element {
+                crate::ui::UiElement::Fill {
+                    position,
+                    size,
+                    color,
+                    ..
+                } => Some((*position, *size, *color)),
+                _ => None,
+            })
+            .collect();
+        for (position, size, _) in &fills {
+            assert!(
+                well.contains(*position) && well.contains(*position + *size),
+                "spinner segment {position:?}+{size:?} must sit in the count well {well:?}"
+            );
+        }
+        let lit = fills.iter().filter(|(.., c)| *c == SPINNER_LIT).count();
+        (fills.len(), lit)
+    }
+
+    #[test]
+    fn a_reloading_gun_shows_the_spinner_in_place_of_its_count() {
+        for (show_buttons, well) in [(false, COMPACT_COUNT), (true, COUNT)] {
+            let idle = AmmoReadout {
+                show_buttons,
+                ..gun(12, Some("STD_I.PCX"), Some("std"))
+            };
+            assert_eq!(spinner_in(&idle, well), (0, 0), "no reload, no spinner");
+            let busy = AmmoReadout {
+                reload_progress: Some(0.5),
+                ..idle.clone()
+            };
+            assert_eq!(spinner_in(&busy, well).0, SPINNER_SEGMENTS);
+            // The rounds are already in the gun, but it cannot fire them yet:
+            // the well shows the spinner, not a count the trigger won't honor.
+            let count = build_readout_canvas(&busy)
+                .elements()
+                .iter()
+                .any(|e| matches!(e, crate::ui::UiElement::Text { text, .. } if text == "12"));
+            assert!(!count, "the count waits for the lockout to end");
+        }
+    }
+
+    #[test]
+    fn the_spinner_lights_clockwise_as_the_lockout_runs() {
+        let lit = |progress| {
+            let readout = AmmoReadout {
+                reload_progress: Some(progress),
+                ..gun(12, None, None)
+            };
+            spinner_in(&readout, COMPACT_COUNT).1
+        };
+        // A lead segment is lit from the press; the last lights for the
+        // lockout's final eighth.
+        assert_eq!(lit(0.0), 1);
+        assert_eq!(lit(0.49), 4);
+        assert_eq!(lit(0.5), 5);
+        assert_eq!(lit(0.99), SPINNER_SEGMENTS);
+        assert_eq!(lit(1.0), SPINNER_SEGMENTS);
     }
 
     #[test]

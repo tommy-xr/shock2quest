@@ -60,8 +60,8 @@ test("VR dual ammo controls bind to the selected real held entity", { skip: proc
     await click(await control("cycle_ammo", shotgun.id));
     assert.equal(await ammo(shotgun.id), 0);
     assert.equal(await ammo(pistol.id), 12);
+    // Cycling back to the ejected type reloads it from reserve.
     await click(await control("cycle_ammo", shotgun.id));
-    await click(await control("reload", shotgun.id));
     await game.step({ frames: 10 });
     assert.equal(await ammo(shotgun.id), 6, "selected shotgun reloads its ejected shells");
     assert.equal(await ammo(pistol.id), 12);
