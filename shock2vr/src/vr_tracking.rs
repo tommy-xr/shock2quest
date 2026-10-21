@@ -53,6 +53,11 @@ impl TrackingTransform {
     pub fn stage_to_pawn(self, stage: Vector3<f32>) -> Vector3<f32> {
         stage / crate::METERS_PER_WORLD_UNIT + self.translation
     }
+
+    /// Raw eye height above the runtime's floor, before stance/eye-offset correction.
+    pub fn head_height_meters(self) -> f32 {
+        self.head_stage_y
+    }
 }
 
 /// Horizontal roomscale walking (`user_settings::RoomscaleMode`). Tracking history is transient and belongs

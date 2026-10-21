@@ -604,6 +604,8 @@ dev_params! {
     /// bug report needs are otherwise only reachable from a debug-runtime HTTP
     /// query, which a headset has no way to make.
     SHOW_POSITION = Visualizations::bool("show_position", "Show position", false),
+    /// Compare the game eye height with the tracked floor and actual crouch state.
+    SHOW_HEIGHT = Visualizations::bool("show_height", "Show height", false),
     /// Draw collider shapes, contacts and joint anchors live. The desktop and
     /// debug runtime's `--debug-physics` flag seeds this switch before startup.
     DEBUG_PHYSICS = Visualizations::bool("debug_physics", "Physics wireframe", false),

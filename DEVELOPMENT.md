@@ -948,6 +948,15 @@ off and participates in All on / All off. VR places the shared readout on an upr
 panel with lazy recentering; it is hidden while the cyber interface, pause menu,
 or death camera owns the view. Values last until app restart.
 
+**Visualizations → Show height** (`show_height`) shows eye height above the game
+floor in metres and feet, plus the actual **Crouched: Yes/No** state. A second
+row shows raw tracked eye height above the headset runtime's floor, before
+crouch/eye-offset correction; synthetic or lost tracking reads `unavailable`.
+Game height uses the grounded pawn's floor anchor and reads `not grounded`
+while jumping, falling or climbing. It shares the position readout's flat/VR
+presentation and visibility rules, works independently of Show position, and
+defaults off. Compare both heights while standing to investigate boundary calibration.
+
 **Visualizations → Physics wireframe** (`debug_physics`) toggles collider,
 contact, and joint debug drawing without restarting the mission. It defaults
 off and participates in All on / All off. Desktop and debug runtime
