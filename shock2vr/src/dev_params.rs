@@ -425,6 +425,9 @@ dev_params! {
     /// Deepest drop (m) letting go of every climbing hold counts as safe: the
     /// held gloves glow green and the landing footprint is solid at or below it.
     CLIMB_SAFE_DROP = Body::float("climb_safe_drop", "Climb safe drop (m)", 1.0, 0.25, 4.0, 0.05),
+    /// How a committed assisted climb exit moves the body: a quick fade to
+    /// black and a teleport (comfort), or the collision-checked glide.
+    CLIMB_EXIT_MOTION = Body::bool("climb_exit_motion", "Climb exit motion", false, "Teleport", "Glide"),
     /// Base chest and ammo target volumes; show glove spheres separately to see contact.
     VR_BODY_INVENTORY_ZONES = Interaction::bool("vr_body_inventory_zones", "Body inventory zones", false),
     VR_PLAYER_COLLIDER = Body::bool("vr_player_collider", "Player collision capsule", false),
