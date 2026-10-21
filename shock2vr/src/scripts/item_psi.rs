@@ -219,7 +219,7 @@ pub fn resolve(world: &World, request: ItemUse, target: EntityId, roll: i32) -> 
                 Effect::AwardNanites { amount },
                 message(format!("Transmuted for {amount} nanites.")),
             ];
-            effects.extend(transmute_cue(world, target, consumed));
+            effects.extend(script_util::hand_dissolve_cue(world, target, consumed));
             effects
         }
         _ => return Effect::NoEffect,
@@ -232,21 +232,6 @@ pub fn resolve(world: &World, request: ItemUse, target: EntityId, roll: i32) -> 
     );
     result.extend(super::psi_amp_script::amp_cast_flashes(world, request.tool));
     Effect::combine(result)
-}
-
-/// Alchemy breaking an item in a VR hand down into nanites, with a firm pulse
-/// in that hand. A flat inventory target is not in the world, so it gets the
-/// message alone.
-fn transmute_cue(world: &World, target: EntityId, consumed: bool) -> Vec<Effect> {
-    let Some(hand) = crate::wielded_weapon::vr_hand_holding(world, target) else {
-        return Vec::new();
-    };
-    let mut effects = script_util::dissolve_cue(world, target, consumed);
-    effects.push(Effect::HandHaptic {
-        hand,
-        pulse: crate::haptics::TOOL_APPLIED,
-    });
-    effects
 }
 
 fn fabrication_chance(data: [f32; 4], psi: i32) -> i32 {
@@ -496,12 +481,15 @@ mod tests {
                 PropModelName("medpatch_h".into()),
             ),
         );
-        assert!(transmute_cue(&world, target, true).is_empty(), "flat");
+        assert!(
+            script_util::hand_dissolve_cue(&world, target, true).is_empty(),
+            "flat"
+        );
         world.add_unique(crate::mission::GlobalPresentationMode(
             crate::PresentationMode::Vr,
         ));
         assert!(matches!(
-            transmute_cue(&world, target, true).as_slice(),
+            script_util::hand_dissolve_cue(&world, target, true).as_slice(),
             [
                 Effect::CreateEntityByTemplateName { template_name, position, .. },
                 Effect::CreateEntity { template_id: -52, options, .. },
@@ -512,7 +500,7 @@ mod tests {
                 && options.model_override.as_deref() == Some("medpatch_h")
         ));
         assert_eq!(
-            transmute_cue(&world, target, false).len(),
+            script_util::hand_dissolve_cue(&world, target, false).len(),
             2,
             "a partial stack stays in the hand"
         );

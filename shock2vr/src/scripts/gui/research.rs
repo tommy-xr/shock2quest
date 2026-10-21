@@ -314,6 +314,56 @@ fn status_line(name: &str, status: &ResearchStatus, fraction: f32, body: String)
     }
 }
 
+/// HUD line for a chemical the player used: taken by the active project or not.
+pub(crate) fn chemical_message(world: &World, consumed: bool) -> String {
+    if consumed {
+        PanelText::string(world, "misc", "ChemUsed", "Chemical used in research.")
+    } else {
+        PanelText::string(
+            world,
+            "misc",
+            "ChemNotNeeded",
+            "Please insert correct chemical.",
+        )
+    }
+}
+
+/// HUD line when the active project stalls on a chemical, e.g.
+/// "Chemical Needed: Antimony (Sb)".
+pub(crate) fn chemical_needed_message(world: &World, entity_id: EntityId) -> Option<String> {
+    let chemical = research_status(world, entity_id).needed_chemical?;
+    Some(
+        PanelText::string(world, "misc", "ResearchChemNeeded", "Chemical Needed: %s").replacen(
+            "%s",
+            &chemical_display_name(world, &chemical),
+            1,
+        ),
+    )
+}
+
+/// The one HUD line `BeginResearch` reports: a skill refusal always, so flat
+/// (panel up) and VR word it alike; otherwise the status, only when no
+/// Research MFD shows it.
+pub(crate) fn begin_research_message(
+    world: &World,
+    entity_id: EntityId,
+    skill_required: Option<i32>,
+    mfd_showing: bool,
+) -> Option<String> {
+    match skill_required {
+        Some(required) => Some(PanelText::format(
+            &PanelText::string(
+                world,
+                "misc",
+                "ResearchSkillNeeded",
+                "This item requires a research skill of %d to be researched.",
+            ),
+            &[required],
+        )),
+        None => (!mfd_showing).then(|| research_message(world, entity_id)),
+    }
+}
+
 fn research_text(world: &World, entity_id: EntityId, status: &ResearchStatus) -> String {
     let required_skill = world
         .borrow::<View<PropBaseTechDesc>>()
@@ -445,6 +495,109 @@ mod tests {
         assert_eq!(
             status_line("Grub Organ", &status(false, false, None), 0.0, body()),
             "panel body"
+        );
+    }
+
+    fn misc_table(world: &World) {
+        world.add_unique(crate::string_table::StringTable::from_table(
+            "misc.str",
+            HashMap::from([
+                ("chemused".to_owned(), "Used.".to_owned()),
+                ("chemnotneeded".to_owned(), "Wrong.".to_owned()),
+                ("researchskillneeded".to_owned(), "Need %d.".to_owned()),
+                ("researchchemneeded".to_owned(), "Need: %s".to_owned()),
+            ]),
+        ));
+    }
+
+    #[test]
+    fn chemical_messages_come_from_the_misc_table() {
+        let world = World::new();
+        assert_eq!(chemical_message(&world, true), "Chemical used in research.");
+        assert_eq!(
+            chemical_message(&world, false),
+            "Please insert correct chemical."
+        );
+        misc_table(&world);
+        assert_eq!(chemical_message(&world, true), "Used.");
+        assert_eq!(chemical_message(&world, false), "Wrong.");
+    }
+
+    #[test]
+    fn begin_research_reports_skill_always_and_status_only_without_an_mfd() {
+        let mut world = World::new();
+        world.add_unique(QuestInfo::new());
+        let specimen = world.add_entity((
+            PropTemplateId { template_id: -1095 },
+            PropObjShortName("Organ_1: \"Grub Organ\"".to_owned()),
+        ));
+        let skill = Some("This item requires a research skill of 3 to be researched.".to_owned());
+        assert_eq!(
+            begin_research_message(&world, specimen, Some(3), true),
+            skill
+        );
+        assert_eq!(
+            begin_research_message(&world, specimen, Some(3), false),
+            skill
+        );
+        assert_eq!(begin_research_message(&world, specimen, None, true), None);
+        world
+            .borrow::<shipyard::UniqueViewMut<QuestInfo>>()
+            .unwrap()
+            .research_mut()
+            .begin(-1095, 0, 0);
+        assert_eq!(
+            begin_research_message(&world, specimen, None, false).as_deref(),
+            Some("Researching Grub Organ: 0.0 %")
+        );
+        misc_table(&world);
+        assert_eq!(
+            begin_research_message(&world, specimen, Some(2), true).as_deref(),
+            Some("Need 2.")
+        );
+    }
+
+    #[test]
+    fn chemical_due_names_the_chemical() {
+        let mut world = World::new();
+        world.add_unique(QuestInfo::new());
+        world.add_unique(GlobalEntityMetadata(HashMap::from([(
+            "chem #3".to_owned(),
+            EntityMetadata {
+                template_id: -145,
+                obj_icon: None,
+                obj_short_name: Some("Chem_p3: \"Antimony (Sb)\"".to_owned()),
+                obj_name: None,
+            },
+        )])));
+        let chemicals = PropChemicalNeeded {
+            chemicals: std::array::from_fn(|i| {
+                if i == 0 {
+                    "Chem #3".into()
+                } else {
+                    String::new()
+                }
+            }),
+            thresholds_secs: [5, 0, 0, 0, 0, 0, 0],
+        };
+        let specimen = world.add_entity((PropTemplateId { template_id: -1341 }, chemicals.clone()));
+        assert_eq!(chemical_needed_message(&world, specimen), None);
+        {
+            let mut quests = world
+                .borrow::<shipyard::UniqueViewMut<QuestInfo>>()
+                .unwrap();
+            let research = quests.research_mut();
+            research.begin(-1341, 0, 0);
+            research.advance(-1341, 10.0, 1, 0.0, 100.0, Some(&chemicals), 0);
+        }
+        assert_eq!(
+            chemical_needed_message(&world, specimen).as_deref(),
+            Some("Chemical Needed: Antimony (Sb)")
+        );
+        misc_table(&world);
+        assert_eq!(
+            chemical_needed_message(&world, specimen).as_deref(),
+            Some("Need: Antimony (Sb)")
         );
     }
 

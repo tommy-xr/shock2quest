@@ -42,6 +42,21 @@ pub(crate) fn entity_class_template_id(world: &World, entity: EntityId) -> Optio
         })
 }
 
+/// An item in a VR hand broken down into nanites (alchemy, a research
+/// chemical), with a firm pulse in that hand. Only an item held in a VR hand
+/// gets the cue.
+pub(crate) fn hand_dissolve_cue(world: &World, item: EntityId, consumed: bool) -> Vec<Effect> {
+    let Some(hand) = crate::wielded_weapon::vr_hand_holding(world, item) else {
+        return Vec::new();
+    };
+    let mut effects = dissolve_cue(world, item, consumed);
+    effects.push(Effect::HandHaptic {
+        hand,
+        pulse: crate::haptics::TOOL_APPLIED,
+    });
+    effects
+}
+
 /// Seconds a held item broken down into nanites takes to shrink away.
 const DISSOLVE_SHRINK_SECONDS: f32 = 0.4;
 
