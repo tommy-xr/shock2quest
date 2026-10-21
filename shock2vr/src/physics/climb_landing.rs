@@ -12,6 +12,9 @@ const NATURAL_MAX_DROP: f32 = 40.0;
 const GAZE_SNAPPED_RAYS: usize = 3;
 /// Support checks settle the body for many frames; one per query.
 const GAZE_SUPPORT_CHECKS: usize = 1;
+/// How far past a held floor's hold a landing on it is tried, nearest first:
+/// the hand vault's own insets.
+const HELD_FLOOR_INSETS: [f32; 2] = [0.4, 0.8];
 /// Fraction of the body radius the footprint probes stand out from the centre.
 const FOOTPRINT_PROBE: f32 = 0.8;
 
@@ -281,6 +284,61 @@ impl PhysicsWorld {
         }
     }
 
+    /// The landing on a walkable floor a hand holds: past the hand, away from
+    /// the body, at the first of the vault's insets the body fits. Held, so
+    /// reachable however high: no gaze range applies. `previous` (last
+    /// frame's landing) is kept while it is still on this floor near the hand
+    /// and its glide is clear, skipping the costly support settle.
+    pub(crate) fn held_floor_landing(
+        &self,
+        player: &PlayerHandle,
+        grip: &ClimbGrip,
+        previous: Option<Landing>,
+    ) -> Option<Landing> {
+        if !is_walkable_normal(grip.normal.y) {
+            return None;
+        }
+        let start = vec_to_nvec(self.get_player_next_translation(player));
+        let held = vec_to_nvec(grip.point);
+        let toward = held - start;
+        let horizontal = vector![toward.x, 0.0, toward.z];
+        if horizontal.norm() < 1e-4 {
+            return None;
+        }
+        let direction = horizontal.normalize();
+        let on_this_floor = |landing: &Landing| {
+            (landing.floor_y - grip.point.y).abs() <= climb_release::GAZE_SNAP_MAX_STEP
+                && vector![landing.center.x - held.x, 0.0, landing.center.z - held.z].norm()
+                    <= HELD_FLOOR_INSETS[HELD_FLOOR_INSETS.len() - 1] + 0.1
+        };
+        if let Some(previous) = previous.filter(on_this_floor) {
+            if self.assisted_route(player, start, previous).is_ok() {
+                return Some(previous);
+            }
+        }
+        let filter = player_movement_filter(player.character_handle);
+        let not_climbable =
+            |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
+        let all_queries =
+            self.player_movement_queries(self.narrow_phase.query_dispatcher(), filter);
+        let queries = all_queries.with_filter(filter.predicate(&not_climbable));
+        let standing = !player.tracking_is_crouched();
+        HELD_FLOOR_INSETS.iter().find_map(|inset| {
+            let ray = Ray::new(
+                Point::from(held + direction * *inset + Vector::y() * 0.3),
+                -Vector::y(),
+            );
+            let (_, hit) = queries.cast_ray_and_get_normal(&ray, 0.6, true)?;
+            let floor = ray.point_at(hit.time_of_impact).coords;
+            let landing = Self::landing_on(floor, hit.normal, standing);
+            (is_walkable_normal(hit.normal.y)
+                && on_this_floor(&landing)
+                && self.assisted_route(player, start, landing).is_ok()
+                && self.landing_is_supported(player, landing))
+            .then_some(landing)
+        })
+    }
+
     /// Where letting go now lands: straight down, or along the arc of
     /// `velocity` (the throw the release would give). `None` when no walkable
     /// floor is reached within a long fall, or the arc ends on a slope too
@@ -505,6 +563,44 @@ mod tests {
         let (world, player) = fixture(&[(vec3(0.75, 4.5, 0.0), vec3(0.2, 1.0, 4.0))]);
         let blocked = aim(&world, &player, vec3(1.9, 4.0, 0.2), Some(first));
         assert!(blocked.landing.is_err());
+    }
+
+    fn ledge(point: Vector3<f32>) -> ClimbGrip {
+        ClimbGrip {
+            kind: ClimbGripKind::Ledge,
+            entity_id: None,
+            point,
+            normal: Vector3::unit_y(),
+        }
+    }
+
+    #[test]
+    fn a_held_floor_lands_on_it_past_the_hand_however_high_it_is() {
+        // A deck 2 above the feet: beyond gaze reach, but held.
+        let (mut world, mut player) = fixture(&[(vec3(3.0, 5.0, 0.0), vec3(4.0, 2.0, 4.0))]);
+        let landing = world
+            .held_floor_landing(&player, &ledge(vec3(1.1, 6.0, 0.0)), None)
+            .expect("the held deck");
+        assert!((landing.floor_y - 6.0).abs() < 0.01, "{landing:?}");
+        assert!(landing.center.x > 1.1 + 0.3, "past the hand: {landing:?}");
+        assert!(world.plan_assisted_release(landing, &mut player));
+    }
+
+    #[test]
+    fn a_held_floor_that_cannot_take_the_body_or_is_not_a_floor_gives_nothing() {
+        // A 0.3-wide sill: the hand holds it, the body does not fit on it.
+        let (world, player) = fixture(&[(vec3(0.75, 5.0, 0.0), vec3(0.3, 2.0, 4.0))]);
+        assert_eq!(
+            world.held_floor_landing(&player, &ledge(vec3(0.75, 6.0, 0.0)), None),
+            None
+        );
+        let wall = ClimbGrip {
+            kind: ClimbGripKind::Surface,
+            normal: vec3(-1.0, 0.0, 0.0),
+            ..ledge(vec3(1.0, 5.0, 0.0))
+        };
+        let (world, player) = fixture(&[]);
+        assert_eq!(world.held_floor_landing(&player, &wall, None), None);
     }
 
     #[test]

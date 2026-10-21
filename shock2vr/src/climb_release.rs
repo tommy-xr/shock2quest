@@ -14,7 +14,7 @@ use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, vec3};
 
 use crate::{
     input_context::InputContext,
-    physics::{ClimbGripKind, PhysicsWorld, PlayerHandle},
+    physics::{PhysicsWorld, PlayerHandle},
     vr_climb::HandClimb,
 };
 
@@ -261,20 +261,15 @@ pub fn resolve(
         - crate::physics::player_center_above_floor(
             player.is_crouched() && !player.is_hanging_crouched(),
         );
-    // Only a ladder exit is assisted: an ordinary ledge pull keeps its vault.
-    let exits_a_ladder = climb.grips().any(|(_, anchor)| {
-        matches!(
-            anchor.grip.kind,
-            ClimbGripKind::Ladder | ClimbGripKind::Surface
-        )
-    });
+    // Only a ladder exit is assisted (through its grace grabs and deck
+    // transfers): an ordinary ledge pull keeps its vault.
+    let exits_a_ladder = climb.on_ladder_departure();
     // The same tracking a release needs to commit: never show an assisted
     // landing the release would then refuse.
-    let head = crate::util::tracked_rotation(input.head.rotation).filter(|_| {
-        input
-            .pose_tracking
-            .is_none_or(|tracking| tracking.head && tracking.hands == [true; 2])
-    });
+    let tracked = input
+        .pose_tracking
+        .is_none_or(|tracking| tracking.head && tracking.hands == [true; 2]);
+    let head = crate::util::tracked_rotation(input.head.rotation).filter(|_| tracked);
     let gaze = head.filter(|_| exits_a_ladder).map(|head| {
         physics.gaze_landing(
             player,
@@ -284,14 +279,32 @@ pub fn resolve(
             previous.assisted(),
         )
     });
-    let outcome = match gaze.as_ref().map(|gaze| gaze.landing) {
-        Some(Ok(landing)) => Some(ReleaseOutcome::new(
+    // Without a gaze landing, a floor a hand holds is where letting go puts
+    // the body (the anchor hand's first): held, so reachable without aiming.
+    let assisted = gaze
+        .as_ref()
+        .and_then(|gaze| gaze.landing.ok())
+        .or_else(|| {
+            (exits_a_ladder && tracked)
+                .then(|| {
+                    climb
+                        .anchor_grip()
+                        .into_iter()
+                        .chain(climb.grips().map(|(_, anchor)| anchor))
+                        .find_map(|anchor| {
+                            physics.held_floor_landing(player, &anchor.grip, previous.assisted())
+                        })
+                })
+                .flatten()
+        });
+    let outcome = match assisted {
+        Some(landing) => Some(ReleaseOutcome::new(
             ReleaseMode::Assisted,
             landing,
             feet_y,
             safe_drop,
         )),
-        _ => physics
+        None => physics
             .natural_landing(
                 player,
                 climb.predicted_release_velocity(physics.player_step_dt()),

@@ -189,6 +189,48 @@ test(
   },
 );
 
+for (const untilY of [5.0, 5.4]) {
+  test(
+    `debug_ladder (VR): a hand on the deck at a ladder's top shows the landing on it without aiming (body y ${untilY})`,
+    { skip: !e2eEnabled, timeout: 600_000 },
+    async () => {
+      await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+      const { anchor } = await climbAt(game, LEDGE_Z, untilY);
+      const free = otherHand(anchor);
+      const right = Math.sign((await viewRight(game))[2]);
+      const deck = (hand: Hand): Vec3 => [-7.25, DECK_Y + 0.02, (hand === "right" ? right : -right) * 0.35];
+      const onDeck = (shown: ClimbRelease, label: string) => {
+        assert.equal(shown.mode, "assisted", `${label}: ${JSON.stringify(shown)}`);
+        assert.equal(shown.safe, true, label);
+        assert.ok(Math.abs((shown.floor_y ?? 0) - DECK_Y) < 0.01, label);
+        assert.ok(shown.landing![0] < -7.0 - 0.3, `${label}: on the deck, past the lip: ${shown.landing}`);
+      };
+
+      // The head looks level, over the deck: no gaze landing.
+      await game.input.set(`${free}_hand.squeeze`, 0);
+      await vrGrab(game, free, deck(free));
+      await game.input.set(`${free}_hand.world_target`, null);
+      await game.step({ frames: 3 });
+      onDeck(await release(game), "one hand on the deck");
+
+      await vrGrab(game, anchor, deck(anchor));
+      await game.input.set(`${anchor}_hand.world_target`, null);
+      await game.step({ frames: 3 });
+      const shown = await release(game);
+      onDeck(shown, "both hands on the deck");
+
+      // Let go of one (a handoff), then the other: the landing on show.
+      await game.input.set(`${free}_hand.squeeze`, 0);
+      await game.step({ frames: 2 });
+      const last = await release(game);
+      onDeck(last, "one hand left");
+      const { committed, landed } = await letGoAndSettle(game, anchor);
+      assert.deepEqual(committed, last.landing);
+      assertArrived(landed, last.landing!);
+    },
+  );
+}
+
 test(
   "debug_ladder (VR): low on a ladder the natural drop is safe",
   { skip: !e2eEnabled, timeout: 600_000 },
