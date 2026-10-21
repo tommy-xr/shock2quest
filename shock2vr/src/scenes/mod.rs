@@ -25,6 +25,7 @@ pub mod debrief;
 pub mod debug_ai_ranged;
 pub mod debug_annelid;
 pub mod debug_bullet_time;
+pub mod debug_calibration;
 pub mod debug_camera;
 pub mod debug_common;
 pub mod debug_gamepig;
@@ -211,6 +212,10 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
         Box::new(DebugHudScene::new())
     }),
     ("debug_gloves", DebugGlovesScene::new),
+    (
+        "debug_calibration",
+        debug_calibration::create_debug_calibration_scene,
+    ),
     ("debug_psi_fit", DebugGlovesScene::psi_amp),
     ("debug_hand_poses", DebugHandPosesScene::new),
     ("debug_joint_constraint", DebugJointConstraintScene::new),

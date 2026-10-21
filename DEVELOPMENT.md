@@ -1088,6 +1088,25 @@ campaign impacts and extra material passes are separate work.
 
 
 
+#### Height calibration (`debug_calibration`)
+
+Open **Developer → Scenes → debug_calibration** on Quest. It requests room
+passthrough and places a passive pipe hybrid two metres ahead, frozen in its
+authored standing pose at normal game scale. Its lowest posed mesh point and
+the ruler's zero sit on an invisible collision floor at Y=0. The ruler has
+10 cm ticks and a six-foot **top-of-head** marker; six-foot stature is not
+six-foot eye height. The hybrid's measured posed mesh height appears beside
+the ruler and in the `SHOCK2QUEST_CALIBRATION` log record.
+
+Enable **Developer → Visualizations → Show height** to compare the game eye
+height, tracked eye height and crouch state. Check the virtual soles/ruler zero
+against your real floor, then compare the hybrid's eyes with your own. Repeat
+after resetting your boundary to distinguish a floor offset from world scale.
+The scene does not recalibrate tracking or resize the hybrid.
+
+Without passthrough support the background is black. For synthetic captures:
+`cargo dbgr --mission debug_calibration --vr` (omit `--vr` for flatscreen).
+
 #### Glove fit check (`debug_gloves`)
 
 Open `debug_gloves` from the Developer scene list. On Quest it requests room
