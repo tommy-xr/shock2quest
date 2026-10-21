@@ -644,6 +644,30 @@ mod tests {
     }
 
     #[test]
+    fn a_grace_held_terrain_floor_is_a_held_floor() {
+        // Level terrain (parentless, tagged with its level entity) 2 above the
+        // feet, held by a grace grab on its top.
+        let (mut world, mut player) = fixture(&[]);
+        world.add_collider(
+            EntityId::from_inner(500).unwrap(),
+            ColliderBuilder::cuboid(2.0, 1.0, 2.0)
+                .translation(vector![3.0, 5.0, 0.0])
+                .build(),
+        );
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        world.set_player_translation(vec3(0.0, 4.0 + FEET_ABOVE_CENTER, 0.0), &mut player);
+        let grip = world
+            .surface_grip_at(vec3(1.1, 6.03, 0.0), vec3(0.0, 6.2, 0.0))
+            .expect("the deck top");
+        assert_eq!(grip.kind, ClimbGripKind::Surface);
+        let landing = world.held_floor_landing(&player, &grip, None);
+        assert!(
+            landing.is_some_and(|l| (l.floor_y - 6.0).abs() < 0.01),
+            "{landing:?}"
+        );
+    }
+
+    #[test]
     fn a_held_landing_out_of_range_from_lower_feet_is_dropped() {
         let (world, player) = fixture(&[]);
         let first = aim(&world, &player, vec3(1.7, 4.0, 0.0), None)

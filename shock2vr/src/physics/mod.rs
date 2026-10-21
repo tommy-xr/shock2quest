@@ -7627,9 +7627,11 @@ impl PhysicsWorld {
                 .parent()
                 .is_none_or(|body| self.rigid_body_set[body].is_fixed())
         };
-        let surface = |point: Vector<Real>, normal: Vector<Real>| ClimbGrip {
+        // The held collider's entity (level terrain has its level's), so a
+        // held floor can be told from a separate one.
+        let surface = |collider: &Collider, point: Vector<Real>, normal: Vector<Real>| ClimbGrip {
             kind: ClimbGripKind::Surface,
-            entity_id: None,
+            entity_id: EntityId::from_inner(collider.user_data as u64),
             point: nvec_to_cgmath(point),
             normal: nvec_to_cgmath(normal),
         };
@@ -7643,7 +7645,13 @@ impl PhysicsWorld {
             if let Some((handle, hit)) = queries.cast_ray_and_get_normal(&ray, distance, true) {
                 return (distance - hit.time_of_impact <= CLIMB_GRIP_RADIUS
                     && is_terrain(&self.collider_set[handle]))
-                .then(|| surface(ray.point_at(hit.time_of_impact).coords, hit.normal));
+                .then(|| {
+                    surface(
+                        &self.collider_set[handle],
+                        ray.point_at(hit.time_of_impact).coords,
+                        hit.normal,
+                    )
+                });
             }
         }
 
@@ -7660,9 +7668,16 @@ impl PhysicsWorld {
                 )
                 .ok()
                 .flatten()
+                .map(|contact| (collider, contact))
             })
-            .min_by(|a, b| a.dist.total_cmp(&b.dist))
-            .map(|contact| surface(contact.point2.coords, -contact.normal1.into_inner()))
+            .min_by(|(_, a), (_, b)| a.dist.total_cmp(&b.dist))
+            .map(|(collider, contact)| {
+                surface(
+                    collider,
+                    contact.point2.coords,
+                    -contact.normal1.into_inner(),
+                )
+            })
     }
 
     fn climbable_grip_above(
