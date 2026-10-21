@@ -12,6 +12,7 @@ use crate::{
     mission::GlobalEntityMetadata,
     player_stats::Skill,
     quest_info::QuestInfo,
+    research::ResearchStatus,
     scripts::{Effect, script_util::entity_class_template_id},
 };
 
@@ -85,27 +86,11 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
                 .with_size(vec2(PANEL_W, PANEL_H)),
         ];
 
-        let Some(template_id) = entity_class_template_id(world, entity_id) else {
+        if entity_class_template_id(world, entity_id).is_none() {
             return components;
-        };
-        let chemicals_view = world.borrow::<View<PropChemicalNeeded>>().unwrap();
-        let chemicals = chemicals_view.get(entity_id).ok();
-        let status = world
-            .borrow::<UniqueView<QuestInfo>>()
-            .map(|quests| quests.research().status(template_id, chemicals))
-            .unwrap_or_else(|_| crate::research::ResearchStatus {
-                authored_seconds: 0.0,
-                active: false,
-                complete: false,
-                needed_chemical: None,
-            });
-        let total = world
-            .borrow::<View<PropResearchTime>>()
-            .unwrap()
-            .get(entity_id)
-            .map(|time| time.0.max(1) as f32)
-            .unwrap_or(1.0);
-        let fraction = (status.authored_seconds / total).clamp(0.0, 1.0);
+        }
+        let status = research_status(world, entity_id);
+        let fraction = research_fraction(world, entity_id, &status);
 
         if let Ok(icon) = world.borrow::<View<PropObjIcon>>().unwrap().get(entity_id) {
             components.push(
@@ -115,22 +100,9 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
             );
         }
         let title = if status.complete {
-            world
-                .borrow::<View<PropObjShortName>>()
-                .ok()
-                .and_then(|names| {
-                    names.get(entity_id).ok().map(|name| {
-                        PanelText::string(
-                            world,
-                            "objshort",
-                            name.0.split(':').next().unwrap_or(&name.0).trim(),
-                            &localized_fallback(&name.0),
-                        )
-                    })
-                })
-                .unwrap_or_else(|| "Research complete".into())
+            short_name(world, entity_id).unwrap_or_else(|| "Research complete".into())
         } else {
-            PanelText::string(world, "research", "NameUnresearched", "Unresearched Object")
+            unresearched_name(world)
         };
         components.push(PanelText::text(&title, layout::TITLE));
         // shkrsrch.cpp: progress well at (15,267), not the name at y=133.
@@ -142,7 +114,7 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
             }));
         }
         components.push(PanelText::centered(
-            &format!("{:.1} %", fraction * 100.0),
+            &percent_text(fraction),
             layout::PERCENT,
         ));
         components.push(
@@ -165,7 +137,7 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
             );
         }
 
-        let body = research_text(world, entity_id);
+        let body = research_text(world, entity_id, &status);
 
         let lines = PanelText::wrap(world, &body, TEXT_W);
         let line_height = PanelText::line_height(world);
@@ -238,9 +210,13 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
                 Effect::NoEffect,
             ),
             ResearchGuiMsg::PageDown => {
-                let max_scroll = PanelText::wrap(world, &research_text(world, entity_id), TEXT_W)
-                    .len()
-                    .saturating_sub(page_lines(world));
+                let max_scroll = PanelText::wrap(
+                    world,
+                    &research_text(world, entity_id, &research_status(world, entity_id)),
+                    TEXT_W,
+                )
+                .len()
+                .saturating_sub(page_lines(world));
                 (
                     ResearchGuiState {
                         scroll: (state.scroll + page_lines(world)).min(max_scroll),
@@ -264,19 +240,81 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
     }
 }
 
-fn research_text(world: &World, entity_id: EntityId) -> String {
+fn research_status(world: &World, entity_id: EntityId) -> ResearchStatus {
     let template_id = entity_class_template_id(world, entity_id).unwrap_or(0);
     let chemicals_view = world.borrow::<View<PropChemicalNeeded>>().unwrap();
     let chemicals = chemicals_view.get(entity_id).ok();
-    let status = world
+    world
         .borrow::<UniqueView<QuestInfo>>()
         .map(|quests| quests.research().status(template_id, chemicals))
-        .unwrap_or_else(|_| crate::research::ResearchStatus {
+        .unwrap_or_else(|_| ResearchStatus {
             authored_seconds: 0.0,
             active: false,
             complete: false,
             needed_chemical: None,
-        });
+        })
+}
+
+fn research_fraction(world: &World, entity_id: EntityId, status: &ResearchStatus) -> f32 {
+    let total = world
+        .borrow::<View<PropResearchTime>>()
+        .unwrap()
+        .get(entity_id)
+        .map(|time| time.0.max(1) as f32)
+        .unwrap_or(1.0);
+    (status.authored_seconds / total).clamp(0.0, 1.0)
+}
+
+fn percent_text(fraction: f32) -> String {
+    format!("{:.1} %", fraction * 100.0)
+}
+
+fn short_name(world: &World, entity_id: EntityId) -> Option<String> {
+    world
+        .borrow::<View<PropObjShortName>>()
+        .ok()
+        .and_then(|names| {
+            names.get(entity_id).ok().map(|name| {
+                PanelText::string(
+                    world,
+                    "objshort",
+                    name.0.split(':').next().unwrap_or(&name.0).trim(),
+                    &localized_fallback(&name.0),
+                )
+            })
+        })
+}
+
+fn unresearched_name(world: &World) -> String {
+    PanelText::string(world, "research", "NameUnresearched", "Unresearched Object")
+}
+
+/// The HUD line for research begun with no Research MFD showing (a VR
+/// specimen in hand): the panel's own name, percentage and status text.
+pub(crate) fn research_message(world: &World, entity_id: EntityId) -> String {
+    let status = research_status(world, entity_id);
+    let name = short_name(world, entity_id).unwrap_or_else(|| unresearched_name(world));
+    status_line(
+        &name,
+        &status,
+        research_fraction(world, entity_id, &status),
+        research_text(world, entity_id, &status),
+    )
+}
+
+/// e.g. "Researching Grub Organ: 12.0 %"; a stalled project (skill too low,
+/// chemical needed, suspended) shows the panel's body text instead.
+fn status_line(name: &str, status: &ResearchStatus, fraction: f32, body: String) -> String {
+    if status.complete {
+        format!("{name}: Research complete")
+    } else if status.active && status.needed_chemical.is_none() {
+        format!("Researching {name}: {}", percent_text(fraction))
+    } else {
+        body
+    }
+}
+
+fn research_text(world: &World, entity_id: EntityId, status: &ResearchStatus) -> String {
     let required_skill = world
         .borrow::<View<PropBaseTechDesc>>()
         .unwrap()
@@ -355,7 +393,7 @@ pub(crate) fn chemical_display_name(world: &World, sym_name: &str) -> String {
 mod tests {
     use std::collections::HashMap;
 
-    use dark::properties::{ObjectState, PropObjState};
+    use dark::properties::{ObjectState, PropObjState, PropTemplateId};
 
     use crate::mission::EntityMetadata;
 
@@ -380,6 +418,58 @@ mod tests {
         )])));
 
         assert_eq!(chemical_display_name(&world, "Chem #7"), "Californium (Cf)");
+    }
+
+    #[test]
+    fn hud_line_reports_progress_or_the_panel_status() {
+        let status = |active, complete, chemical: Option<&str>| ResearchStatus {
+            authored_seconds: 3.0,
+            active,
+            complete,
+            needed_chemical: chemical.map(str::to_owned),
+        };
+        let body = || "panel body".to_owned();
+        assert_eq!(
+            status_line("Grub Organ", &status(true, false, None), 0.125, body()),
+            "Researching Grub Organ: 12.5 %"
+        );
+        assert_eq!(
+            status_line("Grub Organ", &status(false, true, None), 1.0, body()),
+            "Grub Organ: Research complete"
+        );
+        // Skill too low, chemical needed or suspended: the panel's own words.
+        assert_eq!(
+            status_line("Grub Organ", &status(true, false, Some("Sb")), 0.5, body()),
+            "panel body"
+        );
+        assert_eq!(
+            status_line("Grub Organ", &status(false, false, None), 0.0, body()),
+            "panel body"
+        );
+    }
+
+    #[test]
+    fn hud_line_uses_the_panel_skill_text() {
+        let mut world = World::new();
+        world.add_unique(QuestInfo::new());
+        let specimen = world.add_entity((
+            PropTemplateId { template_id: -1095 },
+            PropObjShortName("Organ_1: \"Grub Organ\"".to_owned()),
+        ));
+        // No trained Research at all: every project needs at least 1.
+        assert_eq!(
+            research_message(&world, specimen),
+            "This item requires a Research skill of 1. Use a Tech Upgrade Unit to train Research."
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<QuestInfo>>()
+            .unwrap()
+            .research_mut()
+            .begin(-1095, 0, 0);
+        assert_eq!(
+            research_message(&world, specimen),
+            "Researching Grub Organ: 0.0 %"
+        );
     }
 
     #[test]

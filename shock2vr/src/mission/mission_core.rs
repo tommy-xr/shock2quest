@@ -12556,19 +12556,46 @@ impl MissionCore {
                         .refresh(&self.world, asset_cache, &self.entity_info);
                 }
                 Effect::OpenPanel { entity } => {
+                    let vr = game_options.presentation_mode == crate::PresentationMode::Vr;
+                    // Machines, and in VR containers, lootable corpses and a
+                    // GamePig no hand holds, share the cyber interface unless
+                    // the handheld MFD already owns the panel. Frob never
+                    // toggles it closed.
+                    let shares_interface = super::mfd_device::machine_uses_mfd(&self.world, entity)
+                        || (vr
+                            && (super::mfd_device::gamepig_uses_mfd(&self.world, entity)
+                                || ["ContainerScript", "HackableCrate"].iter().any(|script| {
+                                    crate::scripts::script_util::entity_has_script(
+                                        &self.world,
+                                        entity,
+                                        script,
+                                    )
+                                })
+                                || (crate::scripts::script_util::entity_has_script(
+                                    &self.world,
+                                    entity,
+                                    "CreatureContainer",
+                                ) && crate::scripts::gui::creature_is_lootable(
+                                    &self.world,
+                                    entity,
+                                ))));
+                    let Some(route) = super::mfd_device::panel_route(
+                        vr,
+                        self.flat_ui.device,
+                        self.use_mode,
+                        shares_interface,
+                        crate::research::offers_research(&self.world, entity),
+                    ) else {
+                        // `BeginResearch` reports on the HUD instead.
+                        continue;
+                    };
                     self.world
                         .add_component(entity, crate::runtime_props::RuntimePropSearched);
                     if self.flat_ui.utilities.has_left_panel() {
                         self.flat_ui.utilities = Default::default();
                     }
-                    // Machines, and in VR a GamePig no hand holds, share the
-                    // cyber interface unless the handheld MFD already owns the
-                    // panel. Frob never toggles it closed.
-                    let machine = super::mfd_device::machine_uses_mfd(&self.world, entity)
-                        || (game_options.presentation_mode == crate::PresentationMode::Vr
-                            && super::mfd_device::gamepig_uses_mfd(&self.world, entity));
-                    match game_options.presentation_mode {
-                        crate::PresentationMode::Vr if self.flat_ui.device => {
+                    match route {
+                        super::mfd_device::PanelRoute::Device => {
                             // Hand frobs and scans share one panel owner, even
                             // if an old world quad was opened earlier this frame.
                             self.gui.close_panel(
@@ -12579,26 +12606,7 @@ impl MissionCore {
                             );
                             self.flat_ui.open(entity)
                         }
-                        presentation
-                            if machine
-                                || (presentation == crate::PresentationMode::Vr
-                                    && (["ContainerScript", "HackableCrate"].iter().any(
-                                        |script| {
-                                            crate::scripts::script_util::entity_has_script(
-                                                &self.world,
-                                                entity,
-                                                script,
-                                            )
-                                        },
-                                    ) || (crate::scripts::script_util::entity_has_script(
-                                        &self.world,
-                                        entity,
-                                        "CreatureContainer",
-                                    ) && crate::scripts::gui::creature_is_lootable(
-                                        &self.world,
-                                        entity,
-                                    )))) =>
-                        {
+                        super::mfd_device::PanelRoute::Interface => {
                             if !self.player_is_alive() {
                                 continue;
                             }
@@ -12618,8 +12626,8 @@ impl MissionCore {
                             }
                             self.flat_ui.open(entity);
                         }
-                        crate::PresentationMode::Flat => self.flat_ui.open(entity),
-                        crate::PresentationMode::Vr => {
+                        super::mfd_device::PanelRoute::Flat => self.flat_ui.open(entity),
+                        super::mfd_device::PanelRoute::World => {
                             // The other half of "one UI at a time": a world
                             // panel replaces an open log reader, exactly as the
                             // reader replaces a world panel. Both used to share
@@ -12682,6 +12690,17 @@ impl MissionCore {
                                 PropObjState(dark::properties::ObjectState::Normal),
                             );
                         }
+                    }
+                    // In VR with neither the tricorder nor the cyber interface up,
+                    // nothing shows the Research MFD (`panel_route`): report on
+                    // the HUD instead.
+                    if !self.flat_ui.device
+                        && self.flat_ui.active_panel() != Some(entity_id)
+                        && self.gui.active_panel() != Some(entity_id)
+                    {
+                        effects.push_front(Effect::ShowMessage {
+                            text: crate::scripts::gui::research_message(&self.world, entity_id),
+                        });
                     }
                 }
 

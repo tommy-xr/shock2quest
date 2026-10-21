@@ -18,16 +18,16 @@ import {
   sub,
 } from "./helpers/vr-hand.js";
 
-// Regression for #1092. This follows the exact 25th Anniversary Hydro2 VR
-// production path that exposed the bug:
+// Regression for #1092 and #2379. This follows the 25th Anniversary Hydro2 VR
+// production path:
 //
 //   Desk 713 --Contains--> Toxin-A 547
 //   trigger desk -> cyber-interface MFD -> squeeze the rendered Toxin slot
-//   held-item trigger -> ResearchGui proxy -> release over that proxy
+//   held-item trigger -> research, with no panel on the hand -> release
 //
-// The proxy forwards the offer to its parent Toxin-A. Before the fix the
-// shared transfer fallback accepted `parent == dropped`, creating a
-// self-Contains link and removing the vial's world refs and physics. Runtime
+// #1092: releasing the vial over its own Research world panel created a
+// self-Contains link and removed its world refs and physics. #2379 removed
+// that panel; the released vial must still be an ordinary world vial. Runtime
 // ids are discovered on every launch; no debug Frob, Give, or quest mutation
 // participates in the interaction under test.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
@@ -108,7 +108,7 @@ async function assertPhysicalWorldToxin(
 }
 
 test(
-  "Hydro2 VR release over Toxin-A's own Research panel remains a re-grabbable world vial",
+  "Hydro2 VR held Toxin-A researches without a panel and stays a re-grabbable world vial",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -186,48 +186,20 @@ test(
       "ordinary locomotion must carry the vial away from the source desk",
     );
 
-    // A held-item trigger uses ResearchableScript's real inventory action and
-    // replaces the desk panel with the Toxin-A-bound Research GUI.
+    // A held-item trigger uses ResearchableScript's real inventory action. With
+    // no tricorder or cyber interface up it researches without opening any
+    // panel - nothing exists on the hand to release the vial over.
     await game.input.set("right_hand.trigger", 1);
     await game.step({ frames: 2 });
     await game.input.set("right_hand.trigger", 0);
     await game.step({ frames: 5 });
-    const researchPanel = (await game.ui.state()).active_panel;
-    assert.ok(researchPanel, "held Toxin-A trigger must open its Research panel");
-    assert.equal(researchPanel.entity_id, toxin.id);
-    assert.ok(
-      researchPanel.elements.some(
-        (element) =>
-          element.kind === "image" &&
-          element.texture?.toLowerCase() === "iface/research.pcx",
-      ),
-      "the active panel must be the real Research GUI",
-    );
+    assert.equal((await game.ui.state()).active_panel, null, "held Toxin-A opens no panel");
+    assert.equal((await uiBodies(game)).length, 0, "held Toxin-A opens no world panel");
 
-    const [researchProxy] = await uiBodies(game);
-    assert.ok(researchProxy, "Research GUI must expose one production UI proxy");
-    assert.equal((await uiBodies(game)).length, 1);
-    const panelAim = await aimVrHandAt(game, researchProxy.position, 0.35, 1);
-    const panelHit = await game.raycast({
-      start: panelAim.start,
-      end: panelAim.target,
-      collision_groups: ["world", "entity", "selectable", "raycast", "ui"],
-      max_distance: 1,
-    });
-    assert.equal(
-      panelHit.entity_id,
-      researchProxy.entity_id,
-      "held hand ray must target Toxin-A's attached Research proxy",
-    );
-
-    // This squeeze edge first performs the ordinary physical world DropItem,
-    // then offers the vial through its own proxy. The offer must be rejected
-    // without undoing that already-completed drop.
     await game.input.set("right_hand.squeeze", 0);
     await game.step({ frames: 8 });
     assert.equal((await game.info()).player.right_hand_entity_id, null);
     await assertPhysicalWorldToxin(game, toxin.id);
-    await game.screenshot("hydro2-toxin-after-self-offer.png");
 
     // The native drop can leave the vial falling or rotating. Let its real
     // body settle before selecting a surface point that must remain under
@@ -254,31 +226,6 @@ test(
       settled,
       `the dropped vial should settle before native re-grab: ${JSON.stringify(lastBody)}`,
     );
-
-    // Walk out of the world panel's ordinary auto-close range, then return.
-    // Its own-host priority would otherwise select Research instead of the vial.
-    // The physical drop can land behind the panel we last faced. Aim at the
-    // settled vial so backward movement actually increases distance from it.
-    const retreatStart = (await game.info()).player;
-    await game.input.lookAtWorldPoint((await game.entities.detail(toxin.id)).position, {
-      eyeHeight: retreatStart.camera_offset[1],
-    });
-    let retreatFrames = 0;
-    await game.input.set("left_hand.thumbstick", [0, -1]);
-    while ((await uiBodies(game)).length > 0 && retreatFrames < 80) {
-      await game.step({ frames: 10 });
-      retreatFrames += 10;
-    }
-    await game.input.set("left_hand.thumbstick", [0, 0]);
-    assert.equal(
-      (await uiBodies(game)).length,
-      0,
-      "walking away must dismiss the world panel before recovering its host",
-    );
-    await game.input.set("left_hand.thumbstick", [0, 1]);
-    await game.step({ frames: retreatFrames });
-    await game.input.set("left_hand.thumbstick", [0, 0]);
-    await game.step({ frames: 3 });
 
     // Player-observable recovery: select the dropped vial through the real
     // hand ray and squeeze it back into the same hand.
