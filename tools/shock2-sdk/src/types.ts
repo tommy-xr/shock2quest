@@ -102,7 +102,7 @@ export interface TrailEvent {
   time: number;
   hand: "left" | "right";
   kind: "grip" | "release" | "top_out";
-  hold: "ladder" | "ledge";
+  hold: "ladder" | "ledge" | "surface";
   pos: Vec3;
 }
 

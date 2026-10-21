@@ -242,7 +242,9 @@ export async function vrClimbLadder(
 /**
  * Top out onto a ledge: close `hand` on `hold` - the lip or anywhere on the
  * deck, since any walkable top above step height is a ledge hold - then
- * {@link vrVault}. Throws when `hold` is no ledge.
+ * {@link vrVault}. Off a ladder the same floor is a grace hold that never
+ * vaults: then {@link vrReleaseOnto} its landing instead. Throws when `hold`
+ * is neither.
  */
 export async function vrTopOut(
   game: Game,
@@ -250,10 +252,40 @@ export async function vrTopOut(
   hold: Vec3,
 ): Promise<{ heights: number[]; landed: Vec3 }> {
   const held = await vrGrab(game, hand, hold);
-  if (held.kind !== "ledge") {
-    throw new Error(`vrTopOut: ${fmt(hold)} is a ${held.kind} hold, not a ledge`);
+  if (held.kind === "ledge") return vrVault(game, hand);
+  if (held.kind === "surface") return vrReleaseOnto(game);
+  throw new Error(`vrTopOut: ${fmt(hold)} is a ${held.kind} hold, not a floor`);
+}
+
+/**
+ * Let go of every hold onto the assisted landing on show (a held floor or a
+ * gaze target): the other hands first, then the anchor, then wait for the
+ * exit (a teleport, or a glide under `climb_exit_motion`) to land. Throws when
+ * no assisted landing shows or the exit never lands.
+ */
+export async function vrReleaseOnto(game: Game): Promise<{ heights: number[]; landed: Vec3 }> {
+  const { climb } = (await game.info()).player;
+  if (climb.release.mode !== "assisted") {
+    throw new Error(`vrReleaseOnto: no assisted landing on show (${JSON.stringify(climb.release)})`);
   }
-  return vrVault(game, hand);
+  const anchor = climb.anchor_hand ?? "right";
+  const heights: number[] = [];
+  for (const hand of [otherHand(anchor), anchor]) {
+    await game.input.set(`${hand}_hand.squeeze`, 0);
+    await game.input.set(`${hand}_hand.world_target`, null);
+    await game.step({ frames: 1 });
+    heights.push((await game.info()).player.position[1]);
+  }
+  let settled = 0;
+  for (let frame = 0; frame < 300 && settled < 30; frame += 1) {
+    await game.step({ frames: 1 });
+    const { player } = await game.info();
+    heights.push(player.position[1]);
+    const moving = player.climb.vaulting || player.climb.release.exit_fade > 0;
+    settled = moving ? 0 : settled + 1;
+  }
+  if (settled < 30) throw new Error("vrReleaseOnto: the exit did not land within 300 frames");
+  return { heights, landed: (await game.info()).player.position };
 }
 
 /**
@@ -262,23 +294,20 @@ export async function vrTopOut(
  * vault never lands.
  */
 export async function vrVault(game: Game, hand: Hand): Promise<{ heights: number[]; landed: Vec3 }> {
-  // A vault onto a ladder exit's shown landing commits it instead: a teleport
-  // by default (`climb_exit_motion`), which never reports `vaulting`.
-  const committed = (p: PlayerSnapshot) => p.climb.vaulting || p.climb.release.gliding_to !== null;
-  const heights = (await vrPull(game, hand, [0, -1.2, 0], 40, committed)).map((p) => p[1]);
+  const heights = (await vrPull(game, hand, [0, -1.2, 0], 40, (p) => p.climb.vaulting)).map((p) => p[1]);
   const { player } = await game.info();
-  if (!committed(player)) {
+  if (!player.climb.vaulting) {
     throw new Error(`vrVault: pulling the ${hand} hand never vaulted (body at y=${player.position[1].toFixed(2)})`);
   }
   await game.input.set("left_hand.squeeze", 0);
   await game.input.set("right_hand.squeeze", 0);
-  // The scripted vault (or exit fade) to its landing, then a second to settle.
+  // The scripted vault to its landing, then a second to settle.
   let settled = 0;
   for (let frame = 0; frame < 300 && settled < 60; frame += 1) {
     await game.step({ frames: 1 });
     const { player } = await game.info();
     heights.push(player.position[1]);
-    if (!player.climb.vaulting && player.climb.release.exit_fade === 0) settled += 1;
+    if (!player.climb.vaulting) settled += 1;
   }
   if (settled < 60) throw new Error("vrVault: the vault did not land within 300 frames");
   return { heights, landed: (await game.info()).player.position };

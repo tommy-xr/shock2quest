@@ -232,29 +232,30 @@ for (const untilY of [5.0, 5.4]) {
 }
 
 test(
-  "debug_ladder (VR): a vault from the held deck lands on the footprint on show",
+  "debug_ladder (VR): pulling on the deck taken off a ladder never vaults; letting go lands on the footprint",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
     const { anchor } = await climbAt(game, LEDGE_Z, 5.4);
     const free = otherHand(anchor);
     const right = Math.sign((await viewRight(game))[2]);
-    await vrGrab(game, free, [-7.25, DECK_Y + 0.02, (free === "right" ? right : -right) * 0.35]);
+    const held = await vrGrab(game, free, [-7.25, DECK_Y + 0.02, (free === "right" ? right : -right) * 0.35]);
+    assert.equal(held.kind, "surface", "a grace grab, not a vaulting ledge");
+    assert.equal(held.grace, 1);
     await game.input.set(`${free}_hand.world_target`, null);
-    // Off the ladder: hanging from the deck alone.
+    // Off the ladder: hanging from the deck alone, then haul on it.
     await game.input.set(`${anchor}_hand.squeeze`, 0);
     await game.step({ frames: 3 });
-    const shown = await release(game);
+    await vrPull(game, free, [0, -1.2, 0], 40);
+    let { player } = await game.info();
+    assert.equal(player.climb.vaulting, false, "no vault");
+    assert.equal(player.climb.release.gliding_to, null, "nothing commits before release");
+    const shown = player.climb.release;
     assert.equal(shown.mode, "assisted", JSON.stringify(shown));
-    // Pull until the vault commits (a teleport by default), then let it land.
-    await vrPull(game, free, [0, -1.2, 0], 40, (p) => p.climb.release.gliding_to !== null);
-    assert.deepEqual((await release(game)).gliding_to, shown.landing, "the vault commits the shown landing");
-    await game.input.set(`${free}_hand.squeeze`, 0);
-    await game.step({ frames: 60 });
-    assertArrived((await game.info()).player.position, shown.landing!);
+    const { landed } = await letGoAndSettle(game, free);
+    assertArrived(landed, shown.landing!);
   },
 );
-
 test(
   "debug_ladder (VR): an assisted exit fades to black, teleports onto the footprint, and fades back in with no re-grab",
   { skip: !e2eEnabled, timeout: 600_000 },

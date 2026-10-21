@@ -195,10 +195,6 @@ pub struct HandClimb {
     /// was a reach for the item, not a grace grab: it refunds.
     fresh: [bool; 2],
     was_grounded: bool,
-    /// The holds held now trace back to a ladder grab: through grace grabs,
-    /// deck transfers and any ledges after, until every hand lets go. Feet
-    /// brushing a lip while the hands still hold do not end it.
-    ladder_departure: bool,
 }
 
 impl HandClimb {
@@ -301,7 +297,6 @@ impl HandClimb {
             };
             if grip.kind == ClimbGripKind::Ladder {
                 self.grace_used = 0;
-                self.ladder_departure = true;
             } else if grace > 0 {
                 self.grace_used = grace;
             }
@@ -359,7 +354,6 @@ impl HandClimb {
         });
         if self.grips.iter().all(Option::is_none) {
             self.grace_used = 0;
-            self.ladder_departure = false;
         }
         ClimbFrame {
             translation,
@@ -388,8 +382,11 @@ impl HandClimb {
     /// in-reach glow, so the glow never promises a grab that would fail.
     ///
     /// Near the other hand's hold, a deck just above the feet is an ordinary
-    /// transfer. Failing that, a ladder hold allows grace grab 1 on any
-    /// surface, and grace hold 1 allows grace grab 2; never a third.
+    /// transfer. Off a ladder or grace hold (a ladder departure), though, only
+    /// another rung is ordinary: anything else is a grace grab, so it never
+    /// vaults - a floor the hand reaches anywhere, any other solid face only
+    /// near the other hold. A ladder hold allows grace grab 1, and grace hold
+    /// 1 allows grace grab 2; never a third.
     pub fn probe_grip(
         &self,
         hand: Handedness,
@@ -400,32 +397,55 @@ impl HandClimb {
         if self.was_squeezing[slot(hand)] && !self.armed[slot(hand)] {
             return None;
         }
-        let Some(other) = self.grips[1 - slot(hand)]
-            .filter(|other| (point - other.grip.point).magnitude() <= TRANSFER_REACH)
-        else {
-            return probe(point, GripProbe::Ordinary).map(|grip| (grip, 0));
-        };
-        if let Some(grip) = probe(point, GripProbe::Transfer) {
+        let other = self.grips[1 - slot(hand)];
+        let near = other.filter(|other| (point - other.grip.point).magnitude() <= TRANSFER_REACH);
+        let reachable = probe(
+            point,
+            if near.is_some() {
+                GripProbe::Transfer
+            } else {
+                GripProbe::Ordinary
+            },
+        );
+        let departing = other.is_some_and(|other| {
+            matches!(
+                other.grip.kind,
+                ClimbGripKind::Ladder | ClimbGripKind::Surface
+            )
+        });
+        if let Some(grip) =
+            reachable.filter(|grip| !departing || grip.kind == ClimbGripKind::Ladder)
+        {
             return Some((grip, 0));
         }
-        let grace = match (other.grip.kind, other.grace) {
-            (ClimbGripKind::Ladder, _) => 1,
-            (_, 1) => 2,
+        let grace = match other.map(|other| (other.grip.kind, other.grace)) {
+            Some((ClimbGripKind::Ladder, _)) => 1,
+            Some((_, 1)) => 2,
             _ => return None,
         };
         if self.grace_used >= grace {
             return None;
         }
-        probe(point, GripProbe::Surface).map(|grip| (grip, grace))
+        // A floor the hand can hold anyway, wherever it is; any other solid
+        // face only near the other hold.
+        reachable
+            .map(|grip| ClimbGrip {
+                kind: ClimbGripKind::Surface,
+                ..grip
+            })
+            .or_else(|| near.and_then(|_| probe(point, GripProbe::Surface)))
+            .map(|grip| (grip, grace))
     }
 
-    /// Whether a ladder is held, or the holds held now trace back to a ladder
-    /// grab (see the field).
+    /// Whether the body hangs off a ladder or its grace holds, with no
+    /// ordinary ledge held: a ladder exit, which the release assist serves.
     pub fn on_ladder_departure(&self) -> bool {
-        self.ladder_departure
-            || self
-                .grips()
-                .any(|(_, anchor)| anchor.grip.kind == ClimbGripKind::Ladder)
+        self.grips().any(|(_, anchor)| {
+            matches!(
+                anchor.grip.kind,
+                ClimbGripKind::Ladder | ClimbGripKind::Surface
+            )
+        }) && !self.holds_a_ledge()
     }
 
     /// Grace grabs still available to this departure (see [`GRACE_GRABS`]).
@@ -485,7 +505,6 @@ impl HandClimb {
         self.grips = [None, None];
         self.armed = [false, false];
         self.grace_used = 0;
-        self.ladder_departure = false;
         self.anchor = None;
         self.recent_anchor_travel.clear();
         self.last_anchor_local = None;
@@ -729,7 +748,12 @@ mod tests {
                 },
                 |_| true,
             );
-            assert_eq!(climb.holds_a_ledge(), !break_hold);
+            // Off the ladder hold the deck is a grace grab; with that hold
+            // broken first there is nothing to grab from.
+            assert_eq!(
+                climb.grips[1].map(|anchor| (anchor.grip.kind, anchor.grace)),
+                (!break_hold).then_some((ClimbGripKind::Surface, 1))
+            );
         }
     }
 
@@ -950,7 +974,12 @@ mod tests {
             |_| true,
         );
         assert_eq!(climb.anchor(), Some(Handedness::Right));
-        assert!(climb.holds_a_ledge());
+        // Taken off the ladder, the deck is a grace hold; it keeps a blocked
+        // pull's support all the same.
+        assert_eq!(
+            climb.anchor_grip().map(|anchor| anchor.grip.kind),
+            Some(ClimbGripKind::Surface)
+        );
         assert!(handoff.translation.is_some());
         assert!(handoff.launch.is_none());
         // Relaxing the pull recovers the same anchored hold; it never rebases
@@ -984,7 +1013,7 @@ mod tests {
         );
         assert!(released.translation.is_none());
         assert!(released.launch.is_none());
-        assert!(!climb.holds_a_ledge());
+        assert_eq!(climb.grips().count(), 0);
     }
 
     #[test]
@@ -1472,7 +1501,8 @@ mod tests {
         };
 
         // A ladder rung is not something to ball up on.
-        climb.update(
+        let mut rung = HandClimb::default();
+        rung.update(
             pawn,
             identity,
             DT,
@@ -1480,15 +1510,15 @@ mod tests {
             |p, _| Some(ladder_grip(p)),
             |_| true,
         );
-        assert!(!climb.holds_a_ledge());
+        assert!(!rung.holds_a_ledge());
 
-        // The other hand takes a ledge: now it is, and the anchor records the
+        // A ledge (not taken off a ladder) is: and the anchor records the
         // body pose that grab was made from - what tells a pull from a grab.
         climb.update(
             pawn,
             identity,
             DT,
-            [hand(reach, 1.0), hand(reach, 1.0)],
+            [hand(reach, 1.0), no_hand()],
             |p, _| Some(ledge(p)),
             |_| true,
         );
@@ -1503,7 +1533,7 @@ mod tests {
             lifted,
             identity,
             DT,
-            [hand(reach, 1.0), hand(reach, 1.0)],
+            [hand(reach, 1.0), no_hand()],
             |_, _| None,
             |_| true,
         );
@@ -1627,6 +1657,60 @@ mod tests {
         climb.grips[index].map(|anchor| anchor.grace)
     }
 
+    /// A ladder left of x = -0.3; elsewhere a floor top the ledge and deck
+    /// transfer probes take (as at a ladder's top), which no surface probe sees.
+    fn deck_world(p: Vector3<f32>, rule: GripProbe) -> Option<ClimbGrip> {
+        if p.x <= -0.3 {
+            return Some(ladder_grip(p));
+        }
+        (rule != GripProbe::Surface).then_some(ClimbGrip {
+            kind: ClimbGripKind::Ledge,
+            normal: Vector3::unit_y(),
+            ..ladder_grip(p)
+        })
+    }
+
+    #[test]
+    fn a_floor_taken_off_a_ladder_is_a_grace_grab_and_two_at_most() {
+        let step =
+            |climb: &mut HandClimb, left: (Vector3<f32>, f32), right: (Vector3<f32>, f32)| {
+                climb.update(
+                    Vector3::zero(),
+                    Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                    DT,
+                    [hand(left.0, left.1), hand(right.0, right.1)],
+                    deck_world,
+                    |_| true,
+                )
+            };
+        let mut climb = HandClimb::default();
+        step(&mut climb, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        step(&mut climb, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+        let deck = climb.grips[1].expect("the floor in front holds");
+        assert_eq!(
+            deck.grip.kind,
+            ClimbGripKind::Surface,
+            "never a vaulting ledge"
+        );
+        assert_eq!(deck.grace, 1);
+        // Off the ladder: the other hand onto the floor too, the second grace.
+        step(&mut climb, (RUNG, OPEN), (WALL[0], SQUEEZE));
+        step(&mut climb, (WALL[1], SQUEEZE), (WALL[0], SQUEEZE));
+        assert_eq!(grace_of(&climb, 0), Some(2));
+        assert_eq!(climb.grips[0].unwrap().grip.kind, ClimbGripKind::Surface);
+        // No third.
+        step(&mut climb, (WALL[1], SQUEEZE), (WALL[0], OPEN));
+        step(&mut climb, (WALL[1], SQUEEZE), (WALL[2], SQUEEZE));
+        assert_eq!(grace_of(&climb, 1), None, "no third floor grab");
+
+        // The same floor, not reached from a ladder: an ordinary ledge.
+        let mut climb = HandClimb::default();
+        step(&mut climb, (WALL[0], OPEN), (WALL[0], SQUEEZE));
+        let ledge = climb.grips[1].expect("an ordinary ledge");
+        assert_eq!(ledge.grip.kind, ClimbGripKind::Ledge);
+        assert_eq!(ledge.grace, 0);
+    }
+
     #[test]
     fn a_ladder_allows_two_grace_grabs_on_any_surface_and_never_a_third() {
         for a in 0..2 {
@@ -1702,29 +1786,57 @@ mod tests {
         }
         assert_eq!(climb.grips().count(), 1);
         assert_eq!(climb.grace_remaining(), 2);
-        // A deck transfer and a second rung are ordinary holds.
-        let deck = |p: Vector3<f32>, rule: GripProbe| {
-            (rule == GripProbe::Transfer).then_some(ClimbGrip {
+        // A second rung is an ordinary hold.
+        grace_step(
+            &mut climb,
+            0,
+            (RUNG, SQUEEZE),
+            (RUNG + vec3(0.0, 0.3, 0.0), SQUEEZE),
+        );
+        assert_eq!(grace_of(&climb, 1), Some(0));
+        assert_eq!(climb.grace_remaining(), 2);
+
+        // An ordinary ledge hold (not off a ladder) is no ladder: a deck
+        // transfer from it is ordinary, and it authorizes no grace grab.
+        let ledges = |p: Vector3<f32>, rule: GripProbe| {
+            (rule != GripProbe::Surface).then_some(ClimbGrip {
                 kind: ClimbGripKind::Ledge,
                 ..ladder_grip(p)
             })
         };
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
-        climb.update(
-            Vector3::zero(),
-            identity,
-            DT,
-            [hand(RUNG, SQUEEZE), hand(WALL[0], SQUEEZE)],
-            deck,
-            |_| true,
+        let mut climb = HandClimb::default();
+        let step =
+            |climb: &mut HandClimb,
+             hands: [ClimbHandInput; 2],
+             probe: &dyn Fn(Vector3<f32>, GripProbe) -> Option<ClimbGrip>| {
+                climb.update(Vector3::zero(), identity, DT, hands, probe, |_| true);
+            };
+        step(
+            &mut climb,
+            [hand(WALL[1], SQUEEZE), hand(WALL[0], OPEN)],
+            &ledges,
         );
-        assert_eq!(grace_of(&climb, 1), Some(0));
-        assert_eq!(climb.grips[1].unwrap().grip.kind, ClimbGripKind::Ledge);
-        assert_eq!(climb.grace_remaining(), 2);
-        // An ordinary ledge hold is no ladder: it authorizes no grace grab.
-        grace_step(&mut climb, 0, (RUNG, OPEN), (WALL[0], SQUEEZE));
-        grace_step(&mut climb, 0, (WALL[1], SQUEEZE), (WALL[0], SQUEEZE));
-        assert_eq!(grace_of(&climb, 0), None);
+        step(
+            &mut climb,
+            [hand(WALL[1], SQUEEZE), hand(WALL[0], SQUEEZE)],
+            &ledges,
+        );
+        assert_eq!(
+            climb.grips[1].map(|a| (a.grip.kind, a.grace)),
+            Some((ClimbGripKind::Ledge, 0))
+        );
+        step(
+            &mut climb,
+            [hand(WALL[1], SQUEEZE), hand(WALL[0], OPEN)],
+            &grace_world,
+        );
+        step(
+            &mut climb,
+            [hand(WALL[1], SQUEEZE), hand(WALL[2], SQUEEZE)],
+            &grace_world,
+        );
+        assert_eq!(grace_of(&climb, 1), None);
         assert_eq!(climb.grace_remaining(), 2);
     }
 

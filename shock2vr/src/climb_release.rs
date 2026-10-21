@@ -160,26 +160,7 @@ impl ReleasePreview {
     pub fn safe(&self) -> bool {
         self.outcome.is_some_and(|outcome| outcome.safe)
     }
-
-    /// An automatic ledge vault onto `grip_point` would take the body somewhere
-    /// other than the assisted landing on show: the release owns the exit.
-    /// A vault onto the shown deck is the same exit and keeps working.
-    pub fn blocks_vault(&self, grip_point: Vector3<f32>) -> bool {
-        self.assisted().is_some_and(|landing| {
-            let across = vec3(
-                landing.center.x - grip_point.x,
-                0.0,
-                landing.center.z - grip_point.z,
-            );
-            across.magnitude() > VAULT_SAME_EXIT_RADIUS
-                || (landing.floor_y - grip_point.y).abs() > GAZE_SNAP_MAX_STEP * 2.0
-        })
-    }
 }
-
-/// A vault's landing is an inset of up to 0.8 past the held lip; within this
-/// of the lip, the shown landing is that same deck.
-const VAULT_SAME_EXIT_RADIUS: f32 = 1.2;
 
 /// The gaze rays for a head looking along `forward`, centre first.
 /// Empty for a degenerate direction.
@@ -261,8 +242,8 @@ pub fn resolve(
         - crate::physics::player_center_above_floor(
             player.is_crouched() && !player.is_hanging_crouched(),
         );
-    // Only a ladder exit is assisted (through its grace grabs and deck
-    // transfers): an ordinary ledge pull keeps its vault.
+    // Only a ladder exit (a ladder or its grace holds) is assisted: an
+    // ordinary ledge pull keeps its vault.
     let exits_a_ladder = climb.on_ladder_departure();
     // The same tracking a release needs to commit: never show an assisted
     // landing the release would then refuse.
@@ -519,21 +500,5 @@ mod tests {
             !ReleasePreview::default().safe(),
             "no prediction is not safe"
         );
-    }
-
-    #[test]
-    fn a_shown_assisted_exit_blocks_only_a_vault_somewhere_else() {
-        let lip = vec3(-7.0, 6.0, 0.0);
-        let preview = |mode, landing| ReleasePreview {
-            outcome: Some(ReleaseOutcome::new(mode, landing, 5.0, 1.3)),
-            ..Default::default()
-        };
-        // The deck past the held lip: same exit, the vault keeps working.
-        assert!(!preview(ReleaseMode::Assisted, landing(-7.6, 6.0, 0.0)).blocks_vault(lip));
-        // A side platform: the vault must not take over before release.
-        assert!(preview(ReleaseMode::Assisted, landing(-6.0, 4.0, 2.0)).blocks_vault(lip));
-        // A natural preview never blocks an ordinary vault.
-        assert!(!preview(ReleaseMode::Natural, landing(-6.0, 0.0, 0.0)).blocks_vault(lip));
-        assert!(!ReleasePreview::default().blocks_vault(lip));
     }
 }

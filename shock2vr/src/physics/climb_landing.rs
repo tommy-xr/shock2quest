@@ -355,18 +355,20 @@ impl PhysicsWorld {
             }
         }
         let standing = !player.tracking_is_crouched();
-        // One support settle at most: the nearest inset that passes the rest.
-        let landing = planes.iter().find_map(|plane| {
+        // The nearest inset the body fits and settles on, level first. A
+        // settle is costly, but runs only until a landing is found: the next
+        // frames reuse it.
+        planes.iter().find_map(|plane| {
             HELD_FLOOR_INSETS.iter().find_map(|inset| {
                 let at = held + direction * *inset;
                 let (floor, normal) = floor_at(*plane, at.x, at.z)?;
                 let landing = Self::landing_on(floor, normal, standing);
-                (connected(*plane, &landing) && self.assisted_route(player, start, landing).is_ok())
-                    .then_some(landing)
+                (connected(*plane, &landing)
+                    && self.assisted_route(player, start, landing).is_ok()
+                    && self.landing_is_supported(player, landing))
+                .then_some(landing)
             })
-        })?;
-        self.landing_is_supported(player, landing)
-            .then_some(landing)
+        })
     }
 
     /// Where letting go now lands: straight down, or along the arc of
