@@ -371,7 +371,8 @@ impl PhysicsWorld {
                     return None;
                 }
                 *settles -= 1;
-                self.landing_is_supported(player, landing).then_some(landing)
+                self.landing_is_supported(player, landing)
+                    .then_some(landing)
             })
         })
     }
@@ -703,7 +704,7 @@ mod tests {
             ..ledge(vec3(1.05, 6.0, 0.0))
         };
         let landing = world
-            .held_floor_landing(&player, &edge, None)
+            .held_floor_landing(&player, &edge, None, &mut 2)
             .expect("the level deck");
         assert!((landing.floor_y - 6.0).abs() < 0.01, "{landing:?}");
     }
@@ -770,7 +771,7 @@ mod tests {
             ..ledge(hold)
         };
         let landing = world
-            .held_floor_landing(&player, &grip, None)
+            .held_floor_landing(&player, &grip, None, &mut 2)
             .expect("up the ramp");
         assert!(landing.floor_y > hold.y + 0.1, "{landing:?}");
         assert!(world.plan_assisted_release(landing, &mut player));

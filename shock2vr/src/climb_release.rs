@@ -14,7 +14,7 @@ use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, vec3};
 
 use crate::{
     input_context::InputContext,
-    physics::{PhysicsWorld, PlayerHandle},
+    physics::{ClimbGrip, ClimbGripKind, PhysicsWorld, PlayerHandle},
     vr_climb::HandClimb,
 };
 
@@ -146,6 +146,8 @@ pub struct ReleasePreview {
     /// The aimed surface point behind the current gaze verdict.
     pub gaze_candidate: Option<Vector3<f32>>,
     pub gaze_rejection: Option<GazeRejection>,
+    /// Which held floor the next held-floor search leads with.
+    held_turn: bool,
 }
 
 impl ReleasePreview {
@@ -245,6 +247,7 @@ pub fn resolve(
     // Only a ladder exit (a ladder or its grace holds) is assisted: an
     // ordinary ledge pull keeps its vault.
     let exits_a_ladder = climb.on_ladder_departure();
+    let held_turn = !previous.held_turn;
     // The same tracking a release needs to commit: never show an assisted
     // landing the release would then refuse.
     let tracked = input
@@ -269,20 +272,29 @@ pub fn resolve(
             (exits_a_ladder && tracked)
                 .then(|| {
                     let anchor_hand = climb.anchor();
-                    // Settles across both held floors and their insets.
-                    let mut settles = HELD_FLOOR_SETTLES;
-                    climb
+                    let floors: Vec<_> = climb
                         .grips()
                         .filter(|(hand, _)| Some(*hand) == anchor_hand)
                         .chain(climb.grips().filter(|(hand, _)| Some(*hand) != anchor_hand))
-                        .map(|(_, anchor)| anchor)
-                        .find_map(|anchor| {
-                            physics.held_floor_landing(
-                                player,
-                                &anchor.grip,
-                                previous.assisted(),
-                                &mut settles,
-                            )
+                        .map(|(_, anchor)| anchor.grip)
+                        .collect();
+                    // A landing found before is kept while it is still valid
+                    // on a held floor, with no settle.
+                    floors
+                        .iter()
+                        .find_map(|grip| {
+                            physics.held_floor_landing(player, grip, previous.assisted(), &mut 0)
+                        })
+                        .or_else(|| {
+                            // Else a bounded search (settles across both floors),
+                            // leading with the other floor each frame: one that
+                            // never settles cannot starve the other.
+                            let mut settles = HELD_FLOOR_SETTLES;
+                            held_search_order(&floors, held_turn)
+                                .iter()
+                                .find_map(|grip| {
+                                    physics.held_floor_landing(player, grip, None, &mut settles)
+                                })
                         })
                 })
                 .flatten()
@@ -303,6 +315,7 @@ pub fn resolve(
     };
     ReleasePreview {
         outcome,
+        held_turn,
         gaze_candidate: gaze.as_ref().and_then(|gaze| gaze.candidate),
         gaze_rejection: match gaze {
             Some(gaze) => gaze.landing.err(),
@@ -367,6 +380,34 @@ impl ExitTeleport {
     pub fn done(&self) -> bool {
         self.moved && self.alpha() <= 0.0
     }
+}
+
+/// The hold a pull-up vault may go over: an ordinary ledge, or - only while
+/// no assisted landing shows, so there is one destination at a time - a
+/// grace hold on a floor (a ladder top whose held floor offers no landing).
+pub fn vault_hold(grip: ClimbGrip, preview: &ReleasePreview) -> Option<ClimbGrip> {
+    match grip.kind {
+        ClimbGripKind::Ledge => Some(grip),
+        ClimbGripKind::Surface
+            if crate::physics::is_walkable_normal(grip.normal.y)
+                && preview.assisted().is_none() =>
+        {
+            Some(ClimbGrip {
+                kind: ClimbGripKind::Ledge,
+                ..grip
+            })
+        }
+        _ => None,
+    }
+}
+
+/// `floors` (anchor's first), led on alternate `turn`s by the next one.
+fn held_search_order<T: Copy>(floors: &[T], turn: bool) -> Vec<T> {
+    let mut order = floors.to_vec();
+    if turn && !order.is_empty() {
+        order.rotate_left(1);
+    }
+    order
 }
 
 /// How long a fresh hold flashes cyan before showing the release's colour.
@@ -495,6 +536,51 @@ mod tests {
             while !exit.advance(dt) {}
             assert_eq!(exit.alpha(), 1.0, "black on the move frame at dt {dt}");
         }
+    }
+
+    #[test]
+    fn a_grace_floor_vaults_only_while_no_assisted_landing_shows() {
+        let grip = |kind, normal_y: f32| ClimbGrip {
+            kind,
+            entity_id: None,
+            point: vec3(0.0, 6.0, 0.0),
+            normal: vec3((1.0 - normal_y * normal_y).sqrt(), normal_y, 0.0),
+        };
+        let none = ReleasePreview::default();
+        let shown = ReleasePreview {
+            outcome: Some(ReleaseOutcome::new(
+                ReleaseMode::Assisted,
+                landing(-1.0, 6.0, 0.0),
+                5.0,
+                1.3,
+            )),
+            ..Default::default()
+        };
+        // An ordinary ledge always may.
+        assert!(vault_hold(grip(ClimbGripKind::Ledge, 1.0), &shown).is_some());
+        // A grace floor only as a fallback, and as a ledge.
+        assert!(vault_hold(grip(ClimbGripKind::Surface, 1.0), &shown).is_none());
+        assert_eq!(
+            vault_hold(grip(ClimbGripKind::Surface, 1.0), &none).map(|g| g.kind),
+            Some(ClimbGripKind::Ledge)
+        );
+        // Never a wall or a ladder.
+        assert!(vault_hold(grip(ClimbGripKind::Surface, 0.0), &none).is_none());
+        assert!(vault_hold(grip(ClimbGripKind::Ladder, 1.0), &none).is_none());
+    }
+
+    #[test]
+    fn the_held_floor_search_leads_with_each_floor_in_turn() {
+        assert_eq!(
+            held_search_order(&["anchor", "other"], false),
+            ["anchor", "other"]
+        );
+        assert_eq!(
+            held_search_order(&["anchor", "other"], true),
+            ["other", "anchor"]
+        );
+        assert_eq!(held_search_order(&["anchor"], true), ["anchor"]);
+        assert!(held_search_order::<u8>(&[], true).is_empty());
     }
 
     #[test]

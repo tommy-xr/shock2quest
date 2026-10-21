@@ -19721,6 +19721,7 @@ impl MissionCore {
     /// moment of grabbing does not disqualify the new hold.
     fn hand_vault_target(&self, head_local: Vector3<f32>) -> Option<crate::physics::ClimbGrip> {
         let anchor = self.interaction.hand_climb()?.anchor_grip()?;
+        let grip = crate::climb_release::vault_hold(anchor.grip, &self.climb_release)?;
         let center = self
             .physics
             .get_player_next_translation(&self.player_handle);
@@ -19736,11 +19737,11 @@ impl MissionCore {
         crate::vr_climb::vault_ready(
             center.y + head_local.y,
             traveled.y.max(inward),
-            anchor.grip.point.y,
-            anchor.grip.kind,
-            crate::physics::is_walkable_normal(anchor.grip.normal.y),
+            grip.point.y,
+            grip.kind,
+            crate::physics::is_walkable_normal(grip.normal.y),
         )
-        .then_some(anchor.grip)
+        .then_some(grip)
     }
 
     /// Both VR hands for the player trail: each controller's world point (the

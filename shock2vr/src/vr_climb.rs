@@ -149,6 +149,11 @@ pub struct ClimbHandInput {
 /// Which hand each slot of [`HandClimb::grips`] belongs to.
 pub(crate) const HANDS: [Handedness; 2] = [Handedness::Left, Handedness::Right];
 
+/// A ladder, or a grace hold taken off one: holding either is a ladder exit.
+fn is_ladder_exit_hold(kind: ClimbGripKind) -> bool {
+    matches!(kind, ClimbGripKind::Ladder | ClimbGripKind::Surface)
+}
+
 fn slot(hand: Handedness) -> usize {
     match hand {
         Handedness::Left => 0,
@@ -215,6 +220,7 @@ impl HandClimb {
     ) -> ClimbFrame {
         let previous_anchor = self.anchor;
         let had_a_hold = self.grips.iter().any(Option::is_some);
+        let held_before = self.grips;
         // Per hand: was this the player opening their hand? A hold torn off by
         // an over-stretched (blocked) body, or by the entity going away,
         // recorded travel that was the body failing to follow, not a pull -
@@ -282,13 +288,14 @@ impl HandClimb {
             }
         }
         // Resolve both hands against the holds that survived the releases
-        // above, before either acquires: a broken, deleted, released or newly
-        // occupied hand cannot authorize a contextual grab, and a hold taken
-        // this frame cannot authorize one either, whatever the hand order.
+        // above, before either acquires: a hold taken this frame cannot
+        // authorize a contextual grab, whatever the hand order, and one let
+        // go of this frame only carries the departure (see probe_grip_after).
         self.fresh = [false; 2];
         let acquired: [_; 2] = std::array::from_fn(|index| {
+            let released = held_before[1 - index].filter(|_| self.grips[1 - index].is_none());
             (self.grips[index].is_none() && self.armed[index])
-                .then(|| self.probe_grip(HANDS[index], hand_world[index], &probe))
+                .then(|| self.probe_grip_after(HANDS[index], hand_world[index], &probe, released))
                 .flatten()
         });
         for (index, acquired) in acquired.into_iter().enumerate() {
@@ -393,12 +400,27 @@ impl HandClimb {
         point: Vector3<f32>,
         probe: impl Fn(Vector3<f32>, GripProbe) -> Option<ClimbGrip>,
     ) -> Option<(ClimbGrip, u8)> {
+        self.probe_grip_after(hand, point, probe, None)
+    }
+
+    /// [`Self::probe_grip`], where the other hand let go of `released` this
+    /// frame: that hold still makes this a ladder departure, and authorizes
+    /// a grace grab on a floor the hand reaches anyway, but no face that only
+    /// a surviving hold nearby could offer.
+    fn probe_grip_after(
+        &self,
+        hand: Handedness,
+        point: Vector3<f32>,
+        probe: impl Fn(Vector3<f32>, GripProbe) -> Option<ClimbGrip>,
+        released: Option<GripAnchor>,
+    ) -> Option<(ClimbGrip, u8)> {
         // A hand still closed after a broken hold takes nothing until reopened.
         if self.was_squeezing[slot(hand)] && !self.armed[slot(hand)] {
             return None;
         }
-        let other = self.grips[1 - slot(hand)];
-        let near = other.filter(|other| (point - other.grip.point).magnitude() <= TRANSFER_REACH);
+        let held = self.grips[1 - slot(hand)];
+        let other = held.or(released);
+        let near = held.filter(|other| (point - other.grip.point).magnitude() <= TRANSFER_REACH);
         let reachable = probe(
             point,
             if near.is_some() {
@@ -407,12 +429,7 @@ impl HandClimb {
                 GripProbe::Ordinary
             },
         );
-        let departing = other.is_some_and(|other| {
-            matches!(
-                other.grip.kind,
-                ClimbGripKind::Ladder | ClimbGripKind::Surface
-            )
-        });
+        let departing = other.is_some_and(|other| is_ladder_exit_hold(other.grip.kind));
         if let Some(grip) =
             reachable.filter(|grip| !departing || grip.kind == ClimbGripKind::Ladder)
         {
@@ -440,12 +457,9 @@ impl HandClimb {
     /// Whether the body hangs off a ladder or its grace holds, with no
     /// ordinary ledge held: a ladder exit, which the release assist serves.
     pub fn on_ladder_departure(&self) -> bool {
-        self.grips().any(|(_, anchor)| {
-            matches!(
-                anchor.grip.kind,
-                ClimbGripKind::Ladder | ClimbGripKind::Surface
-            )
-        }) && !self.holds_a_ledge()
+        self.grips()
+            .any(|(_, anchor)| is_ladder_exit_hold(anchor.grip.kind))
+            && !self.holds_a_ledge()
     }
 
     /// Grace grabs still available to this departure (see [`GRACE_GRABS`]).
@@ -1709,6 +1723,39 @@ mod tests {
         let ledge = climb.grips[1].expect("an ordinary ledge");
         assert_eq!(ledge.grip.kind, ClimbGripKind::Ledge);
         assert_eq!(ledge.grace, 0);
+    }
+
+    #[test]
+    fn opening_the_ladder_hand_as_the_other_takes_the_floor_is_still_a_grace_grab() {
+        let step =
+            |climb: &mut HandClimb, left: (Vector3<f32>, f32), right: (Vector3<f32>, f32)| {
+                climb.update(
+                    Vector3::zero(),
+                    Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                    DT,
+                    [hand(left.0, left.1), hand(right.0, right.1)],
+                    deck_world,
+                    |_| true,
+                );
+            };
+        let mut climb = HandClimb::default();
+        step(&mut climb, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        // The same frame: the ladder hand opens, the other closes on the floor.
+        step(&mut climb, (RUNG, OPEN), (WALL[0], SQUEEZE));
+        let deck = climb.grips[1].expect("the floor holds");
+        assert_eq!(
+            (deck.grip.kind, deck.grace),
+            (ClimbGripKind::Surface, 1),
+            "never an ordinary vaulting ledge"
+        );
+
+        // Off the last grace hold in the same frame: no ordinary ledge, and
+        // no grab past the allowance.
+        step(&mut climb, (WALL[1], SQUEEZE), (WALL[0], SQUEEZE));
+        assert_eq!(grace_of(&climb, 0), Some(2));
+        step(&mut climb, (WALL[1], SQUEEZE), (WALL[0], OPEN));
+        step(&mut climb, (WALL[1], OPEN), (WALL[2], SQUEEZE));
+        assert!(climb.grips[1].is_none(), "no third, nor an ordinary ledge");
     }
 
     #[test]
