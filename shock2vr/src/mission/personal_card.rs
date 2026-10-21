@@ -13,14 +13,9 @@ pub(crate) fn is_reader(world: &World, entity: EntityId) -> bool {
         .borrow::<View<dark::properties::PropKeyDst>>()
         .is_ok_and(|keys| keys.get(entity).is_ok())
         || super::mfd_device::machine_uses_mfd(world, entity)
-        || [
-            "Computer",
-            "SecurityComputer",
-            "EnergyStation",
-            "ResurrectMachine",
-        ]
-        .iter()
-        .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))
+        || ["Computer", "SecurityComputer", "ResurrectMachine"]
+            .iter()
+            .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))
 }
 
 /// Key targets and MFD machines accept frob as well as scanning.
