@@ -15,8 +15,6 @@ use cgmath::{
     Vector2, Vector3, num_traits::ToPrimitive, vec2, vec3,
 };
 
-use collision::Aabb3;
-
 use super::turn_clip::TurnClipTracker;
 use crate::SpawnLocation;
 use crate::game_scene::DebuggableScene;
@@ -83,7 +81,7 @@ use crate::{
     game_scene::PlayerSavePoseError,
     gui::GuiManager,
     hud::{
-        BracketStyle, DamageFlash, bracket_hint, draw_health_bar, draw_item_name,
+        BracketStyle, DamageFlash, SelectionShape, bracket_hint, draw_health_bar, draw_item_name,
         draw_item_outline, is_hud_selectable,
     },
     input_context::{self, InputContext},
@@ -7621,7 +7619,11 @@ impl MissionCore {
                     };
                     if !inspect_only && has_script("Chemical") {
                         self.flat_ui.utilities.open_research(None);
-                        effects.push(Effect::UseResearchChemical { entity_id: entity });
+                        effects.push(Effect::UseResearchChemical {
+                            entity_id: entity,
+                            specimen: None,
+                            released: false,
+                        });
                     } else if !inspect_only && crate::research::offers_research(&self.world, entity)
                     {
                         let template = crate::scripts::script_util::entity_class_template_id(
@@ -7795,6 +7797,49 @@ impl MissionCore {
                 _ => {}
             }
         }
+        // A chemical released onto a specimen that takes it is used up where
+        // the hand held it, never dropped first (a drop moves it off the grip
+        // and its dissolve would show elsewhere). The release goes straight
+        // to the chemical handler, which also returns any it refuses.
+        let doses: Vec<_> = interaction_msgs
+            .iter()
+            .filter_map(|effect| match effect {
+                VirtualHandEffect::OutMessage {
+                    message:
+                        Message {
+                            to,
+                            payload: MessagePayload::ProvideForConsumption { entity },
+                        },
+                } if crate::research::chemical_ready_for(&self.world, *entity, *to)
+                    && interaction_msgs.iter().any(|effect| {
+                        matches!(effect, VirtualHandEffect::DropItem { entity_id, .. } if entity_id == entity)
+                    }) =>
+                {
+                    Some((*entity, *to))
+                }
+                _ => None,
+            })
+            .collect();
+        interaction_msgs.retain(|effect| match effect {
+            VirtualHandEffect::DropItem {
+                entity_id: entity, ..
+            }
+            | VirtualHandEffect::OutMessage {
+                message:
+                    Message {
+                        payload: MessagePayload::ProvideForConsumption { entity },
+                        ..
+                    },
+            } => !doses.iter().any(|(dose, _)| dose == entity),
+            _ => true,
+        });
+        effects.extend(doses.into_iter().map(|(entity_id, specimen)| {
+            Effect::UseResearchChemical {
+                entity_id,
+                specimen: Some(specimen),
+                released: true,
+            }
+        }));
         // Releases offered to a target: an accepted item is confirmed below
         // once a script consumes it. A release is also a plain drop, so a
         // refusal is explained only on a hackable target no script took the
@@ -12664,17 +12709,7 @@ impl MissionCore {
                     ) else {
                         continue;
                     };
-                    let required = self
-                        .world
-                        .borrow::<View<dark::properties::PropBaseTechDesc>>()
-                        .unwrap()
-                        .get(entity_id)
-                        .map(|skills| skills.0.research().max(1))
-                        .unwrap_or(1);
-                    let skill = crate::scripts::script_util::player_skill_level(
-                        &self.world,
-                        crate::player_stats::Skill::Research,
-                    );
+                    let (required, skill) = crate::research::research_skill(&self.world, entity_id);
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                     let result = quests.research_mut().begin(template_id, required, skill);
                     drop(quests);
@@ -12713,7 +12748,11 @@ impl MissionCore {
                     }
                 }
 
-                Effect::UseResearchChemical { entity_id } => {
+                Effect::UseResearchChemical {
+                    entity_id,
+                    specimen,
+                    released,
+                } => {
                     let scanned = self.flat_ui.device
                         && self.personal_card.last_scan == Some(entity_id)
                         && self
@@ -12728,14 +12767,16 @@ impl MissionCore {
                                 })
                             });
                     // A chemical out of reach (not carried, not scanned close by)
-                    // was never offered to research: no verdict to report.
-                    if !scanned
+                    // was never offered to research: no verdict to report. One
+                    // just released onto a held specimen is offered to it.
+                    if !released
+                        && !scanned
                         && !crate::scripts::script_util::player_carried_items(&self.world)
                             .contains(&entity_id)
                     {
                         continue;
                     }
-                    let consumed = apply_research_chemical(&self.world, entity_id);
+                    let consumed = apply_research_chemical(&self.world, entity_id, specimen);
                     if consumed {
                         let stack = self
                             .world
@@ -12743,19 +12784,50 @@ impl MissionCore {
                             .ok()
                             .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
                         let last_dose = stack.unwrap_or(1) <= 1;
-                        // Before the destroy below: the cue reads the held transform.
-                        effects.extend(crate::scripts::script_util::hand_dissolve_cue(
-                            &self.world,
-                            entity_id,
-                            last_dose,
-                        ));
+                        // A released dose left the hand opposite the specimen.
+                        let hand = if released {
+                            specimen
+                                .and_then(|specimen| self.interaction.holding_hand(specimen))
+                                .map(|hand| match hand {
+                                    crate::Handedness::Left => crate::Handedness::Right,
+                                    crate::Handedness::Right => crate::Handedness::Left,
+                                })
+                        } else {
+                            crate::wielded_weapon::vr_hand_holding(&self.world, entity_id)
+                        };
+                        // Before the destroy below: the cue reads the item's transform.
+                        if let Some(hand) = hand {
+                            effects.extend(crate::scripts::script_util::dissolve_cue_in_hand(
+                                &self.world,
+                                entity_id,
+                                hand,
+                                last_dose,
+                            ));
+                        }
                         if !last_dose {
-                            let mut stacks = self
+                            if let Ok(stack) = (&mut self
                                 .world
                                 .borrow::<ViewMut<dark::properties::PropStackCount>>()
-                                .unwrap();
-                            if let Ok(stack) = (&mut stacks).get(entity_id) {
+                                .unwrap())
+                                .get(entity_id)
+                            {
                                 stack.0 -= 1;
+                            }
+                            // The rest of a released stack goes to the backpack,
+                            // or the floor when it is full.
+                            if released {
+                                let backpack = self
+                                    .world
+                                    .borrow::<UniqueView<PlayerInfo>>()
+                                    .unwrap()
+                                    .inventory_entity_id;
+                                if self
+                                    .drop_entity_into_container(backpack, entity_id)
+                                    .is_none()
+                                {
+                                    effects.push_back(backpack_full_feedback(entity_id));
+                                    self.drop_held_item_into_world(entity_id);
+                                }
                             }
                         } else {
                             self.destroy_entity(entity_id);
@@ -12763,6 +12835,9 @@ impl MissionCore {
                         game_log!(INFO, "Research chemical consumed");
                     } else {
                         game_log!(INFO, "That chemical is not needed");
+                        if released {
+                            self.drop_held_item_into_world(entity_id);
+                        }
                     }
                     effects.push_front(Effect::ShowMessage {
                         text: crate::scripts::gui::chemical_message(&self.world, consumed),
@@ -17444,39 +17519,51 @@ impl MissionCore {
             .unwrap_or_default()
     }
 
-    /// The world-space bounds that stand in for an entity: the union of its
+    /// The shape that stands in for an entity: the union of its
     /// hitboxes where it has them - the volume a creature's limbs occupy in
     /// the pose it is in - otherwise its visible model, otherwise its own
     /// collider. A fixture's authored collider can be far larger than what is
     /// drawn: the security crate's is sized from its model header's box, about
     /// twice the mesh deep (#2350).
     ///
-    /// The HUD highlight frames this, and `/v1/entities/:id` reports it, from
-    /// this one function: what an agent reads is what the player sees framed.
+    /// The HUD highlight frames this, and `/v1/entities/:id` reports its world
+    /// box, from this one function: an agent reads the volume the player sees
+    /// framed.
     ///
     /// The proxies are stepped by physics before they are re-posed, so the
     /// bounds trail the drawn pose by a frame - invisible at 60 Hz, and not
     /// worth a second pose evaluation to remove.
-    pub(crate) fn selection_bounds(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
+    pub(crate) fn selection_bounds(&self, entity_id: EntityId) -> Option<SelectionShape> {
+        let world_box = |world| SelectionShape { world, mesh: None };
         self.hit_boxes
             .hit_box_bounds(&self.physics, entity_id)
+            .map(world_box)
             .or_else(|| self.model_surface_bounds(entity_id))
-            .or_else(|| self.physics.get_aabb2(entity_id))
+            .or_else(|| self.physics.get_aabb2(entity_id).map(world_box))
     }
 
-    /// `entity`'s model surface bounds carried into the world by the transform
-    /// it is drawn with. Only for an entity a ray can hit - one with a body -
-    /// so a decal reports no bounds rather than a frame it can never show.
+    /// `entity`'s model surface, placed by its world transform. Only for an
+    /// entity a ray can hit - one with a body - so a decal reports no bounds
+    /// rather than a frame it can never show.
     /// The surface is the bind pose, as frob rays test it, so a jointed object
-    /// (a camera mid-pan) is framed at rest, as its collider was before.
-    fn model_surface_bounds(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
+    /// (a camera mid-pan) is framed at rest, as its collider was before. An
+    /// item held in a VR hand has no body but is framed too: it is bracketed
+    /// while it will take the item in the other hand.
+    fn model_surface_bounds(&self, entity_id: EntityId) -> Option<SelectionShape> {
         use collision::Aabb as _;
-        if !self.id_to_physics.contains_key(&entity_id) {
+        if !self.id_to_physics.contains_key(&entity_id)
+            && crate::wielded_weapon::vr_hand_holding(&self.world, entity_id).is_none()
+        {
             return None;
         }
-        let local = self.id_to_model.get(&entity_id)?.surface_bounds()?;
+        let model = self.id_to_model.get(&entity_id)?;
+        let local = model.surface_bounds()?;
         let transforms = self.world.borrow::<View<RuntimePropTransform>>().ok()?;
-        Some(local.transform(&transforms.get(entity_id).ok()?.0))
+        let transform = transforms.get(entity_id).ok()?.0;
+        Some(SelectionShape {
+            world: local.transform(&transform),
+            mesh: Some((transform, model.interaction_triangles())),
+        })
     }
 
     /// The world object the mini-frame names when the canvas pointer is on
@@ -17622,7 +17709,7 @@ impl MissionCore {
             let hint = bracket_hint(asset_cache, &self.world, hit_entity, style);
             ret.extend(draw_item_outline(
                 asset_cache,
-                bounds,
+                &bounds,
                 style,
                 hint.as_deref(),
                 view,
@@ -17633,7 +17720,7 @@ impl MissionCore {
 
             ret.extend(draw_health_bar(
                 asset_cache,
-                bounds,
+                &bounds,
                 hit_entity,
                 &self.world,
                 view,
@@ -20867,7 +20954,42 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
     effects
 }
 
-fn apply_research_chemical(world: &World, chemical_entity: EntityId) -> bool {
+fn apply_research_chemical(
+    world: &World,
+    chemical_entity: EntityId,
+    specimen: Option<EntityId>,
+) -> bool {
+    let target = match specimen {
+        // Offered to a specific specimen: resume its project, then dose it.
+        Some(specimen) => {
+            if !crate::research::chemical_ready_for(world, chemical_entity, specimen) {
+                return false;
+            }
+            let Some(template_id) =
+                crate::scripts::script_util::entity_class_template_id(world, specimen)
+            else {
+                return false;
+            };
+            let (required, skill) = crate::research::research_skill(world, specimen);
+            let Ok(mut quests) = world.borrow::<UniqueViewMut<QuestInfo>>() else {
+                return false;
+            };
+            quests.research_mut().begin(template_id, required, skill);
+            specimen
+        }
+        None => {
+            let active_template = world
+                .borrow::<UniqueView<QuestInfo>>()
+                .ok()
+                .and_then(|quests| quests.research().active_template_id());
+            let Some(active_entity) =
+                active_template.and_then(|id| carried_research_entity(world, id))
+            else {
+                return false;
+            };
+            active_entity
+        }
+    };
     let chemical_name = world
         .borrow::<View<dark::properties::PropSymName>>()
         .ok()
@@ -20875,18 +20997,10 @@ fn apply_research_chemical(world: &World, chemical_entity: EntityId) -> bool {
     let Some(chemical_name) = chemical_name else {
         return false;
     };
-    let active_template = world
-        .borrow::<UniqueView<QuestInfo>>()
-        .ok()
-        .and_then(|quests| quests.research().active_template_id());
-    let Some(active_entity) = active_template.and_then(|id| carried_research_entity(world, id))
-    else {
-        return false;
-    };
     let needed = world
         .borrow::<View<dark::properties::PropChemicalNeeded>>()
         .ok()
-        .and_then(|view| view.get(active_entity).ok().cloned());
+        .and_then(|view| view.get(target).ok().cloned());
     let Some(needed) = needed else {
         return false;
     };
@@ -22137,7 +22251,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .find(|link| link.contains_ordinal.is_some())
                     .map(|link| link.target_id);
 
-                let selection_bounds = self.selection_bounds(id);
+                let selection_bounds = self.selection_bounds(id).map(|shape| shape.world);
                 let magazine_anchor = self
                     .magazine_capacity(id)
                     .and_then(|_| self.magazine_anchor_world(id))

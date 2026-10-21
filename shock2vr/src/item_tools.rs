@@ -13,10 +13,10 @@ pub fn is_tool(world: &World, tool: EntityId) -> bool {
         || script_util::entity_has_script(world, tool, "BeakerScript")
 }
 
-/// MISC.STR key of retail's tech-cursor verb for `tool` ("Hack", "Repair"),
-/// shown alone in the target's bracket slot while it will take the tool.
-/// Research has no applied tool in the port, so `TechCursor4` is unused, and
-/// only the ICE Pick has an accepting target today.
+/// MISC.STR key of retail's tech-cursor verb for `tool` ("Hack", "Repair",
+/// "Research"), shown alone in the target's bracket slot while it will take
+/// the tool. Accepting targets today: the ICE Pick's crate and a research
+/// chemical's specimen.
 pub fn tool_verb_key(world: &World, tool: EntityId) -> Option<&'static str> {
     if maintenance::is_maintenance_tool(world, tool) {
         return Some("TechSkill3");
@@ -25,6 +25,7 @@ pub fn tool_verb_key(world: &World, tool: EntityId) -> Option<&'static str> {
         ("FreeHack", "TechCursor0"),
         ("FreeModify", "TechCursor1"),
         ("FreeRepair", "TechCursor2"),
+        ("Chemical", "TechCursor4"),
     ]
     .into_iter()
     .find(|(script, _)| script_util::entity_has_script(world, tool, script))
@@ -47,6 +48,13 @@ pub fn misc_text(world: &World, key: &str) -> Option<String> {
         .ok()?
         .get("misc.str", key)
         .cloned()
+}
+
+/// [`offers_to`] for the VR two-hand gesture, which also offers a research
+/// chemical to the specimen in the other hand. Flat applies chemicals from
+/// the Research MFD instead, so its inventory drags do not.
+pub fn offers_to_held(world: &World, tool: EntityId, target: EntityId) -> bool {
+    offers_to(world, tool, target) || crate::research::chemical_ready_for(world, tool, target)
 }
 
 pub fn offers_to(world: &World, tool: EntityId, target: EntityId) -> bool {
@@ -87,6 +95,9 @@ fn repair_refusal(world: &World, target: Option<EntityId>) -> Option<&'static st
 }
 
 pub fn can_apply(world: &World, tool: EntityId, target: EntityId) -> bool {
+    if crate::research::chemical_ready_for(world, tool, target) {
+        return true;
+    }
     if script_util::entity_has_script(world, tool, "BeakerScript") {
         return offers_to(world, tool, target) && filled_beaker_template(world, tool).is_some();
     }
@@ -293,6 +304,7 @@ mod tests {
             ("FreeHack", Some("TechCursor0")),
             ("FreeModify", Some("TechCursor1")),
             ("FreeRepair", Some("TechCursor2")),
+            ("Chemical", Some("TechCursor4")),
             ("Wrench", Some("TechSkill3")),
             ("BeakerScript", None),
         ] {

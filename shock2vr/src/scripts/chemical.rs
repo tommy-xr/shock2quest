@@ -21,7 +21,11 @@ impl Script for ChemicalScript {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::Frob => Effect::UseResearchChemical { entity_id },
+            MessagePayload::Frob => Effect::UseResearchChemical {
+                entity_id,
+                specimen: None,
+                released: false,
+            },
             _ => Effect::NoEffect,
         }
     }

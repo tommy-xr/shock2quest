@@ -46,9 +46,18 @@ pub(crate) fn entity_class_template_id(world: &World, entity: EntityId) -> Optio
 /// chemical), with a firm pulse in that hand. Only an item held in a VR hand
 /// gets the cue.
 pub(crate) fn hand_dissolve_cue(world: &World, item: EntityId, consumed: bool) -> Vec<Effect> {
-    let Some(hand) = crate::wielded_weapon::vr_hand_holding(world, item) else {
-        return Vec::new();
-    };
+    crate::wielded_weapon::vr_hand_holding(world, item)
+        .map(|hand| dissolve_cue_in_hand(world, item, hand, consumed))
+        .unwrap_or_default()
+}
+
+/// [`hand_dissolve_cue`] for an item `hand` has just let go of.
+pub(crate) fn dissolve_cue_in_hand(
+    world: &World,
+    item: EntityId,
+    hand: crate::Handedness,
+    consumed: bool,
+) -> Vec<Effect> {
     let mut effects = dissolve_cue(world, item, consumed);
     effects.push(Effect::HandHaptic {
         hand,

@@ -328,12 +328,23 @@ impl ResearchState {
         chemical_sym_name: &str,
         chemicals: &PropChemicalNeeded,
     ) -> bool {
+        self.active_template_id.is_some_and(|template_id| {
+            self.accepts_chemical_for(template_id, chemical_sym_name, chemicals)
+        })
+    }
+
+    /// Whether `template_id`'s project, active or not, is stopped at a gate
+    /// asking for exactly this chemical. Like the active-project path, an
+    /// early dose (gate not yet reached) is not taken.
+    pub fn accepts_chemical_for(
+        &self,
+        template_id: i32,
+        chemical_sym_name: &str,
+        chemicals: &PropChemicalNeeded,
+    ) -> bool {
         if self.ignore_chemicals {
             return false;
         }
-        let Some(template_id) = self.active_template_id else {
-            return false;
-        };
         let Some(progress) = self.progress.get(&template_id) else {
             return false;
         };
@@ -341,6 +352,57 @@ impl ResearchState {
             .map(|needed| needed.eq_ignore_ascii_case(chemical_sym_name))
             .unwrap_or(false)
     }
+}
+
+/// The Research skill `specimen` asks for, and the player's.
+pub(crate) fn research_skill(world: &World, specimen: EntityId) -> (i32, i32) {
+    let required = world
+        .borrow::<View<PropBaseTechDesc>>()
+        .ok()
+        .and_then(|skills| skills.get(specimen).ok().map(|s| s.0.research().max(1)))
+        .unwrap_or(1);
+    let skill = crate::scripts::script_util::player_skill_level(
+        world,
+        crate::player_stats::Skill::Research,
+    );
+    (required, skill)
+}
+
+/// Whether the carried `specimen` takes `chemical` right now: its project
+/// waits on that chemical and the player's skill still lets it resume. The
+/// VR two-hand gesture offers a chemical to the specimen in the other hand.
+pub(crate) fn chemical_ready_for(world: &World, chemical: EntityId, specimen: EntityId) -> bool {
+    use crate::scripts::script_util::{
+        entity_class_template_id, entity_has_script, player_carried_items,
+    };
+    if chemical == specimen || !entity_has_script(world, chemical, "Chemical") {
+        return false;
+    }
+    let Some(name) = world
+        .borrow::<View<dark::properties::PropSymName>>()
+        .ok()
+        .and_then(|names| names.get(chemical).ok().map(|name| name.0.clone()))
+    else {
+        return false;
+    };
+    let Some(needed) = world
+        .borrow::<View<PropChemicalNeeded>>()
+        .ok()
+        .and_then(|needed| needed.get(specimen).ok().cloned())
+    else {
+        return false;
+    };
+    let Some(template_id) = entity_class_template_id(world, specimen) else {
+        return false;
+    };
+    let (required, skill) = research_skill(world, specimen);
+    skill >= required
+        && world.borrow::<UniqueView<QuestInfo>>().is_ok_and(|quests| {
+            let research = quests.research();
+            !research.is_complete(template_id)
+                && research.accepts_chemical_for(template_id, &name, &needed)
+        })
+        && player_carried_items(world).contains(&specimen)
 }
 
 fn next_threshold(progress: &ResearchProgress, needed: &PropChemicalNeeded) -> Option<f32> {
@@ -549,6 +611,123 @@ mod tests {
                 .as_deref(),
             Some("Chem #2")
         );
+    }
+
+    #[test]
+    fn a_paused_project_takes_only_its_due_chemical_even_while_another_is_active() {
+        let mut state = ResearchState::default();
+        let chemicals = toxin_chemicals();
+        state.begin(-1341, 1, 1);
+        assert!(
+            !state.accepts_chemical_for(-1341, "Chem #4", &chemicals),
+            "an early dose, before the gate, is not taken"
+        );
+        state.advance(-1341, 31.0, 1, 1.0, 600.0, Some(&chemicals), 0);
+        assert!(state.accepts_chemical_for(-1341, "chem #4", &chemicals));
+        assert!(!state.accepts_chemical_for(-1341, "Chem #2", &chemicals));
+        assert!(!state.accepts_chemical_for(-1095, "Chem #4", &chemicals));
+
+        // Switching to another project leaves the toxin waiting on Chem #4.
+        state.begin(-1095, 1, 1);
+        assert!(!state.accepts_chemical("Chem #4", &chemicals));
+        assert!(state.accepts_chemical_for(-1341, "Chem #4", &chemicals));
+    }
+
+    #[test]
+    fn a_chemical_is_ready_only_for_a_carried_specimen_waiting_on_it_at_skill() {
+        use crate::gui::Gui;
+        use crate::scripts::{Effect, gui::ResearchGui};
+        use dark::properties::{PropScripts, PropSymName, TechSkillValues};
+        use shipyard::UniqueViewMut;
+
+        let chemical = |world: &mut World, name: &str| {
+            world.add_entity((
+                PropScripts {
+                    scripts: vec!["Chemical".into()],
+                    inherits: false,
+                },
+                PropSymName(name.into()),
+            ))
+        };
+        let mut world = World::new();
+        let chemicals = toxin_chemicals();
+        let specimen = world.add_entity((
+            RuntimePropCanonicalTemplateId(-1341),
+            chemicals.clone(),
+            PropBaseTechDesc(TechSkillValues([0, 0, 0, 0, 2])),
+        ));
+        let needed = chemical(&mut world, "Chem #4");
+        let wrong = chemical(&mut world, "Chem #2");
+        let player = world.add_entity(PropBaseTechDesc(TechSkillValues([0, 0, 0, 0, 2])));
+        let backpack = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: Some(specimen),
+            right_hand_entity_id: None,
+            inventory_entity_id: backpack,
+        });
+        let hold = |world: &World, left| {
+            world
+                .borrow::<UniqueViewMut<PlayerInfo>>()
+                .unwrap()
+                .left_hand_entity_id = left;
+        };
+        world.add_unique(QuestInfo::new());
+        assert!(
+            !chemical_ready_for(&world, needed, specimen),
+            "not before research reaches the gate"
+        );
+        {
+            let mut quests = world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+            let research = quests.research_mut();
+            research.begin(-1341, 2, 2);
+            research.advance(-1341, 31.0, 2, 0.0, 600.0, Some(&chemicals), 0);
+            // A different specimen became the active project meanwhile.
+            research.begin(-1095, 1, 2);
+        }
+        assert!(chemical_ready_for(&world, needed, specimen));
+        assert!(!chemical_ready_for(&world, wrong, specimen));
+        assert!(!chemical_ready_for(&world, specimen, specimen));
+
+        // The research GUI takes it as a tool, naming the specimen to resume;
+        // flat inventory drags (`offers_to`) never apply a chemical.
+        let gui = ResearchGui { usable: false };
+        assert!(gui.accepts_tool(specimen, &world, needed));
+        assert!(matches!(
+            gui.on_provide_for_consumption(specimen, &world, needed),
+            Some(Effect::UseResearchChemical { entity_id, specimen: Some(target), released: false })
+                if entity_id == needed && target == specimen
+        ));
+        assert!(!gui.accepts_tool(specimen, &world, wrong));
+        // Refused outright, never deposited inside the specimen.
+        assert!(matches!(
+            gui.on_provide_for_consumption(specimen, &world, wrong),
+            Some(Effect::NoEffect)
+        ));
+        assert!(crate::item_tools::offers_to_held(&world, needed, specimen));
+        assert!(crate::item_tools::can_apply(&world, needed, specimen));
+        assert!(!crate::item_tools::offers_to(&world, needed, specimen));
+
+        // Not carried, or too little skill to resume: not ready.
+        hold(&world, None);
+        assert!(!chemical_ready_for(&world, needed, specimen));
+        hold(&world, Some(specimen));
+        world.add_component(player, PropBaseTechDesc(TechSkillValues([0, 0, 0, 0, 1])));
+        assert!(!chemical_ready_for(&world, needed, specimen));
+
+        // Finished work takes nothing, whatever its gates read.
+        world.add_component(player, PropBaseTechDesc(TechSkillValues([0, 0, 0, 0, 2])));
+        assert!(chemical_ready_for(&world, needed, specimen));
+        {
+            let mut quests = world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+            let research = quests.research_mut();
+            research.begin(-1341, 2, 2);
+            research.advance(-1341, 600.0, 2, 0.0, 600.0, None, 0);
+            assert!(research.is_complete(-1341));
+        }
+        assert!(!chemical_ready_for(&world, needed, specimen));
     }
 
     #[test]

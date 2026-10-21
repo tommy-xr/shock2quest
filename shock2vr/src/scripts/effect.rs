@@ -510,10 +510,15 @@ pub enum Effect {
     /// Explicit research MFD suspend control.
     SuspendResearch,
 
-    /// Offer one carried chemical to the active research project. The handler
-    /// consumes it only when it matches the currently authored gate.
+    /// Offer one carried chemical to the active research project, or to
+    /// `specimen`'s (which then becomes the active one). The handler consumes
+    /// it only when it matches that project's currently authored gate.
+    /// `released`: a VR hand just let go of it, so it is in no hand, container
+    /// or world yet, and whatever is not used up is put back.
     UseResearchChemical {
         entity_id: EntityId,
+        specimen: Option<EntityId>,
+        released: bool,
     },
 
     /// Record an audio log the player just frobbed into the persistent
