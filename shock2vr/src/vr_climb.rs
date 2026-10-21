@@ -195,8 +195,9 @@ pub struct HandClimb {
     /// was a reach for the item, not a grace grab: it refunds.
     fresh: [bool; 2],
     was_grounded: bool,
-    /// The holds held now trace back to a ladder grab: through grace grabs
-    /// and deck transfers, until landing or letting go of everything.
+    /// The holds held now trace back to a ladder grab: through grace grabs,
+    /// deck transfers and any ledges after, until every hand lets go. Feet
+    /// brushing a lip while the hands still hold do not end it.
     ladder_departure: bool,
 }
 
@@ -428,7 +429,6 @@ impl HandClimb {
     pub fn set_grounded(&mut self, grounded: bool) {
         if grounded && !self.was_grounded {
             self.grace_used = 0;
-            self.ladder_departure = false;
         }
         self.was_grounded = grounded;
     }
@@ -1745,7 +1745,11 @@ mod tests {
         assert!(!climb.on_ladder_departure());
         depart(&mut climb);
         climb.set_grounded(true);
-        assert!(!climb.on_ladder_departure(), "landing ends it");
+        climb.set_grounded(false);
+        assert!(
+            climb.on_ladder_departure(),
+            "feet touching down while the hands hold do not end it"
+        );
 
         let mut climb = HandClimb::default();
         depart(&mut climb);

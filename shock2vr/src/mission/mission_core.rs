@@ -5513,7 +5513,8 @@ impl MissionCore {
             let mut hand_climb = hand_climb;
             // An assisted exit on show owns the body until release: a vault
             // somewhere else must not take over first. A vault onto that same
-            // exit goes to the landing on show, so there is one destination.
+            // exit goes to the landing on show or not at all (the holds stay),
+            // so there is one destination.
             if let Some(grip) = self
                 .hand_vault_target(input_context.head.position)
                 .filter(|grip| !self.climb_release.blocks_vault(grip.point))
@@ -5522,18 +5523,21 @@ impl MissionCore {
                     .climb_release
                     .outcome
                     .filter(|outcome| outcome.mode == crate::climb_release::ReleaseMode::Assisted);
-                let to_shown = shown.is_some_and(|outcome| {
-                    self.physics
-                        .plan_assisted_release(outcome.landing, &mut self.player_handle)
-                });
-                if to_shown {
-                    self.climb_release_glide = shown;
-                }
-                if to_shown
-                    || self
+                let vaulted = match shown {
+                    Some(outcome) => {
+                        let planned = self
+                            .physics
+                            .plan_assisted_release(outcome.landing, &mut self.player_handle);
+                        if planned {
+                            self.climb_release_glide = shown;
+                        }
+                        planned
+                    }
+                    None => self
                         .physics
-                        .plan_hand_top_out(grip, &mut self.player_handle)
-                {
+                        .plan_hand_top_out(grip, &mut self.player_handle),
+                };
+                if vaulted {
                     vault_hold = self
                         .interaction
                         .hand_climb()

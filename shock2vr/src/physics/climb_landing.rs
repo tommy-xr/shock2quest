@@ -286,16 +286,17 @@ impl PhysicsWorld {
 
     /// The landing on a walkable floor a hand holds: past the hand, away from
     /// the body, at the first of the vault's insets the body fits. Held, so
-    /// reachable however high: no gaze range applies. `previous` (last
-    /// frame's landing) is kept while it is still on this floor near the hand
-    /// and its glide is clear, skipping the costly support settle.
+    /// reachable however high: no gaze range applies, but only on the held
+    /// surface itself, continuous from the hand. `previous` (last frame's
+    /// landing) is kept while it still is, skipping the costly support settle.
     pub(crate) fn held_floor_landing(
         &self,
         player: &PlayerHandle,
         grip: &ClimbGrip,
         previous: Option<Landing>,
     ) -> Option<Landing> {
-        if !is_walkable_normal(grip.normal.y) {
+        // A ladder's top face is no floor; a wall is no floor.
+        if grip.kind == ClimbGripKind::Ladder || !is_walkable_normal(grip.normal.y) {
             return None;
         }
         let start = vec_to_nvec(self.get_player_next_translation(player));
@@ -306,37 +307,50 @@ impl PhysicsWorld {
             return None;
         }
         let direction = horizontal.normalize();
-        let on_this_floor = |landing: &Landing| {
-            (landing.floor_y - grip.point.y).abs() <= climb_release::GAZE_SNAP_MAX_STEP
-                && vector![landing.center.x - held.x, 0.0, landing.center.z - held.z].norm()
-                    <= HELD_FLOOR_INSETS[HELD_FLOOR_INSETS.len() - 1] + 0.1
-        };
-        if let Some(previous) = previous.filter(on_this_floor) {
-            if self.assisted_route(player, start, previous).is_ok() {
-                return Some(previous);
-            }
-        }
         let filter = player_movement_filter(player.character_handle);
         let not_climbable =
             |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
         let all_queries =
             self.player_movement_queries(self.narrow_phase.query_dispatcher(), filter);
         let queries = all_queries.with_filter(filter.predicate(&not_climbable));
-        let standing = !player.tracking_is_crouched();
-        HELD_FLOOR_INSETS.iter().find_map(|inset| {
-            let ray = Ray::new(
-                Point::from(held + direction * *inset + Vector::y() * 0.3),
-                -Vector::y(),
-            );
-            let (_, hit) = queries.cast_ray_and_get_normal(&ray, 0.6, true)?;
+        // The held surface's floor under (x, z), if it is there at the hold's height.
+        let floor_at = |x: Real, z: Real| {
+            let ray = Ray::new(point![x, held.y + 0.3, z], -Vector::y());
+            let (handle, hit) = queries.cast_ray_and_get_normal(&ray, 0.6, true)?;
             let floor = ray.point_at(hit.time_of_impact).coords;
-            let landing = Self::landing_on(floor, hit.normal, standing);
             (is_walkable_normal(hit.normal.y)
-                && on_this_floor(&landing)
-                && self.assisted_route(player, start, landing).is_ok()
-                && self.landing_is_supported(player, landing))
+                && (floor.y - held.y).abs() <= climb_release::GAZE_SNAP_MAX_STEP
+                && EntityId::from_inner(self.collider_set[handle].user_data as u64)
+                    == grip.entity_id)
+                .then_some((floor, hit.normal))
+        };
+        // On the held surface all the way from the hand: no gap to another
+        // platform, sampled every 0.2.
+        let connected = |landing: &Landing| {
+            let to = vector![landing.center.x - held.x, 0.0, landing.center.z - held.z];
+            let steps = (to.norm() / 0.2).ceil().max(1.0) as usize;
+            to.norm() <= HELD_FLOOR_INSETS[HELD_FLOOR_INSETS.len() - 1] + 0.1
+                && (1..=steps).all(|i| {
+                    let at = held + to * (i as Real / steps as Real);
+                    floor_at(at.x, at.z).is_some()
+                })
+        };
+        if let Some(previous) = previous.filter(|previous| connected(previous)) {
+            if self.assisted_route(player, start, previous).is_ok() {
+                return Some(previous);
+            }
+        }
+        let standing = !player.tracking_is_crouched();
+        // One support settle at most: the nearest inset that passes the rest.
+        let landing = HELD_FLOOR_INSETS.iter().find_map(|inset| {
+            let at = held + direction * *inset;
+            let (floor, normal) = floor_at(at.x, at.z)?;
+            let landing = Self::landing_on(floor, normal, standing);
+            (connected(&landing) && self.assisted_route(player, start, landing).is_ok())
+                .then_some(landing)
+        })?;
+        self.landing_is_supported(player, landing)
             .then_some(landing)
-        })
     }
 
     /// Where letting go now lands: straight down, or along the arc of
@@ -578,8 +592,12 @@ mod tests {
     fn a_held_floor_lands_on_it_past_the_hand_however_high_it_is() {
         // A deck 2 above the feet: beyond gaze reach, but held.
         let (mut world, mut player) = fixture(&[(vec3(3.0, 5.0, 0.0), vec3(4.0, 2.0, 4.0))]);
+        let deck = ClimbGrip {
+            entity_id: EntityId::from_inner(102),
+            ..ledge(vec3(1.1, 6.0, 0.0))
+        };
         let landing = world
-            .held_floor_landing(&player, &ledge(vec3(1.1, 6.0, 0.0)), None)
+            .held_floor_landing(&player, &deck, None)
             .expect("the held deck");
         assert!((landing.floor_y - 6.0).abs() < 0.01, "{landing:?}");
         assert!(landing.center.x > 1.1 + 0.3, "past the hand: {landing:?}");
@@ -601,6 +619,28 @@ mod tests {
         };
         let (world, player) = fixture(&[]);
         assert_eq!(world.held_floor_landing(&player, &wall, None), None);
+    }
+
+    #[test]
+    fn a_held_floor_never_lands_on_a_separate_platform_or_from_a_ladder() {
+        // A sill, and past a 0.2 gap a platform at the same height: holding
+        // the sill must not hand the body onto the platform it never held.
+        let (world, player) = fixture(&[
+            (vec3(0.75, 5.0, 0.0), vec3(0.3, 2.0, 4.0)),
+            (vec3(2.05, 5.0, 0.0), vec3(1.9, 2.0, 4.0)),
+        ]);
+        let sill = ClimbGrip {
+            entity_id: EntityId::from_inner(102),
+            ..ledge(vec3(0.75, 6.0, 0.0))
+        };
+        assert_eq!(world.held_floor_landing(&player, &sill, None), None);
+        // A ladder's top face is not a floor the hand holds.
+        let (world, player) = fixture(&[(vec3(3.0, 5.0, 0.0), vec3(4.0, 2.0, 4.0))]);
+        let ladder_top = ClimbGrip {
+            kind: ClimbGripKind::Ladder,
+            ..ledge(vec3(0.75, 6.0, 0.0))
+        };
+        assert_eq!(world.held_floor_landing(&player, &ladder_top, None), None);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer, otherHand, quatMultiply, quatRotate, viewRight, vrClimbLadder, vrGrab } from "../src/index.js";
+import { GameServer, otherHand, quatMultiply, quatRotate, viewRight, vrClimbLadder, vrGrab, vrVault } from "../src/index.js";
 import type { ClimbRelease, Hand, Vec3 } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
@@ -230,6 +230,26 @@ for (const untilY of [5.0, 5.4]) {
     },
   );
 }
+
+test(
+  "debug_ladder (VR): a vault from the held deck lands on the footprint on show",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+    const { anchor } = await climbAt(game, LEDGE_Z, 5.4);
+    const free = otherHand(anchor);
+    const right = Math.sign((await viewRight(game))[2]);
+    await vrGrab(game, free, [-7.25, DECK_Y + 0.02, (free === "right" ? right : -right) * 0.35]);
+    await game.input.set(`${free}_hand.world_target`, null);
+    // Off the ladder: hanging from the deck alone.
+    await game.input.set(`${anchor}_hand.squeeze`, 0);
+    await game.step({ frames: 3 });
+    const shown = await release(game);
+    assert.equal(shown.mode, "assisted", JSON.stringify(shown));
+    const { landed } = await vrVault(game, free);
+    assertArrived(landed, shown.landing!);
+  },
+);
 
 test(
   "debug_ladder (VR): low on a ladder the natural drop is safe",

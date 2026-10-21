@@ -287,10 +287,12 @@ pub fn resolve(
         .or_else(|| {
             (exits_a_ladder && tracked)
                 .then(|| {
+                    let anchor_hand = climb.anchor();
                     climb
-                        .anchor_grip()
-                        .into_iter()
-                        .chain(climb.grips().map(|(_, anchor)| anchor))
+                        .grips()
+                        .filter(|(hand, _)| Some(*hand) == anchor_hand)
+                        .chain(climb.grips().filter(|(hand, _)| Some(*hand) != anchor_hand))
+                        .map(|(_, anchor)| anchor)
                         .find_map(|anchor| {
                             physics.held_floor_landing(player, &anchor.grip, previous.assisted())
                         })
