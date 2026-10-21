@@ -3395,6 +3395,14 @@ pub struct MissionCore {
     /// The lower-button press behind `button_jump` is still held: the jump
     /// channel stays down with it, so a held press keeps swimming up.
     button_jump_held: bool,
+    /// Where letting go of every climbing hold would land: resolved after each
+    /// movement frame, shown and committed until the next (see `climb_release`).
+    climb_release: crate::climb_release::ReleasePreview,
+    /// The assisted landing a committed release is gliding to.
+    climb_release_glide: Option<crate::climb_release::ReleaseOutcome>,
+    /// The view's yaw (radians about +Y; 0 faces -Z), for the footprint.
+    climb_release_yaw: f32,
+    landing_marker: crate::climb_marker::LandingMarker,
 
     /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the VR
     /// comfort dim's strength - see [`crate::ui::entry_ramp`]. Advanced every
@@ -4439,6 +4447,10 @@ impl MissionCore {
             psi_nav_latched: Default::default(),
             button_jump: false,
             button_jump_held: false,
+            climb_release: Default::default(),
+            climb_release_glide: None,
+            climb_release_yaw: 0.0,
+            landing_marker: Default::default(),
             use_mode_shortcut: None,
             use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp::new(),
             vr_use_mode_anchor: crate::ui::FrontendPanelAnchor::new(),
@@ -5425,6 +5437,28 @@ impl MissionCore {
                 Vec::new(),
             )
         } else {
+            // A voluntary final release commits the assisted landing on show,
+            // frozen there (the head no longer steers it) and revalidated from
+            // here; it replaces the throw. A broken hold or lost tracking does
+            // not commit. Before the crouch request below: the glide owns the
+            // body, so a held crouch cannot first change the stance the shown
+            // landing was resolved for.
+            let shown = self
+                .climb_release
+                .outcome
+                .filter(|outcome| outcome.mode == crate::climb_release::ReleaseMode::Assisted);
+            let assisted_release = shown.is_some_and(|outcome| {
+                hand_climb.released
+                    && input_context
+                        .pose_tracking
+                        .is_none_or(|tracking| tracking.head && tracking.hands == [true; 2])
+                    && self
+                        .physics
+                        .plan_assisted_release(outcome.landing, &mut self.player_handle)
+            });
+            if assisted_release {
+                self.climb_release_glide = shown;
+            }
             // Apply the crouch request before moving: swaps the capsule size
             // feet-planted; standing up is refused without headroom (the
             // actual state is read back via `player_is_crouched`).
@@ -5466,7 +5500,12 @@ impl MissionCore {
             // the planner cannot find is simply not taken - the holds stay and
             // the player keeps pulling.
             let mut hand_climb = hand_climb;
-            if let Some(grip) = self.hand_vault_target(input_context.head.position) {
+            // An assisted exit on show owns the body until release: a vault
+            // somewhere else must not take over first.
+            if let Some(grip) = self
+                .hand_vault_target(input_context.head.position)
+                .filter(|grip| !self.climb_release.blocks_vault(grip.point))
+            {
                 if self
                     .physics
                     .plan_hand_top_out(grip, &mut self.player_handle)
@@ -5482,7 +5521,7 @@ impl MissionCore {
             }
             // Letting go of the last hold throws the body with the momentum of
             // the pull, so a hard haul-and-release sails on past the hold.
-            if let Some(launch) = hand_climb.launch {
+            if let Some(launch) = hand_climb.launch.filter(|_| !assisted_release) {
                 self.physics.launch_player(launch, &mut self.player_handle);
             }
             // A discrete jump (a Quest hand's lower face button, an injected
@@ -5557,6 +5596,44 @@ impl MissionCore {
                 self.interaction
                     .resolve_hand_climb(requested, self.player_handle.self_translation());
             }
+            // A committed landing stays shown through the glide and any fall
+            // that ends it, until the body lands or takes a new hold. A glide
+            // turned back by an obstruction ends away from it: clear at once.
+            if !self.player_handle.is_topping_out() {
+                let body = self.physics.get_player_translation(&self.player_handle);
+                if self.climb_release_glide.is_some_and(|glide| {
+                    let off = glide.landing.center - body;
+                    vec3(off.x, 0.0, off.z).magnitude() > 0.1
+                }) || self.player_handle.is_grounded()
+                    || self
+                        .interaction
+                        .hand_climb()
+                        .is_some_and(|climb| climb.grips().next().is_some())
+                {
+                    self.climb_release_glide = None;
+                }
+            }
+            self.climb_release =
+                self.interaction
+                    .hand_climb()
+                    .map_or_else(Default::default, |climb| {
+                        crate::climb_release::resolve(
+                            &self.physics,
+                            &self.player_handle,
+                            climb,
+                            input_context,
+                            new_rotation,
+                            &self.climb_release,
+                            crate::dev_params::get(crate::dev_params::CLIMB_SAFE_DROP)
+                                / crate::METERS_PER_WORLD_UNIT,
+                        )
+                    });
+            if let Some(head) = crate::util::tracked_rotation(input_context.head.rotation) {
+                let forward = (new_rotation * head).rotate_vector(vec3(0.0, 0.0, -1.0));
+                self.climb_release_yaw = (-forward.x).atan2(-forward.z);
+            }
+            self.interaction
+                .set_climb_release_safe(self.climb_release.safe());
             moved
         };
 
@@ -18779,6 +18856,17 @@ impl MissionCore {
         );
 
         scene.extend(self.rag_doll_manager.render_scene_objects());
+        // Where letting go of every hold lands (VR climbing), or the landing a
+        // committed release is gliding to.
+        if let Some(outcome) = self.climb_release_glide.or(self.climb_release.outcome) {
+            scene.push(self.landing_marker.object(
+                outcome.landing.center,
+                outcome.landing.floor_y,
+                outcome.landing.normal,
+                self.climb_release_yaw,
+                outcome.safe,
+            ));
+        }
 
         // Render bitmap_animation
         for (entity_id, objs) in &self.id_to_bitmap {
@@ -22426,6 +22514,23 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 .collect(),
             grace_remaining: climb.map_or(0, |climb| climb.grace_remaining()),
             reach: self.interaction.climb_reach(),
+            release: {
+                let xyz = |v: Vector3<f32>| [v.x, v.y, v.z];
+                let preview = &self.climb_release;
+                let outcome = preview.outcome;
+                crate::game_scene::DebugClimbRelease {
+                    mode: outcome.map_or("none", |outcome| outcome.mode.as_str()),
+                    landing: outcome.map(|outcome| xyz(outcome.landing.center)),
+                    floor_y: outcome.map(|outcome| outcome.landing.floor_y),
+                    expected_drop: outcome.map(|outcome| outcome.drop),
+                    safe: preview.safe(),
+                    rejection: preview.gaze_rejection.map(|reason| reason.as_str()),
+                    gaze_candidate: preview.gaze_candidate.map(xyz),
+                    gliding_to: self
+                        .climb_release_glide
+                        .map(|outcome| xyz(outcome.landing.center)),
+                }
+            },
         })
     }
 

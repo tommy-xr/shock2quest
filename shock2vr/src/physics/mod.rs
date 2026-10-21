@@ -1,3 +1,4 @@
+mod climb_landing;
 #[cfg(any(test, feature = "damage-query-audit", feature = "lazy-hitboxes"))]
 mod damage_queries;
 mod debug_render_pipeline;
@@ -7262,10 +7263,18 @@ impl PhysicsWorld {
         let Some(route) = planned else {
             return false;
         };
+        self.start_hand_route(route, player);
+        true
+    }
+
+    /// Hand the body to a planned tucked hand route (a vault or an assisted
+    /// release), starting from its `save_pose`.
+    fn start_hand_route(&mut self, route: ClimbTopOut, player: &mut PlayerHandle) {
         self.set_player_crouch_hanging(true, player);
         // A stance change may reset the body's queued translation. Preserve
         // the collision-resolved hand movement this route was planned from.
-        self.rigid_body_set[player.character_handle].set_next_kinematic_translation(start);
+        self.rigid_body_set[player.character_handle]
+            .set_next_kinematic_translation(route.save_pose);
         player.top_out = Some(route);
         sync_top_out_collider(
             &mut self.collider_set,
@@ -7273,7 +7282,6 @@ impl PhysicsWorld {
             false,
             player,
         );
-        true
     }
 
     /// The fixed timestep one movement frame integrates with. A velocity

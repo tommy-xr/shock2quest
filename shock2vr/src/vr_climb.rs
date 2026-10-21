@@ -87,14 +87,19 @@ pub fn vault_ready(
 /// the wall clock: one sample of travel per game update becomes one physics
 /// step of flight, so dividing by anything else makes the throw faster or
 /// slower than the pull that produced it at any frame rate but 60 Hz.
-pub(crate) fn release_velocity(travel: &[Vector3<f32>], step_dt: f32) -> Option<Vector3<f32>> {
-    if travel.is_empty() || step_dt <= 0.0 {
+pub(crate) fn release_velocity<'a>(
+    travel: impl IntoIterator<Item = &'a Vector3<f32>>,
+    step_dt: f32,
+) -> Option<Vector3<f32>> {
+    let (sum, count) = travel
+        .into_iter()
+        .fold((Vector3::zero(), 0), |(sum, count), delta| {
+            (sum + delta, count + 1)
+        });
+    if count == 0 || step_dt <= 0.0 {
         return None;
     }
-    let mean = travel
-        .iter()
-        .fold(Vector3::zero(), |sum, delta| sum + delta)
-        / travel.len() as f32;
+    let mean = sum / count as f32;
     let mut velocity = -mean / step_dt;
     let speed = velocity.magnitude();
     if speed > CLIMB_RELEASE_MAX_SPEED {
@@ -112,6 +117,9 @@ pub struct ClimbFrame {
     /// Velocity to launch the body with, set on the frame the LAST hold is
     /// voluntarily released (see [`release_velocity`]).
     pub launch: Option<Vector3<f32>>,
+    /// The LAST hold was voluntarily opened this frame, thrown or not. A
+    /// broken hold or a handoff to the other hand is not a release.
+    pub released: bool,
 }
 
 /// One hand's hold: what it grabbed, and where the hand was in the world when
@@ -320,14 +328,12 @@ impl HandClimb {
             }
         }
 
-        let launch = if had_a_hold
+        let released = had_a_hold
             && self.anchor.is_none()
-            && previous_anchor.is_some_and(|hand| let_go_cleanly[slot(hand)])
-        {
-            release_velocity(self.recent_anchor_travel.make_contiguous(), step_dt)
-        } else {
-            None
-        };
+            && previous_anchor.is_some_and(|hand| let_go_cleanly[slot(hand)]);
+        let launch = released
+            .then(|| release_velocity(&self.recent_anchor_travel, step_dt))
+            .flatten();
 
         // A new anchor starts a fresh history: the travel so far is the other
         // hand's, and a re-based hold is a new pull.
@@ -352,7 +358,13 @@ impl HandClimb {
         ClimbFrame {
             translation,
             launch,
+            released,
         }
+    }
+
+    /// The throw opening the anchor hand now would give, from its pull so far.
+    pub fn predicted_release_velocity(&self, step_dt: f32) -> Option<Vector3<f32>> {
+        release_velocity(&self.recent_anchor_travel, step_dt)
     }
 
     /// What a free `hand` at `point` would take, and which grace grab (0 for
@@ -1289,6 +1301,7 @@ mod tests {
         let launch = released.launch.expect("a quick pull should launch");
         assert!((launch.y - 4.8).abs() < 0.1, "{launch:?}");
         assert_eq!(released.translation, None);
+        assert!(released.released);
 
         // Stopping the hand before opening it is part of the pull: the same
         // haul, released from rest, throws proportionally less.
@@ -1320,6 +1333,7 @@ mod tests {
         );
         assert_eq!(broke.translation, None, "the grip should have broken");
         assert_eq!(broke.launch, None);
+        assert!(!broke.released, "a broken hold is not a release");
     }
 
     #[test]
@@ -1349,7 +1363,26 @@ mod tests {
         // it does not get thrown.
         let handoff = step(&mut climb, [hand(at, 0.0), hand(right, 1.0)], false);
         assert_eq!(handoff.launch, None);
+        assert!(!handoff.released, "a handoff is not a release");
         assert_eq!(climb.anchor(), Some(Handedness::Right));
+    }
+
+    #[test]
+    fn opening_a_still_last_hand_is_a_release_and_predicts_its_throw() {
+        // Hanging still: a release that throws nothing is still a release.
+        let still = pull_and_finish(4, Vector3::zero(), open_the_hand);
+        assert_eq!(still.launch, None);
+        assert!(still.released);
+
+        // Mid-pull, the predicted throw is the one opening on the next frame
+        // of that pull gives.
+        let mut predicted = None;
+        let launched = pull_and_finish(4, vec3(0.0, -0.08, 0.0), |climb, at| {
+            predicted = climb.predicted_release_velocity(DT);
+            open_the_hand(climb, at + vec3(0.0, -0.08, 0.0))
+        });
+        assert_eq!(predicted, launched.launch);
+        assert!(predicted.is_some());
     }
 
     #[test]

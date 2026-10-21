@@ -423,6 +423,9 @@ dev_params! {
     VR_HOLSTER_RADIUS = Body::float("vr_holster_radius", "Holster reach radius (m)", 0.15, 0.14, 0.5, 0.01),
     VR_GLOVE_SPHERES = Interaction::bool("vr_glove_spheres", "Glove contact spheres", false),
     VR_GLOVE_RADIUS = Body::float("vr_glove_radius", "Glove contact radius (m)", 0.1, 0.02, 0.1, 0.005),
+    /// Deepest drop (m) letting go of every climbing hold counts as safe: the
+    /// held gloves glow green and the landing footprint is solid at or below it.
+    CLIMB_SAFE_DROP = Body::float("climb_safe_drop", "Climb safe drop (m)", 1.0, 0.25, 4.0, 0.05),
     /// Base chest and ammo target volumes; show glove spheres separately to see contact.
     VR_BODY_INVENTORY_ZONES = Interaction::bool("vr_body_inventory_zones", "Body inventory zones", false),
     VR_PLAYER_COLLIDER = Body::bool("vr_player_collider", "Player collision capsule", false),

@@ -137,6 +137,8 @@ pub use hand_glove::{GloveRenderer, HandLight};
 /// can re-measure the melee `_h` contact offsets off the shipped rigs with the
 /// same maths the wield uses.
 pub use vr_config::{Handedness, MeleePosedArm, melee_contact_offset};
+mod climb_marker;
+pub mod climb_release;
 pub mod swimming;
 pub mod vr_climb;
 pub mod vr_crouch;

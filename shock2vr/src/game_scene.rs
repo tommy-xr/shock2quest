@@ -442,6 +442,28 @@ pub struct DebugClimbState {
     pub grace_remaining: u8,
     /// Free (left, right) gloves glowing in reach of a hold they would take.
     pub reach: [bool; 2],
+    /// What letting go of every hold does (see `crate::climb_release`).
+    pub release: DebugClimbRelease,
+}
+
+/// The `/v1/info` climb release readout: the outcome the footprint and held
+/// gloves show, and the gaze verdict behind it.
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct DebugClimbRelease {
+    /// "assisted" (gaze landing), "natural" (plain drop/throw), or "none".
+    pub mode: &'static str,
+    /// Resting body centre at the landing.
+    pub landing: Option<[f32; 3]>,
+    pub floor_y: Option<f32>,
+    /// Feet height now minus the landing floor.
+    pub expected_drop: Option<f32>,
+    pub safe: bool,
+    /// Why the gaze offered no assisted landing, if it did not.
+    pub rejection: Option<&'static str>,
+    /// The aimed surface point behind the gaze verdict.
+    pub gaze_candidate: Option<[f32; 3]>,
+    /// The landing a committed assisted release is gliding to.
+    pub gliding_to: Option<[f32; 3]>,
 }
 
 /// Raycast mask for collision group filtering

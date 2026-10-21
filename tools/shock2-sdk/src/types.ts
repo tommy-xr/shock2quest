@@ -904,6 +904,37 @@ export interface ClimbState {
   grace_remaining: number;
   /** Free [left, right] gloves glowing in reach of a hold they would take. */
   reach: [boolean, boolean];
+  /** What letting go of every hold does: the footprint and held gloves show it. */
+  release: ClimbRelease;
+}
+
+/** The climb release readout (GET /v1/info): where letting go of every hold lands. */
+export interface ClimbRelease {
+  /** `assisted`: a gaze-selected landing a release glides to; `natural`: the plain drop/throw. */
+  mode: "assisted" | "natural" | "none";
+  /** Resting body centre at the landing. */
+  landing: Vec3 | null;
+  floor_y: number | null;
+  /** Feet height now minus the landing floor. */
+  expected_drop: number | null;
+  /** A known landing within the `climb_safe_drop` dev param: green gloves. */
+  safe: boolean;
+  /** Why the gaze offered no assisted landing, if it did not. */
+  rejection:
+    | "inactive"
+    | "no_hit"
+    | "not_walkable"
+    | "too_far"
+    | "too_high"
+    | "too_low"
+    | "no_fit"
+    | "unsupported"
+    | "blocked"
+    | null;
+  /** The aimed surface point behind the gaze verdict. */
+  gaze_candidate: Vec3 | null;
+  /** The landing a committed assisted release is gliding to. */
+  gliding_to: Vec3 | null;
 }
 
 /** One audio log the player has collected, keyed by its per-deck identity. */
