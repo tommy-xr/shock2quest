@@ -314,6 +314,16 @@ fn status_line(name: &str, status: &ResearchStatus, fraction: f32, body: String)
     }
 }
 
+/// HUD line for firing a weapon not yet researched.
+pub(crate) fn unresearched_message(world: &World) -> String {
+    PanelText::string(
+        world,
+        "research",
+        "QueryUnresearched",
+        "This item is not yet researched.",
+    )
+}
+
 /// HUD line for a chemical the player used: taken by the active project or not.
 pub(crate) fn chemical_message(world: &World, consumed: bool) -> String {
     if consumed {

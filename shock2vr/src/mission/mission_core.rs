@@ -10168,6 +10168,7 @@ impl MissionCore {
                     return Vec::new();
                 }
                 if crate::scripts::gui::WeaponSettingsTarget::is_carried_gun(&self.world, entity_id)
+                    && !crate::research::researches_on_use(&self.world, entity_id)
                 {
                     vec![Effect::OpenWeaponSettings {
                         weapon: Some(entity_id),
