@@ -59,6 +59,10 @@ pub(crate) const SETTING_BUTTON: Rect = Rect::new(118.0, 15.0, 66.0, 20.0);
 /// The RELOAD button - the same thing the Reload key does.
 pub(crate) const RELOAD_BUTTON: Rect = Rect::new(118.0, 37.0, 66.0, 20.0);
 
+/// IFBTN00.PCX, the interface's blank button plate: its authored size and
+/// bevel widths (left, top, right, bottom), for nine-patching onto a control.
+pub(crate) const PLATE_ART: ([f32; 2], [f32; 4]) = ([38.0, 36.0], [4.0, 4.0, 5.0, 4.0]);
+
 /// Psi tier badge (AmPsi&lt;tier&gt;1.PCX, 32x19), in the gauge well while the
 /// amp is wielded - the amp has no clip, so this replaces the ammo readout.
 pub(crate) const PSI_TIER_BADGE: Rect = Rect::new(177.0, 16.0, 32.0, 19.0);
@@ -82,8 +86,9 @@ pub(crate) const PSI_SELECT: Rect = Rect::new(
     PSI_POWER_NEXT.h,
 );
 
-/// The font every readout label uses (the original's HUD font).
-const FONT: &str = "mainfont.fon";
+/// The font every readout label uses: the original HUD's antialiased face in
+/// its cyan text palette. Plain `mainfont.fon` is an untinted bitmap and draws white.
+const FONT: &str = crate::ui::MFD_FONT;
 
 /// The condition badges, best first: a green "10" down through a red "1", then
 /// a crossed-out badge for a gun that is not in working order. The shipped art
@@ -178,6 +183,14 @@ pub struct ReadoutButtonSpec {
     pub rect: Rect,
     pub texture: Option<&'static str>,
     pub text: Option<String>,
+    /// Cyan [`FONT`] for a control on the black readout, a chrome font for a
+    /// caption on a grey plate.
+    pub font: &'static str,
+    /// Label height in canvas pixels; 0 draws the font's native size.
+    pub font_size: f32,
+    /// Nine-patch the texture (its authored size, then its bevel borders) so
+    /// a plate wider than its art keeps an undistorted bevel.
+    pub nine_slice: Option<([f32; 2], [f32; 4])>,
 }
 
 /// Draw one control at `rect`: its art, then its label centred on it.
@@ -188,12 +201,22 @@ pub struct ReadoutButtonSpec {
 /// hit-tested from another.
 pub(crate) fn draw_button(canvas: &mut UiCanvas, button: &ReadoutButtonSpec, rect: Rect) {
     if let Some(texture) = button.texture {
-        canvas.image(rect, texture);
+        match button.nine_slice {
+            Some((art_size, borders)) => canvas.nine_slice_image(rect, texture, art_size, borders),
+            None => canvas.image(rect, texture),
+        };
     }
     if let Some(text) = &button.text {
         // Ellipsized: labels are data (a localized MISC.STR string, an authored
         // `P$SHead` header), and an over-wide one would spill onto the gauge.
-        canvas.text_native_fit(rect, text, FONT, HAlign::Center, VAlign::Middle);
+        canvas.text_fit(
+            rect,
+            text,
+            button.font,
+            button.font_size,
+            HAlign::Center,
+            VAlign::Middle,
+        );
     }
 }
 
@@ -330,6 +353,17 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
         rect,
         texture,
         text: text.map(str::to_owned),
+        font: FONT,
+        font_size: 0.0,
+        nine_slice: None,
+    };
+    // The fire-mode and reload controls read as pressable: the original's
+    // green MFD button (TBUTMAX, as the upgrade chooser nine-patches it),
+    // captioned in the cyan readout face.
+    let plated = |button, rect, text: Option<&str>| ReadoutButtonSpec {
+        texture: Some("iface/tbutmax.pcx"),
+        nine_slice: Some(([90.0, 32.0], [3.0; 4])),
+        ..spec(button, rect, None, text)
     };
     if !readout.show_buttons {
         return Vec::new();
@@ -375,18 +409,16 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
     // The fire-mode button is shown for every gun with a magazine, energy
     // weapons included - only a gun whose data names no mode has none.
     if let Some(header) = &readout.gun_setting_header {
-        out.push(spec(
+        out.push(plated(
             ReadoutButton::GunSetting,
             SETTING_BUTTON,
-            None,
             Some(header),
         ));
     }
     if readout.can_reload {
-        out.push(spec(
+        out.push(plated(
             ReadoutButton::Reload,
             RELOAD_BUTTON,
-            None,
             Some(&readout.reload_label),
         ));
     }
@@ -1176,8 +1208,12 @@ mod tests {
                 spec.button
             );
         }
-        // count + icon + type + 3 buttons
-        assert_eq!(canvas.element_count(), 3 + specs.len());
+        // count + icon + type, then each button's plate and label
+        let button_elements: usize = specs
+            .iter()
+            .map(|spec| usize::from(spec.texture.is_some()) + usize::from(spec.text.is_some()))
+            .sum();
+        assert_eq!(canvas.element_count(), 3 + button_elements);
     }
 
     #[test]

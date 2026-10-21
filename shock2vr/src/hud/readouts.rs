@@ -22,8 +22,8 @@ use super::ammo_panel::{self, AmmoReadout, ReadoutButton, ReadoutButtonSpec};
 use crate::mission::PlayerInfo;
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 
-/// The font the bio numbers use (the original's HUD font).
-const FONT: &str = "mainfont.fon";
+/// The font the bio numbers use - the same cyan HUD face as the ammo readout.
+const FONT: &str = crate::ui::MFD_FONT;
 
 /// The bio panel's compact (BIO.PCX) and expanded (BIOFULL.PCX) art sizes.
 /// BIO is the left crop of BIOFULL, so the bars and numbers below land
@@ -86,10 +86,13 @@ pub(crate) fn system_button() -> ReadoutButtonSpec {
     ReadoutButtonSpec {
         button: ReadoutButton::SystemMenu,
         rect: SYSTEM_BUTTON,
-        // The original's blank interface-button plate, widened from its
-        // authored 38 px so the label sits inside the bevel rather than on it.
+        // The original's blank interface-button plate, nine-patched so the
+        // widened plate keeps its bevel; the label is sized to sit well inside.
         texture: Some("IFBTN00.PCX"),
         text: Some("MENU".to_owned()),
+        font: crate::ui::CHROME_BOLD_FONT,
+        font_size: 12.0,
+        nine_slice: Some(ammo_panel::PLATE_ART),
     }
 }
 
@@ -100,6 +103,9 @@ pub(crate) fn exit_button() -> ReadoutButtonSpec {
         rect: Rect::new(304.0, 437.0, 32.0, 40.0),
         texture: Some("iface/ml0.png"),
         text: None,
+        font: FONT,
+        font_size: 0.0,
+        nine_slice: None,
     }
 }
 
@@ -309,6 +315,9 @@ fn hand_selectors(readouts: &UseModeReadouts) -> [ReadoutButtonSpec; 2] {
             rect: HAND_TABS[slot],
             texture: Some("IFBTN00.PCX"),
             text: Some(format!("{} {value}", ["LEFT", "RIGHT"][slot])),
+            font: crate::ui::CHROME_FONT,
+            font_size: 0.0,
+            nine_slice: None,
         }
     })
 }
@@ -327,6 +336,9 @@ pub(crate) fn buttons(readouts: &UseModeReadouts) -> Vec<ReadoutButtonSpec> {
         rect: LOG_BUTTON,
         texture: Some("iface/ifbtn00.pcx"),
         text: None,
+        font: FONT,
+        font_size: 0.0,
+        nine_slice: None,
     };
     ammo_panel::buttons(&readouts.ammo)
         .into_iter()
