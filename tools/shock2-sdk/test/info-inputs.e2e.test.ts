@@ -56,6 +56,7 @@ test(
             a: number;
           };
         };
+        roomscale_bounds: number[] | null;
       };
     };
 
@@ -79,6 +80,7 @@ test(
           a: 0.7,
         },
       },
+      roomscale_bounds: null,
     });
   },
 );

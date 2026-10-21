@@ -2374,6 +2374,7 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
         crouch: input.crouch,
         jump: input.jump,
         lean: input.lean,
+        roomscale_bounds: input.roomscale_bounds,
     }
 }
 
@@ -2396,6 +2397,7 @@ fn input_snapshot_from_context(input: &InputContext) -> InputSnapshot {
             left: hand_snapshot(input.left_hand),
             right: hand_snapshot(input.right_hand),
         },
+        roomscale_bounds: input.roomscale_bounds,
     }
 }
 
@@ -5160,6 +5162,7 @@ mod shutdown_tests {
             ("right_hand.trigger", json!(0.3)),
             ("right_hand.squeeze", json!(0.5)),
             ("right_hand.a", json!(0.7)),
+            ("roomscale.bounds", json!([2.0, 1.5])),
         ] {
             apply_input_patch(&mut input, channel, &value).unwrap();
         }
@@ -5179,6 +5182,10 @@ mod shutdown_tests {
         assert_eq!(snapshot.hands.right.trigger, 0.3);
         assert_eq!(snapshot.hands.right.squeeze, 0.5);
         assert_eq!(snapshot.hands.right.a, 0.7);
+        assert_eq!(snapshot.roomscale_bounds, Some([2.0, 1.5]));
+
+        apply_input_patch(&mut input, "roomscale.bounds", &Value::Null).unwrap();
+        assert_eq!(input_snapshot_from_context(&input).roomscale_bounds, None);
     }
 }
 

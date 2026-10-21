@@ -44,6 +44,9 @@ pub struct InputContext {
     pub pose_tracking: Option<PoseTracking>,
     /// This sample uses a newly defined tracking origin, not physical travel.
     pub tracking_origin_changed: bool,
+    /// Guardian play-area size `[width, depth]` in metres. `None` when the
+    /// runtime reports no bounds (e.g. no boundary is set up).
+    pub roomscale_bounds: Option<[f32; 2]>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -86,6 +89,7 @@ impl InputContext {
             tracking: None,
             pose_tracking: None,
             tracking_origin_changed: false,
+            roomscale_bounds: None,
         }
     }
 

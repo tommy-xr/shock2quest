@@ -48,7 +48,8 @@ pub fn input_channels_help() -> &'static str {
      {left,right}_hand.world_target [x,y,z] world, VR, within arm reach (debug runtime only; null clears), \
      crouch 0|1 (stand-up refused without headroom), \
      lean -1..1 (flat only; negative left, positive right), \
-     jump 0|1 (held; launches on the grounded rising edge); \
+     jump 0|1 (held; launches on the grounded rising edge), \
+     roomscale.bounds [width,depth] metres > 0 (guardian play area; null = unavailable, or releases a Quest override); \
      locomotion: flat uses right_hand.thumbstick [strafe, forward] to move and left_hand.thumbstick.x to turn; \
      VR uses left to move and right to turn; turn-stick y flies only with player_flight enabled"
 }
@@ -72,6 +73,7 @@ pub fn input_channels_help() -> &'static str {
 /// - `{left,right}_hand.a`          : number in [0, 1] (alias `a_value`)
 /// - `{left,right}_hand.thumbstick` : `[x, y]`
 /// - `jump`                         : number `0` or `1`
+/// - `roomscale.bounds`             : `[width, depth]` metres, or `null` for unavailable
 pub fn apply_input_patch(
     input: &mut InputContext,
     channel: &str,
@@ -265,6 +267,22 @@ pub fn apply_input_patch(
             };
             Ok(())
         }
+        // The guardian play-area size a headset would report; `null` is the
+        // no-bounds case (stationary or boundary-less play area).
+        "roomscale.bounds" => {
+            if value.is_null() {
+                input.roomscale_bounds = None;
+                return Ok(());
+            }
+            let wd = arr(channel, value, 2)?;
+            if wd[0] <= 0.0 || wd[1] <= 0.0 {
+                return Err(format!(
+                    "channel '{channel}' expects positive [width, depth] metres, got {value}"
+                ));
+            }
+            input.roomscale_bounds = Some([wd[0], wd[1]]);
+            Ok(())
+        }
         _ => Err(format!(
             "unknown input channel '{channel}'; {}",
             input_channels_help()
@@ -341,7 +359,9 @@ fn canonical_channel(channel: &str) -> Result<(String, bool), String> {
     match channel {
         "head.look" => Ok(("head.rotation".to_owned(), true)),
         "head.rotation" | "head.position" | "pointer.position" | "pointer.pressed"
-        | "pointer.secondary" | "crouch" | "jump" | "lean" => Ok((channel.to_owned(), false)),
+        | "pointer.secondary" | "crouch" | "jump" | "lean" | "roomscale.bounds" => {
+            Ok((channel.to_owned(), false))
+        }
         _ => Err(unknown_channel(channel)),
     }
 }
@@ -446,6 +466,24 @@ mod tests {
         for value in [json!(-1.01), json!(1.01), json!(true), json!("left")] {
             assert!(overrides.set("lean", value).is_err());
         }
+    }
+
+    #[test]
+    fn roomscale_bounds_accepts_positive_extent_or_null() {
+        let mut input = InputContext::default();
+        apply_input_patch(&mut input, "roomscale.bounds", &json!([2.0, 1.5])).unwrap();
+        assert_eq!(input.roomscale_bounds, Some([2.0, 1.5]));
+        for bad in [
+            json!([0.0, 1.5]),
+            json!([2.0, -1.0]),
+            json!([2.0]),
+            json!(2.0),
+        ] {
+            assert!(apply_input_patch(&mut input, "roomscale.bounds", &bad).is_err());
+        }
+        assert_eq!(input.roomscale_bounds, Some([2.0, 1.5]));
+        apply_input_patch(&mut input, "roomscale.bounds", &Value::Null).unwrap();
+        assert_eq!(input.roomscale_bounds, None);
     }
 
     #[test]
