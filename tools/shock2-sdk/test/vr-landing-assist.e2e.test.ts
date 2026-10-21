@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer, otherHand, quatMultiply, quatRotate, viewRight, vrClimbLadder, vrGrab, vrPull } from "../src/index.js";
+import { GameServer, otherHand, quatMultiply, quatRotate, viewRight, vrClimbLadder, vrGrab, vrPull, vrReleaseOnto } from "../src/index.js";
 import type { ClimbRelease, Hand, Vec3 } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
@@ -363,6 +363,46 @@ test(
     assertArrived(landed, shown.landing!);
   },
 );
+
+for (const secondRegrab of [false, true]) {
+  test(
+    `debug_ladder (VR): a deck hand gets one free re-grab while the other holds the ladder${secondRegrab ? ", not two" : ", then the ladder hand takes the last"}`,
+    { skip: !e2eEnabled, timeout: 600_000 },
+    async () => {
+      await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+      const { anchor } = await climbAt(game, LEDGE_Z, 5.4);
+      const free = otherHand(anchor);
+      const right = Math.sign((await viewRight(game))[2]);
+      const deck = (hand: Hand): Vec3 => [-7.25, DECK_Y + 0.02, (hand === "right" ? right : -right) * 0.35];
+      const climb = async () => (await game.info()).player.climb;
+      const open = async (hand: Hand) => {
+        await game.input.set(`${hand}_hand.squeeze`, 0);
+        await game.input.set(`${hand}_hand.world_target`, null);
+        await game.step({ frames: 2 });
+      };
+
+      assert.equal((await vrGrab(game, free, deck(free))).grace, 1);
+      assert.equal((await climb()).grace_remaining, 1);
+      await open(free);
+      const regrab = await vrGrab(game, free, deck(free));
+      assert.equal(regrab.grace, 1, "the free re-grab");
+      assert.equal((await climb()).grace_remaining, 1, "spends no grace");
+      if (secondRegrab) {
+        await open(free);
+        assert.equal((await climb()).grace_remaining, 0, "a dead end, shown as one");
+        await assert.rejects(vrGrab(game, free, deck(free)), /closed on nothing/, "no second free re-grab");
+        return;
+      }
+      // The ladder hand leaves the ladder for the deck: grace 2, the last.
+      await open(anchor);
+      assert.equal((await vrGrab(game, anchor, deck(anchor))).grace, 2);
+      assert.equal((await climb()).grace_remaining, 0);
+      await game.input.set(`${anchor}_hand.world_target`, null);
+      await game.step({ frames: 3 });
+      await vrReleaseOnto(game);
+    },
+  );
+}
 
 test(
   "debug_ladder (VR): low on a ladder the natural drop is safe",

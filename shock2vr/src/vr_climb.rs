@@ -194,8 +194,12 @@ pub struct HandClimb {
     /// That hand's pawn-space position last frame, to difference against.
     last_anchor_local: Option<Vector3<f32>>,
     /// Grace grabs spent since the last fresh ladder grab. Releasing a grace
-    /// hold refunds nothing, so a held ladder cannot mint a second first grab.
+    /// hold refunds nothing, so a held ladder cannot mint a second first grab
+    /// - except one free re-grab of it (see `regrab_spent`).
     grace_used: u8,
+    /// The one free re-grab of grace hold 1, taken while the other hand is
+    /// still on the ladder, is spent. Resets with the allowance.
+    regrab_spent: bool,
     /// Holds taken last frame. One the same squeeze lets go of for an item
     /// was a reach for the item, not a grace grab: it refunds.
     fresh: [bool; 2],
@@ -277,7 +281,12 @@ impl HandClimb {
                     // go of the ladder rather than holding both.
                     if !squeezing || !hand.is_empty || over_stretched || gone {
                         if !hand.is_empty && self.fresh[index] && anchor.grace > 0 {
-                            self.grace_used = self.grace_used.min(anchor.grace - 1);
+                            // A free re-grab refunds the re-grab, not grace 1.
+                            if anchor.grace == 1 && self.regrab_spent {
+                                self.regrab_spent = false;
+                            } else {
+                                self.grace_used = self.grace_used.min(anchor.grace - 1);
+                            }
                         }
                         self.armed[index] = false;
                         self.grips[index] = None;
@@ -305,7 +314,9 @@ impl HandClimb {
                 continue;
             };
             if grip.kind == ClimbGripKind::Ladder {
-                self.grace_used = 0;
+                self.reset_grace();
+            } else if grace == 1 && self.grace_used >= 1 {
+                self.regrab_spent = true;
             } else if grace > 0 {
                 self.grace_used = grace;
             }
@@ -362,7 +373,7 @@ impl HandClimb {
             ))
         });
         if self.grips.iter().all(Option::is_none) {
-            self.grace_used = 0;
+            self.reset_grace();
         }
         ClimbFrame {
             translation,
@@ -442,7 +453,9 @@ impl HandClimb {
             Some((_, 1)) => 2,
             _ => return None,
         };
-        if self.grace_used >= grace {
+        // Off the ladder once more, grace 1 again: the one free re-grab.
+        let free_regrab = grace == 1 && !self.regrab_spent;
+        if self.grace_used >= grace && !free_regrab {
             return None;
         }
         // A floor the hand can hold anyway, wherever it is; any other solid
@@ -465,8 +478,20 @@ impl HandClimb {
     }
 
     /// Grace grabs still available to this departure (see [`GRACE_GRABS`]).
+    /// Honest about a dead end: with grace hold 1 let go of and its free
+    /// re-grab spent, nothing can authorize grace grab 2.
     pub fn grace_remaining(&self) -> u8 {
-        GRACE_GRABS - self.grace_used
+        let grace1_held = self.grips().any(|(_, anchor)| anchor.grace == 1);
+        if self.grace_used == 1 && self.regrab_spent && !grace1_held {
+            0
+        } else {
+            GRACE_GRABS - self.grace_used
+        }
+    }
+
+    fn reset_grace(&mut self) {
+        self.grace_used = 0;
+        self.regrab_spent = false;
     }
 
     /// Landing ends the departure: the next climb starts with a full
@@ -474,7 +499,7 @@ impl HandClimb {
     /// on it must not re-mint a first grace grab every frame.
     pub fn set_grounded(&mut self, grounded: bool) {
         if grounded && !self.was_grounded {
-            self.grace_used = 0;
+            self.reset_grace();
         }
         self.was_grounded = grounded;
     }
@@ -520,7 +545,7 @@ impl HandClimb {
     pub fn release_all(&mut self) {
         self.grips = [None, None];
         self.armed = [false, false];
-        self.grace_used = 0;
+        self.reset_grace();
         self.anchor = None;
         self.recent_anchor_travel.clear();
         self.last_anchor_local = None;
@@ -1825,22 +1850,32 @@ mod tests {
     }
 
     #[test]
-    fn a_held_ladder_mints_one_first_grace_grab_until_it_is_grabbed_afresh() {
+    fn a_held_ladder_allows_one_free_regrab_then_none_until_grabbed_afresh() {
         for a in 0..2 {
             let b = 1 - a;
             let mut climb = HandClimb::default();
             grace_step(&mut climb, a, (RUNG, SQUEEZE), (WALL[0], OPEN));
             grace_step(&mut climb, a, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
             assert_eq!(grace_of(&climb, b), Some(1));
-            // Releasing the grace hold refunds nothing.
+            assert_eq!(climb.grace_remaining(), 1);
+            // One re-grab is free while the other hand is still on the ladder.
             grace_step(&mut climb, a, (RUNG, SQUEEZE), (WALL[0], OPEN));
             grace_step(&mut climb, a, (RUNG, SQUEEZE), (WALL[1], SQUEEZE));
+            assert_eq!(grace_of(&climb, b), Some(1), "hand {a}: the free re-grab");
+            assert_eq!(climb.grace_remaining(), 1, "it spends no grace");
+            // A second is not.
+            grace_step(&mut climb, a, (RUNG, SQUEEZE), (WALL[1], OPEN));
+            assert_eq!(
+                climb.grace_remaining(),
+                0,
+                "nothing left to reach grace 2 from"
+            );
+            grace_step(&mut climb, a, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
             assert_eq!(
                 grace_of(&climb, b),
                 None,
-                "hand {a}: a held ladder re-mints"
+                "hand {a}: no second free re-grab"
             );
-            assert_eq!(climb.grace_remaining(), 1);
             // A fresh ladder grab (by either hand) restores the allowance.
             grace_step(&mut climb, a, (RUNG, SQUEEZE), (RUNG, OPEN));
             grace_step(&mut climb, a, (RUNG, SQUEEZE), (RUNG, SQUEEZE));
@@ -1849,6 +1884,24 @@ mod tests {
             grace_step(&mut climb, a, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
             assert_eq!(grace_of(&climb, b), Some(1));
         }
+    }
+
+    #[test]
+    fn after_the_free_regrab_the_ladder_hand_takes_the_last_grace_grab() {
+        let mut climb = HandClimb::default();
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+        assert_eq!(grace_of(&climb, 1), Some(1));
+        // The ladder hand leaves for a surface: grace 2, the last.
+        grace_step(&mut climb, 0, (RUNG, OPEN), (WALL[0], SQUEEZE));
+        grace_step(&mut climb, 0, (WALL[1], SQUEEZE), (WALL[0], SQUEEZE));
+        assert_eq!(grace_of(&climb, 0), Some(2));
+        assert_eq!(climb.grace_remaining(), 0);
+        grace_step(&mut climb, 0, (WALL[1], SQUEEZE), (WALL[0], OPEN));
+        grace_step(&mut climb, 0, (WALL[1], SQUEEZE), (WALL[2], SQUEEZE));
+        assert_eq!(grace_of(&climb, 1), None, "no third");
     }
 
     #[test]
@@ -2004,6 +2057,11 @@ mod tests {
             grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
         }
         climb.set_grounded(false);
+        // Its one free re-grab, then no more: standing at the foot did not
+        // reset the allowance.
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+        assert_eq!(grace_of(&climb, 1), Some(1));
+        grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
         grace_step(&mut climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
         assert_eq!(
             grace_of(&climb, 1),

@@ -290,9 +290,11 @@ export async function vrReleaseOnto(game: Game): Promise<{ heights: number[]; la
     const moving = player.climb.vaulting || player.climb.release.exit_fade > 0;
     settled = moving ? 0 : settled + 1;
   }
+  // The landing the last release committed: letting go of the other hand
+  // first may have moved it onto the floor the anchor holds.
   const landed = (await game.info()).player.position;
-  if (settled < 30 || Math.hypot(landed[0] - landing[0], landed[2] - landing[2]) > 0.1 || Math.abs(landed[1] - landing[1]) > 0.15) {
-    throw new Error(`vrReleaseOnto: came to rest at ${fmt(landed)}, not the landing ${fmt(landing)}`);
+  if (settled < 30 || Math.hypot(landed[0] - committed[0], landed[2] - committed[2]) > 0.1 || Math.abs(landed[1] - committed[1]) > 0.15) {
+    throw new Error(`vrReleaseOnto: came to rest at ${fmt(landed)}, not the committed landing ${fmt(committed)}`);
   }
   return { heights, landed };
 }
