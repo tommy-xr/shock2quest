@@ -290,10 +290,12 @@ impl HandClimb {
         // Resolve both hands against the holds that survived the releases
         // above, before either acquires: a hold taken this frame cannot
         // authorize a contextual grab, whatever the hand order, and one let
-        // go of this frame only carries the departure (see probe_grip_after).
+        // go of this frame only carries the departure (see probe_grip_after);
+        // one torn away (broken, gone, or the hand filled) carries nothing.
         self.fresh = [false; 2];
         let acquired: [_; 2] = std::array::from_fn(|index| {
-            let released = held_before[1 - index].filter(|_| self.grips[1 - index].is_none());
+            let released = held_before[1 - index]
+                .filter(|_| self.grips[1 - index].is_none() && let_go_cleanly[1 - index]);
             (self.grips[index].is_none() && self.armed[index])
                 .then(|| self.probe_grip_after(HANDS[index], hand_world[index], &probe, released))
                 .flatten()
@@ -1756,6 +1758,33 @@ mod tests {
         step(&mut climb, (WALL[1], SQUEEZE), (WALL[0], OPEN));
         step(&mut climb, (WALL[1], OPEN), (WALL[2], SQUEEZE));
         assert!(climb.grips[1].is_none(), "no third, nor an ordinary ledge");
+    }
+
+    #[test]
+    fn a_hold_torn_away_as_the_other_hand_catches_a_ledge_carries_no_departure() {
+        let mut climb = HandClimb::default();
+        let step =
+            |climb: &mut HandClimb, left: (Vector3<f32>, f32), right: (Vector3<f32>, f32)| {
+                climb.update(
+                    Vector3::zero(),
+                    Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                    DT,
+                    [hand(left.0, left.1), hand(right.0, right.1)],
+                    deck_world,
+                    |_| true,
+                );
+            };
+        step(&mut climb, (RUNG, SQUEEZE), (WALL[0], OPEN));
+        // The ladder hold breaks (the hand is dragged past the stretch limit)
+        // the same frame the other hand closes on the floor: a catch, an
+        // ordinary ledge.
+        step(
+            &mut climb,
+            (RUNG + vec3(0.0, 1.0, 0.0), SQUEEZE),
+            (WALL[0], SQUEEZE),
+        );
+        let caught = climb.grips[1].expect("the floor holds");
+        assert_eq!((caught.grip.kind, caught.grace), (ClimbGripKind::Ledge, 0));
     }
 
     #[test]

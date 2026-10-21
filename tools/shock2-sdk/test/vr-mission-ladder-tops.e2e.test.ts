@@ -89,6 +89,12 @@ for (const { mission, top, hold } of TOPS) {
       } else {
         await vrPull(game, free, [0, -1.2, 0], 40, (p) => p.climb.vaulting);
         assert.equal((await game.info()).player.climb.vaulting, true, `neither an assisted landing nor a vault: ${JSON.stringify(shown)}`);
+        await game.input.set("left_hand.squeeze", 0);
+        await game.input.set("right_hand.squeeze", 0);
+        await game.step({ frames: 180 });
+        const { player } = await game.info();
+        assert.equal(player.climb.vaulting, false, "the vault finished");
+        assert.ok(player.position[1] > top[1] - 0.5, `vaulted onto the floor at the top: ${player.position}`);
       }
     },
   );
