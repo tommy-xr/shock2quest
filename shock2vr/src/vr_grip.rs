@@ -61,8 +61,12 @@ fn default_item_scale() -> f32 {
 
 impl ResolvedGrip {
     /// Keep authored grip files in baseline units; scale only the runtime copy.
-    pub(crate) fn for_world_scale(mut self) -> Self {
-        let personal = crate::world_scale::WorldScale::active().personal();
+    pub(crate) fn for_world_scale(self) -> Self {
+        self.rescaled(crate::world_scale::WorldScale::active().personal())
+    }
+
+    /// Scale the hand-space size and placement; item-local data is unchanged.
+    pub(crate) fn rescaled(mut self, personal: f32) -> Self {
         self.item_scale *= personal;
         self.offset *= personal;
         self

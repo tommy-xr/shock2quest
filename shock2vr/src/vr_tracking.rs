@@ -68,11 +68,17 @@ impl TrackingTransform {
         if let Some(old) = input.tracking {
             let new = old.with_stance(center, cap);
             let ratio = old.meters_per_world_unit / new.meters_per_world_unit;
+            let joints = [&mut input.left_hand.joints, &mut input.right_hand.joints]
+                .into_iter()
+                .flat_map(|joints| joints.iter_mut().flatten());
             for position in [
                 &mut input.head.position,
                 &mut input.left_hand.position,
                 &mut input.right_hand.position,
-            ] {
+            ]
+            .into_iter()
+            .chain(joints)
+            {
                 *position = (*position - old.translation) * ratio + new.translation;
             }
             input.tracking = Some(new);
@@ -330,6 +336,9 @@ mod tests {
         input.tracking = Some(initial);
         input.head.position = initial.stage_to_pawn(head);
         input.right_hand.position = initial.stage_to_pawn(hand);
+        // Tracked joints are converted like the hand and move with it.
+        let tip = hand + vec3(0.0, 0.0, -0.1);
+        input.right_hand.joints = Some([initial.stage_to_pawn(tip); 26]);
         for crouched in [true, false, true] {
             let center = crate::physics::player_center_above_floor(crouched);
             let cap = crate::physics::player_eye_cap_above_center(crouched);
@@ -337,6 +346,8 @@ mod tests {
             let rendered = initial.with_stance(center, cap);
             assert!((input.head.position - rendered.stage_to_pawn(head)).magnitude() < 1e-5);
             assert!((input.right_hand.position - rendered.stage_to_pawn(hand)).magnitude() < 1e-5);
+            let joint = input.right_hand.joints.unwrap()[25];
+            assert!((joint - rendered.stage_to_pawn(tip)).magnitude() < 1e-5);
             let once = input.right_hand.position;
             TrackingTransform::rebase_input(&mut input, center, cap);
             assert_eq!(input.right_hand.position, once);

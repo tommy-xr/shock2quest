@@ -1300,15 +1300,20 @@ impl VrInteraction {
         let handedness = [Handedness::Left, Handedness::Right][tool.hand];
         let contact = grip_contact(world, held.entity);
         let item = pose_tool::item_pose(tool.hand_pose, current, contact);
-        let (Some(bones), Some((origin, rotation)), Some((hand_position, hand_rotation))) = (
-            crate::hand_capture::capture_finger_bones(&joints, handedness),
-            crate::hand_capture::grip_transform(&joints, &glove, item.position, item.rotation),
-            crate::hand_capture::hand_pose(&joints, &glove),
+        let Some((grip, hand_pose)) = pose_tool::captured_grip(
+            &joints,
+            &glove,
+            handedness,
+            item,
+            contact,
+            current.item_scale,
+            crate::world_scale::WorldScale::active().personal(),
         ) else {
             println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=false reason=degenerate_joints");
             tool.capture_failure = Some("degenerate_joints".to_owned());
             return;
         };
+        // Authored, like every library and overrides entry.
         let entry = crate::vr_grip::BakedGripEntry {
             authored: true,
             model: held.model.clone(),
@@ -1316,20 +1321,7 @@ impl VrInteraction {
             surface_hash: String::new(),
             kinematics_hash: String::new(),
             hints_hash: String::new(),
-            grip: crate::vr_grip::ResolvedGrip {
-                item_scale: current.item_scale,
-                pose_family: "captured".into(),
-                // The item origin, less the per-item contact placement adds.
-                offset: origin - rotation.rotate_vector(contact * current.item_scale),
-                rotation,
-                fingers: crate::vr_grip::FingerPose::Bones {
-                    bones,
-                    trigger_bones: None,
-                },
-                contacts: [None; 5],
-                anchor: [0.0; 3],
-                score: 0.0,
-            },
+            grip,
         };
         println!(
             "SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=true staged=true model={} hand={}",
@@ -1365,12 +1357,9 @@ impl VrInteraction {
         // The glove now sits where the tracked hand held the item. The grip
         // previews in place while the mission is frozen; it refits from the
         // library when the workbench closes.
-        tool.hand_pose = GripPose {
-            position: hand_position,
-            rotation: hand_rotation,
-        };
+        tool.hand_pose = hand_pose;
         if let Some(held) = self.fitted_grips[tool.hand].as_mut() {
-            held.resolved = Some(entry.grip.clone());
+            held.resolved = Some(entry.grip.clone().for_world_scale());
             held.source = "prepared";
             held.authored = true;
         }
@@ -1396,7 +1385,9 @@ impl VrInteraction {
             .as_ref()
             .and_then(|held| held.resolved.as_ref())
         {
-            staged.entry.grip.item_scale = grip.item_scale;
+            // Authored, as `capture_grip` stores the entry.
+            staged.entry.grip.item_scale =
+                grip.item_scale / crate::world_scale::WorldScale::active().personal();
         }
         let entry = &staged.entry;
         if let Err(error) = pose_tool::save_override(&tool.overrides_path, entry) {
