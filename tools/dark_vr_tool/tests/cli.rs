@@ -312,6 +312,69 @@ fn ports_and_hostile_paths_are_handled_literally() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("hello"));
 }
 #[test]
+fn features_list_set_unset_and_reject_typos() {
+    let h = Harness::new();
+    // The listed row for `name`, split into columns.
+    let row = |h: &Harness, name: &str| {
+        let out = String::from_utf8(h.run(&["features", "list"]).stdout).unwrap();
+        let line = out.lines().find(|line| line.starts_with(name)).unwrap();
+        line.split_whitespace()
+            .map(String::from)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        row(&h, "multiview"),
+        [
+            "multiview",
+            "multiview.txt",
+            "off|on",
+            "off",
+            "off",
+            "(default)"
+        ]
+    );
+    h.run(&["features", "set", "multiview", "on"]);
+    assert_eq!(
+        fs::read_to_string(h.dir.path().join("data/multiview.txt")).unwrap(),
+        "on\n"
+    );
+    assert_eq!(row(&h, "multiview")[4..], ["on"]);
+    fs::write(h.dir.path().join("data/ffr-level.txt"), "hgih\n").unwrap();
+    assert_eq!(row(&h, "ffr-level")[4..], ["invalid", "\"hgih\""]);
+    // Present-but-odd contents are never mistaken for a missing file.
+    fs::write(h.dir.path().join("data/ffr-level.txt"), "(unset)\n").unwrap();
+    assert_eq!(row(&h, "ffr-level")[4..], ["invalid", "\"(unset)\""]);
+    let out = h
+        .command(&["features"])
+        .env("DVR_TEST_FAIL", "1")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("unreadable"));
+    assert!(
+        String::from_utf8(h.run(&["features"]).stdout)
+            .unwrap()
+            .contains("simulation-clock")
+    );
+    for args in [["set", "multiview", "yes"], ["set", "multivew", "on"]] {
+        let out = h
+            .command(&[&["features"][..], &args].concat())
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("on"));
+    }
+    h.run(&["features", "unset", "multiview"]);
+    assert!(!h.dir.path().join("data/multiview.txt").exists());
+    assert!(
+        !h.command(&["features", "unset", "nope"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+}
+#[test]
 fn errors_propagate_and_ambiguous_devices_do_not_mutate() {
     let h = Harness::new();
     let out = h

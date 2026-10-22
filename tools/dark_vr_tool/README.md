@@ -39,7 +39,14 @@ cargo dvr pull-recording rec-1727390000000 --out /tmp/recs
 cargo dvr debug-port set 8171
 cargo dvr debug-port get
 cargo dvr debug-port unset
+cargo dvr features                  # switch files: name, file, values, default, device value
+cargo dvr features set ffr-level medium   # rejects values the runtime would ignore
+cargo dvr features unset ffr-level  # delete the file: back to the default
 ```
+
+`features` edits the opt-in switch files the Quest runtime reads from
+`/sdcard/shock2quest` at launch (`simulation-clock`, `multiview`, `ffr-level`);
+restart the app to apply. The table is `SWITCHES` in the runtime's `quest_config.rs`.
 
 `wifi` needs the headset on USB once: it reads its `wlan0` address, runs
 `adb tcpip` (`--port`, default 5555) and connects. The headset stays reachable through sleep, but
