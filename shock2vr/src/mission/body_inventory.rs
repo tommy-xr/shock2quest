@@ -2,7 +2,8 @@
 use shipyard::EntityId;
 
 pub(super) fn hand_radius() -> f32 {
-    crate::dev_params::get(crate::dev_params::VR_GLOVE_RADIUS) / crate::METERS_PER_WORLD_UNIT
+    crate::dev_params::get(crate::dev_params::VR_GLOVE_RADIUS)
+        / crate::world_scale::meters_per_world_unit()
 }
 
 pub(super) fn followed_yaw(previous: Option<f32>, observed: f32, frozen: bool, dt: f32) -> f32 {
@@ -48,6 +49,6 @@ impl BodyPose {
     pub fn front(&self, below: f32, forward: f32) -> cgmath::Vector3<f32> {
         self.head
             + cgmath::vec3(self.yaw.sin() * forward, -below, -self.yaw.cos() * forward)
-                / crate::METERS_PER_WORLD_UNIT
+                / crate::world_scale::meters_per_world_unit()
     }
 }

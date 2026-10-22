@@ -4827,6 +4827,16 @@ impl MissionCore {
         command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
         let _profile = crate::perf::scope(crate::perf::Phase::MissionUpdate);
+        let mut scaled_input = input_context.clone();
+        if self.physics.update_world_scale(&mut self.player_handle) {
+            crate::vr_tracking::RoomscaleState::invalidate(&self.world);
+        }
+        crate::vr_tracking::TrackingTransform::rebase_input(
+            &mut scaled_input,
+            crate::physics::player_center_above_floor(self.player_handle.tracking_is_crouched()),
+            crate::physics::player_eye_cap_above_center(self.player_handle.tracking_is_crouched()),
+        );
+        let input_context = &scaled_input;
         // Two time domains: `tick` is the player's (locomotion, hands, held
         // items, weapon cadence, UI); `time` is the world's, slowed by
         // `world_time_scale` and speed boosts (AI, scripts, animation,
@@ -9987,7 +9997,11 @@ impl MissionCore {
         let lane = (index % 5) as f32 - 2.0;
         let row = (index / 5) as f32;
         let position = player.pos
-            + forward * (crate::physics::PLAYER_STANDING_RADIUS_WORLD + 0.6 + row * 0.2)
+            + forward
+                * (crate::physics::PLAYER_STANDING_RADIUS_WORLD
+                    * crate::world_scale::WorldScale::active().personal()
+                    + 0.6
+                    + row * 0.2)
             + right * lane * 0.25
             + vec3(0.0, 0.35 + row * 0.1, 0.0);
         self.set_entity_position_rotation(
@@ -10467,11 +10481,13 @@ impl MissionCore {
     /// physics representation) leaves it in the backpack rather than lost or
     /// frozen mid-air.
     fn throw_entity_into_world(&mut self, entity_id: EntityId) {
-        /// How far ahead of the camera the item materializes (world units).
-        /// The eye sits on the standing capsule's axis, so this must clear the
-        /// capsule's radius or a downward throw spawns the item inside the
-        /// player's own collider and gets ejected.
-        const THROW_SPAWN_DISTANCE: f32 = crate::physics::PLAYER_STANDING_RADIUS_WORLD + 0.2;
+        // How far ahead of the camera the item materializes (world units).
+        // The eye sits on the standing capsule's axis, so this must clear the
+        // capsule's radius or a downward throw spawns the item inside the
+        // player's own collider and gets ejected.
+        let throw_spawn_distance = crate::physics::PLAYER_STANDING_RADIUS_WORLD
+            * crate::world_scale::WorldScale::active().personal()
+            + 0.2;
         /// Launch speed along the view ray (world units/sec).
         const THROW_SPEED: f32 = 6.0;
 
@@ -10490,9 +10506,9 @@ impl MissionCore {
         }
 
         let throw_pos = vec3(
-            origin.x + forward.x * THROW_SPAWN_DISTANCE,
-            origin.y + forward.y * THROW_SPAWN_DISTANCE,
-            origin.z + forward.z * THROW_SPAWN_DISTANCE,
+            origin.x + forward.x * throw_spawn_distance,
+            origin.y + forward.y * throw_spawn_distance,
+            origin.z + forward.z * throw_spawn_distance,
         );
         let rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
         let Some(throw_pos) = self
@@ -19092,7 +19108,9 @@ impl MissionCore {
                         let root = Matrix4::from_translation(center)
                             * root_rotation
                             * local
-                            * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT);
+                            * Matrix4::from_scale(
+                                1.0 / crate::world_scale::meters_per_world_unit(),
+                            );
                         for object in &mut objects {
                             object.set_transform(root * object.get_transform());
                         }
@@ -19112,7 +19130,9 @@ impl MissionCore {
                             super::body_gear_feedback::HolsterReadout::resolve(&self.world, item);
                         let root = Matrix4::from_translation(centers[slot])
                             * root_rotation
-                            * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT);
+                            * Matrix4::from_scale(
+                                1.0 / crate::world_scale::meters_per_world_unit(),
+                            );
                         let mut objects = super::body_gear_feedback::holster(&readout, root);
                         crate::util::tag_render_source(
                             &mut objects,
@@ -19932,7 +19952,8 @@ impl MissionCore {
                     .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
                     .ok()
                     .and_then(|v| v.get(weapon).ok().map(|w| w.item_scale))
-                    .unwrap_or(1.0);
+                    .unwrap_or(crate::world_scale::WorldScale::active().personal())
+                    / crate::world_scale::WorldScale::active().personal();
                 self.world.add_component(
                     clip,
                     (
@@ -20135,7 +20156,16 @@ impl MissionCore {
                     entity_id,
                     size,
                     center,
+                    scale,
                 } => {
+                    if let Ok(mut weapons) = self
+                        .world
+                        .borrow::<ViewMut<crate::runtime_props::RuntimePropGloveWeapon>>()
+                    {
+                        if let Ok(weapon) = (&mut weapons).get(entity_id) {
+                            weapon.item_scale = scale;
+                        }
+                    }
                     let (size, center) = crate::rapier::collider_bounds(&self.world, entity_id)
                         .map(|b| (b.size, b.center))
                         .unwrap_or((size, center));

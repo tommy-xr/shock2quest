@@ -26,7 +26,8 @@ impl PhysicsWorld {
     /// The resting body centre on a floor point, for the stance the player
     /// lands in. A slope lifts the rounded bottom clear of the uphill side.
     fn landing_on(floor: Vector<Real>, normal: Vector<Real>, standing: bool) -> Landing {
-        let radius = PLAYER_STANDING_RADIUS / SCALE_FACTOR;
+        let radius = PLAYER_STANDING_RADIUS / SCALE_FACTOR
+            * crate::world_scale::WorldScale::active().personal();
         let lift = player_center_above_floor(!standing) + radius * (1.0 / normal.y - 1.0);
         Landing {
             center: nvec_to_cgmath(floor + Vector::y() * lift),

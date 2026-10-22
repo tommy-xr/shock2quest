@@ -9,6 +9,8 @@ mod profiling;
 #[cfg(feature = "lazy-hitboxes")]
 mod query_hitboxes;
 mod release_placement;
+#[cfg(test)]
+mod world_scale_tests;
 pub use held_recovery::{HeldRecovery, HeldRecoveryContext};
 pub(crate) mod util;
 
@@ -245,6 +247,7 @@ const PLAYER_STAND_TEST_MARGIN: f32 = 0.05;
 /// while crouched doesn't reload a standing capsule embedded in the floor.
 pub fn player_crouch_center_shift() -> f32 {
     (PLAYER_STANDING_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR
+        * crate::world_scale::WorldScale::active().personal()
 }
 
 /// What holds a crouching player up, and therefore what stays put as the
@@ -285,11 +288,12 @@ const PLAYER_EYE_CAP_MARGIN: f32 = 0.2;
 /// only an unusually tall player ever reaches, so tracking stays 1:1 in
 /// practice.
 pub fn player_eye_cap_above_center(crouched: bool) -> f32 {
-    if crouched {
+    let height = if crouched {
         crate::PLAYER_CROUCH_EYE_HEIGHT / SCALE_FACTOR
     } else {
         (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_EYE_CAP_MARGIN) / SCALE_FACTOR
-    }
+    };
+    height * crate::world_scale::WorldScale::active().personal()
 }
 
 /// Height (world units) of the collider CENTER above the surface the player
@@ -302,15 +306,31 @@ pub fn player_center_above_floor(crouched: bool) -> f32 {
     } else {
         PLAYER_STANDING_HEIGHT
     };
-    (height / 2.0 + PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR
+    (height * crate::world_scale::WorldScale::active().personal() / 2.0
+        + PLAYER_CONTACT_OFFSET
+        + PLAYER_REST_LIFT)
+        / SCALE_FACTOR
+}
+
+/// Difference from the canonical save's standing center at identical feet.
+pub fn player_scale_center_offset() -> f32 {
+    PLAYER_STANDING_HEIGHT / (2.0 * SCALE_FACTOR)
+        * (crate::world_scale::WorldScale::active().personal() - 1.0)
 }
 
 /// The player's standing collision capsule, in world units.
 fn standing_player_capsule() -> Capsule {
-    Capsule::new_y(
-        (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR,
-        PLAYER_STANDING_RADIUS / SCALE_FACTOR,
-    )
+    scaled_player_capsule(false, crate::world_scale::WorldScale::active())
+}
+
+fn scaled_player_capsule(crouched: bool, scale: crate::world_scale::WorldScale) -> Capsule {
+    let (height, radius) = if crouched {
+        (PLAYER_CROUCH_HEIGHT, PLAYER_CROUCH_RADIUS)
+    } else {
+        (PLAYER_STANDING_HEIGHT, PLAYER_STANDING_RADIUS)
+    };
+    let unit = scale.personal() / SCALE_FACTOR;
+    Capsule::new_y((height / 2.0 - radius) * unit, radius * unit)
 }
 
 /// [`standing_player_capsule`] as a collider shape.
@@ -320,10 +340,7 @@ fn standing_player_shared_shape() -> SharedShape {
 
 /// The player's crouched collision capsule, in world units.
 fn crouched_player_capsule() -> Capsule {
-    Capsule::new_y(
-        (PLAYER_CROUCH_HEIGHT / 2.0 - PLAYER_CROUCH_RADIUS) / SCALE_FACTOR,
-        PLAYER_CROUCH_RADIUS / SCALE_FACTOR,
-    )
+    scaled_player_capsule(true, crate::world_scale::WorldScale::active())
 }
 
 /// Canonical standing/crouched capsule for asset-authoring previews, in world units.
@@ -584,11 +601,18 @@ const CLIMB_TOP_OUT_MAX_RECOVERY_RETREAT: f32 = 4.0 / SCALE_FACTOR;
 /// controller gap: rick1's vertical cast stops with the capsule crown just over
 /// one half-height below the authored top, before the nominal crown-only
 /// threshold can ever become true.
-const CLIMB_TOP_OUT_TOP_REACH: f32 = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
-    + CLIMB_TOP_OUT_SUBSTEP
-    + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
-const CLIMB_TOP_OUT_COLUMN_LOOKAHEAD: f32 =
-    CLIMB_TOP_OUT_UP + PLAYER_STANDING_HEIGHT / SCALE_FACTOR;
+fn climb_top_out_top_reach() -> f32 {
+    PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+        * crate::world_scale::WorldScale::active().personal()
+        + CLIMB_TOP_OUT_SUBSTEP
+        + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+}
+
+fn climb_top_out_column_lookahead() -> f32 {
+    CLIMB_TOP_OUT_UP
+        + PLAYER_STANDING_HEIGHT / SCALE_FACTOR
+            * crate::world_scale::WorldScale::active().personal()
+}
 
 /// Dark's jump-through phase moves at ten SS2 feet per second. The physics
 /// runtime advances at a fixed 60 Hz.
@@ -1074,7 +1098,9 @@ impl ClimbTopOut {
             // landing stance is tracked separately by stand_on_completion.
             crouched_player_shared_shape()
         } else {
-            SharedShape::ball(CLIMB_TOP_OUT_RADIUS)
+            SharedShape::ball(
+                CLIMB_TOP_OUT_RADIUS * crate::world_scale::WorldScale::active().personal(),
+            )
         }
     }
 }
@@ -1501,7 +1527,8 @@ fn plan_climb_top_out(
         return None;
     }
     let direction = direction_h / direction_norm;
-    let head_offset = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+    let head_offset = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR
+        * crate::world_scale::WorldScale::active().personal();
     let head = pos.translation.vector + Vector::y() * head_offset;
     // Unbounded, not the 3.5 ft probe: a mantle over a lip found below can
     // cross higher than the probe reaches, and that height must still clear
@@ -1512,7 +1539,10 @@ fn plan_climb_top_out(
         .map(|(_, time_of_impact)| (time_of_impact, head.y + time_of_impact));
     // Short-circuit: a ceiling close enough to pin the compressed head sphere
     // leaves no room to rise at all.
-    if up_obstruction.is_some_and(|(time_of_impact, _)| time_of_impact < CLIMB_TOP_OUT_RADIUS) {
+    if up_obstruction.is_some_and(|(time_of_impact, _)| {
+        time_of_impact
+            < (CLIMB_TOP_OUT_RADIUS * crate::world_scale::WorldScale::active().personal())
+    }) {
         return None;
     }
     // The rise stops under whatever is above the head, as the head's own
@@ -1520,14 +1550,17 @@ fn plan_climb_top_out(
     // top-out cannot cross the ceiling the climber is under to reach a
     // surface above it - e.g. the far side of a roof beyond the ladder wall.
     let headroom_y = up_obstruction.map_or(f32::INFINITY, |(_, obstruction_y)| {
-        obstruction_y - CLIMB_TOP_OUT_RADIUS - PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+        obstruction_y
+            - (CLIMB_TOP_OUT_RADIUS * crate::world_scale::WorldScale::active().personal())
+            - PLAYER_CONTACT_OFFSET / SCALE_FACTOR
     });
     let raised = head + Vector::y() * CLIMB_TOP_OUT_UP.min((headroom_y - head.y).max(0.0));
     let probe_ahead = raised + direction * CLIMB_TOP_OUT_PROBE_FORWARD;
     let route_forward = minimum_clear_forward.max(CLIMB_TOP_OUT_PROBE_FORWARD);
     let route_ahead = raised + direction * route_forward;
     let standing = standing_player_capsule();
-    let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
+    let compressed =
+        Ball::new(CLIMB_TOP_OUT_RADIUS * crate::world_scale::WorldScale::active().personal());
     if !ray_segment_is_clear(probe_queries, raised, probe_ahead) {
         return None;
     }
@@ -1545,8 +1578,14 @@ fn plan_climb_top_out(
     // smallest lift clear of parented entity blockers up to the probe endpoint.
     let minimum_cross_y = mantle_floor
         .map(|floor| {
-            head.y
-                .max(floor.y + (1.02 * PLAYER_STANDING_RADIUS + 1.0) / SCALE_FACTOR)
+            head.y.max(
+                floor.y
+                    + (1.02
+                        * PLAYER_STANDING_RADIUS
+                        * crate::world_scale::WorldScale::active().personal()
+                        + 1.0)
+                        / SCALE_FACTOR,
+            )
         })
         .unwrap_or(head.y);
     // Dark's rise target is the authored 3.5-foot probe endpoint, capped at the
@@ -1568,7 +1607,8 @@ fn plan_climb_top_out(
     let cross_start = vector![rise_start.x, cross_y, rise_start.z];
     let probe_cross_end = vector![probe_ahead.x, cross_y, probe_ahead.z];
     let cross_end = vector![route_ahead.x, cross_y, route_ahead.z];
-    let final_sphere = cross_end + direction * CLIMB_TOP_OUT_ADVANCE;
+    let final_sphere = cross_end
+        + direction * (CLIMB_TOP_OUT_ADVANCE * crate::world_scale::WorldScale::active().personal());
     // Parry treats balls and boxes wholly inside a closed trimesh as
     // intersecting its volume. A tiny non-degenerate capsule uses the same
     // triangle-surface query as the player while remaining point-scale.
@@ -1621,11 +1661,7 @@ fn plan_climb_top_out(
         .filter(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
         .map(|(_, ground)| {
             let floor = final_sphere - Vector::y() * ground.time_of_impact;
-            floor
-                + Vector::y()
-                    * (PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
-                        + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
-                        + PLAYER_REST_LIFT / SCALE_FACTOR)
+            floor + Vector::y() * player_center_above_floor(false)
         })
         // Some ladder tops open over a drop. Expand at a pose validated
         // against every collider, then let ordinary gravity find the lower
@@ -1791,6 +1827,9 @@ fn plan_jump_mantle(
     } else {
         (PLAYER_STANDING_HEIGHT, PLAYER_STANDING_RADIUS)
     };
+    let personal = crate::world_scale::WorldScale::active().personal();
+    let body_height = body_height * personal;
+    let body_radius = body_radius * personal;
     let half_height = body_height / 2.0 / SCALE_FACTOR;
     let current_feet_y = pos.translation.vector.y - half_height;
     let head_offset = (body_height / 2.0 - body_radius) / SCALE_FACTOR;
@@ -3615,6 +3654,7 @@ pub struct PlayerHandle {
     // Player
     controller: KinematicCharacterController,
     character_handle: RigidBodyHandle,
+    world_scale: crate::world_scale::WorldScale,
     // Whether the collider is currently the crouched capsule. Mutated only by
     // `PhysicsWorld::set_player_crouch`, which keeps the shape and this flag
     // in sync.
@@ -4861,7 +4901,7 @@ impl PhysicsWorld {
             PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR
         } else {
             PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
-        };
+        } * player_handle.world_scale.personal();
         queries
             .cast_ray(&down, to_feet + PLAYER_PLACEMENT_MAX_DROP, true)
             .is_some()
@@ -5014,7 +5054,7 @@ impl PhysicsWorld {
             PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR
         } else {
             PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
-        };
+        } * player_handle.world_scale.personal();
         let queries = self.broad_phase.as_query_pipeline(
             self.narrow_phase.query_dispatcher(),
             &self.rigid_body_set,
@@ -6606,10 +6646,7 @@ impl PhysicsWorld {
         let character_handle = self.rigid_body_set.insert(rigid_body);
         // Dark's standing player is six SS2 feet tall and 2.4 feet wide. A
         // capsule is the continuous equivalent of its vertical sphere stack.
-        let mut collider = ColliderBuilder::capsule_y(
-            (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR,
-            PLAYER_STANDING_RADIUS / SCALE_FACTOR,
-        );
+        let mut collider = ColliderBuilder::new(standing_player_shared_shape());
         collider = collider.collision_groups(InteractionGroups::new(
             InternalCollisionGroups::PLAYER.bits.into(),
             InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
@@ -6627,6 +6664,7 @@ impl PhysicsWorld {
         PlayerHandle {
             controller,
             character_handle,
+            world_scale: crate::world_scale::WorldScale::active(),
             is_crouched: false,
             is_hanging_crouched: false,
             tracking_crouched: false,
@@ -6643,6 +6681,49 @@ impl PhysicsWorld {
             ladder_grip: None,
             fatal_fall: FatalFallTracker::new(start_pos.y),
         }
+    }
+
+    /// Accept a world-size edit only when a standing player fits at the same
+    /// feet position. Level geometry stays in its original simulation units.
+    pub fn update_world_scale(&mut self, player: &mut PlayerHandle) -> bool {
+        let requested = crate::world_scale::WorldScale::requested();
+        if requested == player.world_scale
+            || !self.has_stepped
+            || !player.is_grounded
+            || player.is_crouched
+            || player.is_climbing
+            || player.top_out.is_some()
+        {
+            return false;
+        }
+        let body_handle = player.character_handle;
+        let body = &self.rigid_body_set[body_handle];
+        let collider_handle = body.colliders()[0];
+        let half_height = PLAYER_STANDING_HEIGHT / (2.0 * SCALE_FACTOR);
+        let mut position = *body.translation();
+        position.y += half_height * (requested.personal() - player.world_scale.personal());
+        let capsule = scaled_player_capsule(false, requested);
+        let margin = PLAYER_STAND_TEST_MARGIN / SCALE_FACTOR;
+        let test_shape = Capsule::new(
+            capsule.segment.a,
+            capsule.segment.b,
+            capsule.radius - margin,
+        );
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            player_pose_filter(body_handle),
+        );
+        if !capsule_pose_is_clear(&queries, position + Vector::y() * margin, &test_shape) {
+            return false;
+        }
+        self.collider_set[collider_handle].set_shape(SharedShape::new(capsule));
+        self.rigid_body_set[body_handle].set_translation(position, true);
+        player.fatal_fall = FatalFallTracker::new(position.y);
+        player.world_scale = requested;
+        requested.activate();
+        true
     }
 
     /// Set the player's crouch state, resizing the capsule with the feet
@@ -6728,9 +6809,11 @@ impl PhysicsWorld {
             let standing_pos = Translation::from(
                 Vector::y() * (center_shift + PLAYER_STAND_TEST_MARGIN / SCALE_FACTOR),
             ) * self.rigid_body_set[character_handle].position();
-            let test_shape = Capsule::new_y(
-                (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR,
-                (PLAYER_STANDING_RADIUS - PLAYER_STAND_TEST_MARGIN) / SCALE_FACTOR,
+            let standing = standing_player_capsule();
+            let test_shape = Capsule::new(
+                standing.segment.a,
+                standing.segment.b,
+                standing.radius - PLAYER_STAND_TEST_MARGIN / SCALE_FACTOR,
             );
             let filter = QueryFilter::new()
                 .groups(InteractionGroups::new(
@@ -8045,7 +8128,7 @@ impl PhysicsWorld {
                 ]);
                 let column_probe = Cuboid::new(vector![
                     capsule.radius + CLIMB_REACH,
-                    half_height + CLIMB_TOP_OUT_COLUMN_LOOKAHEAD,
+                    half_height + climb_top_out_column_lookahead(),
                     capsule.radius + CLIMB_REACH
                 ]);
                 let column_top = queries
@@ -8053,7 +8136,7 @@ impl PhysicsWorld {
                     .map(|(_, collider)| collider.compute_aabb().maxs.y)
                     .fold(f32::NEG_INFINITY, f32::max);
                 let character_top = character_pos.translation.vector.y + half_height;
-                let near_column_top = column_top - character_top <= CLIMB_TOP_OUT_TOP_REACH;
+                let near_column_top = column_top - character_top <= climb_top_out_top_reach();
                 // Grip the closest climbable within reach, by contact distance,
                 // and take the contact's *face normal* as the climb direction.
                 // (The collider-center direction is wrong when the player is
@@ -15487,7 +15570,7 @@ mod tests {
     /// ladder. Before top-out handling the player remains on the shaft side at
     /// x ~= -5.4 indefinitely.
     #[test]
-    fn player_tops_out_from_a_ladder_onto_an_upper_landing() {
+    pub(super) fn player_tops_out_from_a_ladder_onto_an_upper_landing() {
         let quad = |x0: f32, x1: f32, y: f32| {
             let verts = vec![
                 point![x0, y, -100.0],

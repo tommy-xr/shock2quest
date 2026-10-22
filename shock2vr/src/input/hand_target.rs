@@ -19,7 +19,7 @@ fn shoulder(
     head_position: Vector3<f32>,
     head_rotation: Quaternion<f32>,
 ) -> Vector3<f32> {
-    let unit = 1.0 / crate::METERS_PER_WORLD_UNIT;
+    let unit = 1.0 / crate::world_scale::meters_per_world_unit();
     let forward = crate::ui::PanelPlacement::from_head(head_position, head_rotation).forward;
     let right = forward.cross(Vector3::unit_y());
     let lateral = match side {
@@ -67,7 +67,7 @@ pub fn resolve_world_target(
     );
     let calibrated = pawn_rotation.invert().rotate_vector(target - pawn_position);
     let reach = (calibrated - shoulder(side, eye, head_rotation)).magnitude()
-        * crate::METERS_PER_WORLD_UNIT;
+        * crate::world_scale::meters_per_world_unit();
     if !(reach <= ARM_REACH_METERS) {
         return Err(format!(
             "target is {reach:.2} m from the {} shoulder; arm reach is {ARM_REACH_METERS} m",

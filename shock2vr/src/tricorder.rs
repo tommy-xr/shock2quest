@@ -13,8 +13,8 @@ pub fn width() -> f32 {
 }
 pub fn parts(width: f32) -> [(Vector3<f32>, Vector3<f32>); 2] {
     let p = width / CANVAS[0];
-    let d = DEPTH_M / crate::METERS_PER_WORLD_UNIT;
-    let gap = 0.001 / crate::METERS_PER_WORLD_UNIT;
+    let d = DEPTH_M * width / WIDTH_M;
+    let gap = 0.001 * width / WIDTH_M;
     [
         (
             vec3(-32.0 * p, 0.0, -d * 0.5 - gap),
@@ -31,7 +31,7 @@ pub fn lens(width: f32) -> Vector3<f32> {
     vec3(
         -32.0 * width / CANVAS[0],
         (CANVAS[1] * 0.5 - 28.0) * width / CANVAS[0],
-        -(DEPTH_M + 0.003) / crate::METERS_PER_WORLD_UNIT,
+        -(DEPTH_M + 0.003) * width / WIDTH_M,
     )
 }
 fn box_object(
@@ -53,7 +53,7 @@ fn box_object(
     object
 }
 pub fn lens_objects(width: f32) -> Vec<SceneObject> {
-    let m = crate::METERS_PER_WORLD_UNIT;
+    let m = WIDTH_M / width;
     let center = lens(width);
     vec![
         box_object(

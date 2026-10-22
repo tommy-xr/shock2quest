@@ -25,7 +25,11 @@ pub(crate) fn upright_rotation(forward: cgmath::Vector3<f32>) -> cgmath::Quatern
 /// Leave space past both the body and the held amp, so a cast cannot create
 /// a wall behind the muzzle that the next projectile immediately bypasses.
 pub(crate) fn clearance_distance(muzzle_ahead: f32, half_thickness: f32) -> f32 {
-    crate::physics::PLAYER_STANDING_RADIUS_WORLD.max(muzzle_ahead) + half_thickness + 0.5
+    (crate::physics::PLAYER_STANDING_RADIUS_WORLD
+        * crate::world_scale::WorldScale::active().personal())
+    .max(muzzle_ahead)
+        + half_thickness
+        + 0.5
 }
 
 #[derive(Default, Serialize, Deserialize)]

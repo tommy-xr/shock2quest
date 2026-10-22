@@ -157,7 +157,8 @@ fn authored_weapon_readout_transform(
     // The authored fist has no calibrated glove wrist. Use its final hand
     // pose directly: +Y clears the weapon, and +Z faces back toward the player.
     let width = 0.24;
-    root * Matrix4::from_translation(vec3(0.0, 0.55, 0.25))
+    root * Matrix4::from_scale(crate::world_scale::WorldScale::active().personal())
+        * Matrix4::from_translation(vec3(0.0, 0.55, 0.25))
         * Matrix4::from_angle_x(Deg(-20.0))
         * Matrix4::from_nonuniform_scale(width, width * size.y / size.x, 1.0)
 }
@@ -253,7 +254,13 @@ fn roll_upright(m: Matrix4<f32>) -> Matrix4<f32> {
     let angle = normal.dot(own.cross(upright)).atan2(own.dot(upright)) * (1.0 - keep);
     let up = own * angle.cos() + normal.cross(own) * angle.sin();
     let right = up.cross(normal);
-    Matrix4::from_cols(right.extend(0.0), up.extend(0.0), normal.extend(0.0), m.w)
+    // Rolling changes orientation, not the wrist's physical fit or world scale.
+    Matrix4::from_cols(
+        (right * m.x.truncate().magnitude()).extend(0.0),
+        (up * m.y.truncate().magnitude()).extend(0.0),
+        (normal * m.z.truncate().magnitude()).extend(0.0),
+        m.w,
+    )
 }
 
 /// Get player health percentage (0.0 to 1.0)
@@ -418,6 +425,22 @@ pub(crate) fn get_wielded_gun_setting(world: &World) -> Option<(i32, Option<Stri
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn upright_ammo_plate_preserves_wrist_scale() {
+        use cgmath::{InnerSpace, Matrix4, vec3};
+        let original = Matrix4::from_translation(vec3(0.2, 0.3, -0.4))
+            * Matrix4::from_angle_z(cgmath::Deg(40.0))
+            * Matrix4::from_scale(1.0 / 0.82);
+        let rolled = super::roll_upright(original);
+        assert_eq!(rolled.w, original.w);
+        for (before, after) in [original.x, original.y, original.z]
+            .iter()
+            .zip([rolled.x, rolled.y, rolled.z])
+        {
+            assert!((before.magnitude() - after.magnitude()).abs() < 1e-6);
+        }
+        assert!(rolled.y.x.abs() < 1e-6);
+    }
     use super::*;
     use cgmath::{InnerSpace, SquareMatrix};
 

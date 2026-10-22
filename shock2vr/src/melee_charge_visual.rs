@@ -45,7 +45,8 @@ fn offset(held_seconds: Option<f32>, pose: Matrix4<f32>) -> Vector3<f32> {
     } else {
         0.0
     };
-    (x.normalize() * tremor_x + y.normalize() * (tremor_y + kick)) / crate::METERS_PER_WORLD_UNIT
+    (x.normalize() * tremor_x + y.normalize() * (tremor_y + kick))
+        / crate::world_scale::meters_per_world_unit()
 }
 
 #[cfg(test)]

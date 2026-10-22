@@ -155,7 +155,7 @@ pub(super) fn badge_frame(
 ) -> Matrix4<f32> {
     Matrix4::from_translation(center)
         * body_rotation
-        * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT)
+        * Matrix4::from_scale(1.0 / crate::world_scale::meters_per_world_unit())
         * Matrix4::from_translation(offset_m)
         * Matrix4::from_angle_x(Deg(-60.0))
 }

@@ -8,6 +8,12 @@ pub struct TrackingTransform {
     translation: Vector3<f32>,
     head_stage_y: f32,
     stage_offset_meters: f32,
+    #[serde(default = "default_meters_per_world_unit")]
+    meters_per_world_unit: f32,
+}
+
+fn default_meters_per_world_unit() -> f32 {
+    crate::METERS_PER_WORLD_UNIT
 }
 
 impl TrackingTransform {
@@ -20,7 +26,22 @@ impl TrackingTransform {
         head_stage_y: f32,
         stage_offset_meters: f32,
     ) -> Self {
-        let scale = crate::METERS_PER_WORLD_UNIT;
+        Self::new_with_scale(
+            center_above_floor,
+            eye_cap,
+            head_stage_y,
+            stage_offset_meters,
+            crate::world_scale::meters_per_world_unit(),
+        )
+    }
+
+    fn new_with_scale(
+        center_above_floor: f32,
+        eye_cap: f32,
+        head_stage_y: f32,
+        stage_offset_meters: f32,
+        scale: f32,
+    ) -> Self {
         let offset = stage_offset_meters / scale;
         let head_y = head_stage_y / scale - center_above_floor;
         let lowering = (head_y - eye_cap).max(0.0);
@@ -28,6 +49,7 @@ impl TrackingTransform {
             translation: vec3(0.0, offset - center_above_floor - lowering, 0.0),
             head_stage_y,
             stage_offset_meters,
+            meters_per_world_unit: scale,
         }
     }
 
@@ -45,13 +67,20 @@ impl TrackingTransform {
     pub fn rebase_input(input: &mut crate::input_context::InputContext, center: f32, cap: f32) {
         if let Some(old) = input.tracking {
             let new = old.with_stance(center, cap);
-            input.shift_rig(new.translation - old.translation);
+            let ratio = old.meters_per_world_unit / new.meters_per_world_unit;
+            for position in [
+                &mut input.head.position,
+                &mut input.left_hand.position,
+                &mut input.right_hand.position,
+            ] {
+                *position = (*position - old.translation) * ratio + new.translation;
+            }
             input.tracking = Some(new);
         }
     }
 
     pub fn stage_to_pawn(self, stage: Vector3<f32>) -> Vector3<f32> {
-        stage / crate::METERS_PER_WORLD_UNIT + self.translation
+        stage / self.meters_per_world_unit + self.translation
     }
 
     /// Raw eye height above the runtime's floor, before stance/eye-offset correction.
@@ -117,7 +146,7 @@ impl RoomscaleState {
         let delta = head - previous;
         // Reject discontinuities, not ordinary walking speed. This is a coarse
         // fallback; OpenXR reference-space changes also explicitly reset above.
-        if delta.magnitude() > 0.5 / crate::METERS_PER_WORLD_UNIT {
+        if delta.magnitude() > 0.5 / crate::world_scale::meters_per_world_unit() {
             self.offset = -head;
             return Vector3::zero();
         }
@@ -150,6 +179,19 @@ impl RoomscaleState {
 mod tests {
     use super::*;
     use cgmath::InnerSpace;
+
+    #[test]
+    fn recordings_without_scale_keep_the_original_conversion() {
+        let original =
+            TrackingTransform::new_with_scale(1.2, 1.1, 1.7, 0.0, crate::METERS_PER_WORLD_UNIT);
+        let mut json = serde_json::to_value(original).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .remove("meters_per_world_unit");
+        let restored: TrackingTransform = serde_json::from_value(json).unwrap();
+        let hand = vec3(0.25, 1.4, -0.4);
+        assert_eq!(original.stage_to_pawn(hand), restored.stage_to_pawn(hand));
+    }
 
     #[test]
     fn roomscale_counts_free_travel_once_and_preserves_rig_geometry() {

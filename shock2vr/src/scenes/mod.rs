@@ -398,7 +398,8 @@ pub(crate) fn build_mission_from_save_data(
     };
 
     let spawn_loc = SpawnLocation::PositionRotation(
-        save_data.global_data.position,
+        save_data.global_data.position
+            + cgmath::vec3(0.0, crate::physics::player_scale_center_offset(), 0.0),
         save_data.global_data.rotation,
     );
 

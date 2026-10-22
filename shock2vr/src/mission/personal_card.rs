@@ -138,8 +138,8 @@ impl PersonalCard {
                     } else {
                         vec3(0.0, 0.0, 0.0)
                     })
-                    / crate::METERS_PER_WORLD_UNIT)
-                    .extend(0.0))
+                    / crate::world_scale::meters_per_world_unit())
+                .extend(0.0))
             .truncate()
         });
         self.blocked = [false; 2];
@@ -185,7 +185,7 @@ impl PersonalCard {
                 && !self.pressed[i]
                 && self.center.is_some_and(|center| {
                     (hand.position - center).magnitude()
-                        <= 0.05 / crate::METERS_PER_WORLD_UNIT
+                        <= 0.05 / crate::world_scale::meters_per_world_unit()
                             + super::body_inventory::hand_radius()
                         && body.is_none_or(|body| {
                             (hand.position - center).magnitude2()
@@ -353,7 +353,7 @@ impl PersonalCard {
                         let phase = i as f32 * 2.399_963 + t * std::f32::consts::TAU * 1.7;
                         let envelope = (std::f32::consts::PI * t).sin();
                         let radius = (0.055 + (i % 4) as f32 * 0.012)
-                            / crate::METERS_PER_WORLD_UNIT
+                            / crate::world_scale::meters_per_world_unit()
                             * envelope;
                         let point = *origin
                             + direction * (t * t * (3.0 - 2.0 * t))
@@ -371,7 +371,8 @@ impl PersonalCard {
                             color,
                             0.65,
                             1.0 - opacity,
-                            (0.035 + (i % 3) as f32 * 0.004) / crate::METERS_PER_WORLD_UNIT,
+                            (0.035 + (i % 3) as f32 * 0.004)
+                                / crate::world_scale::meters_per_world_unit(),
                         );
                         let mut bit = engine::scene::SceneObject::new(
                             material,

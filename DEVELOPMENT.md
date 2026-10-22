@@ -1102,7 +1102,18 @@ Enable **Developer → Visualizations → Show height** to compare the game eye
 height, tracked eye height and crouch state. Check the virtual soles/ruler zero
 against your real floor, then compare the hybrid's eyes with your own. Repeat
 after resetting your boundary to distinguish a floor offset from world scale.
-The scene does not recalibrate tracking or resize the hybrid.
+The scene does not recalibrate tracking.
+
+**Developer → Camera → World scale** (`world_scale`, default `1.0`) changes
+the physical size of the world. Try `0.82` for a remaster hybrid near six feet
+tall. Gloves, held items, body equipment and the metre ruler retain their
+physical size. This is a session-only developer setting, not a claim about
+the hybrid's intended height.
+
+Resume play while standing to apply a change; no level reload is needed.
+Expansion waits until the player has sufficient clearance and is grounded.
+Level geometry and its physics coordinates stay unchanged. Saves keep their
+original position convention and can be loaded at another scale.
 
 Without passthrough support the background is black. For synthetic captures:
 `cargo dbgr --mission debug_calibration --vr` (omit `--vr` for flatscreen).

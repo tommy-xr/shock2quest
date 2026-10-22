@@ -168,9 +168,10 @@ pub(super) fn attached_pose(
     let along = rotation.rotate_vector(along);
     // Palm clearance and the contact inside the curled knuckles are glove-scale
     // dimensions, shared by the two ladder shapes and both hands.
-    let palm = grip.point + outward * 0.065 + along * 0.02;
+    let palm = grip.point
+        + (outward * 0.065 + along * 0.02) * crate::world_scale::WorldScale::active().personal();
     Some(GripPose {
-        position: palm - rotation.rotate_vector(rig.palm),
+        position: palm - rotation.rotate_vector(rig.palm_in_world()),
         rotation,
     })
 }

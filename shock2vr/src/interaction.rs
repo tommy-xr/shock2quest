@@ -331,6 +331,7 @@ pub struct VrInteraction {
     grip_hints: HashMap<String, crate::vr_grip::GripHints>,
     grip_overlay: bool,
     fitted_grips: [Option<HeldGrip>; 2],
+    world_scale: crate::world_scale::WorldScale,
     support_profiles: HashMap<String, SupportProfile>,
     support: Option<SupportAttachment>,
     slide: Option<slide::SlideAttachment>,
@@ -456,6 +457,7 @@ impl VrInteraction {
             grip_hints: HashMap::new(),
             grip_overlay: false,
             fitted_grips: [None, None],
+            world_scale: crate::world_scale::WorldScale::active(),
             support_profiles: HashMap::new(),
             support: None,
             slide: None,
@@ -706,9 +708,9 @@ impl VrInteraction {
                 continue;
             };
             let base_rotation = poses[primary].rotation.normalize() * grip.rotation;
-            let primary_palm = poses[primary].point(rig[primary].palm);
+            let primary_palm = poses[primary].point(rig[primary].palm_in_world());
             // Scaled model-space anchors, independent of the melee contact-origin split.
-            let primary_anchor = held.primary_anchor(rig[primary].palm)?;
+            let primary_anchor = held.primary_anchor(rig[primary].palm_in_world())?;
             let handedness = if primary == 0 {
                 Handedness::Left
             } else {
@@ -762,13 +764,13 @@ impl VrInteraction {
                             model_mirror,
                             grip.item_scale,
                             contact_pose,
-                            poses[1 - primary].point(rig[1 - primary].palm),
+                            poses[1 - primary].point(rig[1 - primary].palm_in_world()),
                         )
                     },
                     |s| s.anchor,
                 );
             let pump = pump.and_then(|(motion, travel)| {
-                let separation = (poses[1 - primary].point(rig[1 - primary].palm)
+                let separation = (poses[1 - primary].point(rig[1 - primary].palm_in_world())
                     - control_primary_palm)
                     .magnitude();
                 let fraction = crate::vr_support::pump_fraction_from_separation(
@@ -878,8 +880,9 @@ impl VrInteraction {
                 let Some(rig) = self.grip_kinematics.as_ref() else {
                     return false;
                 };
-                let separation =
-                    (poses[other].point(rig[other].palm) - c.control_primary_palm).magnitude();
+                let separation = (poses[other].point(rig[other].palm_in_world())
+                    - c.control_primary_palm)
+                    .magnitude();
                 // Input can change during a paused redraw. Test retention
                 // against the whole rail then, but only advance the part on a
                 // simulation step: a full stroke must not look like a release.
@@ -905,7 +908,7 @@ impl VrInteraction {
                     && separation > 0.06
                     && c.profile.allows_swing(
                         c.tracked_axis,
-                        poses[other].point(rig[other].palm) - c.control_primary_palm,
+                        poses[other].point(rig[other].palm_in_world()) - c.control_primary_palm,
                     )
                     && (separation
                         - support.pump_separation_offset
@@ -924,7 +927,7 @@ impl VrInteraction {
             if let Some(c) = candidate.as_ref() {
                 let other = 1 - c.primary;
                 if let Some(rig) = self.grip_kinematics.as_ref() {
-                    let palm = poses[other].point(rig[other].palm);
+                    let palm = poses[other].point(rig[other].palm_in_world());
                     if available(c.primary)
                         && tracking
                         && poses.iter().all(|p| p.is_tracked())
@@ -1012,7 +1015,8 @@ impl VrInteraction {
                     // Use the grab-time calibrated controller reference for aim.
                     // Collision motion must not steer the target back into itself.
                     // Translation still follows the primary controller.
-                    c.primary_palm + (poses[other].point(rig[other].palm) - c.control_primary_palm),
+                    c.primary_palm
+                        + (poses[other].point(rig[other].palm_in_world()) - c.control_primary_palm),
                     base_rotation,
                     c.primary_anchor,
                     c.anchor,
@@ -1130,7 +1134,7 @@ impl PlayerInteraction for VrInteraction {
                 rotation: hands[i].rotation,
             };
             (pose.is_tracked() && input.pose_tracking.is_none_or(|p| p.head && p.hands[i]))
-                .then(|| pose.point(rig[i].palm))
+                .then(|| pose.point(rig[i].palm_in_world()))
         })
     }
 
@@ -1150,6 +1154,7 @@ impl PlayerInteraction for VrInteraction {
                 if hand == 0 { "left" } else { "right" },
             )
             .cloned()
+            .map(crate::vr_grip::ResolvedGrip::for_world_scale)
     }
 
     fn reserve_body_tool_hands(&mut self, reserved: [bool; 2]) {
@@ -1434,6 +1439,7 @@ impl PlayerInteraction for VrInteraction {
                             && e.authored
                             && resolved.as_ref() == Some(&expected)
                     });
+                let resolved = resolved.map(crate::vr_grip::ResolvedGrip::for_world_scale);
                 if crate::mission::mission_core::held_item_collision_group(world, entity).is_some()
                     || crate::pipe_melee::is_ranged_guard(world, entity)
                 {
@@ -1459,6 +1465,7 @@ impl PlayerInteraction for VrInteraction {
                             entity_id: entity,
                             size: max - min,
                             center: (min + max) * 0.5,
+                            scale: grip.item_scale,
                         });
                     }
                 }
@@ -1645,7 +1652,7 @@ impl PlayerInteraction for VrInteraction {
                     "hand": if i == 0 { "right" } else { "left" },
                     "attached": attachment.is_some_and(|s| s.active),
                     "blend": attachment.map_or(0.0, |s| s.blend),
-                    "tracked_palm": self.grip_kinematics.as_ref().map(|rig| self.hand_poses()[1-i].point(rig[1-i].palm)),
+                    "tracked_palm": self.grip_kinematics.as_ref().map(|rig| self.hand_poses()[1-i].point(rig[1-i].palm_in_world())),
                     "pressed": self.support_pressed, "blocked": self.support_blocked, "step_dt": self.step_dt,
                     "socket_position": c.model_pose.point(c.anchor),
                     // The support solver returns a calibrated hand origin. Tools
@@ -1669,7 +1676,7 @@ impl PlayerInteraction for VrInteraction {
                 "visual_trigger": visual_triggers[i], "finger_curls": grip.resolved.as_ref().map(|g| g.curls_at(visual_triggers[i])),
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
-                "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal)}))
+                "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm_in_world()), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal)}))
         }).collect())
     }
 
@@ -1784,6 +1791,20 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
+        let scale = crate::world_scale::WorldScale::active();
+        if scale != self.world_scale {
+            // Reuse the authored fit data, rebuilding runtime offsets and contact
+            // shapes at the new conversion without rebaking or saving grip edits.
+            self.fitted_grips = [None, None];
+            self.support = None;
+            self.support_preview = None;
+            self.slide = None;
+            self.slide_preview = None;
+            self.visual_hands = [None, None];
+            self.left_hand.reset_throw_motion();
+            self.right_hand.reset_throw_motion();
+            self.world_scale = scale;
+        }
         self.body_hand_tracking =
             std::array::from_fn(|i| ctx.input.pose_tracking.is_none_or(|p| p.head && p.hands[i]));
         let mut slide_effects = self.update_slide(ctx);
@@ -1900,7 +1921,7 @@ impl PlayerInteraction for VrInteraction {
             if hand.get_held_entity() == Some(entity) {
                 let held = self.fitted_grips[index].as_ref()?;
                 return (held.entity == entity)
-                    .then(|| held.primary_anchor(rig[index].palm))
+                    .then(|| held.primary_anchor(rig[index].palm_in_world()))
                     .flatten();
             }
         }
@@ -2084,7 +2105,7 @@ impl PlayerInteraction for VrInteraction {
                 if let Some(rig) = &self.grip_kinematics {
                     let pose = self.hand_poses()[1 - c.primary];
                     if pose.is_tracked() {
-                        let palm = pose.point(rig[1 - c.primary].palm);
+                        let palm = pose.point(rig[1 - c.primary].palm_in_world());
                         let mut vertices = vec![
                             VertexPosition { position: palm },
                             VertexPosition { position: socket },
@@ -2231,7 +2252,9 @@ impl PlayerInteraction for VrInteraction {
         let palm = self
             .grip_kinematics
             .as_ref()
-            .map_or(Vector3::new(0.0, 0.0, 0.0), |rig| rig[index].palm);
+            .map_or(Vector3::new(0.0, 0.0, 0.0), |rig| {
+                rig[index].palm_in_world()
+            });
         let point = pose.point(palm);
         Some(Point3::new(point.x, point.y, point.z))
     }

@@ -19,7 +19,9 @@ pub fn panel(
     hand: usize,
 ) -> Option<WorldPanel> {
     let grip = grip?;
-    let (base, contact) = authored_panel(position, rotation, grip, face_size());
+    // The runtime grip already carries the world-size compensation.
+    let authored_size = face_size() / crate::world_scale::WorldScale::active().personal();
+    let (base, contact) = authored_panel(position, rotation, grip, authored_size);
     Some(grip::place(
         base,
         contact,
@@ -79,13 +81,14 @@ fn scaled_grip_point(
 }
 
 fn grip_margin() -> f32 {
-    crate::dev_params::get(crate::dev_params::VR_MFD_GRIP_MARGIN) / crate::METERS_PER_WORLD_UNIT
+    crate::dev_params::get(crate::dev_params::VR_MFD_GRIP_MARGIN)
+        / crate::world_scale::meters_per_world_unit()
 }
 
 fn face_size() -> Vector2<f32> {
     SIZE * (crate::dev_params::get(crate::dev_params::VR_MFD_WIDTH)
         / SIZE.x
-        / crate::METERS_PER_WORLD_UNIT)
+        / crate::world_scale::meters_per_world_unit())
 }
 
 /// The device hand and any hand carrying an item keep their world controls.
@@ -761,7 +764,7 @@ impl Scanner {
 
 pub fn beam(start: Vector3<f32>, end: Vector3<f32>) -> engine::scene::SceneObject {
     use engine::scene::{SceneObject, color_material, lines_mesh};
-    let r = 0.008 / crate::METERS_PER_WORLD_UNIT;
+    let r = 0.008 / crate::world_scale::meters_per_world_unit();
     SceneObject::new(
         color_material::create(vec3(0.2, 1.0, 0.8)),
         Box::new(lines_mesh::create(
@@ -812,7 +815,7 @@ pub fn body(
         face * Matrix4::from_translation(vec3(
             0.0,
             0.0,
-            -size.y * scale * 0.5 - 0.0015 / crate::METERS_PER_WORLD_UNIT,
+            -size.y * scale * 0.5 - 0.0015 / crate::world_scale::meters_per_world_unit(),
         )) * Matrix4::from_angle_x(Deg(-90.0))
             * Matrix4::from_scale(scale)
             * Matrix4::from_translation(-center);
@@ -848,8 +851,8 @@ pub fn body(
     let root = face
         * Matrix4::from_angle_z(Deg(180.0))
         * Matrix4::from_translation(vec3(0.0, grip_margin() * 0.5, 0.0));
-    let extra = size.y * scale + 0.0015 / crate::METERS_PER_WORLD_UNIT
-        - crate::tricorder::DEPTH_M / crate::METERS_PER_WORLD_UNIT;
+    let extra = size.y * scale + 0.0015 / crate::world_scale::meters_per_world_unit()
+        - crate::tricorder::DEPTH_M / crate::world_scale::meters_per_world_unit();
     let mut lens = crate::tricorder::lens_objects(display.x);
     for object in &mut lens {
         object.set_transform(
@@ -892,8 +895,8 @@ pub fn scanner_pose(
         if let Some((model, scale, _)) = retail_body(assets) {
             let bounds = model.bounding_box().unwrap();
             let extra = (bounds.max.y - bounds.min.y) * scale
-                + 0.0015 / crate::METERS_PER_WORLD_UNIT
-                - crate::tricorder::DEPTH_M / crate::METERS_PER_WORLD_UNIT;
+                + 0.0015 / crate::world_scale::meters_per_world_unit()
+                - crate::tricorder::DEPTH_M / crate::world_scale::meters_per_world_unit();
             lens.z -= extra;
         }
     }
@@ -916,7 +919,7 @@ fn stepped_frame(
     use engine::scene::{SceneObject, SceneObjectDebugTag, color_material, cube};
     let display = face_size();
     let pixel = display.x / SIZE.x;
-    let depth = 0.008 / crate::METERS_PER_WORLD_UNIT;
+    let depth = 0.008 / crate::world_scale::meters_per_world_unit();
     let root = face
         * Matrix4::from_angle_z(Deg(180.0))
         * Matrix4::from_translation(vec3(0.0, grip_margin() * 0.5, 0.0));
@@ -1032,12 +1035,12 @@ pub fn hologram(
         // point 8 mm above the glass even as it rotates.
         (
             (SIZE.y * 0.5 - (SCREEN.y + 70.0)) * panel.size.y / SIZE.y,
-            size * 0.5 + 0.008 / crate::METERS_PER_WORLD_UNIT,
+            size * 0.5 + 0.008 / crate::world_scale::meters_per_world_unit(),
         )
     } else {
         (
-            panel.size.y * 0.5 + size * 0.5 + 0.012 / crate::METERS_PER_WORLD_UNIT,
-            0.025 / crate::METERS_PER_WORLD_UNIT,
+            panel.size.y * 0.5 + size * 0.5 + 0.012 / crate::world_scale::meters_per_world_unit(),
+            0.025 / crate::world_scale::meters_per_world_unit(),
         )
     };
     let anchor = vec3(-32.0 / SIZE.x * panel.size.x, y, z);

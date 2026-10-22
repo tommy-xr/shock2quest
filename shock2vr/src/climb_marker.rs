@@ -158,7 +158,7 @@ impl LandingMarker {
                 * Matrix4::from(Quaternion::from_arc(Vector3::unit_y(), normal, None))
                 * Matrix4::from_angle_y(cgmath::Rad(yaw))
                 * Matrix4::from_angle_x(Deg(-90.0))
-                * Matrix4::from_scale(MARKER_SIZE),
+                * Matrix4::from_scale(MARKER_SIZE * crate::world_scale::WorldScale::active().personal()),
         );
         object.set_depth_bias(true);
         object

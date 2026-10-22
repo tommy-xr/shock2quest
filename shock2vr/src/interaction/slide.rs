@@ -89,8 +89,8 @@ impl VrInteraction {
             let pose = poses[primary];
             let rotation = pose.rotation.normalize() * grip.rotation;
             let model = held.physical_model_pose(world).unwrap_or(GripPose {
-                position: pose.point(rigs[primary].palm)
-                    - rotation.rotate_vector(held.primary_anchor(rigs[primary].palm)?),
+                position: pose.point(rigs[primary].palm_in_world())
+                    - rotation.rotate_vector(held.primary_anchor(rigs[primary].palm_in_world())?),
                 rotation,
             });
             let hand = profile.glove_pose(
@@ -148,7 +148,8 @@ impl VrInteraction {
                 .any(|(h, _)| crate::vr_config::hand_slot(h) == other)
             && inputs[c.primary].squeeze_value >= 0.5
             && inputs[other].squeeze_value >= 0.5;
-        let palm = poses[other].point(self.grip_kinematics.as_ref().unwrap()[other].palm);
+        let palm =
+            poses[other].point(self.grip_kinematics.as_ref().unwrap()[other].palm_in_world());
         let local = c
             .model
             .rotation

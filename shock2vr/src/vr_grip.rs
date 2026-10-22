@@ -58,6 +58,13 @@ fn default_item_scale() -> f32 {
 }
 
 impl ResolvedGrip {
+    /// Keep authored grip files in baseline units; scale only the runtime copy.
+    pub(crate) fn for_world_scale(mut self) -> Self {
+        let personal = crate::world_scale::WorldScale::active().personal();
+        self.item_scale *= personal;
+        self.offset *= personal;
+        self
+    }
     /// Convert a grip fitted against scaled triangles back to source-mesh
     /// coordinates. The hand-space offset already has the correct world size.
     pub fn with_item_scale(mut self, scale: f32) -> Self {
@@ -638,6 +645,9 @@ pub fn surface_fingerprint(triangles: &[[Point3<f32>; 3]]) -> String {
 }
 
 impl GripKinematics {
+    pub(crate) fn palm_in_world(&self) -> Vector3<f32> {
+        self.palm * crate::world_scale::WorldScale::active().personal()
+    }
     pub fn fingerprint(&self) -> String {
         fingerprint(
             self.fingers

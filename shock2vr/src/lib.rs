@@ -147,6 +147,7 @@ pub mod vr_support;
 pub mod vr_tracking;
 pub mod vr_weapon_grip;
 mod wielded_weapon;
+pub mod world_scale;
 pub mod zip_asset_path;
 
 use scenes::{
@@ -211,11 +212,9 @@ pub(crate) fn resolve_fov_deg(base: f32) -> f32 {
     }
 }
 
-/// Real-world meters per world unit: 1 world unit is `dark::SCALE_FACTOR`
-/// (2.5) SS2 feet, and an SS2 foot is a real foot (0.3048 m). VR runtimes
-/// divide floor-relative tracked poses (meters) by this before feeding them
-/// to the game so the world renders at true scale and a tracked eye N meters
-/// above the physical floor lands the equivalent height above the game floor.
+/// Default metres per world unit, treating an authored SS2 foot as 0.3048 m.
+/// Physical tracking uses [`world_scale::meters_per_world_unit`] so world
+/// size can be tuned independently of authored geometry and personal equipment.
 pub const METERS_PER_WORLD_UNIT: f32 = 0.3048 * dark::SCALE_FACTOR;
 
 /// The single mapping from crouch state to eye height. The render camera and
@@ -223,11 +222,12 @@ pub const METERS_PER_WORLD_UNIT: f32 = 0.3048 * dark::SCALE_FACTOR;
 /// [`Game::player_eye_height`], which wraps it) so shots stay on the
 /// crosshair.
 pub fn player_eye_height_for(crouched: bool) -> f32 {
-    if crouched {
+    let height = if crouched {
         PLAYER_CROUCH_EYE_HEIGHT
     } else {
         PLAYER_EYE_HEIGHT
-    }
+    };
+    height * world_scale::WorldScale::active().personal()
 }
 
 use std::{
@@ -1758,7 +1758,7 @@ impl Game {
             simulation_focused: true,
             hit_feedback: hit_feedback::HitFeedback::new(),
             head_pose: (
-                vec3(0.0, input_context::DEFAULT_HEAD_HEIGHT, 0.0),
+                vec3(0.0, player_eye_height_for(false) / dark::SCALE_FACTOR, 0.0),
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
             ),
             input_recorder: None,
@@ -2059,6 +2059,17 @@ impl Game {
             &self.options,
             action_effects,
         );
+
+        // A live scale/stance change must also move eye-attached render layers.
+        if input_context.tracking.is_some() {
+            let mut rendered_input = input_context.clone();
+            vr_tracking::TrackingTransform::rebase_input(
+                &mut rendered_input,
+                self.player_center_above_floor(),
+                self.player_eye_cap_above_center(),
+            );
+            self.head_pose = (rendered_input.head.position, rendered_input.head.rotation);
+        }
 
         let audio_profile = perf::scope(perf::Phase::Audio);
         // `time` is the player's clock; world sounds follow the scene's
@@ -2686,6 +2697,7 @@ impl Game {
 
         let is_crouched = self.active_game_scene.player_is_crouched();
         let (position, rotation) = self.player_standing_transform()?;
+        let position = position - vec3(0.0, physics::player_scale_center_offset(), 0.0);
 
         let quest_info = self
             .active_game_scene

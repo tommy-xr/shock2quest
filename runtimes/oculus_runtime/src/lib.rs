@@ -1205,8 +1205,10 @@ fn main() {
         } else {
             last_head_stage.unwrap_or(vec3(
                 0.0,
-                (shock2vr::input_context::DEFAULT_HEAD_HEIGHT + game.player_center_above_floor())
-                    * shock2vr::METERS_PER_WORLD_UNIT,
+                (shock2vr::input_context::DEFAULT_HEAD_HEIGHT
+                    * shock2vr::world_scale::WorldScale::active().personal()
+                    + game.player_center_above_floor())
+                    * shock2vr::world_scale::meters_per_world_unit(),
                 0.0,
             ))
         };

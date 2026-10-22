@@ -6,9 +6,9 @@ use crate::{
 use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, vec3};
 use shipyard::{EntityId, IntoIter, IntoWithId, View, World};
 
-const SCALE: f32 = crate::METERS_PER_WORLD_UNIT;
 fn radius() -> f32 {
-    crate::dev_params::get(crate::dev_params::VR_HOLSTER_RADIUS) / SCALE
+    crate::dev_params::get(crate::dev_params::VR_HOLSTER_RADIUS)
+        / crate::world_scale::meters_per_world_unit()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -647,7 +647,11 @@ impl Holsters {
     }
 
     fn radius(&self) -> f32 {
-        if self.chest { 0.075 / SCALE } else { radius() }
+        if self.chest {
+            0.075 / crate::world_scale::meters_per_world_unit()
+        } else {
+            radius()
+        }
     }
 
     pub fn occupants(&self, world: &World) -> [Option<EntityId>; 2] {
@@ -882,9 +886,10 @@ impl Holsters {
                 crate::dev_params::get(crate::dev_params::VR_HOLSTER_SIDE),
             )
         };
-        let base = head.position - Vector3::unit_y() * (below / SCALE)
-            + forward * (forward_distance / SCALE);
-        let side = side / SCALE;
+        let base = head.position
+            - Vector3::unit_y() * (below / crate::world_scale::meters_per_world_unit())
+            + forward * (forward_distance / crate::world_scale::meters_per_world_unit());
+        let side = side / crate::world_scale::meters_per_world_unit();
         let centers = [base + right * side, base - right * side];
         self.centers = Some(centers);
         if !enabled {
@@ -908,7 +913,7 @@ impl Holsters {
                 && held[i].is_none()
                 && (hand.position - super::ammo_pouch::center_for(self.body_pose.unwrap()))
                     .magnitude2()
-                    <= (super::ammo_pouch::RADIUS + super::body_inventory::hand_radius()).powi(2);
+                    <= (super::ammo_pouch::radius() + super::body_inventory::hand_radius()).powi(2);
             self.near[i] = (tracked
                 && !at_pouch
                 && !self.shoulder_priority[i]
