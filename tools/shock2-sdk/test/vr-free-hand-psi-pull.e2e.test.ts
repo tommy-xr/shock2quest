@@ -30,6 +30,7 @@ for (const ampHand of ["left", "right"] as const) {
     assert.equal((await game.info()).player.psi_points, before, "enabling while pressed cannot cast");
     await game.input.set(`${freeHand}_hand.trigger`, 0);
     await game.step({ frames: 2 });
+    assert.ok(!(await game.ui.state()).bracket_hints.includes("Collect"), "the empty hand's psi trigger pulls instead of collecting");
     const start = (await game.entities.detail(item.id)).position;
     await aimVrHandAt(game, start, 3, 0, 1, { hand: freeHand });
     await game.step({ frames: 20 });
