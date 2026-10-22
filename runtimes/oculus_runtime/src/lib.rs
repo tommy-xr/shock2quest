@@ -596,6 +596,10 @@ fn main() {
     let mut swapchain = None;
     let mut event_storage = xr::EventDataBuffer::new();
     let mut session_running = false;
+    // Latched: Meta's Quit destroys the activity after STOPPING and never
+    // sends EXITING, so the loop must notice it once the session has ended.
+    #[cfg(target_os = "android")]
+    let mut activity_destroyed = false;
     // Set once a scene has asked to quit and we've asked OpenXR to exit, so the
     // request is made exactly once (the runtime takes several frames to answer).
     let mut exit_requested = false;
@@ -766,7 +770,9 @@ fn main() {
         // unconsumed is what makes Horizon OS raise "shock2quest isn't
         // responding" while the OpenXR session renders happily at 90 Hz.
         #[cfg(target_os = "android")]
-        android_pump_events();
+        {
+            activity_destroyed |= android_pump_events();
+        }
 
         // println!(
         //     " - Before polling events: {}",
@@ -926,6 +932,13 @@ fn main() {
                 }
                 _ => {}
             }
+        }
+        // Activity gone with the session already ended (Meta menu Quit): no
+        // EXITING will follow, so leave rather than idle as a hidden process.
+        #[cfg(target_os = "android")]
+        if activity_destroyed && !session_running {
+            println!("SHOCK2QUEST_XR_ACTIVITY_DESTROYED - leaving the idle session");
+            break 'main_loop;
         }
         if !session_running {
             // Don't grind up the CPU
@@ -1827,7 +1840,8 @@ fn main() {
     drop(left_grip_space);
     drop(right_grip_space);
 
-    // The session is over (EXITING / LOSS_PENDING, or an instance loss). Just
+    // The session is over (EXITING / LOSS_PENDING, an instance loss, or the
+    // activity destroyed after the session ended). Just
     // returning is not enough on Android: ndk-glue runs `main` on a thread it
     // spawned, so the NativeActivity - and the process - would stay up with
     // nothing rendering, which the headset shows as a black void. Ask Android
@@ -1843,10 +1857,10 @@ fn main() {
         #[allow(deprecated)]
         ndk_glue::native_activity().finish();
         let deadline = Instant::now() + Duration::from_secs(1);
-        while Instant::now() < deadline && !android_pump_events() {
+        while !activity_destroyed && Instant::now() < deadline && !android_pump_events() {
             std::thread::sleep(Duration::from_millis(16));
         }
-        // `process::exit` runs no destructors, so hand the XR objects back
+        // The exit below runs no Rust destructors, so hand the XR objects back
         // explicitly first - otherwise even the clean exit destroys neither the
         // session nor the instance, and the runtime service can carry that
         // state into the next launch.
@@ -1855,7 +1869,14 @@ fn main() {
         drop(frame_wait);
         drop(session);
         drop(xr_instance);
-        std::process::exit(0);
+        // `_exit`, not `exit`: `exit` runs C++ atexit/static destructors while
+        // the audio stream's AudioTrack callback thread is still live, and the
+        // process SIGABRTs in that thread on quit. `_exit` skips them, like a
+        // force-stop (which never crashed). Saves and settings are written
+        // synchronously, so only stdout needs a flush.
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        // SAFETY: `_exit` takes no pointers and never returns.
+        unsafe { libc::_exit(0) };
     }
 
     // egl_display
@@ -1967,14 +1988,15 @@ fn end_frame_with_no_layers(
 /// which queue actually has something pending, so every read below is
 /// guaranteed not to block.
 ///
-/// Returns whether the activity was destroyed during this drain. Teardown is
-/// deliberately *not* driven from that during the main loop: the OpenXR session
+/// Returns whether the activity was destroyed during this drain. While the
+/// session runs, teardown is deliberately *not* driven from that: the OpenXR session
 /// state machine already exits it on EXITING/LOSS_PENDING after a clean
 /// `session.end()`; breaking out on ndk-glue's `Destroy` instead would tear
 /// down GL and XR objects after the activity is already gone, with the session
-/// possibly never ended - strictly worse ordering. The flag is only read after
-/// the loop, where it ends the post-`finish()` wait as soon as Android has
-/// actually torn the activity down. `Destroy` also stops the drain for the frame.
+/// possibly never ended - strictly worse ordering. The main loop only acts on it
+/// once the session has already ended (Meta's Quit sends no EXITING), and after
+/// the loop it ends the post-`finish()` wait as soon as Android has actually
+/// torn the activity down. `Destroy` also stops the drain for the frame.
 ///
 /// The input events are finished as *unhandled* on purpose: gameplay input
 /// arrives through OpenXR actions, and these only need to be consumed so the
