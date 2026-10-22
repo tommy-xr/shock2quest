@@ -1,4 +1,4 @@
-//! The `show_position` debug readout: player and hand-ray world coordinates on the
+//! Position and height debug readouts on the
 //! shared [`UiCanvas`], so both presentations lay it out once. Flat draws the
 //! canvas in screen space over the HUD; VR presents the same canvas on a
 //! head-anchored panel of its own.
@@ -15,8 +15,23 @@ use crate::ui::{HAlign, PanelPlacement, Rect, UiCanvas, VAlign, WorldPanel};
 /// Full-width so the readout is centered on the canvas; the rows sit in the
 /// gap between the psi-overload meter and the flat HUD's bottom panels.
 const READOUT: Rect = Rect::new(0.0, 352.0, CANVAS_SIZE.x, 54.0);
+const HEIGHT_READOUT: Rect = Rect::new(0.0, 316.0, CANVAS_SIZE.x, 36.0);
 /// Start beyond the glove so the beam emerges from the pointing hand.
 const BEAM_HAND_CLEARANCE: f32 = 0.25;
+
+pub(crate) struct DebugHeightReadout {
+    /// Grounded eye height above the pawn's floor anchor; None while airborne.
+    pub eye_meters: Option<f32>,
+    /// Raw tracked eye height above STAGE; None for synthetic or lost tracking.
+    pub tracked_meters: Option<f32>,
+    pub crouched: bool,
+}
+
+/// Resolve the eye against the same floor anchor that converts the tracked rig.
+pub(crate) fn eye_above_floor_meters(eye_y: f32, tracking_crouched: bool) -> f32 {
+    (eye_y + crate::physics::player_center_above_floor(tracking_crouched))
+        * crate::METERS_PER_WORLD_UNIT
+}
 
 /// One sample drives the labels, beams and surface spots. Debug rays have
 /// unlimited reach without changing the game's grab/use range.
@@ -126,13 +141,48 @@ fn format_position(pos: Vector3<f32>) -> String {
     format!("X: {:.2}   Y: {:.2}   Z: {:.2}", pos.x, pos.y, pos.z)
 }
 
-/// Build the position readout as a resolution-independent canvas. Pure (no
+/// Build the enabled readouts as a resolution-independent canvas. Pure (no
 /// asset/GL access), so it is unit-testable.
 pub(crate) fn build_debug_overlay_canvas(
-    pos: Vector3<f32>,
+    pos: Option<Vector3<f32>>,
     targets: [Option<Vector3<f32>>; 2],
+    height: Option<DebugHeightReadout>,
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(CANVAS_SIZE);
+    if let Some(height) = height {
+        let eye = height.eye_meters.map_or_else(
+            || "not grounded".into(),
+            |meters| format!("{meters:.2} m ({:.2} ft)", meters / 0.3048),
+        );
+        let tracked = height.tracked_meters.map_or_else(
+            || "unavailable".into(),
+            |meters| format!("{meters:.2} m ({:.2} ft)", meters / 0.3048),
+        );
+        let crouched = if height.crouched { "Yes" } else { "No" };
+        for (i, text) in [
+            format!("Eye / floor: {eye}   Crouched: {crouched}"),
+            format!("Tracked eye / floor: {tracked}"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            canvas.text_native(
+                Rect::new(
+                    HEIGHT_READOUT.x,
+                    HEIGHT_READOUT.y + i as f32 * 18.0,
+                    HEIGHT_READOUT.w,
+                    18.0,
+                ),
+                &text,
+                "mainfont.fon",
+                HAlign::Center,
+                VAlign::Middle,
+            );
+        }
+    }
+    let Some(pos) = pos else {
+        return canvas;
+    };
     for (i, (label, position)) in [
         ("Player", Some(pos)),
         ("Left ray", targets[0]),
@@ -185,8 +235,9 @@ mod tests {
     #[test]
     fn the_canvas_labels_player_and_each_hand() {
         let canvas = build_debug_overlay_canvas(
-            vec3(-32.153, 1.0, 21.4),
+            Some(vec3(-32.153, 1.0, 21.4)),
             [Some(vec3(8.126, -2.3456, 0.0)), None],
+            None,
         );
         assert_eq!(canvas.element_count(), 3);
         assert_eq!(
@@ -196,6 +247,61 @@ mod tests {
                 "Left ray: X: 8.13   Y: -2.35   Z: 0.00",
                 "Right ray: no hit",
             ]
+        );
+    }
+
+    #[test]
+    fn height_compares_corrected_and_raw_floor_heights_without_position_rows() {
+        // A button crouch lowers the game eye; the physical headset stays at 1.70 m.
+        let center = crate::physics::player_center_above_floor(true);
+        let tracking = crate::vr_tracking::TrackingTransform::new(
+            center,
+            crate::physics::player_eye_cap_above_center(true),
+            1.70,
+            0.0,
+        );
+        let eye = tracking.stage_to_pawn(vec3(0.0, 1.70, 0.0));
+        let canvas = build_debug_overlay_canvas(
+            None,
+            [None; 2],
+            Some(DebugHeightReadout {
+                eye_meters: Some(eye_above_floor_meters(eye.y, true)),
+                tracked_meters: Some(tracking.head_height_meters()),
+                crouched: true,
+            }),
+        );
+        assert_eq!(
+            text_of(&canvas),
+            [
+                "Eye / floor: 0.83 m (2.71 ft)   Crouched: Yes",
+                "Tracked eye / floor: 1.70 m (5.58 ft)",
+            ]
+        );
+    }
+
+    #[test]
+    fn height_and_position_coexist_without_inventing_a_missing_floor() {
+        let canvas = build_debug_overlay_canvas(
+            Some(vec3(0.0, 0.0, 0.0)),
+            [None; 2],
+            Some(DebugHeightReadout {
+                eye_meters: None,
+                tracked_meters: None,
+                crouched: false,
+            }),
+        );
+        assert_eq!(canvas.element_count(), 5);
+        assert_eq!(
+            &text_of(&canvas)[..2],
+            [
+                "Eye / floor: not grounded   Crouched: No",
+                "Tracked eye / floor: unavailable",
+            ]
+        );
+        assert!(
+            build_debug_overlay_canvas(None, [None; 2], None)
+                .elements()
+                .is_empty()
         );
     }
 
@@ -290,6 +396,8 @@ mod tests {
         // canvas - so the row must clear them and sit below the canvas center.
         assert!(READOUT.y + READOUT.h <= crate::hud::readouts::BIO_ORIGIN.y);
         assert!(READOUT.center().y > CANVAS_SIZE.y / 2.0);
+        assert!(HEIGHT_READOUT.y + HEIGHT_READOUT.h <= READOUT.y);
+        assert!(HEIGHT_READOUT.y > CANVAS_SIZE.y / 2.0);
     }
 
     #[test]

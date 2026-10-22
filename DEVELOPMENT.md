@@ -948,6 +948,15 @@ off and participates in All on / All off. VR places the shared readout on an upr
 panel with lazy recentering; it is hidden while the cyber interface, pause menu,
 or death camera owns the view. Values last until app restart.
 
+**Visualizations → Show height** (`show_height`) shows eye height above the game
+floor in metres and feet, plus the actual **Crouched: Yes/No** state. A second
+row shows raw tracked eye height above the headset runtime's floor, before
+crouch/eye-offset correction; synthetic or lost tracking reads `unavailable`.
+Game height uses the grounded pawn's floor anchor and reads `not grounded`
+while jumping, falling or climbing. It shares the position readout's flat/VR
+presentation and visibility rules, works independently of Show position, and
+defaults off. Compare both heights while standing to investigate boundary calibration.
+
 **Visualizations → Physics wireframe** (`debug_physics`) toggles collider,
 contact, and joint debug drawing without restarting the mission. It defaults
 off and participates in All on / All off. Desktop and debug runtime
@@ -1078,6 +1087,28 @@ campaign impacts and extra material passes are separate work.
 
 
 
+
+#### Height calibration (`debug_calibration`)
+
+Open **Developer → Scenes → debug_calibration** on Quest. It requests room
+passthrough and places a passive pipe hybrid two metres ahead, frozen in its
+authored standing pose at normal game scale. Its lowest posed mesh point and
+the ruler's zero sit on an invisible collision floor at Y=0. The ruler has
+10 cm ticks and a six-foot **top-of-head** marker; six-foot stature is not
+six-foot eye height. The hybrid's measured posed mesh height appears beside
+the ruler and in the `SHOCK2QUEST_CALIBRATION` log record.
+
+Enable **Developer → Visualizations → Show height** to compare the game eye
+height, tracked eye height and crouch state. Check the virtual soles/ruler zero
+against your real floor, then compare the hybrid's eyes with your own. Repeat
+after resetting your boundary to distinguish a floor offset from world scale.
+The scene does not recalibrate tracking or resize the hybrid.
+
+Without passthrough support the background is black. For synthetic captures:
+`cargo dbgr --mission debug_calibration --vr` (omit `--vr` for flatscreen).
+The debug runtime starts with desktop mouse-look even in VR mode. Send
+`{"head.rotation": [0, 0, 0, 1]}` to `/v1/control/input` for a neutral headset
+pose facing the hybrid; a real headset supplies that pose itself.
 
 #### Glove fit check (`debug_gloves`)
 

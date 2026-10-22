@@ -3503,8 +3503,10 @@ pub struct MissionCore {
     /// The eye's offset within the pawn, as last reported by the input
     /// context: eye height in flat, plus the roomscale offset in VR.
     last_head_position: Vector3<f32>,
+    /// Raw eye height above the runtime floor, cleared on tracking loss.
+    last_tracked_eye_height: Option<f32>,
 
-    /// Where the `show_position` readout's VR panel hangs: placed on the first
+    /// Where the debug readouts' VR panel hangs: placed on the first
     /// visible frame, world-locked, lazily recentered - the same treatment
     /// every other head-referenced panel gets, so the readout does not swim
     /// with the head. Reset while the param is off, so turning it back on
@@ -4477,6 +4479,7 @@ impl MissionCore {
             screen_fade_alpha: 0.0,
             last_head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             last_head_position: vec3(0.0, 0.0, 0.0),
+            last_tracked_eye_height: None,
             show_position_anchor: crate::ui::FrontendPanelAnchor::new(),
             show_position_targets: Default::default(),
             death_camera: None,
@@ -4871,6 +4874,10 @@ impl MissionCore {
         // viewer rather than the pawn origin (they differ by the roomscale
         // offset in VR, and by eye height in both).
         self.last_head_position = input_context.head.position;
+        self.last_tracked_eye_height = input_context
+            .tracking
+            .filter(|_| !input_context.pose_tracking.is_some_and(|pose| !pose.head))
+            .map(crate::vr_tracking::TrackingTransform::head_height_meters);
         let mut life_state_effects = Vec::new();
         if self.player_is_alive() && player_health_depleted {
             life_state_effects.append(&mut self.begin_player_death());
@@ -6290,26 +6297,27 @@ impl MissionCore {
         {
             self.vr_use_mode_head = (input_context.head.position, input_context.head.rotation);
         }
-        self.show_position_targets =
-            if self.show_position_readout_visible(game_options.presentation_mode) {
-                let (left, right) = self.interaction.held_entities();
-                crate::hud::DebugPositionTargets::sample(
-                    input_context,
-                    player_pos,
-                    player_rot,
-                    [left, right],
-                    &self.physics,
-                )
-            } else {
-                Default::default()
-            };
+        self.show_position_targets = if self.debug_readout_visible(game_options.presentation_mode)
+            && crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION)
+        {
+            let (left, right) = self.interaction.held_entities();
+            crate::hud::DebugPositionTargets::sample(
+                input_context,
+                player_pos,
+                player_rot,
+                [left, right],
+                &self.physics,
+            )
+        } else {
+            Default::default()
+        };
 
-        // The `show_position` readout's panel. Advanced here (not in `render`)
+        // The debug readouts' panel. Advanced here (not in `render`)
         // because the anchor needs the tracked head and a dt; while the readout
         // is not being drawn the anchor is reset, so the next time it comes up
         // it places in front of the player rather than wherever they last were.
         if game_options.presentation_mode == crate::PresentationMode::Vr
-            && self.show_position_readout_visible(game_options.presentation_mode)
+            && self.debug_readout_visible(game_options.presentation_mode)
         {
             self.show_position_anchor.update(
                 input_context.head.position,
@@ -17955,21 +17963,14 @@ impl MissionCore {
                 crate::resolve_fov_deg(crate::DEFAULT_FOV_DEG),
             ));
 
-            // `show_position` readout (flat). VR presents the same canvas on a
+            // Debug readouts (flat). VR presents the same canvas on a
             // head-anchored panel in `render`.
-            if self.show_position_readout_visible(options.presentation_mode) {
-                let pos = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
-                ret.extend(
-                    crate::hud::build_debug_overlay_canvas(
-                        pos,
-                        self.show_position_targets.positions(),
-                    )
-                    .render_screen_space(
-                        asset_cache,
-                        screen_size,
-                        crate::ui::ScaleMode::PreserveAspect,
-                    ),
-                );
+            if self.debug_readout_visible(options.presentation_mode) {
+                ret.extend(self.debug_readout_canvas().render_screen_space(
+                    asset_cache,
+                    screen_size,
+                    crate::ui::ScaleMode::PreserveAspect,
+                ));
             }
 
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
@@ -18159,7 +18160,7 @@ impl MissionCore {
         }
     }
 
-    /// Whether the shared `show_position` readout is visible during gameplay.
+    /// Whether either shared debug readout is visible during gameplay.
     ///
     /// The cyber interface is excluded here because its panel owns the view
     /// while it is up. In VR it keeps owning it through the exit ramp - the
@@ -18169,11 +18170,38 @@ impl MissionCore {
     /// `MissionCore` cannot see them; they are covered centrally by
     /// `Game::render`'s `DEBUG_OVERLAY` drop, the same drop that removes the
     /// player's hands.
-    fn show_position_readout_visible(&self, presentation_mode: crate::PresentationMode) -> bool {
+    fn debug_readout_visible(&self, presentation_mode: crate::PresentationMode) -> bool {
         let is_vr = presentation_mode == crate::PresentationMode::Vr;
-        crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION)
+        (crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION)
+            || crate::dev_params::get_bool(crate::dev_params::SHOW_HEIGHT))
             && !self.use_mode
             && (!is_vr || self.use_mode_ramp.is_settled_closed())
+    }
+
+    fn debug_readout_canvas(&self) -> crate::ui::UiCanvas {
+        let height = crate::dev_params::get_bool(crate::dev_params::SHOW_HEIGHT).then(|| {
+            // Use the resolved eye and tracking stance, not the crouch request:
+            // low ceilings can refuse standing, and hanging can compress only the body.
+            let eye = self
+                .flat_eye
+                .map_or(self.last_head_position, |eye| eye.position);
+            crate::hud::DebugHeightReadout {
+                eye_meters: self.player_handle.is_grounded().then(|| {
+                    crate::hud::eye_above_floor_meters(
+                        eye.y,
+                        self.player_handle.tracking_is_crouched(),
+                    )
+                }),
+                tracked_meters: self.last_tracked_eye_height,
+                crouched: self.player_handle.is_crouched(),
+            }
+        });
+        crate::hud::build_debug_overlay_canvas(
+            crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION)
+                .then(|| self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos),
+            self.show_position_targets.positions(),
+            height,
+        )
     }
 
     fn render_vr_use_mode(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
@@ -19475,7 +19503,9 @@ impl MissionCore {
             sim_time,
         ));
 
-        if self.show_position_readout_visible(options.presentation_mode) {
+        if self.debug_readout_visible(options.presentation_mode)
+            && crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION)
+        {
             let mut pointers = self.show_position_targets.render(sim_time as f32);
             crate::util::tag_render_source(
                 &mut pointers,
@@ -19484,22 +19514,18 @@ impl MissionCore {
             scene.extend(pointers);
         }
 
-        // `show_position` readout (VR): the same canvas flat draws in screen
+        // Debug readouts (VR): the same canvas flat draws in screen
         // space, on its own anchored panel - nearer than the system panels so
         // it cannot be coplanar with them. Labelled `DEBUG_OVERLAY` so
         // `Game::render`'s pause/death filter drops it exactly as the flat
         // readout is dropped with the per-eye scene.
         if let Some(placement) = self
-            .show_position_readout_visible(options.presentation_mode)
+            .debug_readout_visible(options.presentation_mode)
             .then(|| self.show_position_anchor.placement())
             .flatten()
         {
             let panel = crate::hud::readout_panel(placement);
-            let mut objects = crate::hud::build_debug_overlay_canvas(
-                player.pos,
-                self.show_position_targets.positions(),
-            )
-            .render_world_space(
+            let mut objects = self.debug_readout_canvas().render_world_space(
                 asset_cache,
                 panel.transform(),
                 None,
