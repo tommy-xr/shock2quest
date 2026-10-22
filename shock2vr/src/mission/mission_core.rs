@@ -669,15 +669,16 @@ mod loot_table_tests {
     }
 }
 
-/// Draw the held item on the grip pose workbench instead of in its frozen hand,
-/// again in each extra view, all in the system-overlay group behind a world
-/// dim. The item keeps its entity id but is relabelled, so the pause menu
-/// drops it with the workbench's hands.
+/// The grip pose workbench's scene, built from the mission's draws of its held
+/// item (`scene`): the item on the workbench instead of in its frozen hand,
+/// again in each extra view, and the workbench's room. Nothing else of the
+/// mission is kept. The item keeps its entity id but is relabelled, and is lit
+/// by the workbench's own lights.
 fn draw_pose_workbench(
-    scene: &mut Vec<SceneObject>,
-    bench: &crate::interaction::PoseWorkbench,
+    scene: Vec<SceneObject>,
+    bench: crate::interaction::PoseWorkbench,
     world: &World,
-) {
+) -> Vec<SceneObject> {
     use cgmath::SquareMatrix;
     let rigid = |position, rotation| Matrix4::from_translation(position) * Matrix4::from(rotation);
     // Moved rigidly, so the item keeps the size gameplay draws it at; only a
@@ -688,7 +689,7 @@ fn draw_pose_workbench(
         .and_then(|positions| positions.get(bench.entity).ok().cloned())
         .and_then(|pose| rigid(pose.position, pose.rotation).invert())
     else {
-        return;
+        return bench.environment;
     };
     let rescale = world
         .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
@@ -701,41 +702,32 @@ fn draw_pose_workbench(
     // The item's own model; effects tagged with it (a laser sight) are left
     // out, rather than left behind at the frozen hand or turned across the
     // views.
-    let (item, rest): (Vec<_>, Vec<_>) = std::mem::take(scene).into_iter().partition(|object| {
-        object
-            .debug_tag()
-            .is_some_and(|tag| tag.entity_id == Some(bench.entity.inner()))
-    });
-    let item: Vec<_> = item
+    let item: Vec<_> = scene
         .into_iter()
         .filter(|object| {
-            object
-                .debug_tag()
-                .is_some_and(|tag| tag.source.as_deref() == Some("entity"))
+            object.debug_tag().is_some_and(|tag| {
+                tag.entity_id == Some(bench.entity.inner())
+                    && tag.source.as_deref() == Some("entity")
+            })
         })
         .collect();
-    *scene = rest;
-    let source = crate::util::render_source::GRIP_WORKBENCH;
-    if let Some((eye, gaze)) = bench.head {
-        let mut dim = crate::ui::world_dim::world_dim_layer(eye, gaze, bench.dim_distance, source);
-        dim.set_render_layer(RenderLayer::SystemOverlay);
-        scene.push(dim);
-    }
+    let mut objects = bench.environment;
     let placements =
         std::iter::once(rebase).chain(bench.views.into_iter().flatten().map(|view| view * rebase));
     for placement in placements {
         for object in &item {
             let mut copy = object.clone();
             copy.set_transform(placement * object.get_transform());
-            copy.set_render_layer(RenderLayer::SystemOverlay);
+            copy.set_lights(bench.lights.clone());
             let tag = engine::scene::SceneObjectDebugTag {
-                source: Some(source.to_owned()),
+                source: Some(crate::util::render_source::GRIP_WORKBENCH.to_owned()),
                 ..object.debug_tag().unwrap().clone()
             };
             copy.set_debug_tag(Some(Rc::new(tag)));
-            scene.push(copy);
+            objects.push(copy);
         }
     }
+    objects
 }
 
 /// Move a VR overlay built in the tracked pawn space (the cyber interface, the
@@ -18503,8 +18495,16 @@ impl MissionCore {
             .borrow::<View<crate::runtime_props::RuntimePropDoubleSided>>()
             .unwrap();
 
+        // The grip pose workbench is a scene of its own: of the mission, only
+        // its held item is drawn, onto the workbench (see the model loop).
+        let bench = self.interaction.pose_workbench();
+
         // Start with built in scene objects
-        let mut scene = self.scene_objects.clone();
+        let mut scene = if bench.is_some() {
+            Vec::new()
+        } else {
+            self.scene_objects.clone()
+        };
         scene.extend(crate::hud::survival_status::render(
             &self.world,
             asset_cache,
@@ -18637,6 +18637,12 @@ impl MissionCore {
 
         // Render models
         for (entity_id, objs) in &self.id_to_model {
+            if bench
+                .as_ref()
+                .is_some_and(|bench| bench.entity != *entity_id)
+            {
+                continue;
+            }
             total_model_count += 1;
             if flat_viewmodel_skip.contains(entity_id) {
                 continue;
@@ -18870,6 +18876,18 @@ impl MissionCore {
             total_model_count
         );
 
+        if let Some(bench) = bench {
+            let mut scene = draw_pose_workbench(scene, bench, &self.world);
+            scene.append(&mut self.interaction.render(
+                asset_cache,
+                &self.world,
+                self.use_mode,
+                None,
+            ));
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            return (scene, player.pos, player.rotation);
+        }
+
         // Where letting go of every hold lands (VR climbing), or the landing a
         // committed release is gliding to.
         if let Some(outcome) = self.climb_release_glide.or(self.climb_release.outcome) {
@@ -18983,13 +19001,6 @@ impl MissionCore {
         let player_mat = engine::scene::color_material::create(Vector3::new(0.0, 0.0, 1.0));
         let mut _player = SceneObject::new(player_mat, Box::new(engine::scene::cube::create()));
         _player.set_transform(Matrix4::from_translation(player.pos));
-
-        // The grip pose workbench takes the held item off its frozen hand and
-        // draws it on the bench and in each extra view, over a dim that hides
-        // the world. Ahead of the hands, so the dim leads its layer.
-        if let Some(bench) = self.interaction.pose_workbench() {
-            draw_pose_workbench(&mut scene, &bench, &self.world);
-        }
 
         // The interaction controller owns its own visuals: VR draws hand models
         // + forearm HUD panels; flat draws nothing here (its weapon viewmodel is
@@ -25502,11 +25513,18 @@ impl crate::game_scene::GameScene for MissionCore {
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             (player.pos, player.rotation)
         };
+        // The real floor: the tracked stage's, else (synthetic input) the feet.
+        let floor_y = pawn_pos.y
+            + input.tracking.map_or_else(
+                || -crate::physics::player_center_above_floor(self.player_handle.is_crouched()),
+                |tracking| tracking.stage_to_pawn(Vector3::new(0.0, 0.0, 0.0)).y,
+            );
         self.interaction.update_pose_workbench(
             &self.world,
             &input,
             pawn_pos,
             pawn_rotation,
+            floor_y,
             elapsed.as_secs_f32(),
         );
     }

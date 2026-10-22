@@ -153,14 +153,16 @@ pub trait PlayerInteraction {
         false
     }
 
-    /// Drive the open workbench with this frame's (rig-shifted) input; the
-    /// mission is not updated meanwhile.
+    /// Drive the open workbench with this frame's (rig-shifted) input and the
+    /// world height of the player's real floor; the mission is not updated
+    /// meanwhile.
     fn update_pose_workbench(
         &mut self,
         _world: &World,
         _input: &InputContext,
         _player_pos: Vector3<f32>,
         _player_rotation: Quaternion<f32>,
+        _floor_y: f32,
         _dt: f32,
     ) {
     }
@@ -439,16 +441,16 @@ struct GripGeometry {
     weapon_arms: Option<Vec<Point3<f32>>>,
 }
 
-/// Where the grip pose workbench draws the held item: its world pose and
-/// grip scale there, each extra view, and the eye position and gaze the world
-/// dim hangs from, at `dim_distance`.
+/// What the mission draws for the grip pose workbench instead of itself: the
+/// held item's world pose and grip scale there, each extra view, the
+/// workbench's fixed lights and its plain room.
 pub struct PoseWorkbench {
     pub entity: EntityId,
     pub item: GripPose,
     pub item_scale: f32,
     pub views: Option<[Matrix4<f32>; 3]>,
-    pub head: Option<(Vector3<f32>, Vector3<f32>)>,
-    pub dim_distance: f32,
+    pub lights: Option<std::rc::Rc<engine::scene::light::LightArray>>,
+    pub environment: Vec<SceneObject>,
 }
 
 /// A pose-tool capture applied live but not yet saved, and what the first
@@ -1138,6 +1140,7 @@ impl VrInteraction {
         input: &InputContext,
         player_pos: Vector3<f32>,
         player_rotation: Quaternion<f32>,
+        floor_y: f32,
         dt: f32,
     ) {
         let Some(tool) = self.pose_tool.as_mut() else {
@@ -1176,9 +1179,7 @@ impl VrInteraction {
                 pose_tool::item_pose(tool.hand_pose, grip, contact).position,
             );
         }
-        if let Some((eye, gaze)) = head {
-            tool.head = Some((eye, gaze.rotate_vector(Vector3::new(0.0, 0.0, -1.0))));
-        }
+        tool.floor_y = floor_y;
         let world_joints = |hand: &crate::input_context::Hand| {
             hand.joints
                 .map(|joints| joints.map(|p| hand_world_position(player_pos, player_rotation, p)))
@@ -2349,9 +2350,10 @@ impl PlayerInteraction for VrInteraction {
         input: &InputContext,
         player_pos: Vector3<f32>,
         player_rotation: Quaternion<f32>,
+        floor_y: f32,
         dt: f32,
     ) {
-        self.update_pose_tool(world, input, player_pos, player_rotation, dt);
+        self.update_pose_tool(world, input, player_pos, player_rotation, floor_y, dt);
     }
 
     fn pose_tool_button(&mut self, hand: Handedness, button: crate::hand_buttons::HandButton) {
@@ -2376,8 +2378,8 @@ impl PlayerInteraction for VrInteraction {
             item: tool.item_placed?,
             item_scale: tool.item.map_or(1.0, |(_, scale)| scale),
             views: tool.views(),
-            head: tool.head,
-            dim_distance: tool.head.map_or(0.0, |(eye, _)| tool.dim_distance(eye)),
+            lights: tool.lights(),
+            environment: tool.environment(),
         })
     }
 
@@ -2443,7 +2445,7 @@ impl PlayerInteraction for VrInteraction {
                 .as_ref()
                 .and_then(|held| held.resolved.as_ref());
             let mut objs = glove_renderer
-                .map(|renderer| pose_tool::render(tool, renderer, grip, lighting))
+                .map(|renderer| pose_tool::render(tool, renderer, grip, tool.lights()))
                 .unwrap_or_default();
             crate::util::tag_render_source(&mut objs, crate::util::render_source::PLAYER_HANDS);
             return objs;

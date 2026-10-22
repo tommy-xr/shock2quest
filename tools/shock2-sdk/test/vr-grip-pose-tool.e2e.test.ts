@@ -79,19 +79,38 @@ test(
     // 0.1 m to the right (the posing hand), and again in three views.
     let draws = await mugDraws();
     assert.equal(draws.length, drawnOnce * 4, "drawn on the bench and in three extra views");
-    assert.ok(draws.every((d) => d.source === "grip_workbench" && d.render_layer === "system_overlay"));
+    assert.ok(draws.every((d) => d.source === "grip_workbench"));
     const ahead = normalize([gaze[0], 0, gaze[2]]);
     const right = cross(ahead, [0, 1, 0]);
     const spot = add(add(eye, scale(ahead, 0.45 / METERS_PER_WORLD_UNIT)),
       add(scale(right, 0.1 / METERS_PER_WORLD_UNIT), [0, -0.3 / METERS_PER_WORLD_UNIT, 0]));
     const bench = draws[0]!.position;
     assert.ok(distance(bench, spot) < 0.02 / METERS_PER_WORLD_UNIT, `bench ${bench} vs ${spot}`);
-    const dims = (await game.scene.fromSource("grip_workbench")).filter((o) => o.entity_id === null);
-    assert.equal(dims.length, 1, "one dim hides the world");
+    // The workbench is a scene of its own: none of the mission is drawn (its
+    // world, labels, HUD), only the mug, the hands, a floor and a backdrop.
+    const benchScene = (await game.scene.objects()).objects;
+    const strays = benchScene
+      .filter((o) => o.source !== "grip_workbench" && o.source !== "player_hands")
+      .map((o) => `${o.source}:${o.name ?? o.model}`);
+    assert.equal(strays.length, 0, `no mission objects, saw ${strays.slice(0, 8).join(", ")}`);
+    const environment = benchScene.filter((o) => o.source === "grip_workbench" && o.entity_id === null);
+    assert.deepEqual(environment.map((o) => o.name).sort(), ["workbench backdrop", "workbench floor"],
+      "a floor and a backdrop, and no dim");
+    const floor = environment.find((o) => o.name === "workbench floor")!;
+    assert.ok(floor.position[1] < bench[1], "the floor is below the bench");
     // Walking round it (head moved and turned) leaves it where it is.
     await game.input.setMany({ "head.position": [0.6, 0, 0.4], "head.look": [70, 20] });
     await game.step({ frames: 5 });
     assert.ok(distance((await mugDraws())[0]!.position, bench) < 1e-4, "the bench is world-locked");
+    // The pause menu still opens over the workbench, which stays behind it.
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 2 });
+    const paused = (await game.scene.objects()).objects;
+    assert.ok(paused.some((o) => o.source === "pause_dim"), "the pause menu draws over the workbench");
+    assert.ok(paused.some((o) => o.source === "grip_workbench" && o.entity_id === mug.id),
+      "with the workbench behind it");
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 2 });
     const fitted = grip.grip;
     assert.ok(fitted && !("bones" in fitted), "the mug starts on its shipped grip");
 
@@ -185,6 +204,10 @@ test(
     draws = await mugDraws();
     assert.equal(draws.length, drawnOnce);
     assert.ok(draws.every((d) => d.source === "entity"), "drawn in the world again");
+    const missionScene = (await game.scene.objects()).objects;
+    assert.ok(!missionScene.some((o) => o.source === "grip_workbench"), "the workbench scene is gone");
+    assert.ok(missionScene.some((o) => o.source === "entity" && o.entity_id !== mug.id),
+      "the mission renders again");
 
     // A fresh squeeze, then letting go, drops it.
     await game.input.setMany({ "right_hand.trigger": 0, "right_hand.squeeze": 1 });

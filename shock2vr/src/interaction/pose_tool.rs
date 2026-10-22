@@ -1,17 +1,19 @@
 //! In-VR grip authoring (a developer cheat): a workbench that freezes the
-//! mission and floats the held item, with its saved grip's glove, in front of
-//! the player. A tracked hand forms the grip around it; the other hand's
+//! mission and shows, in a plain room of its own, the held item with its saved
+//! grip's glove floating in front of the player. A tracked hand forms the grip around it; the other hand's
 //! controller trigger (or its tracked pinch) stages that pose live, its lower
 //! button saves it as a headset override and its upper button discards it.
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
+use std::rc::Rc;
+
 use cgmath::{
-    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3, Vector3,
+    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad, Rotation, Rotation3, Vector3,
 };
 use shipyard::EntityId;
 
-use engine::scene::{RenderLayer, SceneObject};
+use engine::scene::{SceneObject, light::LightArray};
 
 use crate::hand_capture::HandJoints;
 use crate::hand_glove::{GloveRenderer, HandLight};
@@ -39,8 +41,8 @@ const VIEW_SPACING: f32 = 0.35 / crate::METERS_PER_WORLD_UNIT;
 const BENCH_AHEAD: f32 = 0.45 / crate::METERS_PER_WORLD_UNIT;
 const BENCH_DROP: f32 = 0.3 / crate::METERS_PER_WORLD_UNIT;
 const BENCH_ASIDE: f32 = 0.1 / crate::METERS_PER_WORLD_UNIT;
-/// Clear air between the workbench's farthest reach and the world dim.
-const DIM_CLEARANCE: f32 = 1.0 / crate::METERS_PER_WORLD_UNIT;
+/// The workbench room's width, centred on where the player stood (world units).
+const ROOM_SIZE: f32 = 12.0 / crate::METERS_PER_WORLD_UNIT;
 
 pub(super) struct GripPoseTool {
     /// The posing hand (0 left, 1 right) and the item it holds.
@@ -68,8 +70,9 @@ pub(super) struct GripPoseTool {
     /// Where the player stood when the workbench was placed: the extra
     /// views face it.
     pub viewer: Vector3<f32>,
-    /// The live eye position and gaze, which the world dim follows.
-    pub head: Option<(Vector3<f32>, Vector3<f32>)>,
+    /// World height of the player's real floor, which the workbench floor
+    /// lies on.
+    pub floor_y: f32,
     /// Each untracked hand's controller (world pose, trigger, squeeze), drawn
     /// as a glove so the hand on the controls can be seen.
     pub controllers: [Option<(GripPose, f32, f32)>; 2],
@@ -100,7 +103,7 @@ impl GripPoseTool {
             surface: None,
             item_placed: None,
             viewer: hand_pose.position,
-            head: None,
+            floor_y: hand_pose.position.y,
             controllers: [None, None],
             recent: VecDeque::new(),
             // Entered "already pressed": a trigger or pinch held as the
@@ -123,12 +126,49 @@ impl GripPoseTool {
         self.placed = true;
     }
 
-    /// How far out to hang the world dim: past the item and its views.
-    pub fn dim_distance(&self, head_position: Vector3<f32>) -> f32 {
+    /// Fixed lights for the workbench (no mission light reaches it), around
+    /// the item and turned with the player who placed it: the key light comes
+    /// from behind their left shoulder.
+    pub fn lights(&self) -> Option<Rc<LightArray>> {
         let item = self
             .item
             .map_or(self.hand_pose.position, |(item, _)| item.position);
-        (item - head_position).magnitude() + VIEW_SPACING + DIM_CLEARANCE
+        let yaw = crate::scripts::ai::ai_util::normalized_horizontal(item - self.viewer)
+            // The turn about +Y that points -Z (ahead) at the item.
+            .map_or(Quaternion::new(1.0, 0.0, 0.0, 0.0), |ahead| {
+                Quaternion::from_angle_y(Rad((-ahead.x).atan2(-ahead.z)))
+            });
+        crate::object_lighting::gallery_lights(item, yaw)
+    }
+
+    /// The workbench's plain room, for spatial reference: a grid floor at the
+    /// player's real floor inside a solid backdrop.
+    pub fn environment(&self) -> Vec<SceneObject> {
+        let below = Vector3::new(self.viewer.x, self.floor_y, self.viewer.z);
+        let thickness = 0.02 / crate::METERS_PER_WORLD_UNIT;
+        // Inset from the walls, so its edges do not fight them for depth.
+        let floor_size = ROOM_SIZE - 2.0 * thickness;
+        let floor = crate::scenes::debug_common::shaded_cube_object(
+            Vector3::new(0.32, 0.33, 0.35),
+            below - Vector3::unit_y() * (thickness / 2.0),
+            Vector3::new(floor_size, thickness, floor_size),
+        );
+        let mut backdrop = crate::scenes::debug_common::cube_object(
+            Vector3::new(0.1, 0.11, 0.13),
+            below,
+            Vector3::new(ROOM_SIZE, ROOM_SIZE, ROOM_SIZE),
+        );
+        // Seen from inside, so no face is culled.
+        backdrop.set_backface_culling(None);
+        let mut room = [(floor, "workbench floor"), (backdrop, "workbench backdrop")];
+        for (object, name) in &mut room {
+            object.set_debug_tag(Some(Rc::new(engine::scene::SceneObjectDebugTag {
+                name: Some((*name).to_owned()),
+                source: Some(crate::util::render_source::GRIP_WORKBENCH.to_owned()),
+                ..Default::default()
+            })));
+        }
+        room.into_iter().map(|(object, _)| object).collect()
     }
 
     /// Take this frame's tracked hands. The leading edge of `trigger` (the
@@ -264,7 +304,7 @@ fn steady_mean(frames: &VecDeque<(HandJoints, f32)>) -> Option<HandJoints> {
         .then_some(mean)
 }
 
-/// The workbench's hands, over the dimmed world: the posing hand's glove
+/// The workbench's hands, lit by `lights`: the posing hand's glove
 /// frozen on the item at its grip, each tracked hand live (the posing one
 /// with fingertip spheres), each untracked controller as an open glove, and
 /// the posing gloves again in every extra view.
@@ -272,9 +312,8 @@ pub(super) fn render(
     tool: &GripPoseTool,
     renderer: &mut GloveRenderer,
     grip: Option<&ResolvedGrip>,
-    lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
+    lights: Option<Rc<LightArray>>,
 ) -> Vec<SceneObject> {
-    let lights = |position| lighting.map(|lighting| lighting.at_player_position(position));
     let handedness = |index: usize| [Handedness::Left, Handedness::Right][index];
     let mut objs = Vec::new();
     let mut posed = Vec::new();
@@ -290,7 +329,7 @@ pub(super) fn render(
             None,
             Some((grip.fingers.hand_shape_at(0.0), 1.0)),
             HandLight::Off,
-            lights(pose.position),
+            lights.clone(),
         ));
     }
     for (index, joints) in tool.tracked.iter().enumerate() {
@@ -314,7 +353,7 @@ pub(super) fn render(
             None,
             Some((crate::hand_pose::HandShape::Pose(pose.clone()), 1.0)),
             HandLight::Off,
-            lights(position),
+            lights.clone(),
         );
         // Only the posing hand belongs in the item's views; the other is
         // pinching somewhere else.
@@ -362,7 +401,7 @@ pub(super) fn render(
             None,
             None,
             HandLight::Off,
-            lights(pose.position),
+            lights.clone(),
         ));
     }
     // The posing gloves again in each extra view; the mission redraws the
@@ -375,9 +414,6 @@ pub(super) fn render(
         }
     }
     objs.append(&mut posed);
-    for object in &mut objs {
-        object.set_render_layer(RenderLayer::SystemOverlay);
-    }
     objs
 }
 
@@ -619,6 +655,29 @@ mod tests {
         // An untracked (zero) head still gets a defined bench.
         let untracked = bench_spot(eye, Quaternion::new(0.0, 0.0, 0.0, 0.0), 1);
         assert!(untracked.x.is_finite() && untracked.y.is_finite() && untracked.z.is_finite());
+    }
+
+    #[test]
+    fn the_room_stands_on_the_real_floor_and_its_key_light_is_behind_the_viewer() {
+        // The viewer stands off the item's +X, looking along -X.
+        let item = vec3(1.0, 2.0, 3.0);
+        let mut tool = tool_with_item(item, item + vec3(4.0, 1.0, 0.0));
+        tool.floor_y = -0.5;
+        let room = tool.environment();
+        let floor = &room[0];
+        let top = floor.get_transform() * cgmath::Vector4::new(0.0, 0.5, 0.0, 1.0);
+        assert!((top.y - tool.floor_y).abs() < 1e-5, "{top:?}");
+        assert!((top.x - tool.viewer.x).abs() < 1e-5 && (top.z - tool.viewer.z).abs() < 1e-5);
+        // `None` only with object lighting off: a process-wide dev param that
+        // a parallel test may flip, so it is not forced here.
+        if let Some(lights) = tool.lights() {
+            let key = lights.get_light(0).unwrap().position() - item;
+            assert!(
+                key.x > 0.0,
+                "behind the viewer, who looks along -X: {key:?}"
+            );
+            assert!(key.z > 0.0, "and over their left shoulder (+Z): {key:?}");
+        }
     }
 
     #[test]

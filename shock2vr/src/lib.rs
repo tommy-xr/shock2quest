@@ -3075,8 +3075,12 @@ impl Game {
     pub fn get_hand_lights(&self) -> Vec<engine::scene::light::SceneLight> {
         // The lights belong to the hands: with the hands suppressed they would
         // be two pools cast by nothing - and, being world lighting, they light
-        // the scene *before* the pause dim and show straight through it.
-        if self.pause_menu.is_open() || self.pending_save_load.is_some() {
+        // the scene *before* the pause dim and show straight through it. The
+        // grip pose workbench lights its own room.
+        if self.pause_menu.is_open()
+            || self.pending_save_load.is_some()
+            || self.active_game_scene.pose_workbench_open()
+        {
             return Vec::new();
         }
         self.active_game_scene.get_hand_lights(&self.options)
@@ -3204,6 +3208,7 @@ impl Game {
             && dev_params::get_bool(dev_params::VR_DEBUG_BODY)
             && !self.pause_menu.is_open()
             && !self.player_visuals_hidden()
+            && !self.active_game_scene.pose_workbench_open()
         {
             scene.extend(
                 self.active_game_scene
@@ -3225,7 +3230,6 @@ impl Game {
             scene.retain(|object| {
                 let source = object.debug_tag().and_then(|tag| tag.source.as_deref());
                 source != Some(util::render_source::PLAYER_HANDS)
-                    && source != Some(util::render_source::GRIP_WORKBENCH)
                     && source != Some(util::render_source::DEBUG_OVERLAY)
                     && source != Some(util::render_source::GAMEPLAY_HUD)
             });
@@ -3262,8 +3266,11 @@ impl Game {
         // clamp the cameras use is a no-op standing.
         eye_position.y = eye_position.y.min(self.player_eye_cap_above_center());
 
+        // The grip pose workbench draws a room of its own, which the mission's
+        // view effects (water and hit tints, the drunk wave) stay out of.
+        let workbench = self.active_game_scene.pose_workbench_open();
         let water = swimming::WaterStatus::from_world(self.active_game_scene.world());
-        if water.tint > 0.001 {
+        if water.tint > 0.001 && !workbench {
             let mut layer = hit_feedback::vignette_layer_at_pose(
                 self.view_extents,
                 Matrix4::from_translation(eye_position)
@@ -3280,9 +3287,10 @@ impl Game {
         // The hit tint occupies the explicit scene-overlay layer: over the
         // world, behind scene UI and the pause menu, identically in flat and
         // VR. It remains view-locked, so only the eye pose differs.
-        if let Some(mut layer) =
-            self.hit_feedback
-                .render(self.view_extents, eye_position, eye_forward)
+        if let Some(mut layer) = self
+            .hit_feedback
+            .render(self.view_extents, eye_position, eye_forward)
+            .filter(|_| !workbench)
         {
             layer.set_transform(pawn_to_world * layer.get_transform());
             scene.push(layer);
@@ -3348,7 +3356,7 @@ impl Game {
         }
         scene.extend(pause_objects);
 
-        if !self.player_visuals_hidden() {
+        if !self.player_visuals_hidden() && !workbench {
             if let Ok(alcohol) = self
                 .world()
                 .borrow::<shipyard::UniqueView<alcohol::AlcoholVital>>()
@@ -3418,7 +3426,12 @@ impl Game {
         // with a gun welded to their face while the camera rolled onto the
         // floor - the two presentations diverging on exactly the beat this
         // feature exists for (AGENTS.md section 3).
-        let mut objs = if self.pause_menu.is_open() || self.player_visuals_hidden() {
+        // The grip pose workbench is a scene of its own, so none of this
+        // shows over it either (an item's label would read through).
+        let mut objs = if self.pause_menu.is_open()
+            || self.player_visuals_hidden()
+            || self.active_game_scene.pose_workbench_open()
+        {
             Vec::new()
         } else {
             self.active_game_scene.render_per_eye(

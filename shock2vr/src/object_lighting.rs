@@ -195,6 +195,43 @@ pub fn weapon_vein_tuning() -> VeinTuning {
     }
 }
 
+/// A fixed key and fill light for places with no mission lights (debug
+/// galleries, the grip pose workbench): broad, neutral lamps around `center`,
+/// turned by `yaw` about it, so setting ambient to zero still leaves shape and
+/// texture visible. `None` when object lighting is off.
+pub fn gallery_lights(
+    center: Vector3<f32>,
+    yaw: cgmath::Quaternion<f32>,
+) -> Option<std::rc::Rc<LightArray>> {
+    use cgmath::Rotation;
+    if !dev_params::get_bool(dev_params::OBJECT_LIGHTING) {
+        return None;
+    }
+    let ambient = 0.5 + dev_params::get(dev_params::OBJECT_LIGHT_AMBIENT_BOOST);
+    let mut lights = LightArray::new()
+        .with_object_lighting(
+            vec3(ambient, ambient, ambient),
+            dev_params::get(dev_params::OBJECT_LIGHT_WRAP),
+        )
+        .with_specular(dev_params::get(dev_params::OBJECT_SPECULAR))
+        .with_veins(growth_vein_tuning(), weapon_vein_tuning());
+    let brightness = dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS)
+        * dev_params::get(dev_params::LEVEL_LIGHT_INTENSITY);
+    // They cover the standard 48-unit debug floor, and stay put when the
+    // player turns or walks, unlike a head-mounted lamp.
+    for (offset, intensity) in [
+        (vec3(-18.0, 24.0, 12.0), 18.0),
+        (vec3(20.0, 12.0, -16.0), 10.0),
+    ] {
+        lights.add_light(PointLight {
+            position: center + yaw.rotate_vector(offset),
+            color_intensity: Vector4::new(1.0, 1.0, 1.0, intensity * brightness),
+            range: 150.0,
+        });
+    }
+    Some(std::rc::Rc::new(lights))
+}
+
 /// The lights that shade an object at `position`, strongest first.
 pub fn lights_for_position(
     spatial: &dyn SpatialQueryEngine,

@@ -10,16 +10,13 @@ use dark::{
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{
-        SceneObject, basic_material, color_material, create_plane_with_uv_scale, cube,
-        light::{LightArray, PointLight},
-    },
+    scene::{SceneObject, basic_material, color_material, create_plane_with_uv_scale, cube},
 };
 use rapier3d::prelude::{Collider, ColliderBuilder, Isometry, SharedShape};
 use shipyard::EntityId;
 
 use crate::{
-    GameOptions, dev_params,
+    GameOptions,
     game_scene::{
         AmbientAudioState, DebugPlayerStatsRequest, DebugSkillLevelsRequest, DebuggableScene,
         GameScene,
@@ -42,40 +39,17 @@ use crate::{
 /// A box of debug geometry: (color, center, size) in world units.
 pub type DebugBox = (Vector3<f32>, Vector3<f32>, Vector3<f32>);
 
-/// Debug galleries have no world-rep light table. Give their models a fixed
-/// key and fill light so setting ambient to zero still leaves shape and texture
-/// visible. Apply after scene hooks, preserving any purpose-built lighting rig.
-/// Per-eye viewmodels use world-space lighting too and need the same pass.
+/// Debug galleries have no world-rep light table, so their models get the
+/// fixed gallery lights. Apply after scene hooks, preserving any purpose-built
+/// lighting rig. Per-eye viewmodels use world-space lighting too and need the
+/// same pass.
 fn apply_debug_lighting(objects: &mut [SceneObject]) {
-    if !dev_params::get_bool(dev_params::OBJECT_LIGHTING) {
+    let Some(lights) = crate::object_lighting::gallery_lights(
+        vec3(0.0, 0.0, 0.0),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0),
+    ) else {
         return;
-    }
-    let ambient = 0.5 + dev_params::get(dev_params::OBJECT_LIGHT_AMBIENT_BOOST);
-    let mut lights = LightArray::new()
-        .with_object_lighting(
-            vec3(ambient, ambient, ambient),
-            dev_params::get(dev_params::OBJECT_LIGHT_WRAP),
-        )
-        .with_specular(dev_params::get(dev_params::OBJECT_SPECULAR))
-        .with_veins(
-            crate::object_lighting::growth_vein_tuning(),
-            crate::object_lighting::weapon_vein_tuning(),
-        );
-    let brightness = dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS)
-        * dev_params::get(dev_params::LEVEL_LIGHT_INTENSITY);
-    // Broad, neutral lamps cover the standard 48-unit floor. They stay fixed
-    // in the scene when the player turns or walks, unlike a head-mounted lamp.
-    for (position, intensity) in [
-        (vec3(-18.0, 24.0, 12.0), 18.0),
-        (vec3(20.0, 12.0, -16.0), 10.0),
-    ] {
-        lights.add_light(PointLight {
-            position,
-            color_intensity: cgmath::vec4(1.0, 1.0, 1.0, intensity * brightness),
-            range: 150.0,
-        });
-    }
-    let lights = std::rc::Rc::new(lights);
+    };
     for object in objects {
         if object.lights().is_none() {
             object.set_lights(Some(lights.clone()));
@@ -598,14 +572,18 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         let (mut scene_objects, mut camera_position, mut camera_rotation) =
             self.core.render(asset_cache, options);
-        self.hooks.after_render(
-            &mut self.core,
-            &mut scene_objects,
-            &mut camera_position,
-            &mut camera_rotation,
-            asset_cache,
-            options,
-        );
+        // The grip pose workbench is a scene of its own; the gallery adds
+        // nothing to it.
+        if !self.core.pose_workbench_open() {
+            self.hooks.after_render(
+                &mut self.core,
+                &mut scene_objects,
+                &mut camera_position,
+                &mut camera_rotation,
+                asset_cache,
+                options,
+            );
+        }
         apply_debug_lighting(&mut scene_objects);
         (scene_objects, camera_position, camera_rotation)
     }
