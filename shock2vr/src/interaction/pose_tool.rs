@@ -17,12 +17,16 @@ use engine::scene::{SceneObject, light::LightArray};
 
 use crate::hand_capture::HandJoints;
 use crate::hand_glove::{GloveRenderer, HandLight};
+use crate::hand_pose::{HandShape, Pose};
 use crate::vr_config::Handedness;
 use crate::vr_grip::{BakedGripEntry, GripLibrary, GripSurface, ResolvedGrip};
 use crate::vr_support::GripPose;
 
-/// Thumb and index tips closer than this pinch (world units).
-const PINCH_DISTANCE: f32 = 0.02 / crate::METERS_PER_WORLD_UNIT;
+/// Thumb and index tips closer than this start a pinch, and farther than the
+/// release distance end it, so tracking noise at the edge does not re-fire it
+/// (world units).
+const PINCH_PRESS: f32 = 0.02 / crate::METERS_PER_WORLD_UNIT;
+const PINCH_RELEASE: f32 = 0.03 / crate::METERS_PER_WORLD_UNIT;
 /// Seconds of steady posing-hand tracking averaged into a capture.
 const STEADY_SECONDS: f32 = 0.3;
 /// Every joint stays this close to its window mean to count as steady
@@ -32,8 +36,16 @@ const STEADY_DISTANCE: f32 = 0.005 / crate::METERS_PER_WORLD_UNIT;
 const SCALE_RATE: f32 = 0.7;
 /// The grip editor's item scale range.
 const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.1..=3.0;
-/// A glove fingertip this close to the item's surface touches it (world units).
+/// A glove joint this close to the item's surface touches it (world units).
 const TOUCH_DISTANCE: f32 = 0.01 / crate::METERS_PER_WORLD_UNIT;
+/// An open (not watertight) surface has no inside, only a back side: a joint
+/// this far behind its nearest face counts as through it (world units). Most
+/// item models are open solids (the mug), where that is their inside; behind
+/// a lone sheet (a card, a double-sided tile) it reads red falsely.
+const OPEN_PENETRATION: f32 = 0.003 / crate::METERS_PER_WORLD_UNIT;
+/// Contact spheres on each glove joint, and markers on each raw tracked joint.
+const CONTACT_RADIUS: f32 = 0.008 / crate::METERS_PER_WORLD_UNIT;
+const MARKER_RADIUS: f32 = 0.004 / crate::METERS_PER_WORLD_UNIT;
 /// How far beside the item each extra view of it sits (world units).
 const VIEW_SPACING: f32 = 0.35 / crate::METERS_PER_WORLD_UNIT;
 /// Where the workbench holds the item relative to the eye: ahead along the
@@ -76,10 +88,19 @@ pub(super) struct GripPoseTool {
     /// Each untracked hand's controller (world pose, trigger, squeeze), drawn
     /// as a glove so the hand on the controls can be seen.
     pub controllers: [Option<(GripPose, f32, f32)>; 2],
+    /// How far each glove fingertip (thumb..little) lands from the posing
+    /// hand's tracked one this frame, in millimetres: the mapping's error.
+    pub tip_error_mm: Option<[f32; 5]>,
+    /// Why the last capture request captured nothing, until one succeeds.
+    pub capture_failure: Option<String>,
+    /// Contact spheres and tracked-joint markers drawn (thumbstick click).
+    pub show_contacts: bool,
     /// Recent posing-hand frames, each with the time since the one before
     /// (zero for the oldest), spanning the steady window.
     recent: VecDeque<(HandJoints, f32)>,
     requested: bool,
+    pinching: bool,
+    clicked: bool,
 }
 
 impl GripPoseTool {
@@ -105,11 +126,25 @@ impl GripPoseTool {
             viewer: hand_pose.position,
             floor_y: hand_pose.position.y,
             controllers: [None, None],
+            tip_error_mm: None,
+            capture_failure: None,
+            show_contacts: true,
             recent: VecDeque::new(),
-            // Entered "already pressed": a trigger or pinch held as the
-            // workbench opens must be let go before it captures.
+            // Entered "already pressed": a trigger, pinch or click held as
+            // the workbench opens must be let go before it acts.
             requested: true,
+            pinching: false,
+            clicked: true,
         }
+    }
+
+    /// The leading edge of the free controller's thumbstick click shows or
+    /// hides the contact spheres and joint markers.
+    pub fn toggle_contacts(&mut self, click: bool) {
+        if click && !self.clicked {
+            self.show_contacts = !self.show_contacts;
+        }
+        self.clicked = click;
     }
 
     /// Move the posing hand, and so its item, from `item_position` onto the
@@ -192,12 +227,18 @@ impl GripPoseTool {
             }
             None => self.recent.clear(),
         }
-        let requested =
-            trigger || tracked[1 - self.hand].is_some_and(|joints| is_pinching(&joints));
+        self.pinching = pinching(self.pinching, tracked[1 - self.hand].as_ref());
+        let requested = trigger || self.pinching;
         if requested && !self.requested {
-            self.capture = steady_mean(&self.recent);
-            if self.capture.is_none() {
-                println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=false reason=unsteady");
+            match steady_mean(&self.recent) {
+                Ok(mean) => {
+                    self.capture = Some(mean);
+                    self.capture_failure = None;
+                }
+                Err(reason) => {
+                    println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=false reason={reason}");
+                    self.capture_failure = Some(reason.to_string());
+                }
             }
         }
         self.requested = requested;
@@ -242,15 +283,71 @@ impl GripPoseTool {
         ])
     }
 
-    /// Which of a glove's world-space fingertips touch the held item.
-    pub fn touching(&self, tips: [Vector3<f32>; 5]) -> [bool; 5] {
+    /// How a world-space glove joint meets the held item's surface.
+    pub fn contact(&self, point: Vector3<f32>) -> Contact {
         let (Some((item, scale)), Some(surface)) = (self.item, &self.surface) else {
-            return [false; 5];
+            return Contact::Free;
         };
-        tips.map(|tip| {
-            let local = item.rotation.invert().rotate_vector(tip - item.position) / scale;
-            surface.distance(Point3::from_vec(local)) * scale < TOUCH_DISTANCE
-        })
+        let local = item.rotation.invert().rotate_vector(point - item.position) / scale;
+        let (distance, behind) = surface.project(Point3::from_vec(local));
+        let distance = distance * scale;
+        if behind && (surface.is_closed() || distance > OPEN_PENETRATION) {
+            Contact::Penetrating
+        } else if distance < TOUCH_DISTANCE {
+            Contact::Touching
+        } else {
+            Contact::Free
+        }
+    }
+}
+
+/// A glove joint against the held item: clear of it, within
+/// `TOUCH_DISTANCE` of its surface, or through it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Contact {
+    Free,
+    Touching,
+    Penetrating,
+}
+
+impl Contact {
+    /// White, green, red.
+    fn color(self) -> Vector3<f32> {
+        match self {
+            Contact::Free => Vector3::new(0.9, 0.9, 0.9),
+            Contact::Touching => Vector3::new(0.2, 1.0, 0.3),
+            Contact::Penetrating => Vector3::new(1.0, 0.15, 0.1),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Contact::Free => "contact sphere free",
+            Contact::Touching => "contact sphere touching",
+            Contact::Penetrating => "contact sphere penetrating",
+        }
+    }
+}
+
+/// Why a capture request found no steady window to average.
+#[derive(Debug, PartialEq)]
+enum Unsteady {
+    /// The posing hand is not tracked (e.g. its controller is still held
+    /// without simultaneous hands and controllers).
+    NoJoints,
+    /// Tracked for less than `STEADY_SECONDS`.
+    WindowShort,
+    /// Some joint strayed this far (mm) from the window's mean.
+    Jitter { max_mm: f32 },
+}
+
+impl std::fmt::Display for Unsteady {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unsteady::NoJoints => f.write_str("no_joints"),
+            Unsteady::WindowShort => f.write_str("window_short"),
+            Unsteady::Jitter { max_mm } => write!(f, "jitter max_mm={max_mm:.1}"),
+        }
     }
 }
 
@@ -268,8 +365,14 @@ fn bench_spot(
     head_position + forward * BENCH_AHEAD + right * aside - Vector3::unit_y() * BENCH_DROP
 }
 
-fn is_pinching(joints: &HandJoints) -> bool {
-    (joints[5] - joints[10]).magnitude() < PINCH_DISTANCE
+/// Whether a hand pinches, given whether it did last frame; an untracked
+/// hand lets go.
+fn pinching(was: bool, joints: Option<&HandJoints>) -> bool {
+    let Some(joints) = joints else {
+        return false;
+    };
+    let gap = (joints[5] - joints[10]).magnitude();
+    gap < if was { PINCH_RELEASE } else { PINCH_PRESS }
 }
 
 fn window_seconds(frames: &VecDeque<(HandJoints, f32)>) -> f32 {
@@ -282,9 +385,12 @@ fn spans_window(seconds: f32) -> bool {
 }
 
 /// The mean pose over a full window in which no joint strays from it.
-fn steady_mean(frames: &VecDeque<(HandJoints, f32)>) -> Option<HandJoints> {
+fn steady_mean(frames: &VecDeque<(HandJoints, f32)>) -> Result<HandJoints, Unsteady> {
+    if frames.is_empty() {
+        return Err(Unsteady::NoJoints);
+    }
     if !spans_window(window_seconds(frames)) {
-        return None;
+        return Err(Unsteady::WindowShort);
     }
     let mean: HandJoints = std::array::from_fn(|joint| {
         frames
@@ -293,21 +399,90 @@ fn steady_mean(frames: &VecDeque<(HandJoints, f32)>) -> Option<HandJoints> {
             .sum::<Vector3<f32>>()
             / frames.len() as f32
     });
-    frames
+    let max = frames
         .iter()
-        .all(|(frame, _)| {
-            frame
-                .iter()
-                .zip(&mean)
-                .all(|(p, m)| (p - m).magnitude() <= STEADY_DISTANCE)
-        })
-        .then_some(mean)
+        .flat_map(|(frame, _)| frame.iter().zip(&mean).map(|(p, m)| (p - m).magnitude()))
+        .fold(0.0, f32::max);
+    if max > STEADY_DISTANCE {
+        return Err(Unsteady::Jitter {
+            max_mm: max * crate::METERS_PER_WORLD_UNIT * 1000.0,
+        });
+    }
+    Ok(mean)
+}
+
+/// A tracked hand drawn as the glove: where its controller-grip frame sits,
+/// the finger pose matching it, and that pose's joints in world space.
+pub(super) struct TrackedGlove {
+    pub position: Vector3<f32>,
+    pub rotation: Quaternion<f32>,
+    pub pose: Pose,
+    pub joints: HandJoints,
+}
+
+pub(super) fn tracked_glove(
+    renderer: &mut GloveRenderer,
+    joints: &HandJoints,
+    handedness: Handedness,
+) -> Option<TrackedGlove> {
+    let open = renderer.open_joints(handedness);
+    let bones = crate::hand_capture::capture_finger_bones(joints, handedness)?;
+    let (position, rotation) = crate::hand_capture::hand_pose(joints, &open)?;
+    let pose = Pose::from_finger_bones(&bones);
+    let joints = renderer
+        .posed_joints(&pose, handedness)
+        .map(|joint| position + rotation.rotate_vector(joint));
+    Some(TrackedGlove {
+        position,
+        rotation,
+        pose,
+        joints,
+    })
+}
+
+/// Per-finger distance (mm) from each glove fingertip to the tracked one, for
+/// the glove drawn over `joints` (world space).
+pub(super) fn tip_error_mm(
+    renderer: &mut GloveRenderer,
+    joints: &HandJoints,
+    handedness: Handedness,
+) -> Option<[f32; 5]> {
+    let open = renderer.open_joints(handedness);
+    let bones = crate::hand_capture::capture_finger_bones(joints, handedness)?;
+    let posed = renderer.posed_joints(&Pose::from_finger_bones(&bones), handedness);
+    let errors = crate::hand_capture::tip_errors(joints, &open, &posed)?;
+    Some(errors.map(|e| e * crate::METERS_PER_WORLD_UNIT * 1000.0))
+}
+
+fn ball(center: Vector3<f32>, radius: f32, color: Vector3<f32>, name: &str) -> SceneObject {
+    let mut ball = SceneObject::new(
+        engine::scene::color_material::create(color),
+        Box::new(engine::scene::sphere::Sphere),
+    );
+    ball.set_transform(Matrix4::from_translation(center) * Matrix4::from_scale(radius));
+    // Drawn over the item and gloves: a joint through the item, or hidden
+    // behind it, must still show.
+    ball.set_render_layer(engine::scene::RenderLayer::SceneOverlay);
+    ball.set_debug_tag(Some(Rc::new(engine::scene::SceneObjectDebugTag {
+        name: Some(name.to_owned()),
+        ..Default::default()
+    })));
+    ball
+}
+
+/// A sphere on each world-space glove joint, coloured by its contact.
+fn contact_spheres(tool: &GripPoseTool, joints: &HandJoints) -> impl Iterator<Item = SceneObject> {
+    joints.iter().map(|&joint| {
+        let contact = tool.contact(joint);
+        ball(joint, CONTACT_RADIUS, contact.color(), contact.name())
+    })
 }
 
 /// The workbench's hands, lit by `lights`: the posing hand's glove
-/// frozen on the item at its grip, each tracked hand live (the posing one
-/// with fingertip spheres), each untracked controller as an open glove, and
-/// the posing gloves again in every extra view.
+/// frozen on the item at its grip, each tracked hand live, each untracked
+/// controller as an open glove, and the posing gloves again in every extra
+/// view. Unless hidden, both posing gloves carry contact spheres, and the
+/// posing hand's raw tracked joints show as markers beside its glove.
 pub(super) fn render(
     tool: &GripPoseTool,
     renderer: &mut GloveRenderer,
@@ -319,6 +494,7 @@ pub(super) fn render(
     let mut posed = Vec::new();
     if let Some(grip) = grip {
         let pose = tool.hand_pose;
+        let shape = grip.fingers.hand_shape_at(0.0);
         posed.extend(renderer.render_hand(
             pose.position,
             pose.rotation,
@@ -327,60 +503,49 @@ pub(super) fn render(
             1.0,
             true,
             None,
-            Some((grip.fingers.hand_shape_at(0.0), 1.0)),
+            Some((shape.clone(), 1.0)),
             HandLight::Off,
             lights.clone(),
         ));
+        if tool.show_contacts {
+            let joints = renderer
+                .shape_joints(&shape, handedness(tool.hand))
+                .map(|joint| pose.point(joint));
+            posed.extend(contact_spheres(tool, &joints));
+        }
     }
     for (index, joints) in tool.tracked.iter().enumerate() {
         let Some(joints) = joints else { continue };
-        let handedness = handedness(index);
-        let glove = renderer.open_joints(handedness);
-        let (Some(bones), Some((position, rotation))) = (
-            crate::hand_capture::capture_finger_bones(joints, handedness),
-            crate::hand_capture::hand_pose(joints, &glove),
-        ) else {
+        let Some(glove) = tracked_glove(renderer, joints, handedness(index)) else {
             continue;
         };
-        let pose = crate::hand_pose::Pose::from_finger_bones(&bones);
-        let glove = renderer.render_hand(
-            position,
-            rotation,
-            handedness,
+        let drawn = renderer.render_hand(
+            glove.position,
+            glove.rotation,
+            handedness(index),
             0.0,
             0.0,
             false,
             None,
-            Some((crate::hand_pose::HandShape::Pose(pose.clone()), 1.0)),
+            Some((HandShape::Pose(glove.pose), 1.0)),
             HandLight::Off,
             lights.clone(),
         );
         // Only the posing hand belongs in the item's views; the other is
         // pinching somewhere else.
         if index != tool.hand {
-            objs.extend(glove);
+            objs.extend(drawn);
             continue;
         }
-        posed.extend(glove);
-        // A sphere on each drawn fingertip, green where it touches the item.
-        let joints = renderer.posed_joints(&pose, handedness);
-        let tips =
-            crate::hand_capture::TIPS.map(|joint| position + rotation.rotate_vector(joints[joint]));
-        for (tip, touching) in tips.into_iter().zip(tool.touching(tips)) {
-            let color = if touching {
-                Vector3::new(0.2, 1.0, 0.3)
-            } else {
-                Vector3::new(0.9, 0.9, 0.9)
-            };
-            let mut sphere = SceneObject::new(
-                engine::scene::color_material::create(color),
-                Box::new(engine::scene::sphere::Sphere),
+        posed.extend(drawn);
+        if tool.show_contacts {
+            posed.extend(contact_spheres(tool, &glove.joints));
+            let cyan = Vector3::new(0.1, 0.9, 1.0);
+            posed.extend(
+                joints
+                    .iter()
+                    .map(|&joint| ball(joint, MARKER_RADIUS, cyan, "tracked joint")),
             );
-            sphere.set_transform(
-                Matrix4::from_translation(tip)
-                    * Matrix4::from_scale(0.006 / crate::METERS_PER_WORLD_UNIT),
-            );
-            posed.push(sphere);
         }
     }
     for (index, controller) in tool.controllers.iter().enumerate() {
@@ -695,23 +860,103 @@ mod tests {
     }
 
     #[test]
-    fn fingertips_touch_within_a_centimetre_of_the_scaled_surface() {
-        let p = |x: f32, y: f32, z: f32| Point3::new(x, y, z);
-        // A wide square in the model's y = 0 plane.
+    fn joints_are_free_touching_or_through_a_closed_scaled_item() {
+        let item = vec3(0.0, 5.0, 0.0);
+        let mut tool = tool_with_item(item, item + vec3(0.0, 0.0, 4.0));
+        assert_eq!(tool.contact(item), Contact::Free, "no surface yet");
+        tool.surface = Some(crate::vr_grip::tests::closed_cube());
+        // The 10 cm cube at scale 2: its top face is 0.1 above the item.
+        let top = item + vec3(0.0, 0.1, 0.0);
+        let up = vec3(0.0, 1.0, 0.0);
+        assert_eq!(tool.contact(top + up * TOUCH_DISTANCE * 2.0), Contact::Free);
+        assert_eq!(
+            tool.contact(top + up * TOUCH_DISTANCE * 0.5),
+            Contact::Touching
+        );
+        // Inside a closed mesh is through it, however shallow or deep.
+        assert_eq!(tool.contact(top - up * 0.001), Contact::Penetrating);
+        assert_eq!(tool.contact(item), Contact::Penetrating);
+    }
+
+    #[test]
+    fn an_open_surface_is_penetrated_only_well_behind_its_face() {
+        let p = |x: f32, z: f32| Point3::new(x, 0.0, z);
+        // A wide square in the model's y = 0 plane, facing +Y.
         let plane = [
-            [p(-1.0, 0.0, -1.0), p(1.0, 0.0, -1.0), p(1.0, 0.0, 1.0)],
-            [p(-1.0, 0.0, -1.0), p(1.0, 0.0, 1.0), p(-1.0, 0.0, 1.0)],
+            [p(-1.0, -1.0), p(-1.0, 1.0), p(1.0, 1.0)],
+            [p(-1.0, -1.0), p(1.0, 1.0), p(1.0, -1.0)],
         ];
         let item = vec3(0.0, 5.0, 0.0);
         let mut tool = tool_with_item(item, item + vec3(0.0, 0.0, 4.0));
-        assert_eq!(tool.touching([item; 5]), [false; 5], "no surface yet");
         tool.surface = GripSurface::new(&plane);
-        let near = item + vec3(0.0, TOUCH_DISTANCE * 0.5, 0.0);
-        let far = item + vec3(0.0, TOUCH_DISTANCE * 2.0, 0.0);
+        assert!(!tool.surface.as_ref().unwrap().is_closed());
+        let up = vec3(0.0, 1.0, 0.0);
         assert_eq!(
-            tool.touching([near, far, near, far, near]),
-            [true, false, true, false, true]
+            tool.contact(item + up * TOUCH_DISTANCE * 0.5),
+            Contact::Touching
         );
+        assert_eq!(
+            tool.contact(item - up * OPEN_PENETRATION * 0.5),
+            Contact::Touching
+        );
+        assert_eq!(
+            tool.contact(item - up * OPEN_PENETRATION * 2.0),
+            Contact::Penetrating
+        );
+        // Deep behind it, as inside an open solid, is still through it.
+        assert_eq!(
+            tool.contact(item - up * TOUCH_DISTANCE * 2.0),
+            Contact::Penetrating
+        );
+    }
+
+    #[test]
+    fn a_pinch_starts_under_two_centimetres_and_ends_over_three() {
+        let gap = |metres: f32| hand_with_tips(metres / crate::METERS_PER_WORLD_UNIT);
+        assert!(!pinching(false, Some(&gap(0.025))));
+        assert!(pinching(false, Some(&gap(0.015))));
+        assert!(pinching(true, Some(&gap(0.025))), "held through the band");
+        assert!(!pinching(true, Some(&gap(0.035))));
+        assert!(!pinching(true, None), "an untracked hand lets go");
+    }
+
+    #[test]
+    fn a_failed_capture_says_why() {
+        let mut tool = posing_tool();
+        let press = |tool: &mut GripPoseTool, hand: Option<HandJoints>| {
+            tool.observe([None, hand], false, FRAME);
+            tool.observe([None, hand], true, FRAME);
+        };
+        press(&mut tool, None);
+        assert_eq!(tool.capture_failure.as_deref(), Some("no_joints"));
+        press(&mut tool, posing(0.0));
+        assert_eq!(tool.capture_failure.as_deref(), Some("window_short"));
+        hold(&mut tool, [0.0; STEADY_FRAMES - 2], FRAME);
+        tool.observe([None, posing(STEADY_DISTANCE * 2.0)], true, FRAME);
+        // One frame 2 x 5 mm out pulls the 19-frame mean 1/19 of the way.
+        let expected = STEADY_DISTANCE * 2.0 * 18.0 / 19.0 * crate::METERS_PER_WORLD_UNIT * 1000.0;
+        assert_eq!(
+            tool.capture_failure.as_deref(),
+            Some(format!("jitter max_mm={expected:.1}").as_str())
+        );
+        hold(&mut tool, [0.0; STEADY_FRAMES], FRAME);
+        tool.observe([None, posing(0.0)], true, FRAME);
+        assert!(tool.capture.is_some());
+        assert_eq!(tool.capture_failure, None, "a capture clears it");
+    }
+
+    #[test]
+    fn a_thumbstick_click_toggles_the_contacts_once_per_press() {
+        let mut tool = posing_tool();
+        tool.toggle_contacts(true);
+        assert!(tool.show_contacts, "held as the workbench opened");
+        tool.toggle_contacts(false);
+        tool.toggle_contacts(true);
+        tool.toggle_contacts(true);
+        assert!(!tool.show_contacts);
+        tool.toggle_contacts(false);
+        tool.toggle_contacts(true);
+        assert!(tool.show_contacts);
     }
 
     #[test]

@@ -137,6 +137,31 @@ pub fn hand_pose(
     ))
 }
 
+/// How far each glove fingertip (thumb..little) lands from the tracked one
+/// when the glove is drawn over `tracked` by [`hand_pose`]: the mapping's
+/// error, in `tracked`'s units. `open` is the glove's open joints that
+/// `hand_pose` aligns, `posed` its joints posed to match `tracked`, both in
+/// controller-grip space.
+pub fn tip_errors(tracked: &HandJoints, open: &HandJoints, posed: &HandJoints) -> Option<[f32; 5]> {
+    let (position, rotation) = hand_pose(tracked, open)?;
+    Some(TIPS.map(|tip| (position + rotation.rotate_vector(posed[tip]) - tracked[tip]).magnitude()))
+}
+
+/// Each frame's tracked joints `[left, right]` from an input recording
+/// (`ToggleInputRecording`), skipping frames that track neither hand: real
+/// hands to test the mapping against.
+#[cfg(test)]
+pub(crate) fn recorded_hands(
+    path: &std::path::Path,
+) -> std::io::Result<Vec<[Option<HandJoints>; 2]>> {
+    let (_, frames) = crate::input::recording::read_recording(path)?;
+    Ok(frames
+        .into_iter()
+        .map(|frame| [frame.input.left_hand.joints, frame.input.right_hand.joints])
+        .filter(|hands| hands.iter().any(Option::is_some))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +296,63 @@ mod tests {
         );
         // Captured as the wrong hand, the finger bends backward.
         assert!(curl(Handedness::Left) * fist_direction < 0.0);
+    }
+
+    /// Tip errors for `tracked` drawn by a glove whose joints are the pose
+    /// data's own (as real-hand numbers), as the workbench maps it.
+    fn mapped_tip_errors(tracked: &HandJoints, hand: Handedness) -> [f32; 5] {
+        let glove = |pose: &Pose| forward_kinematics(pose).0.map(|p| to_pose_numbers(p, hand));
+        let bones = capture_finger_bones(tracked, hand).unwrap();
+        tip_errors(
+            tracked,
+            &glove(&open_right_hand()),
+            &glove(&Pose::from_finger_bones(&bones)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn tip_error_is_zero_for_the_gloves_own_hand_and_grows_with_a_larger_one() {
+        let open = open_right_hand();
+        let curled = Pose {
+            bone_positions: open.bone_positions.clone(),
+            ..open.blend(&fist_right_hand(), 0.6)
+        };
+        for hand in [Handedness::Left, Handedness::Right] {
+            let errors = mapped_tip_errors(&tracked(&open, hand), hand);
+            assert!(errors.iter().all(|e| *e < 1e-5), "{hand:?}: {errors:?}");
+            // Curling turns the middle metacarpal, so the open glove's palm
+            // frame that places the glove tilts slightly against the hand.
+            let joints = tracked(&curled, hand);
+            let errors = mapped_tip_errors(&joints, hand);
+            assert!(errors.iter().all(|e| *e < 0.0015), "{hand:?}: {errors:?}");
+            // A hand 20% larger than the glove: every tip falls short of it.
+            let (origin, _) = hand_frame(&joints).unwrap();
+            let larger = joints.map(|p| origin + (p - origin) * 1.2);
+            let errors = mapped_tip_errors(&larger, hand);
+            assert!(errors.iter().all(|e| *e > 0.005), "{hand:?}: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn recordings_yield_their_tracked_hands() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/hand_recordings/synthetic.jsonl");
+        // Its first frame has no `thumbstick_click`, as older recordings do not.
+        let frames = recorded_hands(&path).unwrap();
+        assert!(!frames.is_empty());
+        for [left, right] in &frames {
+            assert!(left.is_none(), "the fixture tracks the right hand only");
+            let right = right.expect("the right hand is tracked");
+            assert!(capture_finger_bones(&right, Handedness::Right).is_some());
+        }
+        // The fixture opens the hand, then pinches thumb to index.
+        let pinch = |hands: &[Option<HandJoints>; 2]| {
+            let joints = hands[1].unwrap();
+            (joints[5] - joints[10]).magnitude()
+        };
+        assert!(pinch(&frames[0]) > 0.02 / crate::METERS_PER_WORLD_UNIT);
+        assert!(pinch(frames.last().unwrap()) < 1e-4);
     }
 
     #[test]

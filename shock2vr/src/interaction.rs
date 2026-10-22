@@ -1195,6 +1195,7 @@ impl VrInteraction {
             control.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
             dt,
         );
+        tool.toggle_contacts(control.thumbstick_click);
         grip.item_scale = pose_tool::GripPoseTool::scale(grip.item_scale, control.thumbstick.y, dt);
         tool.controllers = std::array::from_fn(|i| {
             let hand = [&input.left_hand, &input.right_hand][i];
@@ -1205,18 +1206,25 @@ impl VrInteraction {
             (tool.tracked[i].is_none() && tracking.is_none_or(|t| t.hands[i]) && pose.is_tracked())
                 .then_some((pose, hand.trigger_value, hand.squeeze_value))
         });
-        // The glove to match a queued capture against.
-        if let Some(joints) = tool.capture.take() {
-            let handedness = [Handedness::Left, Handedness::Right][tool.hand];
-            let glove = self
-                .glove_renderer
-                .borrow_mut()
-                .as_mut()
-                .and_then(|renderer| renderer.as_mut())
-                .map(|renderer| renderer.open_joints(handedness));
-            if let Some(glove) = glove {
-                self.capture_grip(world, joints, glove);
+        // The mapping's error for the live hand and for a queued capture, and
+        // the open glove to match that capture against.
+        let handedness = [Handedness::Left, Handedness::Right][tool.hand];
+        let capture = tool.capture.take();
+        let mut glove_slot = self.glove_renderer.borrow_mut();
+        let capture = match glove_slot.as_mut().and_then(|renderer| renderer.as_mut()) {
+            Some(renderer) => {
+                tool.tip_error_mm = tool.tracked[tool.hand]
+                    .and_then(|joints| pose_tool::tip_error_mm(renderer, &joints, handedness));
+                capture.map(|joints| {
+                    let error = pose_tool::tip_error_mm(renderer, &joints, handedness);
+                    (joints, renderer.open_joints(handedness), error)
+                })
             }
+            None => None,
+        };
+        drop(glove_slot);
+        if let Some((joints, glove, error)) = capture {
+            self.capture_grip(world, joints, glove, error);
         }
         self.place_pose_tool_item(contact);
     }
@@ -1278,6 +1286,7 @@ impl VrInteraction {
         world: &World,
         joints: crate::hand_capture::HandJoints,
         glove: crate::hand_capture::HandJoints,
+        tip_error_mm: Option<[f32; 5]>,
     ) {
         let Some(tool) = self.pose_tool.as_mut() else {
             return;
@@ -1297,6 +1306,7 @@ impl VrInteraction {
             crate::hand_capture::hand_pose(&joints, &glove),
         ) else {
             println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=false reason=degenerate_joints");
+            tool.capture_failure = Some("degenerate_joints".to_owned());
             return;
         };
         let entry = crate::vr_grip::BakedGripEntry {
@@ -1325,6 +1335,13 @@ impl VrInteraction {
             "SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=true staged=true model={} hand={}",
             entry.model, entry.hand
         );
+        // The metric the mapping is tuned against: glove vs tracked fingertips.
+        if let Some(errors) = tip_error_mm {
+            println!(
+                "SHOCK2QUEST_VR_GRIP_POSE_TOOL tip_error_mm=[{}]",
+                errors.map(|e| format!("{e:.1}")).join(",")
+            );
+        }
         // A re-capture replaces the staged entry but keeps the grip from
         // before the first one, which is what discarding returns to.
         let staged = match tool.staged.take() {
@@ -2059,7 +2076,7 @@ impl PlayerInteraction for VrInteraction {
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
                 "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm_in_world()), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal),
-                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"staged": tool.staged.is_some(), "last_save_error": tool.last_save_error}))}))
+                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"staged": tool.staged.is_some(), "last_save_error": tool.last_save_error, "tip_error_mm": tool.tip_error_mm, "capture_failure": tool.capture_failure, "contacts_shown": tool.show_contacts}))}))
         }).collect())
     }
 

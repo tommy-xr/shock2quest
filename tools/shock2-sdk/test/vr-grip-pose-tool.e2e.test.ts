@@ -30,6 +30,10 @@ function trackedHand(origin: Vec3, { pinch = false, left = false } = {}): Vec3[]
 }
 
 const distance = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const saveState = (grip: { pose_tool?: { staged: boolean; last_save_error: string | null } | null }) => ({
+  staged: grip.pose_tool?.staged,
+  last_save_error: grip.pose_tool?.last_save_error,
+});
 
 test(
   "grip pose tool: a paused workbench floats the item; the other controller stages, discards and saves",
@@ -121,6 +125,21 @@ test(
       await game.input.set("left_hand.trigger", 0);
       await game.step({ frames: 2 });
     };
+    const named = async (prefix: string) =>
+      (await game.scene.objects()).objects.filter((o) => o.name?.startsWith(prefix)).length;
+    // The bench plus three views: 4 copies of every joint.
+    const VIEWS = 4;
+    const JOINTS = 26;
+
+    // Without hand tracking (controller-only, no multimodal) a capture says so.
+    await pullTrigger();
+    grip = await rightGrip();
+    assert.equal(grip.pose_tool?.capture_failure, "no_joints");
+    assert.equal(grip.pose_tool?.tip_error_mm, null, "no tracked hand, no tip error");
+    // The frozen glove carries a contact sphere on every joint, palm and wrist
+    // included; with nothing tracked there are no raw joint markers.
+    assert.equal(await named("contact sphere"), JOINTS * VIEWS);
+    assert.equal(await named("tracked joint"), 0);
 
     // A posing hand that shakes by a centimetre never captures.
     for (let frame = 0; frame < 30; frame++) {
@@ -134,15 +153,38 @@ test(
     }
     await game.input.set("left_hand.trigger", 0);
     await game.step({ frames: 2 });
-    assert.deepEqual((await rightGrip()).grip, fitted, "an unsteady hand does not capture");
+    grip = await rightGrip();
+    assert.deepEqual(grip.grip, fitted, "an unsteady hand does not capture");
+    assert.match(grip.pose_tool?.capture_failure ?? "", /^jitter max_mm=\d+\.\d$/);
 
     // Hold still, then the left trigger stages the pose: applied, not saved.
     await game.input.set("right_hand.joints", trackedHand(hand));
     await game.step({ frames: 30 });
+    // The tracked hand's glove gets spheres too, and its raw joints markers.
+    assert.equal(await named("contact sphere"), 2 * JOINTS * VIEWS);
+    assert.equal(await named("tracked joint"), JOINTS * VIEWS);
+    // How far each glove fingertip lands from the tracked one.
+    const tipError = (await rightGrip()).pose_tool?.tip_error_mm;
+    assert.equal(tipError?.length, 5);
+    assert.ok(tipError!.every((mm) => Number.isFinite(mm) && mm >= 0), `${tipError}`);
+    // The free (left) controller's thumbstick click hides them, and shows them again.
+    const clickStick = async () => {
+      await game.input.set("left_hand.thumbstick_click", 1);
+      await game.step({ frames: 1 });
+      await game.input.set("left_hand.thumbstick_click", 0);
+      await game.step({ frames: 1 });
+    };
+    await clickStick();
+    assert.equal(await named("contact sphere"), 0);
+    assert.equal(await named("tracked joint"), 0);
+    assert.equal((await rightGrip()).pose_tool?.contacts_shown, false);
+    await clickStick();
+    assert.equal(await named("contact sphere"), 2 * JOINTS * VIEWS);
     await pullTrigger();
     grip = await rightGrip();
     assert.ok(grip.grip && "bones" in grip.grip, "the staged capture applies at once");
-    assert.deepEqual(grip.pose_tool, { staged: true, last_save_error: null });
+    assert.deepEqual(saveState(grip), { staged: true, last_save_error: null });
+    assert.equal(grip.pose_tool?.capture_failure, null, "a capture clears the last failure");
     assert.ok(!existsSync(path), "staging writes nothing");
     assert.ok(distance(await mugPosition(), held) < 1e-3, "capturing does not move the mug");
 
@@ -151,7 +193,7 @@ test(
     await game.step({ frames: 2 });
     grip = await rightGrip();
     assert.deepEqual(grip.grip, fitted, "discarding restores the previous grip");
-    assert.deepEqual(grip.pose_tool, { staged: false, last_save_error: null });
+    assert.deepEqual(saveState(grip), { staged: false, last_save_error: null });
     assert.ok(!existsSync(path));
 
     // Stage again. A save that fails (the file's path is a directory) keeps
