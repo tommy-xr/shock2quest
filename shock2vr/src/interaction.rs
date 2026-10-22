@@ -165,6 +165,16 @@ pub trait PlayerInteraction {
         None
     }
 
+    /// Whether the grip pose tool took this face button press: its control
+    /// hand saves (lower) or discards (upper) the staged capture.
+    fn pose_tool_button(
+        &mut self,
+        _hand: Handedness,
+        _button: crate::hand_buttons::HandButton,
+    ) -> bool {
+        false
+    }
+
     /// A latched support grip, rather than proximity or the visual blend-out.
     fn is_supported(&self, _entity: EntityId) -> bool {
         false
@@ -428,6 +438,14 @@ struct GripGeometry {
     triangles: std::rc::Rc<Vec<[Point3<f32>; 3]>>,
     fingerprint: String,
     weapon_arms: Option<Vec<Point3<f32>>>,
+}
+
+/// A pose-tool capture applied live but not yet saved, and what the first
+/// unsaved capture replaced, so discarding restores it.
+struct StagedGrip {
+    entry: crate::vr_grip::BakedGripEntry,
+    previous: Option<HeldGrip>,
+    hand_pose: GripPose,
 }
 
 struct HeldGrip {
@@ -1112,6 +1130,7 @@ impl VrInteraction {
         let tool = self.pose_tool.as_mut()?;
         let holding = [&self.left_hand, &self.right_hand][tool.hand].get_held_entity();
         if holding != Some(tool.entity) {
+            self.discard_staged();
             self.pose_tool = None;
             println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=false reason=item_released");
             return None;
@@ -1120,24 +1139,38 @@ impl VrInteraction {
             hand.joints
                 .map(|joints| joints.map(|p| hand_world_position(player_pos, player_rotation, p)))
         };
+        // The other hand's controller (held while the posing hand is
+        // tracked) drives the tool.
+        let control = [&input.left_hand, &input.right_hand][1 - tool.hand];
         tool.viewer = player_pos;
-        tool.observe([
-            world_joints(&input.left_hand),
-            world_joints(&input.right_hand),
-        ]);
+        tool.observe(
+            [
+                world_joints(&input.left_hand),
+                world_joints(&input.right_hand),
+            ],
+            control.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
+            dt,
+        );
         if let Some(grip) = self.fitted_grips[tool.hand]
             .as_mut()
             .and_then(|held| held.resolved.as_mut())
         {
             grip.item_scale =
-                pose_tool::GripPoseTool::scale(grip.item_scale, input.right_hand.thumbstick.y, dt);
+                pose_tool::GripPoseTool::scale(grip.item_scale, control.thumbstick.y, dt);
         }
         let mut input = input.clone();
-        let hand = if tool.hand == 0 {
-            &mut input.left_hand
+        let [left, right] = [&mut input.left_hand, &mut input.right_hand];
+        let (hand, control) = if tool.hand == 0 {
+            (left, right)
         } else {
-            &mut input.right_hand
+            (right, left)
         };
+        // The tool's controls do nothing else meanwhile (its face buttons
+        // arrive as `pose_tool_button`); nor does a held jump button swim.
+        control.trigger_value = 0.0;
+        control.a_value = 0.0;
+        control.thumbstick = cgmath::Vector2::new(0.0, 0.0);
+        input.jump_button_held = false;
         hand.position = crate::virtual_hand::hand_local_position(
             player_pos,
             player_rotation,
@@ -1153,9 +1186,9 @@ impl VrInteraction {
         Some(input)
     }
 
-    /// Turn the queued tracked-hand capture into the held item's grip: save it
-    /// as a headset override, apply it now, and re-seat the held hand so the
-    /// item does not move.
+    /// Stage the queued tracked-hand capture as the held item's grip: apply it
+    /// now as a preview, unsaved, and re-seat the held hand so the item does
+    /// not move.
     fn capture_grip(
         &mut self,
         world: &World,
@@ -1204,17 +1237,30 @@ impl VrInteraction {
                 score: 0.0,
             },
         };
-        match pose_tool::save_override(&tool.overrides_path, &entry) {
-            Ok(()) => println!(
-                "SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=true model={} hand={} path={}",
-                entry.model,
-                entry.hand,
-                tool.overrides_path.display()
-            ),
-            Err(error) => println!(
-                "SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=true saved=false error=\"{error}\""
-            ),
-        }
+        println!(
+            "SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=true staged=true model={} hand={}",
+            entry.model, entry.hand
+        );
+        // A re-capture replaces the staged entry but keeps the grip from
+        // before the first one, which is what discarding returns to.
+        let staged = match tool.staged.take() {
+            Some(staged) => {
+                if let Some(library) = &mut self.grip_library {
+                    unstage_library_entry(library, &staged.entry);
+                }
+                StagedGrip {
+                    entry: entry.clone(),
+                    ..staged
+                }
+            }
+            None => StagedGrip {
+                entry: entry.clone(),
+                previous: self.fitted_grips[tool.hand].take(),
+                hand_pose: tool.hand_pose,
+            },
+        };
+        tool.staged = Some(staged);
+        tool.last_save_error = None;
         // The glove now sits where the tracked hand held the item, and the
         // next fit resolves the new pose (collider included) from the library.
         tool.hand_pose = GripPose {
@@ -1228,6 +1274,84 @@ impl VrInteraction {
                 ..Default::default()
             });
         }
+    }
+
+    /// Write the staged capture (at its current item scale) to the overrides
+    /// file. A failed save stays staged, so it can be retried.
+    fn save_staged(&mut self) {
+        let Some(tool) = self.pose_tool.as_mut() else {
+            return;
+        };
+        let Some(staged) = tool.staged.as_mut() else {
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL saved=false reason=nothing_staged");
+            return;
+        };
+        if let Some(grip) = self.fitted_grips[tool.hand]
+            .as_ref()
+            .and_then(|held| held.resolved.as_ref())
+        {
+            staged.entry.grip.item_scale = grip.item_scale;
+        }
+        let entry = &staged.entry;
+        if let Err(error) = pose_tool::save_override(&tool.overrides_path, entry) {
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL saved=false error=\"{error}\"");
+            tool.last_save_error = Some(error.to_string());
+            return;
+        }
+        println!(
+            "SHOCK2QUEST_VR_GRIP_POSE_TOOL saved=true model={} hand={} path={}",
+            entry.model,
+            entry.hand,
+            tool.overrides_path.display()
+        );
+        // Keep the in-memory entry in step with the file (its scale).
+        if let Some(library) = &mut self.grip_library {
+            if let Some(kept) = library
+                .entries
+                .iter_mut()
+                .find(|e| e.model == entry.model && e.hand == entry.hand)
+            {
+                *kept = entry.clone();
+            }
+        }
+        tool.staged = None;
+        tool.last_save_error = None;
+    }
+
+    /// Undo an unsaved capture: the grip, glove placement and library entry
+    /// return to what they were before it.
+    fn discard_staged(&mut self) {
+        let Some(tool) = self.pose_tool.as_mut() else {
+            return;
+        };
+        let Some(staged) = tool.staged.take() else {
+            return;
+        };
+        tool.hand_pose = staged.hand_pose;
+        tool.last_save_error = None;
+        self.fitted_grips[tool.hand] = staged.previous;
+        if let Some(library) = &mut self.grip_library {
+            unstage_library_entry(library, &staged.entry);
+        }
+        println!(
+            "SHOCK2QUEST_VR_GRIP_POSE_TOOL discarded=true model={} hand={}",
+            staged.entry.model, staged.entry.hand
+        );
+    }
+}
+
+/// Remove a staged entry from the library: always the first for its model
+/// and hand, since staging prepends it.
+fn unstage_library_entry(
+    library: &mut crate::vr_grip::GripLibrary,
+    entry: &crate::vr_grip::BakedGripEntry,
+) {
+    if let Some(index) = library
+        .entries
+        .iter()
+        .position(|e| e.model == entry.model && e.hand == entry.hand)
+    {
+        library.entries.remove(index);
     }
 }
 
@@ -1877,7 +2001,8 @@ impl PlayerInteraction for VrInteraction {
                 "visual_trigger": visual_triggers[i], "finger_curls": grip.resolved.as_ref().and_then(|g| g.fingers.curls_at(visual_triggers[i])),
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
-                "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm_in_world()), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal)}))
+                "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm_in_world()), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal),
+                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"staged": tool.staged.is_some(), "last_save_error": tool.last_save_error}))}))
         }).collect())
     }
 
@@ -2129,6 +2254,8 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn toggle_grip_pose_tool(&mut self) {
+        // Leaving with an unsaved capture throws it away.
+        self.discard_staged();
         if let Some(tool) = self.pose_tool.take() {
             // The real controller returns from wherever it was set down: that
             // jump is not a throw.
@@ -2173,6 +2300,26 @@ impl PlayerInteraction for VrInteraction {
         dt: f32,
     ) -> Option<InputContext> {
         self.update_pose_tool(input, player_pos, player_rotation, dt)
+    }
+
+    fn pose_tool_button(
+        &mut self,
+        hand: Handedness,
+        button: crate::hand_buttons::HandButton,
+    ) -> bool {
+        let pressed = crate::vr_config::hand_slot(hand);
+        if self
+            .pose_tool
+            .as_ref()
+            .is_none_or(|tool| tool.hand == pressed)
+        {
+            return false;
+        }
+        match button {
+            crate::hand_buttons::HandButton::Lower => self.save_staged(),
+            crate::hand_buttons::HandButton::Upper => self.discard_staged(),
+        }
+        true
     }
 
     fn pose_tool_views(&self) -> Option<(EntityId, [Matrix4<f32>; 3])> {

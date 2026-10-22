@@ -30,6 +30,12 @@ pub const MULTIVIEW: Switch = Switch {
     values: &["off", "on"],
     default: "off",
 };
+pub const MULTIMODAL: Switch = Switch {
+    name: "multimodal",
+    file: "multimodal.txt",
+    values: &["off", "on"],
+    default: "off",
+};
 /// Parsed by `foveation::Level`; invalid text falls back to `off`, not the default.
 pub const FFR_LEVEL: Switch = Switch {
     name: "ffr-level",
@@ -38,7 +44,7 @@ pub const FFR_LEVEL: Switch = Switch {
     default: "low",
 };
 #[cfg_attr(target_os = "android", allow(dead_code))]
-pub const SWITCHES: &[Switch] = &[SIMULATION_CLOCK, MULTIVIEW, FFR_LEVEL];
+pub const SWITCHES: &[Switch] = &[SIMULATION_CLOCK, MULTIVIEW, MULTIMODAL, FFR_LEVEL];
 
 /// Explicit opt-in for interaction testing outside a benchmark fixture.
 // The host CLI shares this module's parser and switch table, but does not link the game.
@@ -51,6 +57,13 @@ pub fn fixed_simulation_enabled() -> bool {
 #[cfg(target_os = "android")]
 pub fn multiview_requested() -> bool {
     read_switch(&MULTIVIEW, "MULTIVIEW")
+}
+
+/// Opt-in simultaneous hands and controllers for the grip pose tool; off by
+/// default so ordinary play keeps controller-only hand slots.
+#[cfg(target_os = "android")]
+pub fn multimodal_requested() -> bool {
+    read_switch(&MULTIMODAL, "MULTIMODAL")
 }
 
 /// A two-state switch: `on` -> true; missing, `off` or invalid -> false.

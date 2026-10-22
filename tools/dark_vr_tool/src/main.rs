@@ -1097,7 +1097,7 @@ mod tests {
             .map(|_| ())
             .unwrap_err()
             .to_string();
-        assert!(unknown.contains("simulation-clock, multiview, ffr-level"));
+        assert!(unknown.contains("simulation-clock, multiview, multimodal, ffr-level"));
         assert_eq!(device_value(multiview, None), "off (default)");
         assert_eq!(device_value(multiview, Some("on\n")), "on");
         assert_eq!(device_value(multiview, Some("On")), "invalid \"On\"");

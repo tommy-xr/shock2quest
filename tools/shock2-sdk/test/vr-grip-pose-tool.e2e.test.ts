@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
@@ -32,7 +32,7 @@ function trackedHand(origin: Vec3, { pinch = false, left = false } = {}): Vec3[]
 const distance = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 test(
-  "grip pose tool: a set-down controller keeps the item; a pinch saves the tracked pose",
+  "grip pose tool: a set-down controller keeps the item; the other controller stages, discards and saves",
   { skip: !enabled, timeout: 300_000 },
   async () => {
     using data = isolatedDataRoot([
@@ -45,6 +45,9 @@ test(
     const held = await mugPosition();
     const mugDraws = async () => (await game.scene.objects({ entityId: mug.id })).objects.length;
     const drawnOnce = await mugDraws();
+    const rightGrip = async () =>
+      (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
+    const path = join(data.root, "vr-grip-overrides.json");
 
     await game.input.trigger("ToggleGripPoseTool");
     await game.step({ frames: 2 });
@@ -55,24 +58,69 @@ test(
       "right_hand.position": [hand[0] + 1, hand[1] - 0.5, hand[2]],
     });
     await game.step({ frames: 10 });
-    let grip = (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
+    let grip = await rightGrip();
     assert.equal(grip.entity_id, mug.id, "the posing hand keeps the mug");
     assert.ok(distance(await mugPosition(), held) < 1e-3, "the mug stays where it was held");
     assert.equal(await mugDraws(), drawnOnce * 4, "the mug is drawn again in three extra views");
+    const fitted = grip.grip;
+    assert.ok(fitted && !("bones" in fitted), "the mug starts on its shipped grip");
 
-    // Form the grip with the tracked right hand, then pinch the left.
-    await game.input.setMany({
-      "right_hand.joints": trackedHand(hand),
-      "left_hand.joints": trackedHand([hand[0] - 0.5, hand[1], hand[2]], { left: true }),
-    });
-    await game.step({ frames: 12 });
-    await game.input.set(
-      "left_hand.joints",
-      trackedHand([hand[0] - 0.5, hand[1], hand[2]], { left: true, pinch: true }),
-    );
+    const otherHand = trackedHand([hand[0] - 0.5, hand[1], hand[2]], { left: true });
+    const pullTrigger = async () => {
+      await game.input.set("left_hand.trigger", 1);
+      await game.step({ frames: 2 });
+      await game.input.set("left_hand.trigger", 0);
+      await game.step({ frames: 2 });
+    };
+
+    // A posing hand that shakes by a centimetre never captures.
+    for (let frame = 0; frame < 30; frame++) {
+      const x = frame % 2 === 0 ? 0.01 / METERS_PER_WORLD_UNIT : 0;
+      await game.input.setMany({
+        "right_hand.joints": trackedHand([hand[0] + x, hand[1], hand[2]]),
+        "left_hand.joints": otherHand,
+      });
+      await game.step({ frames: 1 });
+      if (frame === 25) await game.input.set("left_hand.trigger", 1);
+    }
+    await game.input.set("left_hand.trigger", 0);
     await game.step({ frames: 2 });
+    assert.deepEqual((await rightGrip()).grip, fitted, "an unsteady hand does not capture");
 
-    const path = join(data.root, "vr-grip-overrides.json");
+    // Hold still, then the left trigger stages the pose: applied, not saved.
+    await game.input.set("right_hand.joints", trackedHand(hand));
+    await game.step({ frames: 30 });
+    await pullTrigger();
+    grip = await rightGrip();
+    assert.ok(grip.grip && "bones" in grip.grip, "the staged capture applies at once");
+    assert.deepEqual(grip.pose_tool, { staged: true, last_save_error: null });
+    assert.ok(!existsSync(path), "staging writes nothing");
+    assert.ok(distance(await mugPosition(), held) < 1e-3, "capturing does not move the mug");
+
+    // B (upper) discards it: the grip returns to the one before the capture.
+    await game.input.trigger("LeftHandUpperButton");
+    await game.step({ frames: 2 });
+    grip = await rightGrip();
+    assert.deepEqual(grip.grip, fitted, "discarding restores the previous grip");
+    assert.deepEqual(grip.pose_tool, { staged: false, last_save_error: null });
+    assert.ok(!existsSync(path));
+
+    // Stage again. A save that fails (the file's path is a directory) keeps
+    // the capture staged and reports why.
+    await pullTrigger();
+    mkdirSync(path);
+    await game.input.trigger("LeftHandLowerButton");
+    await game.step({ frames: 2 });
+    grip = await rightGrip();
+    assert.equal(grip.pose_tool?.staged, true, "a failed save stays staged");
+    assert.ok(grip.pose_tool?.last_save_error, "and says why");
+    rmdirSync(path);
+
+    // A (lower) saves it, and does not jump.
+    const standing = (await game.info()).player.position;
+    await game.input.trigger("LeftHandLowerButton");
+    await game.step({ frames: 10 });
+    assert.ok(Math.abs((await game.info()).player.position[1] - standing[1]) < 1e-3, "no jump");
     assert.ok(existsSync(path), "the capture is saved on the device");
     const saved = JSON.parse(readFileSync(path, "utf8")) as {
       entries: { model: string; hand: string; authored: boolean; grip: { bones?: unknown[] } }[];
@@ -81,12 +129,28 @@ test(
     assert.equal(saved.entries[0]!.model, "mug");
     assert.equal(saved.entries[0]!.hand, "right");
     assert.equal(saved.entries[0]!.grip.bones?.length, 24, "a captured grip holds bone rotations");
-    grip = (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
-    assert.ok(grip.grip && "bones" in grip.grip, "the capture applies at once");
-    assert.ok(distance(await mugPosition(), held) < 1e-3, "capturing does not move the mug");
+    grip = await rightGrip();
+    assert.ok(grip.grip && "bones" in grip.grip, "the saved capture stays applied");
+    assert.equal(grip.pose_tool?.staged, false);
+    const savedGrip = grip.grip;
 
-    // Finishing hands the mug back to the controller, which no longer grips.
+    // A capture still staged on exit is thrown away, in memory and on disk.
+    const savedText = readFileSync(path, "utf8");
+    await game.input.set("right_hand.joints", trackedHand([hand[0], hand[1] + 0.05, hand[2]]));
+    await game.step({ frames: 30 });
+    await pullTrigger();
+    assert.notDeepEqual((await rightGrip()).grip, savedGrip, "a new capture is staged");
+    // Take the controller back up so the mug stays held to inspect.
+    await game.input.setMany({ "right_hand.squeeze": 1, "right_hand.position": hand });
     await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 3 });
+    grip = await rightGrip();
+    assert.equal(grip.entity_id, mug.id);
+    assert.deepEqual(grip.grip, savedGrip, "exiting discards the staged capture");
+    assert.equal(readFileSync(path, "utf8"), savedText, "and writes nothing");
+
+    // Finishing hands the mug back to the controller, which can let go.
+    await game.input.set("right_hand.squeeze", 0);
     await game.step({ frames: 3 });
     assert.notEqual((await game.info()).player.right_hand_entity_id, mug.id);
   },
