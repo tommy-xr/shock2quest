@@ -160,6 +160,22 @@ pub trait GameScene {
     /// Cancel scene-local input gestures when a system overlay takes ownership.
     fn cancel_transient_input(&mut self) {}
 
+    /// Whether the grip pose workbench is open. Like the pause menu it
+    /// suspends the scene: `Game` stops updating it and calls
+    /// [`Self::update_pose_workbench`] instead.
+    fn pose_workbench_open(&self) -> bool {
+        false
+    }
+
+    /// One frame of the open grip pose workbench, with the scene suspended.
+    fn update_pose_workbench(
+        &mut self,
+        _elapsed: std::time::Duration,
+        _input: &InputContext,
+        _actions: &crate::input::InputActionState,
+    ) {
+    }
+
     /// Whether this scene wants a 2D mouse cursor (e.g. a menu). Flat runtimes
     /// show the OS cursor and populate `InputContext::pointer` when true; by
     /// default scenes capture the mouse for look.

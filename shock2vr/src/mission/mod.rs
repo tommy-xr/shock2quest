@@ -229,6 +229,20 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.cancel_transient_input();
     }
 
+    fn pose_workbench_open(&self) -> bool {
+        self.mission_core.pose_workbench_open()
+    }
+
+    fn update_pose_workbench(
+        &mut self,
+        elapsed: std::time::Duration,
+        input: &InputContext,
+        actions: &crate::input::InputActionState,
+    ) {
+        self.mission_core
+            .update_pose_workbench(elapsed, input, actions);
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }

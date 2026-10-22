@@ -295,6 +295,19 @@ impl GameScene for DebugScene {
         self.core.cancel_transient_input();
     }
 
+    fn pose_workbench_open(&self) -> bool {
+        self.core.pose_workbench_open()
+    }
+
+    fn update_pose_workbench(
+        &mut self,
+        elapsed: std::time::Duration,
+        input: &InputContext,
+        actions: &crate::input::InputActionState,
+    ) {
+        self.core.update_pose_workbench(elapsed, input, actions);
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
@@ -527,6 +540,19 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
     }
     fn cancel_transient_input(&mut self) {
         self.core.cancel_transient_input();
+    }
+
+    fn pose_workbench_open(&self) -> bool {
+        self.core.pose_workbench_open()
+    }
+
+    fn update_pose_workbench(
+        &mut self,
+        elapsed: std::time::Duration,
+        input: &InputContext,
+        actions: &crate::input::InputActionState,
+    ) {
+        self.core.update_pose_workbench(elapsed, input, actions);
     }
 
     fn is_pausable(&self) -> bool {

@@ -1937,7 +1937,9 @@ impl Game {
         // scene is not updated at all, so a scene-routed effect could never
         // close the menu again.
         self.update_pause_menu(time, input_context, actions);
+        let workbench = self.active_game_scene.pose_workbench_open();
         let scene_suspended = self.pause_menu.suspends_scene()
+            || workbench
             || (self
                 .options
                 .experimental_features
@@ -1962,6 +1964,12 @@ impl Game {
             // and jumps every total-time-driven animation the moment the world
             // comes back.
             self.time_suspended += time.elapsed;
+            // The grip pose workbench holds the world still like the pause
+            // menu, but owns the hands - unless the pause menu is over it.
+            if workbench && !self.pause_menu.suspends_scene() {
+                self.active_game_scene
+                    .update_pose_workbench(time.elapsed, input_context, actions);
+            }
             actions.clear_triggered();
             return;
         }
@@ -2032,7 +2040,10 @@ impl Game {
             for tick in clock.advance(time.elapsed) {
                 let (input, effects) = self.simulation_input.next(input_context);
                 self.update_scene_tick(&tick, &input, effects);
-                if self.pending_save_load.is_some() {
+                // A load, or the grip pose workbench freezing the scene, ends
+                // the batch; the rest of its ticks stay pending.
+                if self.pending_save_load.is_some() || self.active_game_scene.pose_workbench_open()
+                {
                     break;
                 }
             }
@@ -2264,6 +2275,10 @@ impl Game {
             // toggle nothing would ever see.
             input::MenuPress::Short if self.pause_menu.is_open() => {
                 Some(InputAction::TogglePauseMenu)
+            }
+            // ...and the grip pose workbench, which suspends the scene too.
+            input::MenuPress::Short if self.active_game_scene.pose_workbench_open() => {
+                Some(InputAction::ToggleGripPoseTool)
             }
             input::MenuPress::Short => Some(InputAction::ToggleUseMode),
             input::MenuPress::Long => Some(InputAction::TogglePauseMenu),
@@ -3210,6 +3225,7 @@ impl Game {
             scene.retain(|object| {
                 let source = object.debug_tag().and_then(|tag| tag.source.as_deref());
                 source != Some(util::render_source::PLAYER_HANDS)
+                    && source != Some(util::render_source::GRIP_WORKBENCH)
                     && source != Some(util::render_source::DEBUG_OVERLAY)
                     && source != Some(util::render_source::GAMEPLAY_HUD)
             });

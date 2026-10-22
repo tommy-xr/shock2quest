@@ -1,7 +1,7 @@
-//! In-VR grip authoring (a developer cheat). The posing hand is held where it
-//! was, so the item stays put and stays held after its controller is set
-//! down; a tracked hand then forms the grip around it. The other hand's
-//! controller trigger (or its tracked pinch) stages that pose live; its lower
+//! In-VR grip authoring (a developer cheat): a workbench that freezes the
+//! mission and floats the held item, with its saved grip's glove, in front of
+//! the player. A tracked hand forms the grip around it; the other hand's
+//! controller trigger (or its tracked pinch) stages that pose live, its lower
 //! button saves it as a headset override and its upper button discards it.
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -11,7 +11,11 @@ use cgmath::{
 };
 use shipyard::EntityId;
 
+use engine::scene::{RenderLayer, SceneObject};
+
 use crate::hand_capture::HandJoints;
+use crate::hand_glove::{GloveRenderer, HandLight};
+use crate::vr_config::Handedness;
 use crate::vr_grip::{BakedGripEntry, GripLibrary, GripSurface, ResolvedGrip};
 use crate::vr_support::GripPose;
 
@@ -30,13 +34,23 @@ const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.1..=3.0;
 const TOUCH_DISTANCE: f32 = 0.01 / crate::METERS_PER_WORLD_UNIT;
 /// How far beside the item each extra view of it sits (world units).
 const VIEW_SPACING: f32 = 0.35 / crate::METERS_PER_WORLD_UNIT;
+/// Where the workbench holds the item relative to the eye: ahead along the
+/// head's yaw, down to chest height, and aside toward the posing hand.
+const BENCH_AHEAD: f32 = 0.45 / crate::METERS_PER_WORLD_UNIT;
+const BENCH_DROP: f32 = 0.3 / crate::METERS_PER_WORLD_UNIT;
+const BENCH_ASIDE: f32 = 0.1 / crate::METERS_PER_WORLD_UNIT;
+/// Clear air between the workbench's farthest reach and the world dim.
+const DIM_CLEARANCE: f32 = 1.0 / crate::METERS_PER_WORLD_UNIT;
 
 pub(super) struct GripPoseTool {
     /// The posing hand (0 left, 1 right) and the item it holds.
     pub hand: usize,
     pub entity: EntityId,
-    /// World pose the posing hand is held at, so its item does not move.
+    /// World pose of the posing hand's glove: where it held the item until
+    /// the workbench is placed, then on the workbench.
     pub hand_pose: GripPose,
+    /// Whether the workbench has been placed in front of the player.
+    pub placed: bool,
     /// World-space joints of each tracked hand this frame, drawn as gloves.
     pub tracked: [Option<HandJoints>; 2],
     /// Averaged posing-hand joints awaiting capture.
@@ -49,8 +63,16 @@ pub(super) struct GripPoseTool {
     /// and that surface, for the fingertip contacts and the extra views.
     pub item: Option<(GripPose, f32)>,
     pub surface: Option<GripSurface>,
-    /// The player, whom the extra views face.
+    /// The item's world pose on the workbench (contact offset included).
+    pub item_placed: Option<GripPose>,
+    /// Where the player stood when the workbench was placed: the extra
+    /// views face it.
     pub viewer: Vector3<f32>,
+    /// The live eye position and gaze, which the world dim follows.
+    pub head: Option<(Vector3<f32>, Vector3<f32>)>,
+    /// Each untracked hand's controller (world pose, trigger, squeeze), drawn
+    /// as a glove so the hand on the controls can be seen.
+    pub controllers: [Option<(GripPose, f32, f32)>; 2],
     /// Recent posing-hand frames, each with the time since the one before
     /// (zero for the oldest), spanning the steady window.
     recent: VecDeque<(HandJoints, f32)>,
@@ -68,6 +90,7 @@ impl GripPoseTool {
             hand,
             entity,
             hand_pose,
+            placed: false,
             tracked: [None, None],
             capture: None,
             staged: None,
@@ -75,10 +98,37 @@ impl GripPoseTool {
             overrides_path,
             item: None,
             surface: None,
+            item_placed: None,
             viewer: hand_pose.position,
+            head: None,
+            controllers: [None, None],
             recent: VecDeque::new(),
-            requested: false,
+            // Entered "already pressed": a trigger or pinch held as the
+            // workbench opens must be let go before it captures.
+            requested: true,
         }
+    }
+
+    /// Move the posing hand, and so its item, from `item_position` onto the
+    /// workbench in front of this head pose.
+    pub fn place(
+        &mut self,
+        head_position: Vector3<f32>,
+        head_rotation: Quaternion<f32>,
+        item_position: Vector3<f32>,
+    ) {
+        let spot = bench_spot(head_position, head_rotation, self.hand);
+        self.hand_pose.position += spot - item_position;
+        self.viewer = head_position;
+        self.placed = true;
+    }
+
+    /// How far out to hang the world dim: past the item and its views.
+    pub fn dim_distance(&self, head_position: Vector3<f32>) -> f32 {
+        let item = self
+            .item
+            .map_or(self.hand_pose.position, |(item, _)| item.position);
+        (item - head_position).magnitude() + VIEW_SPACING + DIM_CLEARANCE
     }
 
     /// Take this frame's tracked hands. The leading edge of `trigger` (the
@@ -123,13 +173,6 @@ impl GripPoseTool {
             .clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end())
     }
 
-    /// A tracked hand draws as a live glove instead of its set-down
-    /// controller's; the posing hand keeps its held glove as well, showing
-    /// the saved grip to compare the live hand against.
-    pub fn hides_controller_glove(&self, hand: usize) -> bool {
-        hand != self.hand && self.tracked[hand].is_some()
-    }
-
     /// Transforms that redraw the item and its gloves beside it, turned to
     /// show the viewer its far side, its top and its profile.
     pub fn views(&self) -> Option<[Matrix4<f32>; 3]> {
@@ -171,6 +214,20 @@ impl GripPoseTool {
     }
 }
 
+/// Where the workbench holds the item: ahead of the eye along its yaw (so a
+/// pitched head still gets a level bench), at chest height, toward the
+/// posing hand's side.
+fn bench_spot(
+    head_position: Vector3<f32>,
+    head_rotation: Quaternion<f32>,
+    hand: usize,
+) -> Vector3<f32> {
+    let forward = crate::ui::PanelPlacement::from_head(head_position, head_rotation).forward;
+    let right = forward.cross(Vector3::unit_y());
+    let aside = if hand == 0 { -BENCH_ASIDE } else { BENCH_ASIDE };
+    head_position + forward * BENCH_AHEAD + right * aside - Vector3::unit_y() * BENCH_DROP
+}
+
 fn is_pinching(joints: &HandJoints) -> bool {
     (joints[5] - joints[10]).magnitude() < PINCH_DISTANCE
 }
@@ -205,6 +262,123 @@ fn steady_mean(frames: &VecDeque<(HandJoints, f32)>) -> Option<HandJoints> {
                 .all(|(p, m)| (p - m).magnitude() <= STEADY_DISTANCE)
         })
         .then_some(mean)
+}
+
+/// The workbench's hands, over the dimmed world: the posing hand's glove
+/// frozen on the item at its grip, each tracked hand live (the posing one
+/// with fingertip spheres), each untracked controller as an open glove, and
+/// the posing gloves again in every extra view.
+pub(super) fn render(
+    tool: &GripPoseTool,
+    renderer: &mut GloveRenderer,
+    grip: Option<&ResolvedGrip>,
+    lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
+) -> Vec<SceneObject> {
+    let lights = |position| lighting.map(|lighting| lighting.at_player_position(position));
+    let handedness = |index: usize| [Handedness::Left, Handedness::Right][index];
+    let mut objs = Vec::new();
+    let mut posed = Vec::new();
+    if let Some(grip) = grip {
+        let pose = tool.hand_pose;
+        posed.extend(renderer.render_hand(
+            pose.position,
+            pose.rotation,
+            handedness(tool.hand),
+            0.0,
+            1.0,
+            true,
+            None,
+            Some((grip.fingers.hand_shape_at(0.0), 1.0)),
+            HandLight::Off,
+            lights(pose.position),
+        ));
+    }
+    for (index, joints) in tool.tracked.iter().enumerate() {
+        let Some(joints) = joints else { continue };
+        let handedness = handedness(index);
+        let glove = renderer.open_joints(handedness);
+        let (Some(bones), Some((position, rotation))) = (
+            crate::hand_capture::capture_finger_bones(joints, handedness),
+            crate::hand_capture::hand_pose(joints, &glove),
+        ) else {
+            continue;
+        };
+        let pose = crate::hand_pose::Pose::from_finger_bones(&bones);
+        let glove = renderer.render_hand(
+            position,
+            rotation,
+            handedness,
+            0.0,
+            0.0,
+            false,
+            None,
+            Some((crate::hand_pose::HandShape::Pose(pose.clone()), 1.0)),
+            HandLight::Off,
+            lights(position),
+        );
+        // Only the posing hand belongs in the item's views; the other is
+        // pinching somewhere else.
+        if index != tool.hand {
+            objs.extend(glove);
+            continue;
+        }
+        posed.extend(glove);
+        // A sphere on each drawn fingertip, green where it touches the item.
+        let joints = renderer.posed_joints(&pose, handedness);
+        let tips =
+            crate::hand_capture::TIPS.map(|joint| position + rotation.rotate_vector(joints[joint]));
+        for (tip, touching) in tips.into_iter().zip(tool.touching(tips)) {
+            let color = if touching {
+                Vector3::new(0.2, 1.0, 0.3)
+            } else {
+                Vector3::new(0.9, 0.9, 0.9)
+            };
+            let mut sphere = SceneObject::new(
+                engine::scene::color_material::create(color),
+                Box::new(engine::scene::sphere::Sphere),
+            );
+            sphere.set_transform(
+                Matrix4::from_translation(tip)
+                    * Matrix4::from_scale(0.006 / crate::METERS_PER_WORLD_UNIT),
+            );
+            posed.push(sphere);
+        }
+    }
+    for (index, controller) in tool.controllers.iter().enumerate() {
+        let Some((pose, trigger, squeeze)) = controller else {
+            continue;
+        };
+        // The posing hand's controller is set down somewhere; it has a glove.
+        if index == tool.hand {
+            continue;
+        }
+        objs.extend(renderer.render_hand(
+            pose.position,
+            pose.rotation,
+            handedness(index),
+            *trigger,
+            *squeeze,
+            false,
+            None,
+            None,
+            HandLight::Off,
+            lights(pose.position),
+        ));
+    }
+    // The posing gloves again in each extra view; the mission redraws the
+    // item itself into those views.
+    for view in tool.views().into_iter().flatten() {
+        for object in &posed {
+            let mut copy = object.clone();
+            copy.set_transform(view * object.get_transform());
+            objs.push(copy);
+        }
+    }
+    objs.append(&mut posed);
+    for object in &mut objs {
+        object.set_render_layer(RenderLayer::SystemOverlay);
+    }
+    objs
 }
 
 /// Where a grip puts its item for a hand pose (as `fit_held_items` places it).
@@ -303,6 +477,18 @@ mod tests {
         let captured = tool.capture.take().expect("a steady hand captures");
         // 18 frames alternate +w/-w from +w, then a 0: the mean is 0.
         assert!(captured[0].x.abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_trigger_held_as_the_workbench_opens_does_not_capture() {
+        let mut tool = posing_tool();
+        for _ in 0..STEADY_FRAMES * 2 {
+            tool.observe([None, posing(0.0)], true, FRAME);
+        }
+        assert!(tool.capture.is_none(), "entered already pressed");
+        tool.observe([None, posing(0.0)], false, FRAME);
+        tool.observe([None, posing(0.0)], true, FRAME);
+        assert!(tool.capture.is_some(), "a fresh press captures");
     }
 
     #[test]
@@ -414,6 +600,39 @@ mod tests {
         assert!((at(profile, item) - (item + up * VIEW_SPACING)).magnitude() < 1e-4);
         // Straight above the item there is no direction to face.
         assert!(tool_with_item(item, item + up).views().is_none());
+    }
+
+    #[test]
+    fn the_bench_is_level_ahead_at_chest_height_toward_the_posing_hand() {
+        let eye = vec3(1.0, 5.0, 2.0);
+        // Facing +X (yaw -90 from -Z), pitched well down at the floor.
+        let head = Quaternion::from_angle_y(Deg(-90.0)) * Quaternion::from_angle_x(Deg(-60.0));
+        let right = bench_spot(eye, head, 1);
+        let ahead = vec3(1.0, 0.0, 0.0);
+        let offset = right - eye;
+        assert!((offset.dot(ahead) - BENCH_AHEAD).abs() < 1e-4, "{offset:?}");
+        assert!((offset.y + BENCH_DROP).abs() < 1e-4);
+        // The viewer's right is +Z when facing +X.
+        assert!((offset.z - BENCH_ASIDE).abs() < 1e-4);
+        let left = bench_spot(eye, head, 0);
+        assert!(((left - eye).z + BENCH_ASIDE).abs() < 1e-4);
+        // An untracked (zero) head still gets a defined bench.
+        let untracked = bench_spot(eye, Quaternion::new(0.0, 0.0, 0.0, 0.0), 1);
+        assert!(untracked.x.is_finite() && untracked.y.is_finite() && untracked.z.is_finite());
+    }
+
+    #[test]
+    fn placing_carries_the_glove_with_the_item_onto_the_bench() {
+        let mut tool = posing_tool();
+        let grip_offset = vec3(0.0, 0.0, -0.2);
+        let item = tool.hand_pose.position + grip_offset;
+        let eye = vec3(3.0, 4.0, 5.0);
+        let head = Quaternion::from_angle_y(Deg(0.0));
+        tool.place(eye, head, item);
+        let spot = bench_spot(eye, head, 1);
+        assert!(tool.placed);
+        assert!(((tool.hand_pose.position + grip_offset) - spot).magnitude() < 1e-5);
+        assert_eq!(tool.viewer, eye, "the views face where the player stood");
     }
 
     #[test]

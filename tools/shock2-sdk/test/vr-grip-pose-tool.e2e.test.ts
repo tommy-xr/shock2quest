@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
 import { isolatedDataRoot } from "./helpers/isolated-data-root.js";
-import { holdDebugMug } from "./helpers/vr-hand.js";
+import { add, cross, holdDebugMug, normalize, quatMultiply, quatRotate, scale } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 const METERS_PER_WORLD_UNIT = 0.3048 * 2.5;
@@ -32,7 +32,7 @@ function trackedHand(origin: Vec3, { pinch = false, left = false } = {}): Vec3[]
 const distance = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 test(
-  "grip pose tool: a set-down controller keeps the item; the other controller stages, discards and saves",
+  "grip pose tool: a paused workbench floats the item; the other controller stages, discards and saves",
   { skip: !enabled, timeout: 300_000 },
   async () => {
     using data = isolatedDataRoot([
@@ -42,26 +42,56 @@ test(
     const mug = await holdDebugMug(game);
     const mugPosition = async () =>
       (await game.entities.list()).entities.find((e) => e.id === mug.id)!.position;
-    const held = await mugPosition();
-    const mugDraws = async () => (await game.scene.objects({ entityId: mug.id })).objects.length;
-    const drawnOnce = await mugDraws();
+    const mugDraws = async () => (await game.scene.objects({ entityId: mug.id })).objects;
+    const drawnOnce = (await mugDraws()).length;
     const rightGrip = async () =>
       (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
+    const playerY = async () => (await game.info()).player.position[1];
     const path = join(data.root, "vr-grip-overrides.json");
+
+    // Lift the player so the world's clock shows as a fall in progress.
+    const start = (await game.info()).player.position;
+    await game.player.teleport({ x: start[0], y: start[1] + 3, z: start[2] });
+    await game.step({ frames: 2 });
+    const pawn = (await game.info()).player;
+    const eye = add(pawn.position, [0, pawn.camera_offset[1], 0]);
+    const gaze = quatRotate(quatMultiply(pawn.rotation, (await game.input.state()).head.rotation), [0, 0, -1]);
 
     await game.input.trigger("ToggleGripPoseTool");
     await game.step({ frames: 2 });
+    const held = await mugPosition();
+    const frozenY = await playerY();
+    const frozenTime = (await game.step({ frames: 1 })).render_time;
     // Set the controller down: no squeeze, somewhere else entirely.
     const hand = (await game.input.state()).right_hand.position;
     await game.input.setMany({
       "right_hand.squeeze": 0,
       "right_hand.position": [hand[0] + 1, hand[1] - 0.5, hand[2]],
     });
-    await game.step({ frames: 10 });
+    const stepped = await game.step({ frames: 30 });
+    assert.equal(stepped.render_time, frozenTime, "the world clock stops");
+    assert.equal(await playerY(), frozenY, "a falling player hangs in the air");
     let grip = await rightGrip();
     assert.equal(grip.entity_id, mug.id, "the posing hand keeps the mug");
     assert.ok(distance(await mugPosition(), held) < 1e-3, "the mug stays where it was held");
-    assert.equal(await mugDraws(), drawnOnce * 4, "the mug is drawn again in three extra views");
+
+    // The mug floats on the bench: 0.45 m ahead of the eye, 0.3 m below it,
+    // 0.1 m to the right (the posing hand), and again in three views.
+    let draws = await mugDraws();
+    assert.equal(draws.length, drawnOnce * 4, "drawn on the bench and in three extra views");
+    assert.ok(draws.every((d) => d.source === "grip_workbench" && d.render_layer === "system_overlay"));
+    const ahead = normalize([gaze[0], 0, gaze[2]]);
+    const right = cross(ahead, [0, 1, 0]);
+    const spot = add(add(eye, scale(ahead, 0.45 / METERS_PER_WORLD_UNIT)),
+      add(scale(right, 0.1 / METERS_PER_WORLD_UNIT), [0, -0.3 / METERS_PER_WORLD_UNIT, 0]));
+    const bench = draws[0]!.position;
+    assert.ok(distance(bench, spot) < 0.02 / METERS_PER_WORLD_UNIT, `bench ${bench} vs ${spot}`);
+    const dims = (await game.scene.fromSource("grip_workbench")).filter((o) => o.entity_id === null);
+    assert.equal(dims.length, 1, "one dim hides the world");
+    // Walking round it (head moved and turned) leaves it where it is.
+    await game.input.setMany({ "head.position": [0.6, 0, 0.4], "head.look": [70, 20] });
+    await game.step({ frames: 5 });
+    assert.ok(distance((await mugDraws())[0]!.position, bench) < 1e-4, "the bench is world-locked");
     const fitted = grip.grip;
     assert.ok(fitted && !("bones" in fitted), "the mug starts on its shipped grip");
 
@@ -140,16 +170,26 @@ test(
     await game.step({ frames: 30 });
     await pullTrigger();
     assert.notDeepEqual((await rightGrip()).grip, savedGrip, "a new capture is staged");
-    // Take the controller back up so the mug stays held to inspect.
-    await game.input.setMany({ "right_hand.squeeze": 1, "right_hand.position": hand });
+    // Leave with the controller back in hand but not squeezed, its trigger
+    // pulled: the mug neither drops nor fires, and the jump is no throw.
+    await game.input.setMany({ "right_hand.position": hand, "right_hand.trigger": 1, "right_hand.joints": null, "left_hand.joints": null });
     await game.input.trigger("ToggleGripPoseTool");
-    await game.step({ frames: 3 });
+    const resumed = await game.step({ frames: 30 });
+    assert.ok(resumed.render_time > frozenTime + 0.4, "the world clock runs again");
+    assert.ok(await playerY() < frozenY, "and the fall resumes");
     grip = await rightGrip();
-    assert.equal(grip.entity_id, mug.id);
+    assert.equal(grip.entity_id, mug.id, "the mug is back in the same hand");
+    assert.equal(grip.pose_tool, null, "the workbench is closed");
     assert.deepEqual(grip.grip, savedGrip, "exiting discards the staged capture");
     assert.equal(readFileSync(path, "utf8"), savedText, "and writes nothing");
+    draws = await mugDraws();
+    assert.equal(draws.length, drawnOnce);
+    assert.ok(draws.every((d) => d.source === "entity"), "drawn in the world again");
 
-    // Finishing hands the mug back to the controller, which can let go.
+    // A fresh squeeze, then letting go, drops it.
+    await game.input.setMany({ "right_hand.trigger": 0, "right_hand.squeeze": 1 });
+    await game.step({ frames: 3 });
+    assert.equal((await game.info()).player.right_hand_entity_id, mug.id);
     await game.input.set("right_hand.squeeze", 0);
     await game.step({ frames: 3 });
     assert.notEqual((await game.info()).player.right_hand_entity_id, mug.id);
