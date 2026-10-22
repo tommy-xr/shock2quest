@@ -1400,6 +1400,8 @@ cargo dvr deploy                  # release build and install only
 cargo dvr pr 1234                 # install and launch PR #1234's CI APK (needs gh)
 cargo dvr assets copy             # copy retail assets from DARK_ASSET_PATH
 cargo dvr assets recopy           # replace retail assets; preserves saves/settings
+cargo dvr features                # opt-in switch files: values, defaults, device state
+cargo dvr features set multiview on  # validated; applies on next launch (unset: default)
 ```
 
 See [dark_vr_tool](tools/dark_vr_tool/README.md) for device selection, filesystem

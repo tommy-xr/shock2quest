@@ -15,6 +15,7 @@ mod dashboard;
 #[path = "../../../runtimes/oculus_runtime/src/quest_config.rs"]
 mod quest_config;
 
+use quest_config::{SWITCHES, Switch};
 const ROOT: &str = "/sdcard/shock2quest";
 const PACKAGE: &str = "com.tommybuilds.shock2quest";
 /// Builds that kept saves in app-private storage, which an uninstall deletes:
@@ -56,6 +57,11 @@ enum Action {
     DebugPort {
         #[command(subcommand)]
         action: Setting,
+    },
+    /// List or change opt-in feature switch files; changes apply on next launch
+    Features {
+        #[command(subcommand)]
+        action: Option<Features>,
     },
     /// Build, install and launch the release APK (follows logcat)
     Run {
@@ -135,6 +141,16 @@ enum Setting {
         value: String,
     },
     Unset,
+}
+
+#[derive(Subcommand)]
+enum Features {
+    /// One row per switch with its current device value (the default)
+    List,
+    /// e.g. `features set multiview on`
+    Set { name: String, value: String },
+    /// Delete the file, restoring the default
+    Unset { name: String },
 }
 
 #[derive(Subcommand)]
@@ -232,6 +248,7 @@ fn main() -> Result<()> {
             device.setting(quest_config::MISSION_CONFIG_PATH, action, true)?
         }
         Action::DebugPort { action } => device.setting(DEBUG_PORT, action, false)?,
+        Action::Features { action } => device.features(action.unwrap_or(Features::List))?,
         Action::Pr {
             mission,
             no_uninstall,
@@ -421,6 +438,54 @@ impl Device {
             None => format!("rm -f {}", quote(path)),
         };
         self.shell(&script)?;
+        Ok(())
+    }
+    fn features(&self, action: Features) -> Result<()> {
+        let path = |switch: &Switch| format!("{ROOT}/{}", switch.file);
+        match action {
+            Features::List => {
+                println!(
+                    "{:<17} {:<21} {:<20} {:<8} DEVICE",
+                    "NAME", "FILE", "VALUES", "DEFAULT"
+                );
+                let mut failed = false;
+                for switch in SWITCHES {
+                    // Prints nothing for a missing file, `+<contents>` otherwise.
+                    let file = quote(&path(switch));
+                    let current = match self
+                        .shell(&format!("[ ! -e {file} ] || {{ printf +; cat {file}; }}"))
+                    {
+                        Ok(raw) => device_value(switch, raw.strip_prefix('+')),
+                        Err(error) => {
+                            failed = true;
+                            format!("unreadable ({error})")
+                        }
+                    };
+                    println!(
+                        "{:<17} {:<21} {:<20} {:<8} {current}",
+                        switch.name,
+                        switch.file,
+                        switch.values.join("|"),
+                        switch.default
+                    );
+                }
+                ensure!(!failed, "could not read every switch file");
+            }
+            Features::Set { name, value } => {
+                let switch = feature_switch(&name)?;
+                let value = feature_value(switch, &value)?;
+                self.write(&path(switch), Some(value))?;
+                println!("{} = {value}; applies on next launch", switch.name);
+            }
+            Features::Unset { name } => {
+                let switch = feature_switch(&name)?;
+                self.write(&path(switch), None)?;
+                println!(
+                    "{} = {} (default); applies on next launch",
+                    switch.name, switch.default
+                );
+            }
+        }
         Ok(())
     }
     fn recordings(&self) -> Result<Vec<Recording>> {
@@ -703,6 +768,42 @@ fn validate_setting(value: &str, mission: bool) -> Result<Option<String>> {
     Ok(Some(port.to_string()))
 }
 
+fn feature_switch(name: &str) -> Result<&'static Switch> {
+    SWITCHES
+        .iter()
+        .find(|switch| switch.name == name)
+        .with_context(|| {
+            let names: Vec<_> = SWITCHES.iter().map(|switch| switch.name).collect();
+            format!("unknown feature {name:?}; expected {}", names.join(", "))
+        })
+}
+
+/// The runtime silently falls back on unrecognized text, so reject it here.
+fn feature_value(switch: &Switch, value: &str) -> Result<&'static str> {
+    let value = value.trim();
+    switch
+        .values
+        .iter()
+        .copied()
+        .find(|allowed| *allowed == value)
+        .with_context(|| {
+            format!(
+                "invalid {} value {value:?}; expected {}",
+                switch.name,
+                switch.values.join(", ")
+            )
+        })
+}
+
+/// What a switch file (`None`: missing) holds, as the `features` table shows it.
+fn device_value(switch: &Switch, contents: Option<&str>) -> String {
+    match contents.map(str::trim) {
+        None => format!("{} (default)", switch.default),
+        Some(value) if switch.values.contains(&value) => value.to_owned(),
+        Some(value) => format!("invalid {value:?}"),
+    }
+}
+
 /// Uploaded by `.github/workflows/build-android.yml`.
 fn apk_artifact_name(sha: &str) -> String {
     format!("shock2quest-apk-{sha}")
@@ -955,6 +1056,37 @@ mod tests {
             validate_setting("8171", false).unwrap(),
             Some("8171".into())
         );
+    }
+    #[test]
+    fn features_accept_only_listed_names_and_values() {
+        let multiview = feature_switch("multiview").unwrap();
+        assert_eq!(feature_value(multiview, " on\n").unwrap(), "on");
+        let typo = feature_value(multiview, "yes").unwrap_err().to_string();
+        assert!(typo.contains("off, on"), "{typo}");
+        let unknown = feature_switch("multivew")
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(unknown.contains("simulation-clock, multiview, ffr-level"));
+        assert_eq!(device_value(multiview, None), "off (default)");
+        assert_eq!(device_value(multiview, Some("on\n")), "on");
+        assert_eq!(device_value(multiview, Some("On")), "invalid \"On\"");
+    }
+    #[test]
+    fn ffr_switch_matches_the_runtime_parser() {
+        // foveation.rs links OpenXR, so check its parser's literals instead.
+        let source = include_str!("../../../runtimes/oculus_runtime/src/foveation.rs");
+        let levels = &quest_config::FFR_LEVEL;
+        for value in levels.values {
+            assert!(source.contains(&format!("\"{value}\" => Some(Self::")));
+        }
+        assert_eq!(
+            source.matches("=> Some(Self::").count(),
+            levels.values.len()
+        );
+        let mut default = levels.default.to_owned();
+        default[..1].make_ascii_uppercase();
+        assert!(source.contains(&format!("#[default]\n    {default},")));
     }
     #[test]
     fn recordings_sort_newest_first_and_reject_escaping_saves() {

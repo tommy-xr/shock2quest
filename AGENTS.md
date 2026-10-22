@@ -760,7 +760,8 @@ The project supports experimental flags for gating in-progress features during d
   diagnostics. This does not change simulation timing; see `benchmarks/README.md`.
 - **`fixed_simulation`**: opt-in 60 Hz scene scheduling with the existing solver
   timestep. Legacy frame-driven updates remain the default. On Quest use
-  `simulation-clock.txt` containing `fixed`, or an explicit benchmark fixture.
+  `simulation-clock.txt` containing `fixed` (`cargo dvr features set
+  simulation-clock fixed`), or an explicit benchmark fixture.
   Catch-up/input-backlog and interaction/presentation checks remain before default
   promotion; see `projects/quest-120hz.md`.
 

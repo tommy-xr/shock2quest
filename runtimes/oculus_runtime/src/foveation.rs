@@ -43,7 +43,7 @@ impl Level {
 }
 
 pub fn configured_level() -> Level {
-    let path = shock2vr::paths::data_root().join("ffr-level.txt");
+    let path = shock2vr::paths::data_root().join(crate::quest_config::FFR_LEVEL.file);
     match std::fs::read_to_string(&path) {
         Ok(value) => Level::parse(&value).unwrap_or_else(|| {
             println!(
