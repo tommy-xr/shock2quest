@@ -630,7 +630,7 @@ dev_params! {
     WORLD_TIME_SCALE = Root::float("world_time_scale", "World time scale", 1.0, 0.1, 1.0, 0.05),
     /// Smaller values shrink the world; gloves and held items retain their physical size.
     /// Applies while standing with enough room after resuming play; no level reload.
-    WORLD_SCALE = Camera::float("world_scale", "World scale", 1.0, 0.5, 1.5, 0.01),
+    WORLD_SCALE = Camera::float("world_scale", "World scale", 0.85, 0.5, 1.5, 0.01),
     /// `world_time_scale` at or below which a projectile created then is in
     /// slow time: fast shots travel with a bullet drawn and every projectile
     /// trails. Above it, projectiles behave as in normal play.
