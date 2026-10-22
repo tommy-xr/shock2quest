@@ -1846,7 +1846,7 @@ fn main() {
         while Instant::now() < deadline && !android_pump_events() {
             std::thread::sleep(Duration::from_millis(16));
         }
-        // `process::exit` runs no destructors, so hand the XR objects back
+        // The exit below runs no Rust destructors, so hand the XR objects back
         // explicitly first - otherwise even the clean exit destroys neither the
         // session nor the instance, and the runtime service can carry that
         // state into the next launch.
@@ -1855,7 +1855,14 @@ fn main() {
         drop(frame_wait);
         drop(session);
         drop(xr_instance);
-        std::process::exit(0);
+        // `_exit`, not `exit`: `exit` runs C++ atexit/static destructors while
+        // the audio stream's AudioTrack callback thread is still live, and the
+        // process SIGABRTs in that thread on quit. `_exit` skips them, like a
+        // force-stop (which never crashed). Saves and settings are written
+        // synchronously, so only stdout needs a flush.
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        // SAFETY: `_exit` takes no pointers and never returns.
+        unsafe { libc::_exit(0) };
     }
 
     // egl_display
