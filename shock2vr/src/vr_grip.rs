@@ -406,6 +406,10 @@ impl GripSurface {
     /// the point lies behind that surface: inside a closed mesh, or on an open
     /// one behind its nearest face (a side test, not a solid one).
     pub fn project(&self, point: Point3<f32>) -> (f32, bool) {
+        // parry panics projecting a non-finite point: no face is nearest.
+        if ![point.x, point.y, point.z].into_iter().all(f32::is_finite) {
+            return (f32::INFINITY, false);
+        }
         let p = na::Point3::new(point.x, point.y, point.z);
         let projection = self.mesh.project_local_point_and_get_feature(&p).0;
         // A closed mesh wound inward (negative volume) flips the side test.
@@ -1152,6 +1156,14 @@ pub(crate) mod tests {
         // An open plane facing +Z: behind it is below it.
         assert!(plane(0.0).project(point3(0.0, 0.0, -0.01)).1);
         assert!(!plane(0.0).project(point3(0.0, 0.0, 0.01)).1);
+    }
+
+    #[test]
+    fn a_non_finite_point_is_nowhere_near_the_surface() {
+        let surface = closed_cube();
+        for p in [point3(f32::NAN, 0.0, 0.0), point3(0.0, f32::INFINITY, 0.0)] {
+            assert_eq!(surface.project(p), (f32::INFINITY, false));
+        }
     }
 
     #[test]

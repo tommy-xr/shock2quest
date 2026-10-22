@@ -1446,14 +1446,16 @@ export interface HandGrip {
    * `tip_error_mm`: glove vs tracked fingertip distance (thumb..little) for
    * the tracked posing hand; `capture_failure`: why the last capture request
    * captured nothing (`no_joints`, `window_short`, `jitter max_mm=<x>`,
-   * `degenerate_joints`); `contacts_shown`: contact spheres and joint markers
-   * drawn (free controller's thumbstick click toggles). */
+   * `degenerate_joints`); `contact_view`: which contact spheres and joint
+   * markers are drawn - touching/through spheres with wrist and fingertip
+   * markers, all of them, or none (the free controller's thumbstick click
+   * steps through them). */
   pose_tool?: {
     staged: boolean;
     last_save_error: string | null;
     tip_error_mm: number[] | null;
     capture_failure: string | null;
-    contacts_shown: boolean;
+    contact_view: "contacts" | "full" | "off";
   } | null;
   /** Pistol slide contact, independent of the ordinary two-hand support grip. */
   slide?: {

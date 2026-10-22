@@ -680,25 +680,21 @@ fn draw_pose_workbench(
     world: &World,
 ) -> Vec<SceneObject> {
     use cgmath::SquareMatrix;
-    let rigid = |position, rotation| Matrix4::from_translation(position) * Matrix4::from(rotation);
-    // Moved rigidly, so the item keeps the size gameplay draws it at; only a
-    // glove weapon is drawn at its grip's scale, which the bench may change.
+    // Back out the item's whole draw transform (scale included), then draw it
+    // at its grip's scale: the scale its gloves and contacts use, which the
+    // bench's thumbstick changes.
     let Some(from_world) = world
-        .borrow::<View<PropPosition>>()
+        .borrow::<View<RuntimePropTransform>>()
         .ok()
-        .and_then(|positions| positions.get(bench.entity).ok().cloned())
-        .and_then(|pose| rigid(pose.position, pose.rotation).invert())
+        .and_then(|transforms| transforms.get(bench.entity).ok().map(|t| t.0))
+        .and_then(|transform| transform.invert())
     else {
         return bench.environment;
     };
-    let rescale = world
-        .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
-        .ok()
-        .and_then(|weapons| weapons.get(bench.entity).ok().map(|w| w.item_scale))
-        .filter(|scale| *scale > 0.0)
-        .map_or(1.0, |scale| bench.item_scale / scale);
-    let rebase =
-        rigid(bench.item.position, bench.item.rotation) * Matrix4::from_scale(rescale) * from_world;
+    let rebase = Matrix4::from_translation(bench.item.position)
+        * Matrix4::from(bench.item.rotation)
+        * Matrix4::from_scale(bench.item_scale)
+        * from_world;
     // The item's own model; effects tagged with it (a laser sight) are left
     // out, rather than left behind at the frozen hand or turned across the
     // views.
