@@ -1,5 +1,5 @@
 //! In-VR grip authoring (a developer cheat): a workbench that freezes the
-//! mission and shows, in a plain room of its own, the held item with its saved
+//! mission and shows, over a grid floor of its own, the held item with its saved
 //! grip's glove floating in front of the player. A tracked hand forms the grip around it; the other hand's
 //! controller trigger (or its tracked pinch) stages that pose live, its lower
 //! button saves it as a headset override and its upper button discards it,
@@ -49,8 +49,13 @@ const VIEW_SPACING: f32 = 0.35;
 const BENCH_AHEAD: f32 = 0.45;
 const BENCH_DROP: f32 = 0.3;
 const BENCH_ASIDE: f32 = 0.1;
-/// The workbench room's width, centred on where the player stood.
-const ROOM_SIZE: f32 = 12.0;
+/// The workbench floor's width, centred on where the player stood.
+const FLOOR_SIZE: f32 = 12.0;
+/// The head-following key light: this far above and behind the head (away
+/// from the bench), and its brightness on what it lights a metre away.
+const HEAD_LIGHT_UP: f32 = 0.2;
+const HEAD_LIGHT_BACK: f32 = 0.15;
+const HEAD_LIGHT_AT_METRE: f32 = 0.6;
 /// The panel beam starts this far out of the controller (its glove holds
 /// the controller, not a pointing finger), and runs this far when it misses.
 const BEAM_CLEARANCE: f32 = 0.04;
@@ -103,6 +108,8 @@ pub(super) struct GripPoseTool {
     pub viewer: Vector3<f32>,
     /// And the way they faced, which the panel is placed from.
     gaze: Quaternion<f32>,
+    /// Where the head was last tracked, which the head light follows.
+    pub eye: Vector3<f32>,
     /// World height of the player's real floor, which the workbench floor
     /// lies on.
     pub floor_y: f32,
@@ -183,6 +190,7 @@ impl GripPoseTool {
             item_placed: None,
             viewer: hand_pose.position,
             gaze: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            eye: hand_pose.position,
             floor_y: hand_pose.position.y,
             controllers: [None, None],
             tip_error_mm: None,
@@ -223,6 +231,7 @@ impl GripPoseTool {
         self.hand_pose.position += spot - item_position;
         self.viewer = head_position;
         self.gaze = head_rotation;
+        self.eye = head_position;
         self.panel = Some(panel::place(
             head_position,
             head_rotation,
@@ -482,50 +491,61 @@ impl GripPoseTool {
         pivot + self.turn.rotate_vector(point - pivot)
     }
 
-    /// Fixed lights for the workbench (no mission light reaches it), around
-    /// the item and turned with the player who placed it: the key light comes
-    /// from behind their left shoulder.
+    /// The workbench's lights (no mission light reaches it): fixed ones
+    /// around the item, turned with the player who placed it (the key from
+    /// behind their left shoulder), and one following the head, so the side
+    /// of the gloves and item being looked at is lit. Never below the held
+    /// light floor, like gloves in play.
     pub fn lights(&self) -> Option<Rc<LightArray>> {
+        use crate::scripts::ai::ai_util::normalized_horizontal;
         let item = self
             .item
             .map_or(self.hand_pose.position, |(item, _)| item.position);
-        let yaw = crate::scripts::ai::ai_util::normalized_horizontal(item - self.viewer)
+        let yaw = normalized_horizontal(item - self.viewer)
             // The turn about +Y that points -Z (ahead) at the item.
             .map_or(Quaternion::new(1.0, 0.0, 0.0, 0.0), |ahead| {
                 Quaternion::from_angle_y(Rad((-ahead.x).atan2(-ahead.z)))
             });
-        crate::object_lighting::gallery_lights(item, yaw)
+        let mut lights = (*crate::object_lighting::gallery_lights(item, yaw)?).clone();
+        let back = normalized_horizontal(self.eye - item).unwrap_or(Vector3::new(0.0, 0.0, 0.0));
+        lights.add_light(engine::scene::light::PointLight {
+            position: self.eye
+                + back * world(HEAD_LIGHT_BACK)
+                + Vector3::unit_y() * world(HEAD_LIGHT_UP),
+            // Inverse-distance falloff in world units: this is
+            // HEAD_LIGHT_AT_METRE a metre away at any world scale.
+            color_intensity: cgmath::Vector4::new(
+                1.0,
+                1.0,
+                1.0,
+                HEAD_LIGHT_AT_METRE * world(1.0) * crate::object_lighting::gallery_brightness(),
+            ),
+            range: world(FLOOR_SIZE),
+        });
+        Some(Rc::new(crate::object_lighting::with_ambient_floor(
+            lights,
+            crate::dev_params::get(crate::dev_params::HELD_LIGHT_FLOOR),
+        )))
     }
 
-    /// The workbench's plain room, for spatial reference: a grid floor at the
-    /// player's real floor inside a solid backdrop.
+    /// The workbench's room, for spatial reference: a grid floor at the
+    /// player's real floor and nothing else, so the cleared background (alpha
+    /// 0) lets a headset's passthrough show the real room around it.
     pub fn environment(&self) -> Vec<SceneObject> {
         let below = Vector3::new(self.viewer.x, self.floor_y, self.viewer.z);
         let thickness = world(0.02);
-        let room_size = world(ROOM_SIZE);
-        // Inset from the walls, so its edges do not fight them for depth.
-        let floor_size = room_size - 2.0 * thickness;
-        let floor = crate::scenes::debug_common::shaded_cube_object(
+        let floor_size = world(FLOOR_SIZE);
+        let mut floor = crate::scenes::debug_common::shaded_cube_object(
             Vector3::new(0.32, 0.33, 0.35),
             below - Vector3::unit_y() * (thickness / 2.0),
             Vector3::new(floor_size, thickness, floor_size),
         );
-        let mut backdrop = crate::scenes::debug_common::cube_object(
-            Vector3::new(0.1, 0.11, 0.13),
-            below,
-            Vector3::new(room_size, room_size, room_size),
-        );
-        // Seen from inside, so no face is culled.
-        backdrop.set_backface_culling(None);
-        let mut room = [(floor, "workbench floor"), (backdrop, "workbench backdrop")];
-        for (object, name) in &mut room {
-            object.set_debug_tag(Some(Rc::new(engine::scene::SceneObjectDebugTag {
-                name: Some((*name).to_owned()),
-                source: Some(crate::util::render_source::GRIP_WORKBENCH.to_owned()),
-                ..Default::default()
-            })));
-        }
-        room.into_iter().map(|(object, _)| object).collect()
+        floor.set_debug_tag(Some(Rc::new(engine::scene::SceneObjectDebugTag {
+            name: Some("workbench floor".to_owned()),
+            source: Some(crate::util::render_source::GRIP_WORKBENCH.to_owned()),
+            ..Default::default()
+        })));
+        vec![floor]
     }
 
     /// Take this frame's tracked hands. The leading edge of `trigger` (the
@@ -1566,6 +1586,9 @@ mod tests {
         let mut tool = tool_with_item(item, item + vec3(4.0, 1.0, 0.0));
         tool.floor_y = -0.5;
         let room = tool.environment();
+        // Only the floor: nothing walls in the background, which passthrough
+        // shows on a headset.
+        assert_eq!(room.len(), 1);
         let floor = &room[0];
         let top = floor.get_transform() * cgmath::Vector4::new(0.0, 0.5, 0.0, 1.0);
         assert!((top.y - tool.floor_y).abs() < 1e-5, "{top:?}");
@@ -1579,6 +1602,28 @@ mod tests {
                 "behind the viewer, who looks along -X: {key:?}"
             );
             assert!(key.z > 0.0, "and over their left shoulder (+Z): {key:?}");
+        }
+    }
+
+    #[test]
+    fn a_key_light_follows_the_head_from_above_and_behind() {
+        let item = vec3(1.0, 2.0, 3.0);
+        let mut tool = tool_with_item(item, item + vec3(4.0, 1.0, 0.0));
+        for eye in [item + vec3(3.0, 1.0, 0.0), item + vec3(0.0, 1.0, -3.0)] {
+            tool.eye = eye;
+            // `None` only with object lighting off (see above).
+            let Some(lights) = tool.lights() else {
+                return;
+            };
+            let head = lights.get_light(2).unwrap().position();
+            assert!(head.y > eye.y, "above the head: {head:?}");
+            let from_item = |p: Vector3<f32>| vec3(p.x - item.x, 0.0, p.z - item.z);
+            let (light, eye_out) = (from_item(head), from_item(eye));
+            assert!(
+                light.magnitude() > eye_out.magnitude()
+                    && light.normalize().dot(eye_out.normalize()) > 0.999,
+                "behind the head, away from the bench: {head:?} for {eye:?}"
+            );
         }
     }
 

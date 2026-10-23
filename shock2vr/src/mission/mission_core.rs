@@ -681,7 +681,7 @@ fn request_pulses(world: &World, pulses: Vec<(crate::Handedness, crate::haptics:
 
 /// The grip pose workbench's scene, built from the mission's draws of its held
 /// item (`scene`): the item on the workbench instead of in its frozen hand,
-/// again in each extra view, and the workbench's room. Nothing else of the
+/// again in each extra view, and the workbench's floor. Nothing else of the
 /// mission is kept. The item keeps its entity id but is relabelled, and is lit
 /// by the workbench's own lights.
 fn draw_pose_workbench(

@@ -1642,7 +1642,13 @@ fn main() {
         let fitting_passthrough = (passthrough::is_fit_scene(&game)
             || matches!(&game, shock2vr::App::Ready(game) if game.scene_name() == "debug_psi_fit"))
             && shock2vr::dev_params::get_bool(shock2vr::dev_params::GLOVE_FIT_PASSTHROUGH);
-        fit_passthrough.update(&session, calibration_passthrough || fitting_passthrough);
+        // The grip workbench draws only its floor, item and gloves over the
+        // real room, so the real hand shows under its glove.
+        let workbench_passthrough = game.pose_workbench_open();
+        fit_passthrough.update(
+            &session,
+            calibration_passthrough || fitting_passthrough || workbench_passthrough,
+        );
         let tracking = tracking.with_stance(
             game.player_center_above_floor(),
             game.player_eye_cap_above_center(),
