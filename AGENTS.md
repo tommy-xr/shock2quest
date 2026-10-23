@@ -301,6 +301,13 @@ preview. Save As writes a separate file; copy it to the canonical asset path
 to use it in game. The preview and runtime share `shock2vr::vr_belt` transforms,
 so rendering and the resting grab target follow the same pose.
 
+Grip poses saved on the headset live in `<data root>/vr-grip-overrides.json`
+(same format as `assets/vr-grips.json`) and win over every shipped grip at
+load. Bring them into the repo with `cargo dvr grips pull`, then
+`cargo dx merge-grips vr-grip-overrides.json` (each pose replaces the entry the
+game would have used), and `cargo dvr grips clear` so they stop shadowing
+later asset edits.
+
 Developer parameters such as belt height/distance are **session-only whole-belt
 fit controls**. They do not replace asset authoring when the request is to
 adjust the card *relative to the buckle*, or a hand *relative to an item*.

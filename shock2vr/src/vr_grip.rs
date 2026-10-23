@@ -788,6 +788,48 @@ impl GripLibrary {
     }
 }
 
+/// Poses saved on the headset by the in-VR pose tool, under the data root.
+/// Entries use library keys (e.g. `vr_magazine::grip_model`), not fit keys.
+pub const GRIP_OVERRIDES_FILE: &str = "vr-grip-overrides.json";
+
+/// Shipped grip libraries in runtime lookup order: the first model/hand match wins.
+pub const GRIP_RESOURCES: [&str; 4] = [
+    "vr-grips.json",
+    "vr-weapon-grips.json",
+    "vr-tricorder-grips.json",
+    "vr-magazine-grips.json",
+];
+
+impl GripLibrary {
+    /// Put `overrides` ahead of every entry; `lookup` takes the first match.
+    pub fn prepend(&mut self, overrides: GripLibrary) {
+        self.entries.splice(0..0, overrides.entries);
+    }
+
+    /// A missing file is normal; an unreadable one is logged and ignored.
+    /// Logs to stdout: the Quest runtime has no tracing subscriber.
+    pub fn load_overrides(path: &std::path::Path) -> Option<GripLibrary> {
+        let text = std::fs::read_to_string(path).ok()?;
+        let path = path.display();
+        match serde_json::from_str::<GripLibrary>(&text) {
+            Ok(library) if library.version == 1 => {
+                let entries = library.entries.len();
+                println!("SHOCK2QUEST_VR_GRIP_OVERRIDES path={path} entries={entries}");
+                Some(library)
+            }
+            Ok(library) => {
+                let version = library.version;
+                println!("SHOCK2QUEST_VR_GRIP_OVERRIDES path={path} ignored=version_{version}");
+                None
+            }
+            Err(error) => {
+                println!("SHOCK2QUEST_VR_GRIP_OVERRIDES path={path} ignored=\"{error}\"");
+                None
+            }
+        }
+    }
+}
+
 impl Default for GripLibrary {
     fn default() -> Self {
         Self {
@@ -1075,6 +1117,32 @@ mod tests {
         assert!(!grip.is_valid());
     }
 
+    #[test]
+    fn device_overrides_win_lookup_and_bad_files_are_ignored() {
+        let grip = plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
+        let entry = |scale| BakedGripEntry {
+            authored: true,
+            model: "mug".into(),
+            hand: "left".into(),
+            surface_hash: String::new(),
+            kinematics_hash: String::new(),
+            hints_hash: String::new(),
+            grip: grip.clone().with_item_scale(scale),
+        };
+        let mut library = GripLibrary::default();
+        library.entries.push(entry(1.0));
+        let dir = crate::test_support::TempDir::new("grip-overrides");
+        let path = dir.path().join(GRIP_OVERRIDES_FILE);
+        assert!(GripLibrary::load_overrides(&path).is_none(), "missing file");
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(GripLibrary::load_overrides(&path).is_none(), "corrupt file");
+        let mut overrides = GripLibrary::default();
+        overrides.entries.push(entry(0.5));
+        std::fs::write(&path, serde_json::to_string(&overrides).unwrap()).unwrap();
+        library.prepend(GripLibrary::load_overrides(&path).unwrap());
+        assert_eq!(library.lookup("mug", "left").unwrap().item_scale, 0.5);
+    }
+
     /// Bone rotations equal up to quaternion sign.
     fn assert_bones_eq(a: &FingerBones, b: &FingerBones) {
         for (bone, (a, b)) in a.iter().zip(b).enumerate() {
@@ -1159,12 +1227,7 @@ mod tests {
     /// same fields, so Explorer saves do not churn them.
     #[test]
     fn shipped_grip_libraries_decode_as_curls_unchanged() {
-        for name in [
-            "vr-grips.json",
-            "vr-weapon-grips.json",
-            "vr-tricorder-grips.json",
-            "vr-magazine-grips.json",
-        ] {
+        for name in GRIP_RESOURCES {
             let path = format!("{}/../assets/{name}", env!("CARGO_MANIFEST_DIR"));
             let text = std::fs::read_to_string(&path).unwrap();
             let original: serde_json::Value = serde_json::from_str(&text).unwrap();
