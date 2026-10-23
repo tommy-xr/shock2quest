@@ -34,8 +34,7 @@ fn profile() -> SupportProfile {
         region: None,
         motion: None,
         rotation_degrees: [0.0, 0.0, -90.0],
-        curls: [0.4, 0.45, 0.5, 0.55, 0.6],
-        trigger_curls: None,
+        fingers: crate::vr_grip::FingerPose::curls([0.4, 0.45, 0.5, 0.55, 0.6]),
         grab_radius: 0.045,
         release_distance: 0.1,
         max_swing_degrees: 75.0,
@@ -232,7 +231,7 @@ impl VrInteraction {
     pub(super) fn slide_grip(&self) -> Option<(usize, crate::vr_grip::ResolvedGrip)> {
         let s = self.slide.as_ref()?;
         let mut grip = self.fitted_grips[s.primary].as_ref()?.resolved.clone()?;
-        grip.fingers = crate::vr_grip::FingerPose::curls(profile().curls);
+        grip.fingers = profile().fingers;
         Some((1 - s.primary, grip))
     }
 

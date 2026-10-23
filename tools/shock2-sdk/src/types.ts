@@ -1452,6 +1452,10 @@ export interface HandGrip {
    * markers, all of them, or none (the free controller's thumbstick click
    * steps through them). */
   pose_tool?: {
+    /** `support`: the other hand (`posing`) is posed as the support grip
+     * against this hand's glove, frozen at its grip. */
+    mode: "primary" | "support";
+    posing: "left" | "right";
     staged: boolean;
     last_save_error: string | null;
     tip_error_mm: number[] | null;
@@ -1466,6 +1470,8 @@ export interface HandGrip {
     panel: {
       status: string;
       switch_disabled: string | null;
+      /** Why the Primary/Support mode button is disabled (null when enabled). */
+      support_disabled: string | null;
       hover: { x: number; y: number } | null;
       panel: {
         center: ResolvedGrip["offset"];
@@ -1473,7 +1479,7 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "SwitchHand" | "Contacts" | "ResetView" | "Exit";
+          event: "Save" | "Discard" | "SwitchHand" | "SupportMode" | "Contacts" | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;
@@ -1502,7 +1508,12 @@ export interface HandGrip {
     blocked: [boolean, boolean];
     step_dt: number;
     visual_trigger: number;
-    finger_curls: FingerCurls;
+    finger_curls: FingerCurls | null;
+    /** The support profile in use: its palm anchor and wrist rotation, and
+     * whether its fingers are curls or captured bones. */
+    palm_anchor: Vec3;
+    rotation_degrees: Vec3;
+    finger_pose: "curls" | "bones";
     socket_position: ResolvedGrip["offset"];
     pump?: {
       parameter: number;

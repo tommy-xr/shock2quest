@@ -23,7 +23,7 @@ const PACKAGE: &str = "com.tommybuilds.shock2quest";
 const APP_PRIVATE_SAVE_VERSIONS: [&str; 4] = ["0.0.3", "0.0.4", "0.0.5", "0.1.0"];
 const DEBUG_PORT: &str = "/sdcard/shock2quest/debug-port.txt";
 const RECORDINGS: &str = "/sdcard/shock2quest/recordings";
-/// Written by the in-VR pose tool (`shock2vr::vr_grip::GRIP_OVERRIDES_FILE`).
+/// Written by the in-VR pose tool (`shock2vr::vr_grip::GRIP_OVERRIDES_FILE`): grip and support poses.
 const GRIP_OVERRIDES: &str = "/sdcard/shock2quest/vr-grip-overrides.json";
 
 #[derive(Parser)]
@@ -133,7 +133,7 @@ enum Action {
         #[arg(long, default_value = "recordings")]
         out: PathBuf,
     },
-    /// Grip poses saved by the in-VR pose tool
+    /// Grip and support poses saved by the in-VR pose tool
     Grips {
         #[command(subcommand)]
         action: Grips,

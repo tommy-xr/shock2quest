@@ -1,6 +1,11 @@
 //! Rigid two-anchor posing. Geometry, scale and ownership stay with the primary hand.
-use cgmath::{Deg, Euler, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Transform, Vector3};
+use cgmath::{
+    Deg, EuclideanSpace, Euler, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Transform,
+    Vector3,
+};
 use serde::{Deserialize, Serialize};
+
+use crate::vr_grip::FingerPose;
 
 /// Authored support sockets and regions currently enabled in gameplay.
 /// Keep the Explorer eligibility notice and runtime policy together.
@@ -114,15 +119,111 @@ pub struct SupportProfile {
     /// Support wrist rotation relative to the primary wrist; authored right-primary.
     #[serde(default)]
     pub rotation_degrees: [f32; 3],
-    pub curls: [f32; 5],
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trigger_curls: Option<[f32; 5]>,
+    #[serde(flatten)]
+    pub fingers: FingerPose,
     pub grab_radius: f32,
     pub release_distance: f32,
     pub max_swing_degrees: f32,
 }
 
+/// What the grip pose workbench captures of a support grip: the palm's place
+/// on the item, the wrist rotation and the fingers. Region, motion and radii
+/// stay authored.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SupportPose {
+    pub palm_anchor: [f32; 3],
+    pub rotation_degrees: [f32; 3],
+    #[serde(flatten)]
+    pub fingers: FingerPose,
+}
+
+/// Put captured support poses (the overrides file's) over the authored
+/// profiles. A pose without an authored profile, or that would make it
+/// invalid, is ignored.
+pub fn apply_overrides(
+    profiles: &mut std::collections::HashMap<String, SupportProfile>,
+    overrides: &std::collections::BTreeMap<String, SupportPose>,
+) {
+    for (model, pose) in overrides {
+        let posed = profiles.get(model).map(|profile| profile.with_pose(pose));
+        match posed {
+            Some(posed) if posed.is_valid() => {
+                profiles.insert(model.clone(), posed);
+            }
+            _ => println!("SHOCK2QUEST_VR_GRIP_OVERRIDES support={model} ignored=true"),
+        }
+    }
+}
+
+/// A right-primary support rotation for `primary`: the glove mirrors hand X
+/// independently of the item's model axes. Its own inverse.
+fn mirror_for(primary: crate::Handedness, q: Quaternion<f32>) -> Quaternion<f32> {
+    if primary == crate::Handedness::Left {
+        Quaternion::new(q.s, q.v.x, -q.v.y, -q.v.z)
+    } else {
+        q
+    }
+}
+
 impl SupportProfile {
+    /// This profile with a captured pose in place of its authored one. A
+    /// sliding grip keeps the palm on its region in play, so a palm off it
+    /// moves to the region's nearest point (`closest_anchor` alike).
+    pub fn with_pose(&self, pose: &SupportPose) -> SupportProfile {
+        let palm = Vector3::from(pose.palm_anchor);
+        let palm_anchor = self.region.as_ref().map_or(pose.palm_anchor, |region| {
+            let (start, end) = (Vector3::from(region.start), Vector3::from(region.end));
+            let along = end - start;
+            let t = if along.magnitude2() < 1e-8 {
+                0.0
+            } else {
+                ((palm - start).dot(along) / along.magnitude2()).clamp(0.0, 1.0)
+            };
+            (start + along * t).into()
+        });
+        SupportProfile {
+            palm_anchor,
+            rotation_degrees: pose.rotation_degrees,
+            fingers: pose.fingers.clone(),
+            ..self.clone()
+        }
+    }
+
+    /// `glove_pose` inverted: the pose that draws the support glove at
+    /// `glove` (with `fingers`) while the primary grip `grip` holds the
+    /// item's model frame at `model`. `None` for a degenerate mirror.
+    pub fn captured_pose(
+        primary: crate::Handedness,
+        model: GripPose,
+        grip: &crate::vr_grip::ResolvedGrip,
+        support_rig: &crate::vr_grip::GripKinematics,
+        model_mirror: Matrix4<f32>,
+        glove: GripPose,
+        fingers: FingerPose,
+    ) -> Option<SupportPose> {
+        use cgmath::SquareMatrix;
+        let primary_rotation = model.rotation * grip.rotation.conjugate();
+        let q = mirror_for(
+            primary,
+            (primary_rotation.invert() * glove.rotation).normalize(),
+        );
+        let euler = Euler::from(q);
+        let palm = glove.point(support_rig.palm_in_world());
+        let local = Point3::from_vec(
+            model.rotation.invert().rotate_vector(palm - model.position) / grip.item_scale,
+        );
+        let anchor = if primary == crate::Handedness::Left {
+            model_mirror.invert()?.transform_point(local)
+        } else {
+            local
+        };
+        Some(SupportPose {
+            palm_anchor: anchor.into(),
+            rotation_degrees: [euler.x, euler.y, euler.z].map(|angle| Deg::from(angle).0),
+            fingers,
+        })
+    }
+
     pub fn is_valid(&self) -> bool {
         self.palm_anchor.iter().all(|v| v.is_finite())
             && self.motion.is_none_or(|m| {
@@ -139,10 +240,7 @@ impl SupportProfile {
                 .rotation_degrees
                 .iter()
                 .all(|v| v.is_finite() && v.abs() <= 360.0)
-            && crate::vr_grip::valid_finger_curls(&self.curls)
-            && self
-                .trigger_curls
-                .is_none_or(|curls| crate::vr_grip::valid_finger_curls(&curls))
+            && self.fingers.is_valid()
             && self.grab_radius.is_finite()
             && (0.01..=0.15).contains(&self.grab_radius)
             && self.release_distance.is_finite()
@@ -161,13 +259,7 @@ impl SupportProfile {
     ) -> GripPose {
         let [x, y, z] = self.rotation_degrees;
         let q = Quaternion::from(Euler::new(Deg(x), Deg(y), Deg(z)));
-        // Glove rotation mirrors hand X independently of the item's model axes.
-        let q = if primary == crate::Handedness::Left {
-            Quaternion::new(q.s, q.v.x, -q.v.y, -q.v.z)
-        } else {
-            q
-        };
-        let rotation = model.rotation * grip.rotation.conjugate() * q;
+        let rotation = model.rotation * grip.rotation.conjugate() * mirror_for(primary, q);
         GripPose {
             position: model.point(scaled_anchor)
                 - rotation.rotate_vector(support_rig.palm_in_world()),
@@ -308,6 +400,39 @@ mod tests {
     }
 
     #[test]
+    fn shipped_support_json_is_unchanged_and_a_bone_pose_loads() {
+        // A Windows checkout may have CRLF line endings.
+        let shipped = include_str!("../../assets/vr-support-grips.json").replace("\r\n", "\n");
+        let profiles: std::collections::BTreeMap<String, SupportProfile> =
+            serde_json::from_str(&shipped).unwrap();
+        let mut text = serde_json::to_string_pretty(&profiles).unwrap();
+        text.push('\n');
+        assert_eq!(text, shipped, "curl profiles keep their JSON");
+        let mut value = serde_json::json!({
+            "palm_anchor": [-0.5, -0.08, 0.0], "rotation_degrees": [0.0, -35.0, 95.0],
+            "grab_radius": 0.07, "release_distance": 0.6, "max_swing_degrees": 150.0
+        });
+        let bones =
+            serde_json::to_value(crate::vr_grip::FingerPose::curls([0.4; 5]).to_bones()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(bones.as_object().unwrap().clone());
+        let profile: SupportProfile =
+            serde_json::from_value(value.clone()).expect("a captured bone pose loads");
+        assert!(profile.is_valid());
+        let written = serde_json::to_value(&profile).unwrap();
+        assert_eq!(
+            written.as_object().unwrap().keys().collect::<Vec<_>>(),
+            value.as_object().unwrap().keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            serde_json::from_value::<SupportProfile>(written).unwrap(),
+            profile
+        );
+    }
+
+    #[test]
     fn support_region_projects_in_scaled_rotated_and_mirrored_model_frames() {
         let mut profile: SupportProfile = serde_json::from_value(serde_json::json!({
             "palm_anchor": [0.0,0.2,0.0], "curls":[0.5,0.5,0.5,0.5,0.5],
@@ -359,8 +484,7 @@ mod tests {
             region: None,
             motion: None,
             rotation_degrees: [20.0, 15.0, -30.0],
-            curls: [0.4; 5],
-            trigger_curls: None,
+            fingers: FingerPose::curls([0.4; 5]),
             grab_radius: 0.07,
             release_distance: 0.12,
             max_swing_degrees: 75.0,
@@ -416,6 +540,124 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_support_pose_overrides_only_what_it_captured() {
+        let shipped: std::collections::HashMap<String, SupportProfile> =
+            serde_json::from_str(include_str!("../../assets/vr-support-grips.json")).unwrap();
+        let mut profiles = shipped.clone();
+        let pose = SupportPose {
+            palm_anchor: [-0.5, -0.07, 0.01],
+            rotation_degrees: [5.0, -30.0, 90.0],
+            fingers: FingerPose::curls([0.3; 5]).to_bones(),
+        };
+        let mut invalid = pose.clone();
+        invalid.palm_anchor[0] = f32::NAN;
+        let overrides = [
+            ("sg_h".to_owned(), pose.clone()),
+            ("al_h".to_owned(), invalid),
+            ("no_such_model".to_owned(), pose.clone()),
+        ]
+        .into_iter()
+        .collect();
+        apply_overrides(&mut profiles, &overrides);
+        let sg = &profiles["sg_h"];
+        assert_eq!(
+            (sg.palm_anchor, sg.rotation_degrees, &sg.fingers),
+            (pose.palm_anchor, pose.rotation_degrees, &pose.fingers)
+        );
+        // Region, motion and radii stay authored.
+        assert_eq!(sg.motion, shipped["sg_h"].motion);
+        assert_eq!(sg.grab_radius, shipped["sg_h"].grab_radius);
+        assert_eq!(sg.release_distance, shipped["sg_h"].release_distance);
+        assert_eq!(
+            profiles["al_h"], shipped["al_h"],
+            "an invalid pose is ignored"
+        );
+        assert!(!profiles.contains_key("no_such_model"));
+        // A sliding grip holds the palm on its region in play, so a captured
+        // palm off it lands on the region's nearest point.
+        let fusion = shipped["fsn_h"].with_pose(&pose);
+        assert_eq!(fusion.palm_anchor, [-0.55, -0.38, 0.0]);
+        assert_eq!(fusion.region, shipped["fsn_h"].region);
+    }
+
+    #[test]
+    fn a_captured_support_pose_redraws_the_glove_where_it_was_captured() {
+        let profile = SupportProfile {
+            palm_anchor: [0.0; 3],
+            region: None,
+            motion: None,
+            rotation_degrees: [0.0; 3],
+            fingers: FingerPose::curls([0.4; 5]),
+            grab_radius: 0.07,
+            release_distance: 0.6,
+            max_swing_degrees: 150.0,
+        };
+        let grip = crate::vr_grip::ResolvedGrip {
+            item_scale: 0.6,
+            pose_family: "cylindrical".into(),
+            offset: vec3(-0.05, -0.1, 0.02),
+            rotation: Quaternion::from_angle_x(Deg(20.0)),
+            fingers: FingerPose::curls([0.4; 5]),
+            contacts: [None; 5],
+            anchor: [0.0; 3],
+            score: 0.0,
+        };
+        let rig = crate::vr_grip::GripKinematics {
+            fingers: std::array::from_fn(|_| Vec::new()),
+            palm: vec3(0.01, -0.001, -0.079),
+            normal: Vector3::unit_x(),
+        };
+        // The item where the frozen primary hand holds it, and the support
+        // glove somewhere along it, turned.
+        let hand = GripPose {
+            position: vec3(2.0, 3.0, 4.0),
+            rotation: Quaternion::from_angle_y(Deg(35.0)),
+        };
+        let model = GripPose {
+            position: hand.point(grip.offset),
+            rotation: hand.rotation * grip.rotation,
+        };
+        let glove = GripPose {
+            position: model.point(vec3(-0.3, -0.05, 0.02)),
+            rotation: hand.rotation
+                * Quaternion::from(Euler::new(Deg(10.0), Deg(-40.0), Deg(95.0))),
+        };
+        let mirror =
+            Matrix4::from_translation(vec3(0.0, 0.0, 0.15)) * crate::Handedness::Left.gun_mirror();
+        let bones = FingerPose::curls([0.7; 5]).to_bones();
+        for primary in [crate::Handedness::Left, crate::Handedness::Right] {
+            let pose = SupportProfile::captured_pose(
+                primary,
+                model,
+                &grip,
+                &rig,
+                mirror,
+                glove,
+                bones.clone(),
+            )
+            .unwrap();
+            let captured = profile.with_pose(&pose);
+            assert!(captured.is_valid());
+            assert_eq!(captured.fingers, bones);
+            assert_eq!(captured.grab_radius, profile.grab_radius);
+            let redrawn = captured.glove_pose(
+                primary,
+                model,
+                &grip,
+                &rig,
+                captured.anchor_in_frame(primary, mirror) * grip.item_scale,
+            );
+            assert!(
+                (redrawn.position - glove.position).magnitude() < 1e-4,
+                "{primary:?}"
+            );
+            for axis in [Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()] {
+                assert!((redrawn.rotation * axis - glove.rotation * axis).magnitude() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
     fn primary_twist_survives_and_invalid_profiles_do_not_opt_in() {
         let a = vec3(0.0, 0.0, 0.0);
         let b = vec3(0.0, 0.2, 0.0);
@@ -431,8 +673,7 @@ mod tests {
             region: None,
             motion: None,
             rotation_degrees: [0.0; 3],
-            curls: [0.5; 5],
-            trigger_curls: None,
+            fingers: FingerPose::curls([0.5; 5]),
             grab_radius: 0.07,
             release_distance: 0.12,
             max_swing_degrees: 75.0,
@@ -464,13 +705,15 @@ mod tests {
         profile.max_swing_degrees = 181.0;
         assert!(!profile.is_valid());
         profile.max_swing_degrees = 150.0;
-        profile.curls[0] = -0.5;
-        profile.trigger_curls = Some([-1.0, 0.5, 0.5, 0.5, 0.5]);
+        profile.fingers = FingerPose::Curls {
+            curls: [-0.5, 0.5, 0.5, 0.5, 0.5],
+            trigger_curls: Some([-1.0, 0.5, 0.5, 0.5, 0.5]),
+        };
         assert!(
             profile.is_valid(),
             "support thumbs can extend past the open pose too"
         );
-        profile.curls[0] = f32::NAN;
+        profile.fingers.rest_curls_mut().unwrap()[0] = f32::NAN;
         assert!(!profile.is_valid());
     }
 

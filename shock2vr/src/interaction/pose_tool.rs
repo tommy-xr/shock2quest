@@ -23,8 +23,8 @@ use crate::hand_capture::{HandFit, HandJoints};
 use crate::hand_glove::{GloveRenderer, HandLight};
 use crate::hand_pose::{HandShape, Pose};
 use crate::vr_config::Handedness;
-use crate::vr_grip::{BakedGripEntry, GripLibrary, GripSurface, ResolvedGrip};
-use crate::vr_support::GripPose;
+use crate::vr_grip::{BakedGripEntry, GripOverrides, GripSurface, ResolvedGrip};
+use crate::vr_support::{GripPose, SupportPose};
 
 // Distances below are physical (metres): tracked hands, the glove and the
 // held item keep their real size at any world scale. `world` converts.
@@ -87,12 +87,13 @@ fn millimetres(world_units: f32) -> f32 {
 }
 
 pub(super) struct GripPoseTool {
-    /// The posing hand (0 left, 1 right), the item it poses and the hand that
-    /// holds that item in the mission (the posing hand, unless switched).
+    /// The grip hand (0 left, 1 right), whose grip places the item and which
+    /// is posed unless in support mode (`posing`), the item and the hand that
+    /// holds it in the mission (the grip hand, unless switched).
     pub hand: usize,
     pub entity: EntityId,
     pub holder: usize,
-    /// World pose of the posing hand's glove: where it held the item until
+    /// World pose of the grip hand's glove: where it held the item until
     /// the workbench is placed, then on the workbench.
     pub hand_pose: GripPose,
     /// Whether the workbench has been placed in front of the player.
@@ -145,6 +146,11 @@ pub(super) struct GripPoseTool {
     pub poke: panel::Poke,
     /// Whether the other hand can be posed instead, or why not.
     pub switch: Result<(), String>,
+    /// Support mode: the other hand is posed as the support grip, against
+    /// the grip hand's glove frozen at its grip. `support_mode` is whether
+    /// the item offers it, or why not.
+    pub support: bool,
+    pub support_mode: Result<(), String>,
     /// The free hand is tracked, so it works the panel by fingertip.
     fingertip: bool,
     /// How the bench is turned for viewing about `pivot`, and while the
@@ -208,6 +214,8 @@ impl GripPoseTool {
             triggers: [panel::TriggerArbiter::new(); 2],
             poke: Default::default(),
             switch: Ok(()),
+            support: false,
+            support_mode: Err("one-handed".to_owned()),
             fingertip: false,
             turn: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             turning: None,
@@ -256,7 +264,7 @@ impl GripPoseTool {
         self.panel = Some(panel::place(
             head_position,
             head_rotation,
-            [Handedness::Left, Handedness::Right][self.hand],
+            [Handedness::Left, Handedness::Right][self.posing()],
         ));
         self.placed = true;
     }
@@ -268,21 +276,43 @@ impl GripPoseTool {
         self.hand = hand;
         self.hand_pose = hand_pose;
         self.surface = None;
+        self.restart_posing();
+    }
+
+    /// Pose the support hand (`support`) against the primary glove frozen
+    /// at its grip, or the primary hand again: the other hand is posed.
+    pub fn set_support(&mut self, support: bool) {
+        self.support = support;
+        self.restart_posing();
+    }
+
+    /// The hand being posed: the primary (grip) hand, or in support mode
+    /// the other one.
+    pub fn posing(&self) -> usize {
+        if self.support {
+            1 - self.hand
+        } else {
+            self.hand
+        }
+    }
+
+    /// A different hand is posed: what was tracked, averaged or pressed for
+    /// the old one starts over.
+    fn restart_posing(&mut self) {
         self.tip_error_mm = None;
         self.hand_size_ratio = None;
         self.capture_failure = None;
         self.saved = false;
-        self.recent.clear();
-        // The newly free hand pinches once seen open.
+        // What the newly free hand holds (a squeeze round the item, a
+        // trigger, a pinch) acts only once let go.
         self.pinching = false;
-        self.pinch_lost = true;
-        self.poke = Default::default();
+        self.rearm();
         // The panel moves to the newly free hand's side.
         if self.placed {
             self.panel = Some(panel::place(
                 self.viewer,
                 self.gaze,
-                [Handedness::Left, Handedness::Right][hand],
+                [Handedness::Left, Handedness::Right][self.posing()],
             ));
         }
     }
@@ -354,13 +384,13 @@ impl GripPoseTool {
                 near,
             );
             click = click.or(clicked);
-            if index != self.hand {
+            if index != self.posing() {
                 snapshot = world;
             }
         }
         // The free fingertip presses only with no controller in that hand: a
         // hand reaching with its controller would press what its ray skipped.
-        let free = [&input.left_hand, &input.right_hand][1 - self.hand];
+        let free = [&input.left_hand, &input.right_hand][1 - self.posing()];
         let free = free
             .joints
             .filter(|_| crate::util::tracked_rotation(free.rotation).is_none());
@@ -397,6 +427,7 @@ impl GripPoseTool {
         serde_json::json!({
             "status": view.status.text(),
             "switch_disabled": view.switch.err(),
+            "support_disabled": view.support_mode.err(),
             "hover": self.hover,
             "panel": placed,
             // The bench's view turn about its pivot (world space).
@@ -407,7 +438,7 @@ impl GripPoseTool {
     /// What the panel shows.
     pub fn panel_view(&self) -> panel::PanelView {
         panel::PanelView {
-            posing: [Handedness::Left, Handedness::Right][self.hand],
+            posing: [Handedness::Left, Handedness::Right][self.posing()],
             status: panel::Status::derive(
                 self.staged.is_some(),
                 self.saved,
@@ -416,6 +447,8 @@ impl GripPoseTool {
             ),
             contact_view: self.contact_view,
             switch: self.switch.clone(),
+            support: self.support,
+            support_mode: self.support_mode.clone(),
             staged: self.staged.is_some(),
             fingertip: self.fingertip,
         }
@@ -541,7 +574,7 @@ impl GripPoseTool {
     /// posing hand, if it has held steady for the last `STEADY_SECONDS`.
     /// Losing its tracking restarts that window.
     pub fn observe(&mut self, tracked: [Option<HandJoints>; 2], trigger: bool, dt: f32) {
-        match tracked[self.hand] {
+        match tracked[self.posing()] {
             Some(joints) => {
                 // A first frame spans no time: one long frame is not
                 // a steady window.
@@ -559,7 +592,7 @@ impl GripPoseTool {
         }
         // Losing the free hand is not letting go of a pinch, nor is finding
         // it pinched one: after a loss it must be seen open to pinch again.
-        match tracked[1 - self.hand].as_ref() {
+        match tracked[1 - self.posing()].as_ref() {
             None => {
                 self.pinch_lost = true;
                 self.pinching = false;
@@ -887,17 +920,52 @@ fn contact_spheres<'a>(
     })
 }
 
+/// A saved or staged glove, gripping, named so `/v1/scene` tells it apart
+/// from the live gloves.
+fn named_glove(
+    renderer: &mut GloveRenderer,
+    pose: GripPose,
+    hand: Handedness,
+    shape: &HandShape,
+    name: String,
+    lights: Option<Rc<LightArray>>,
+) -> Vec<SceneObject> {
+    let mut glove = renderer.render_hand(
+        pose.position,
+        pose.rotation,
+        hand,
+        0.0,
+        1.0,
+        true,
+        None,
+        Some((shape.clone(), 1.0)),
+        HandLight::Off,
+        lights,
+    );
+    for object in &mut glove {
+        let tag = engine::scene::SceneObjectDebugTag {
+            name: Some(name.clone()),
+            ..object.debug_tag().cloned().unwrap_or_default()
+        };
+        object.set_debug_tag(Some(Rc::new(tag)));
+    }
+    glove
+}
+
 /// The workbench's hands, lit by `lights`: the posing hand's glove posed on
 /// the item at its grip, each tracked hand live, each untracked controller
 /// as an open glove, and the posing gloves again in every extra view. While
 /// the posing hand is tracked its live glove replaces the saved grip's, which
 /// would only be in its way; a staged grip always shows, as the preview.
 /// Both posing gloves carry the contact spheres the view shows, and the
-/// posing hand's raw tracked joints its markers.
+/// posing hand's raw tracked joints its markers. In support mode the posed
+/// glove is `support` (its saved or staged pose) and the grip hand's glove
+/// is drawn frozen at its grip.
 pub(super) fn render(
     tool: &GripPoseTool,
     renderer: &mut GloveRenderer,
     grip: Option<&ResolvedGrip>,
+    support: Option<(GripPose, HandShape)>,
     lights: Option<Rc<LightArray>>,
 ) -> Vec<SceneObject> {
     let handedness = |index: usize| [Handedness::Left, Handedness::Right][index];
@@ -923,7 +991,7 @@ pub(super) fn render(
         );
         // Only the posing hand belongs in the item's views; the other is
         // pinching somewhere else.
-        if index != tool.hand {
+        if index != tool.posing() {
             objs.extend(drawn);
             continue;
         }
@@ -939,42 +1007,46 @@ pub(super) fn render(
                 .map(|(_, &joint)| ball(joint, world(MARKER_RADIUS), cyan, "tracked joint")),
         );
     }
-    if let Some(grip) = grip.filter(|_| tool.staged.is_some() || !posing_tracked) {
-        let pose = tool.hand_pose;
-        let shape = grip.fingers.hand_shape_at(0.0);
-        let mut glove = renderer.render_hand(
-            pose.position,
-            pose.rotation,
-            handedness(tool.hand),
-            0.0,
-            1.0,
-            true,
-            None,
-            Some((shape.clone(), 1.0)),
-            HandLight::Off,
+    let held = grip.map(|grip| (tool.hand_pose, grip.fingers.hand_shape_at(0.0)));
+    let (posed_glove, frozen) = if tool.support {
+        (support, held)
+    } else {
+        (held, None)
+    };
+    if let Some((pose, shape)) = posed_glove.filter(|_| tool.staged.is_some() || !posing_tracked) {
+        let hand = handedness(tool.posing());
+        posed.extend(named_glove(
+            renderer,
+            pose,
+            hand,
+            &shape,
+            format!("{hand:?} grip glove"),
             lights.clone(),
-        );
-        // Told apart from the live glove in `/v1/scene`.
-        let name = format!("{:?} grip glove", handedness(tool.hand));
-        for object in &mut glove {
-            let tag = engine::scene::SceneObjectDebugTag {
-                name: Some(name.clone()),
-                ..object.debug_tag().cloned().unwrap_or_default()
-            };
-            object.set_debug_tag(Some(Rc::new(tag)));
-        }
-        posed.extend(glove);
+        ));
         let joints = renderer
-            .shape_joints(&shape, handedness(tool.hand))
+            .shape_joints(&shape, hand)
             .map(|joint| pose.point(joint));
         posed.extend(contact_spheres(tool, &joints, true));
+    }
+    // In support mode the grip hand's glove stays at its grip: the support
+    // pose is relative to it.
+    if let Some((pose, shape)) = frozen {
+        let hand = handedness(tool.hand);
+        posed.extend(named_glove(
+            renderer,
+            pose,
+            hand,
+            &shape,
+            format!("{hand:?} primary glove"),
+            lights.clone(),
+        ));
     }
     for (index, controller) in tool.controllers.iter().enumerate() {
         let Some((pose, trigger, squeeze)) = controller else {
             continue;
         };
         // The posing hand's controller is set down somewhere; it has a glove.
-        if index == tool.hand {
+        if index == tool.posing() {
             continue;
         }
         objs.extend(renderer.render_hand(
@@ -1097,22 +1169,40 @@ pub(super) fn captured_grip(
     )
 }
 
-/// Write `entry` into the overrides file, replacing its model and hand. A
-/// file that exists but cannot be read is left alone rather than replaced.
+/// Write `entry` into the overrides file, replacing its model and hand.
 pub(super) fn save_override(path: &Path, entry: &BakedGripEntry) -> std::io::Result<()> {
-    let mut library = match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str::<GripLibrary>(&text)
+    edit_overrides(path, |overrides| {
+        let entries = &mut overrides.grips.entries;
+        entries.retain(|e| e.model != entry.model || e.hand != entry.hand);
+        entries.push(entry.clone());
+    })
+}
+
+/// Write a captured support pose into the overrides file, replacing its
+/// model's.
+pub(super) fn save_support_override(
+    path: &Path,
+    model: &str,
+    pose: &SupportPose,
+) -> std::io::Result<()> {
+    edit_overrides(path, |overrides| {
+        overrides.support.insert(model.to_owned(), pose.clone());
+    })
+}
+
+/// Rewrite the overrides file with `edit` applied. A file that exists but
+/// cannot be read is left alone rather than replaced.
+fn edit_overrides(path: &Path, edit: impl FnOnce(&mut GripOverrides)) -> std::io::Result<()> {
+    let mut overrides = match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str::<GripOverrides>(&text)
             .ok()
-            .filter(|library| library.version == 1)
+            .filter(|overrides| overrides.grips.version == 1)
             .ok_or_else(|| std::io::Error::other("unreadable overrides file"))?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => GripLibrary::default(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => GripOverrides::default(),
         Err(error) => return Err(error),
     };
-    library
-        .entries
-        .retain(|e| e.model != entry.model || e.hand != entry.hand);
-    library.entries.push(entry.clone());
-    let mut bytes = serde_json::to_vec_pretty(&library)?;
+    edit(&mut overrides);
+    let mut bytes = serde_json::to_vec_pretty(&overrides)?;
     bytes.push(b'\n');
     // Write then rename, so an interrupted save never leaves a torn file.
     let staged = path.with_extension("json.tmp");
@@ -1162,7 +1252,7 @@ mod tests {
         use crate::ui::test_support::{hand_aimed_at, hand_aimed_away, test_panel};
         let mut tool = posing_tool();
         tool.panel = Some(test_panel());
-        let contacts = cgmath::vec2(297.0, 146.0);
+        let contacts = cgmath::vec2(103.0, 191.0);
         let mut input = InputContext::default();
         // The posing (right) controller set down, resting on its trigger.
         input.right_hand = Hand {
@@ -1191,7 +1281,7 @@ mod tests {
         let mut tool = posing_tool();
         tool.panel = Some(test_panel());
         let mut input = InputContext::default();
-        input.left_hand = hand_aimed_at(panel::CANVAS, cgmath::vec2(297.0, 146.0), 0.0);
+        input.left_hand = hand_aimed_at(panel::CANVAS, cgmath::vec2(103.0, 191.0), 0.0);
         tool.point(&input);
         // The pause menu over the workbench takes this press (its Resume).
         tool.rearm();
@@ -1433,6 +1523,22 @@ mod tests {
     }
 
     #[test]
+    fn a_control_held_on_the_newly_free_controller_waits_for_release() {
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let mut tool = tool_with_item(vec3(1.0, 2.0, 3.0), vec3(1.0, 2.0, 6.0));
+        let grab = Quaternion::from_angle_x(Deg(10.0));
+        // The free (left) controller's squeeze let go: armed.
+        tool.turn_with(Some(grab), false);
+        // Support mode frees the right controller, its squeeze still round
+        // the item it held: that is no turn, nor is its stick a resize.
+        tool.set_support(true);
+        tool.turn_with(Some(grab), true);
+        tool.turn_with(Some(Quaternion::from_angle_y(Deg(90.0)) * grab), true);
+        assert!(turned_by(tool.turn, identity));
+        assert_eq!(tool.scale_input(1.0, true), 0.0);
+    }
+
+    #[test]
     fn a_squeeze_turns_the_bench_with_the_controller_and_it_stays_turned() {
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
         let mut tool = tool_with_item(vec3(1.0, 2.0, 3.0), vec3(1.0, 2.0, 6.0));
@@ -1578,7 +1684,7 @@ mod tests {
         use crate::ui::test_support::{hand_aimed_away, test_panel};
         let panel = test_panel();
         let contacts =
-            crate::ui::canvas_to_panel_world(panel::CANVAS, &panel, cgmath::vec2(297.0, 146.0));
+            crate::ui::canvas_to_panel_world(panel::CANVAS, &panel, cgmath::vec2(103.0, 191.0));
         // The free (left) index tip pushed from in front to through Contacts.
         let tip_at = |depth: f32| {
             let mut joints = [vec3(0.0, 0.0, 0.0); HAND_JOINT_COUNT];
@@ -1879,10 +1985,29 @@ mod tests {
         save_override(&path, &entry("left", 0.8)).unwrap();
         save_override(&path, &entry("right", 0.8)).unwrap();
         save_override(&path, &entry("left", 1.5)).unwrap();
-        let library = GripLibrary::load_overrides(&path).unwrap();
+        let library = GripOverrides::load(&path).unwrap().grips;
         assert_eq!(library.entries.len(), 2);
         assert_eq!(library.lookup("mug", "left").unwrap().item_scale, 1.5);
         assert_eq!(library.lookup("mug", "right").unwrap().item_scale, 0.8);
+    }
+
+    #[test]
+    fn grip_and_support_saves_keep_each_other() {
+        let dir = crate::test_support::TempDir::new("pose-tool-support");
+        let path = dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
+        let pose = |x| SupportPose {
+            palm_anchor: [x, 0.0, 0.0],
+            rotation_degrees: [0.0; 3],
+            fingers: crate::vr_grip::FingerPose::curls([0.5; 5]).to_bones(),
+        };
+        save_override(&path, &entry("right", 0.8)).unwrap();
+        save_support_override(&path, "sg_h", &pose(-0.4)).unwrap();
+        save_support_override(&path, "sg_h", &pose(-0.5)).unwrap();
+        save_override(&path, &entry("left", 0.8)).unwrap();
+        let saved = GripOverrides::load(&path).unwrap();
+        assert_eq!(saved.grips.entries.len(), 2);
+        assert_eq!(saved.support.len(), 1);
+        assert_eq!(saved.support["sg_h"], pose(-0.5));
     }
 
     #[test]

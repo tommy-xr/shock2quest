@@ -303,9 +303,12 @@ so rendering and the resting grab target follow the same pose.
 
 Grip poses saved on the headset live in `<data root>/vr-grip-overrides.json`
 (same format as `assets/vr-grips.json`) and win over every shipped grip at
-load. Bring them into the repo with `cargo dvr grips pull`, then
-`cargo dx merge-grips vr-grip-overrides.json` (each pose replaces the entry the
-game would have used), and `cargo dvr grips clear` so they stop shadowing
+load. Its `support` map holds support-hand poses captured in the workbench's
+Support mode (palm anchor, wrist rotation, fingers; region, motion and radii
+stay authored in `assets/vr-support-grips.json`). Bring them into the repo with
+`cargo dvr grips pull`, then `cargo dx merge-grips vr-grip-overrides.json`
+(each pose replaces the entry the game would have used), and
+`cargo dvr grips clear` so they stop shadowing
 later asset edits. To pose with a tracked hand while the other holds a
 controller, run `cargo dvr features set multimodal on` (Quest multimodal; off by
 default).

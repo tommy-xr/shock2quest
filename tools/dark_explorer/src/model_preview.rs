@@ -590,7 +590,7 @@ impl ModelPreview {
                     );
                     let mut support_grip = grip.clone();
                     // Preview curls are already blended.
-                    support_grip.fingers = shock2vr::vr_grip::FingerPose::curls(support.curls);
+                    support_grip.fingers = support.fingers.clone();
                     objects.extend(glove.render_hand(
                         pose.position,
                         pose.rotation,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { findRepoRoot, GameServer, setHandWorldPose } from "../src/index.js";
+import { attachSupportHand, findRepoRoot, GameServer, setHandWorldPose } from "../src/index.js";
 import type { ResolvedGrip, Vec3 } from "../src/types.js";
 import { isolatedDataRoot } from "./helpers/isolated-data-root.js";
 import {
@@ -731,6 +731,94 @@ test(
     // posed against the wrong mesh.
     assert.equal(tool.panel.switch_disabled, "hold it in that hand");
     assert.ok(!tool.panel.panel!.buttons.some((b) => b.event === "SwitchHand"));
+  },
+);
+
+/** Pick up the `debug_interactions` rack's shotgun in the right hand. */
+async function holdShotgun(game: GameServer): Promise<{ id: number; position: Vec3 }> {
+  const gun = await holdDebugMug(game, "right", -19);
+  assert.equal((await game.info()).player.right_hand_entity_id, gun.id);
+  return gun;
+}
+
+type SavedSupport = { palm_anchor: Vec3; rotation_degrees: Vec3; bones?: unknown[] };
+
+test(
+  "grip pose tool: support mode poses the shotgun's support hand against the frozen primary grip",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    const path = join(data.root, "vr-grip-overrides.json");
+    const rightGrip = async (game: GameServer) =>
+      (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
+    let saved: SavedSupport;
+    {
+      await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+      const gun = await holdShotgun(game);
+      const unit = await metresPerWorldUnit(game);
+      const shippedSupport = (await rightGrip(game)).support!;
+      assert.equal(shippedSupport.finger_pose, "curls", "the shipped support pose");
+      await game.input.set("head.position", [0, 1, 0]);
+      await game.step({ frames: 2 });
+      await game.input.trigger("ToggleGripPoseTool");
+      await game.step({ frames: 2 });
+      const tool = async () => (await workbench(game)).tool;
+      assert.equal((await tool()).mode, "primary");
+      const primaryGrip = (await rightGrip(game)).grip;
+
+      // The free (left) controller switches to Support: the left hand is posed now.
+      await aimAtButton(game, "left", "SupportMode", unit);
+      await click(game, "left");
+      assert.equal((await tool()).mode, "support");
+      assert.equal((await tool()).posing, "left");
+      assert.ok(!(await tool()).panel.panel!.buttons.some((b) => b.event === "SwitchHand"));
+      const names = new Set((await game.scene.objects()).objects.map((o) => o.name));
+      assert.ok(names.has("Right primary glove"), "the primary glove stays at its grip");
+      assert.ok(names.has("Left grip glove"), "the saved support pose is drawn");
+
+      // The tracked left hand along the barrel; the right controller snapshots and A saves.
+      const { toLocal } = await workbench(game);
+      const bench = (await game.scene.objects({ entityId: gun.id })).objects[0]!.position;
+      const leftHand = handInMetres({ left: true });
+      await game.input.set("left_hand.joints",
+        leftHand.map((p) => toLocal(add(bench, scale(add(p, [-0.25, -0.05, 0]), 1 / unit)))));
+      await aimAway(game, "right");
+      await game.step({ frames: 30 });
+      await click(game, "right");
+      assert.equal((await tool()).staged, true, "the support pose is staged");
+      assert.equal((await tool()).panel.support_disabled, "save or discard first");
+      assert.deepEqual((await rightGrip(game)).grip, primaryGrip, "the primary grip is untouched");
+      await game.input.trigger("RightHandLowerButton");
+      await game.step({ frames: 2 });
+      assert.equal((await tool()).saved, true);
+      const file = JSON.parse(readFileSync(path, "utf8")) as { entries: unknown[]; support: Record<string, SavedSupport> };
+      assert.deepEqual(file.entries, [], "no primary grip was saved");
+      assert.deepEqual(Object.keys(file.support), ["sg_h"]);
+      saved = file.support.sg_h!;
+      assert.ok(Array.isArray(saved.bones), "the captured fingers are bones");
+
+      // Leave, then support the gun two-handed: it uses the saved pose.
+      await game.input.set("left_hand.joints", null);
+      await game.input.trigger("ToggleGripPoseTool");
+      await game.step({ frames: 5 });
+      assert.ok(!(await game.info()).player.hand_grips.some((g) => g.pose_tool));
+      await attachSupportHand(game, "right");
+      const support = (await rightGrip(game)).support!;
+      assert.equal(support.finger_pose, "bones");
+      assertClose(support.palm_anchor, saved.palm_anchor, 1e-5, "palm_anchor");
+      assertClose(support.rotation_degrees, saved.rotation_degrees, 1e-3, "rotation_degrees");
+    }
+    // A restart loads it from the overrides file.
+    {
+      await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+      await holdShotgun(game);
+      const support = (await rightGrip(game)).support!;
+      assert.equal(support.finger_pose, "bones");
+      assertClose(support.palm_anchor, saved.palm_anchor, 1e-5, "palm_anchor");
+      assertClose(support.rotation_degrees, saved.rotation_degrees, 1e-3, "rotation_degrees");
+    }
   },
 );
 

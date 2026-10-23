@@ -119,6 +119,11 @@ fn merge_overrides(libraries: &mut [GripLibrary], overrides: GripLibrary) -> Res
 }
 
 pub fn merge_override_file(path: PathBuf) -> Result<(), String> {
+    let support = serde_json::from_slice::<shock2vr::vr_grip::GripOverrides>(
+        &std::fs::read(&path).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?
+    .support;
     let overrides = GripDocument::load(path)?.library;
     let count = overrides.entries.len();
     let dir = default_library_path()
@@ -131,6 +136,16 @@ pub fn merge_override_file(path: PathBuf) -> Result<(), String> {
         .collect::<Result<Vec<_>, _>>()?;
     let mut libraries: Vec<_> = docs.iter().map(|doc| doc.library.clone()).collect();
     merge_overrides(&mut libraries, overrides)?;
+    // Merged in memory before anything is written, so a bad pose writes
+    // nothing; saved first, as its save also refuses an externally edited file.
+    let support_doc = crate::support_grip_editor::merged_support(
+        default_library_path().with_file_name("vr-support-grips.json"),
+        &support,
+    )?;
+    if let Some(mut doc) = support_doc {
+        doc.save()?;
+        println!("updated {}", doc.path.display());
+    }
     for (doc, library) in docs.iter_mut().zip(libraries) {
         doc.library = library;
         if doc.dirty() {
@@ -138,7 +153,10 @@ pub fn merge_override_file(path: PathBuf) -> Result<(), String> {
             println!("updated {}", doc.path.display());
         }
     }
-    println!("merged {count} grip overrides");
+    println!(
+        "merged {count} grip overrides and {} support poses",
+        support.len()
+    );
     Ok(())
 }
 
@@ -1585,8 +1603,7 @@ mod tests {
                 region: None,
                 motion: None,
                 rotation_degrees: [15.0, -20.0, 30.0],
-                curls: [0.4; 5],
-                trigger_curls: None,
+                fingers: shock2vr::vr_grip::FingerPose::curls([0.4; 5]),
                 grab_radius: 0.07,
                 release_distance: 0.12,
                 max_swing_degrees: 75.0,
