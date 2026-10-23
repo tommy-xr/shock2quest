@@ -552,6 +552,39 @@ test(
 );
 
 test(
+  "grip pose tool: the bench item is drawn though its frozen mission spot is culled",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using _data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    await game.input.set("right_hand.squeeze", 1);
+    const wrench = await game.player.spawnItem("Wrench", { hand: "right" });
+    await game.step({ frames: 5 });
+    const held = (await game.info()).player.hand_grips.find((g) => g.hand === "right");
+    assert.equal(held?.entity_id, wrench.entity_id, "the right hand holds the wrench");
+    await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 2 });
+    const benchDraws = async () =>
+      (await game.scene.objects({ entityId: wrench.entity_id })).objects.filter((o) => o.source === "grip_workbench");
+    assert.ok((await benchDraws()).length > 0, "on the bench");
+
+    // The player moves far away: the wrench, frozen where it was held, is
+    // in a cell the mission no longer sees. The bench still shows it.
+    const log = (await game.entities.list({ filter: "Audio Log", limit: 80 })).entities
+      .find((e) => e.template_id === 1608)!;
+    const [x, y, z] = (await game.entities.detail(log.id)).position;
+    await game.player.teleport({ x, y: y + 0.5, z });
+    await game.step({ frames: 5 });
+    const pos = await game.player.position();
+    assert.ok(Math.hypot(pos.x - x, pos.z - z) < 3, "teleported");
+    assert.ok((await benchDraws()).length > 0, "still on the bench");
+  },
+);
+
+test(
   "grip pose tool panel: the beam always shows, a press just off the panel never snapshots, a squeeze turns only the view",
   { skip: !enabled, timeout: 300_000 },
   async () => {

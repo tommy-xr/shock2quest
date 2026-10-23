@@ -719,18 +719,23 @@ fn draw_pose_workbench(
     // views.
     let item: Vec<_> = scene
         .into_iter()
-        .filter(|object| {
-            object.debug_tag().is_some_and(|tag| {
+        .filter_map(|object| {
+            let tag = object.debug_tag().filter(|tag| {
                 tag.entity_id == Some(bench.entity.inner())
                     && tag.source.as_deref() == Some("entity")
-            })
+            })?;
+            let tag = Rc::new(engine::scene::SceneObjectDebugTag {
+                source: Some(crate::util::render_source::GRIP_WORKBENCH.to_owned()),
+                ..tag.clone()
+            });
+            Some((object, tag))
         })
         .collect();
     let mut objects = bench.environment;
     let placements =
         std::iter::once(rebase).chain(bench.views.into_iter().flatten().map(|view| view * rebase));
     for placement in placements {
-        for object in &item {
+        for (object, tag) in &item {
             let mut copy = object.clone();
             copy.set_transform(placement * object.get_transform());
             // A reflection turns the faces inside out.
@@ -738,11 +743,7 @@ fn draw_pose_workbench(
                 copy.set_backface_culling(copy.backface_culling().map(dark::model::flip_winding));
             }
             copy.set_lights(bench.lights.clone());
-            let tag = engine::scene::SceneObjectDebugTag {
-                source: Some(crate::util::render_source::GRIP_WORKBENCH.to_owned()),
-                ..object.debug_tag().unwrap().clone()
-            };
-            copy.set_debug_tag(Some(Rc::new(tag)));
+            copy.set_debug_tag(Some(tag.clone()));
             objects.push(copy);
         }
     }
@@ -18701,7 +18702,9 @@ impl MissionCore {
                 };
             }
 
-            let visible = self.visibility_engine.is_visible(*entity_id);
+            // The workbench draws its item away from the frozen mission spot
+            // that portal culling judges.
+            let visible = bench.is_some() || self.visibility_engine.is_visible(*entity_id);
             let echo = radar_contacts.get(&entity_id.inner()).copied();
             let item_echo = item_contacts.get(&entity_id.inner()).copied();
             if !visible && echo.is_none() && item_echo.is_none() {
