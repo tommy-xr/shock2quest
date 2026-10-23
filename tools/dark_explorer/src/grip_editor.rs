@@ -1327,6 +1327,30 @@ mod tests {
         assert_eq!(libraries[0].entries.len(), doc.library.entries.len() + 1);
     }
 
+    #[test]
+    fn a_headset_trigger_pose_survives_the_merge() {
+        let (dir, doc) = document();
+        let mut entry = doc.library.entries[0].clone();
+        let pressed = FingerPose::curls([0.9; 5]).rest_bones();
+        entry.grip.fingers = FingerPose::Bones {
+            bones: entry.grip.fingers.rest_bones(),
+            trigger_bones: Some(pressed),
+        };
+        // As the headset writes it: overrides file, then loaded for the merge.
+        let path = dir.path().join("vr-grip-overrides.json");
+        let mut overrides = shock2vr::vr_grip::GripOverrides::default();
+        overrides.grips.entries.push(entry.clone());
+        std::fs::write(&path, serde_json::to_vec(&overrides).unwrap()).unwrap();
+        let mut libraries = vec![doc.library.clone()];
+        merge_overrides(&mut libraries, GripDocument::load(path).unwrap().library).unwrap();
+        let merged = libraries[0]
+            .entries
+            .iter()
+            .find(|e| e.model == entry.model && e.hand == entry.hand)
+            .unwrap();
+        assert_eq!(merged.grip.fingers, entry.grip.fingers);
+    }
+
     fn curls_mut(grip: &mut ResolvedGrip) -> (&mut [f32; 5], &mut Option<[f32; 5]>) {
         match &mut grip.fingers {
             FingerPose::Curls {

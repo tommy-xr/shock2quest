@@ -4,11 +4,11 @@
 //! shared frontend pointer) or by the free hand's tracked index fingertip.
 use cgmath::{InnerSpace, Quaternion, Rotation, Vector2, Vector3, vec2};
 
-use super::world;
+use super::{Slot, world};
 use crate::ui::{HAlign, PanelPlacement, Rect, UiCanvas, VAlign, WorldPanel};
 use crate::vr_config::Handedness;
 
-pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 390.0 };
+pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 400.0 };
 /// Physical panel width; its height keeps the canvas aspect.
 const PANEL_WIDTH: f32 = 0.3;
 /// Where the panel hangs from the eye: nearer and lower than the bench, and
@@ -39,9 +39,10 @@ const TEST_HOLD: Rect = Rect::new(10.0, 124.0, 186.0, 44.0);
 const ALIGN_AIM: Rect = Rect::new(204.0, 124.0, 186.0, 44.0);
 const POSE_HAND: Rect = Rect::new(10.0, 174.0, 186.0, 44.0);
 const SUPPORT_MODE: Rect = Rect::new(204.0, 174.0, 186.0, 44.0);
-const RESET_VIEW: Rect = Rect::new(10.0, 224.0, 380.0, 34.0);
-const EXIT: Rect = Rect::new(10.0, 264.0, 380.0, 32.0);
-const LEGEND: Rect = Rect::new(10.0, 304.0, 380.0, 80.0);
+const SLOT: Rect = Rect::new(10.0, 224.0, 186.0, 44.0);
+pub(in crate::interaction) const RESET_VIEW: Rect = Rect::new(204.0, 224.0, 186.0, 44.0);
+const EXIT: Rect = Rect::new(10.0, 274.0, 380.0, 32.0);
+const LEGEND: Rect = Rect::new(10.0, 314.0, 380.0, 80.0);
 /// A test-held gun aiming within this many degrees of its controller reads
 /// as aligned.
 const ALIGNED_DEG: f32 = 1.0;
@@ -55,6 +56,7 @@ pub(in crate::interaction) enum PanelEvent {
     AlignAim,
     SwitchHand,
     SupportMode,
+    Slot,
     ResetView,
     Exit,
 }
@@ -173,6 +175,9 @@ pub(in crate::interaction) struct PanelView {
     /// Posing the support grip, and whether the item offers one, or why not.
     pub support: bool,
     pub support_mode: Result<(), String>,
+    /// The pose a snapshot sets, and whether it can switch or why not.
+    pub slot: Slot,
+    pub slot_entry: Result<(), String>,
     /// A snapshot awaits Save or Discard.
     pub staged: bool,
     /// Test holding, and whether it can start or why not.
@@ -201,24 +206,30 @@ fn other(hand: Handedness) -> Handedness {
 
 /// How the free hand works the tool. With its controller: the buttons as
 /// printed on it (X/Y on the left, A/B on the right). Tracked with no
-/// controller in it: fingertip taps and pinches. Saving is on the panel.
+/// controller in it: fingertip taps and pinches. Saving is on the panel. A
+/// snapshot names the slot's pose it sets.
 pub(in crate::interaction) fn legend(
     free: Handedness,
     fingertip: bool,
     support: bool,
     test_hold: bool,
+    slot: Slot,
 ) -> Vec<String> {
     let hold = format!(
         "Hold the item with the {} controller",
         hand_name(other(free))
     );
+    let snapshot = match slot {
+        Slot::Rest => "snapshot",
+        Slot::Trigger => "snapshot pulled pose",
+    };
     if fingertip {
         return vec![
             "Tap buttons with your fingertip".to_owned(),
             if test_hold {
                 hold
             } else {
-                "Pinch: snapshot".to_owned()
+                format!("Pinch: {snapshot}")
             },
         ];
     }
@@ -230,7 +241,7 @@ pub(in crate::interaction) fn legend(
         return vec![hold, format!("{lower}: end test hold    {upper}: discard")];
     }
     vec![
-        format!("{} controller   Trigger: snapshot", hand_name(free)),
+        format!("{} controller   Trigger: {snapshot}", hand_name(free)),
         format!("{lower}: test hold    {upper}: discard"),
         // A support pose leaves the item's scale to the grip.
         if support {
@@ -255,10 +266,10 @@ pub(in crate::interaction) fn emit(
         TITLE,
         &format!(
             "{}: {} hand",
-            if view.support {
-                "Support grip"
-            } else {
-                "Grip pose"
+            match (view.support, view.slot) {
+                (true, _) => "Support grip",
+                (false, Slot::Rest) => "Grip pose",
+                (false, Slot::Trigger) => "Trigger pose",
             },
             hand_name(view.posing)
         ),
@@ -324,6 +335,16 @@ pub(in crate::interaction) fn emit(
             view.support_mode.clone(),
         ),
         (
+            SLOT,
+            match view.slot {
+                Slot::Rest => "Slot: Rest",
+                Slot::Trigger => "Slot: Trigger",
+            }
+            .to_owned(),
+            PanelEvent::Slot,
+            view.slot_entry.clone(),
+        ),
+        (
             RESET_VIEW,
             "Reset view".to_owned(),
             PanelEvent::ResetView,
@@ -363,6 +384,7 @@ pub(in crate::interaction) fn emit(
         view.fingertip,
         view.support,
         view.test_hold,
+        view.slot,
     );
     // Spaced for the controller legend, which is the longest.
     let line_height = LEGEND.h / 3.0;
@@ -583,6 +605,8 @@ mod tests {
             switch: Ok(()),
             support: false,
             support_mode: Err("one-handed".to_owned()),
+            slot: Slot::Rest,
+            slot_entry: Ok(()),
             staged: false,
             fingertip: false,
             test_hold: false,
@@ -593,7 +617,7 @@ mod tests {
 
     #[test]
     fn a_tracked_free_hand_is_told_to_tap_not_shown_controller_buttons() {
-        let lines = legend(Handedness::Left, true, false, false);
+        let lines = legend(Handedness::Left, true, false, false, Slot::Rest);
         assert_eq!(lines[0], "Tap buttons with your fingertip");
         let all = lines.join(" ");
         assert!(
@@ -650,13 +674,13 @@ mod tests {
 
     #[test]
     fn the_legend_names_the_free_controllers_own_buttons() {
-        let left = legend(Handedness::Left, false, false, false).join(" ");
+        let left = legend(Handedness::Left, false, false, false, Slot::Rest).join(" ");
         assert!(
             left.contains("X: test hold") && left.contains("Y: discard"),
             "{left}"
         );
         assert!(left.contains("Squeeze: turn"), "{left}");
-        let right = legend(Handedness::Right, false, false, false).join(" ");
+        let right = legend(Handedness::Right, false, false, false, Slot::Rest).join(" ");
         assert!(
             right.contains("A: test hold") && right.contains("B: discard"),
             "{right}"
@@ -675,7 +699,7 @@ mod tests {
 
     #[test]
     fn test_hold_names_the_controller_to_hold_and_how_to_go_back() {
-        let lines = legend(Handedness::Left, false, false, true).join(" ");
+        let lines = legend(Handedness::Left, false, false, true, Slot::Rest).join(" ");
         assert!(
             lines.contains("Hold the item with the Right controller")
                 && lines.contains("X: end test hold")
@@ -686,7 +710,7 @@ mod tests {
             !lines.contains("snapshot") && !lines.contains("Squeeze"),
             "{lines}"
         );
-        let tapping = legend(Handedness::Left, true, false, true).join(" ");
+        let tapping = legend(Handedness::Left, true, false, true, Slot::Rest).join(" ");
         assert!(!tapping.contains("Pinch"), "{tapping}");
     }
 
@@ -771,6 +795,37 @@ mod tests {
             event_at(&targets, SUPPORT_MODE.center()),
             Some(PanelEvent::SupportMode)
         );
+    }
+
+    #[test]
+    fn the_slot_button_names_the_pose_a_snapshot_sets() {
+        let (canvas, targets) = emit(&view(Status::Ready), None);
+        let shown = texts(&canvas);
+        assert!(shown.contains(&"Slot: Rest".to_owned()));
+        assert!(shown.contains(&"Grip pose: Right hand".to_owned()));
+        assert!(shown.iter().any(|t| t.ends_with("Trigger: snapshot")));
+        assert_eq!(event_at(&targets, SLOT.center()), Some(PanelEvent::Slot));
+        let mut trigger = view(Status::Ready);
+        trigger.slot = Slot::Trigger;
+        let (canvas, _) = emit(&trigger, None);
+        let shown = texts(&canvas);
+        assert!(shown.contains(&"Slot: Trigger".to_owned()), "{shown:?}");
+        assert!(shown.contains(&"Trigger pose: Right hand".to_owned()));
+        assert!(
+            shown
+                .iter()
+                .any(|t| t.ends_with("Trigger: snapshot pulled pose")),
+            "{shown:?}"
+        );
+        trigger.fingertip = true;
+        let (canvas, _) = emit(&trigger, None);
+        assert!(texts(&canvas).contains(&"Pinch: snapshot pulled pose".to_owned()));
+        // In support mode it is disabled, saying why.
+        let mut support = view(Status::Ready);
+        support.slot_entry = Err("primary grip only".to_owned());
+        let (canvas, targets) = emit(&support, None);
+        assert!(texts(&canvas).contains(&"primary grip only".to_owned()));
+        assert_eq!(event_at(&targets, SLOT.center()), None);
     }
 
     #[test]

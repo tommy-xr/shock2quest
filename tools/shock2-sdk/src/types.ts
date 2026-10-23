@@ -1439,6 +1439,8 @@ export interface HandGrip {
   /** Raw analog input used for held finger animation, independent of action reservation. */
   visual_trigger: number;
   finger_curls: FingerCurls | null;
+  /** The finger bones drawn at `visual_trigger` (bone grips; null for curls). */
+  finger_bones: ResolvedGrip["rotation"][] | null;
   /** Glove pose following a physical melee body; null uses raw tracked pose. */
   glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
   /** The grip pose tool posing this hand: an unsaved capture is applied
@@ -1453,6 +1455,10 @@ export interface HandGrip {
      * against this hand's glove, frozen at its grip. */
     mode: "primary" | "support";
     posing: "left" | "right";
+    /** Which pose a snapshot sets: the rest grip, or only the fingers with
+     * the trigger pulled; and whether the grip has a pulled pose. */
+    slot: "rest" | "trigger";
+    has_trigger_pose: boolean;
     staged: boolean;
     last_save_error: string | null;
     tip_error_mm: number[] | null;
@@ -1477,6 +1483,8 @@ export interface HandGrip {
       /** Why Test hold cannot start, and why Align aim is disabled. */
       test_hold_disabled: string | null;
       align_disabled: string | null;
+      /** Why the Rest/Trigger slot button is disabled. */
+      slot_disabled: string | null;
       hover: { x: number; y: number } | null;
       panel: {
         center: ResolvedGrip["offset"];
@@ -1484,7 +1492,7 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "SwitchHand" | "SupportMode" | "ResetView" | "Exit";
+          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "SwitchHand" | "SupportMode" | "Slot" | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;

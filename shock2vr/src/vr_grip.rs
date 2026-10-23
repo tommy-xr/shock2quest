@@ -250,6 +250,28 @@ impl FingerPose {
         }
     }
 
+    /// The rest pose as bones (curls converted exactly).
+    pub fn rest_bones(&self) -> FingerBones {
+        match self {
+            FingerPose::Curls { curls, .. } => curls_to_bones(*curls),
+            FingerPose::Bones { bones, .. } => *bones,
+        }
+    }
+
+    /// Whether the fingers move as the trigger is pulled.
+    pub fn has_trigger_pose(&self) -> bool {
+        matches!(
+            self,
+            FingerPose::Curls {
+                trigger_curls: Some(_),
+                ..
+            } | FingerPose::Bones {
+                trigger_bones: Some(_),
+                ..
+            }
+        )
+    }
+
     pub fn is_valid(&self) -> bool {
         match self {
             FingerPose::Curls {
