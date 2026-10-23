@@ -2,7 +2,7 @@
 //! a legend naming the free controller's buttons. Placed once beside the bench
 //! on the free hand's side, it is pressed by either controller's ray (the
 //! shared frontend pointer) or by the free hand's tracked index fingertip.
-use cgmath::{InnerSpace, Quaternion, Vector2, Vector3, vec2};
+use cgmath::{InnerSpace, Quaternion, Rotation, Vector2, Vector3, vec2};
 
 use super::{ContactView, world};
 use crate::ui::{HAlign, PanelPlacement, Rect, UiCanvas, VAlign, WorldPanel};
@@ -37,7 +37,8 @@ const SAVE: Rect = Rect::new(10.0, 74.0, 186.0, 44.0);
 const DISCARD: Rect = Rect::new(204.0, 74.0, 186.0, 44.0);
 const POSE_HAND: Rect = Rect::new(10.0, 124.0, 186.0, 44.0);
 const CONTACTS: Rect = Rect::new(204.0, 124.0, 186.0, 44.0);
-const EXIT: Rect = Rect::new(10.0, 174.0, 380.0, 34.0);
+const RESET_VIEW: Rect = Rect::new(10.0, 174.0, 186.0, 34.0);
+const EXIT: Rect = Rect::new(204.0, 174.0, 186.0, 34.0);
 const LEGEND: Rect = Rect::new(10.0, 216.0, 380.0, 80.0);
 
 /// What a panel button does.
@@ -47,6 +48,7 @@ pub(in crate::interaction) enum PanelEvent {
     Discard,
     SwitchHand,
     Contacts,
+    ResetView,
     Exit,
 }
 
@@ -121,6 +123,9 @@ pub(in crate::interaction) struct PanelView {
     pub switch: Result<(), String>,
     /// A snapshot awaits Save or Discard.
     pub staged: bool,
+    /// The free hand is tracked with no controller in it: it taps the
+    /// buttons and pinches to snapshot.
+    pub fingertip: bool,
 }
 
 fn hand_name(hand: Handedness) -> &'static str {
@@ -137,18 +142,25 @@ fn other(hand: Handedness) -> Handedness {
     }
 }
 
-/// The free controller's buttons, as printed on it: X/Y on the left, A/B on
-/// the right.
-pub(in crate::interaction) fn legend(free: Handedness) -> [String; 4] {
+/// How the free hand works the tool. With its controller: the buttons as
+/// printed on it (X/Y on the left, A/B on the right). Tracked with no
+/// controller in it: fingertip taps and pinches.
+pub(in crate::interaction) fn legend(free: Handedness, fingertip: bool) -> Vec<String> {
+    if fingertip {
+        return vec![
+            "Tap buttons with your fingertip".to_owned(),
+            "Pinch: snapshot".to_owned(),
+        ];
+    }
     let (lower, upper) = match free {
         Handedness::Left => ("X", "Y"),
         Handedness::Right => ("A", "B"),
     };
-    [
+    vec![
         format!("{} controller   Trigger: snapshot", hand_name(free)),
         format!("{lower}: save    {upper}: discard"),
-        "Stick up/down: item scale".to_owned(),
-        "Stick click: contacts    Finger: press".to_owned(),
+        "Stick up/down: item scale    Squeeze: turn".to_owned(),
+        "Stick click: contacts".to_owned(),
     ]
 }
 
@@ -205,6 +217,12 @@ pub(in crate::interaction) fn emit(
             PanelEvent::Contacts,
             Ok(()),
         ),
+        (
+            RESET_VIEW,
+            "Reset view".to_owned(),
+            PanelEvent::ResetView,
+            Ok(()),
+        ),
         (EXIT, "Exit".to_owned(), PanelEvent::Exit, Ok(())),
     ];
     for (rect, label, event, enabled) in buttons {
@@ -234,8 +252,9 @@ pub(in crate::interaction) fn emit(
             }
         }
     }
-    let lines = legend(other(view.posing));
-    let line_height = LEGEND.h / lines.len() as f32;
+    let lines = legend(other(view.posing), view.fingertip);
+    // Spaced for the controller legend, which is the longest.
+    let line_height = LEGEND.h / 4.0;
     for (i, line) in lines.iter().enumerate() {
         canvas.text_fit(
             Rect::new(
@@ -360,10 +379,47 @@ enum Owner {
     World,
 }
 
+/// Rays passing this close (metres) to the panel's edge belong to it: a
+/// press aimed at a button that just misses must not snapshot.
+pub(in crate::interaction) const PANEL_MARGIN: f32 = 0.05;
+
+/// How close (metres) a ray from `origin` along `direction` passes to the
+/// panel's face, zero when it hits it.
+pub(in crate::interaction) fn ray_distance(
+    panel: &WorldPanel,
+    origin: Vector3<f32>,
+    direction: Vector3<f32>,
+) -> f32 {
+    let to_local = panel.rotation.conjugate();
+    let (origin, direction) = (
+        to_local.rotate_vector(origin - panel.center),
+        to_local.rotate_vector(direction.normalize()),
+    );
+    let half = panel.size / 2.0;
+    // Squared distance from the face to the ray's point at `t`: convex in t.
+    let gap = |t: f32| {
+        let p = origin + direction * t;
+        let (x, y) = ((p.x.abs() - half.x).max(0.0), (p.y.abs() - half.y).max(0.0));
+        x * x + y * y + p.z * p.z
+    };
+    // Beyond this the ray only moves away from every point of the face.
+    let (mut low, mut high) = (0.0, origin.magnitude() + half.magnitude() * 2.0);
+    for _ in 0..60 {
+        let (a, b) = (low + (high - low) / 3.0, high - (high - low) / 3.0);
+        if gap(a) <= gap(b) {
+            high = b;
+        } else {
+            low = a;
+        }
+    }
+    gap((low + high) / 2.0).sqrt() * crate::world_scale::meters_per_world_unit()
+}
+
 /// Splits trigger presses between the panel and the snapshot. A press that
-/// starts with a ray on the panel clicks it and is the panel's until let go,
-/// wherever it drifts; any other press is the snapshot's. Starts "already
-/// pressed", so a trigger held as the workbench opens is neither.
+/// starts with a ray on the panel, or passing within `PANEL_MARGIN` of it,
+/// is the panel's until let go, wherever it drifts (on a button it clicks
+/// it); any other press is the snapshot's. Starts "already pressed", so a
+/// trigger held as the workbench opens is neither.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::interaction) struct TriggerArbiter {
     pressed: bool,
@@ -380,15 +436,17 @@ impl TriggerArbiter {
 
     /// This frame's click on the panel (canvas pixels), and whether the
     /// trigger press in flight belongs to the snapshot. `point` is where the
-    /// pointer pass lands on the panel.
+    /// pointer pass lands on the panel; `near`, whether the ray is on it or
+    /// within its margin.
     pub fn update(
         &mut self,
         pressed: bool,
         point: Option<Vector2<f32>>,
+        near: bool,
     ) -> (Option<Vector2<f32>>, bool) {
         let mut click = None;
         if pressed && !self.pressed {
-            self.owner = Some(if point.is_some() {
+            self.owner = Some(if point.is_some() || near {
                 Owner::Panel
             } else {
                 Owner::World
@@ -414,7 +472,23 @@ mod tests {
             contact_view: ContactView::Contacts,
             switch: Ok(()),
             staged: false,
+            fingertip: false,
         }
+    }
+
+    #[test]
+    fn a_tracked_free_hand_is_told_to_tap_not_shown_controller_buttons() {
+        let lines = legend(Handedness::Left, true);
+        assert_eq!(lines[0], "Tap buttons with your fingertip");
+        let all = lines.join(" ");
+        assert!(
+            !all.contains("Trigger") && !all.contains("X:") && !all.contains("Stick"),
+            "{all}"
+        );
+        let mut tracked = view(Status::Ready);
+        tracked.fingertip = true;
+        let (canvas, _) = emit(&tracked, None);
+        assert!(texts(&canvas).contains(&"Tap buttons with your fingertip".to_owned()));
     }
 
     fn texts(canvas: &UiCanvas) -> Vec<String> {
@@ -461,14 +535,20 @@ mod tests {
 
     #[test]
     fn the_legend_names_the_free_controllers_own_buttons() {
-        let left = legend(Handedness::Left).join(" ");
+        let left = legend(Handedness::Left, false).join(" ");
         assert!(
             left.contains("X: save") && left.contains("Y: discard"),
             "{left}"
         );
-        let right = legend(Handedness::Right).join(" ");
+        assert!(left.contains("Squeeze: turn"), "{left}");
+        let right = legend(Handedness::Right, false).join(" ");
         assert!(
             right.contains("A: save") && right.contains("B: discard"),
+            "{right}"
+        );
+        // A controller in the free hand cannot poke the panel.
+        assert!(
+            !right.contains("Finger") && !right.contains("Tap"),
             "{right}"
         );
         // Posing the right hand frees the left controller.
@@ -576,28 +656,76 @@ mod tests {
     fn a_press_on_the_panel_clicks_it_and_never_snapshots() {
         let on = Some(vec2(100.0, 100.0));
         let mut trigger = TriggerArbiter::new();
-        assert_eq!(trigger.update(false, on), (None, false));
-        assert_eq!(trigger.update(true, on), (on, false), "clicks at the edge");
+        assert_eq!(trigger.update(false, on, true), (None, false));
+        assert_eq!(
+            trigger.update(true, on, true),
+            (on, false),
+            "clicks at the edge"
+        );
         // Held and drifting off the panel: still the panel's.
-        assert_eq!(trigger.update(true, None), (None, false));
-        assert_eq!(trigger.update(false, None), (None, false));
+        assert_eq!(trigger.update(true, None, false), (None, false));
+        assert_eq!(trigger.update(false, None, false), (None, false));
     }
 
     #[test]
     fn a_press_off_the_panel_snapshots_even_if_aim_drifts_onto_it() {
         let on = Some(vec2(100.0, 100.0));
         let mut trigger = TriggerArbiter::new();
-        trigger.update(false, None);
-        assert_eq!(trigger.update(true, None), (None, true));
-        assert_eq!(trigger.update(true, on), (None, true), "no click mid-press");
-        assert_eq!(trigger.update(false, on), (None, false));
+        trigger.update(false, None, false);
+        assert_eq!(trigger.update(true, None, false), (None, true));
+        assert_eq!(
+            trigger.update(true, on, true),
+            (None, true),
+            "no click mid-press"
+        );
+        assert_eq!(trigger.update(false, on, true), (None, false));
+    }
+
+    #[test]
+    fn a_press_just_off_the_panel_edge_is_the_panels_and_clicks_nothing() {
+        let mut trigger = TriggerArbiter::new();
+        trigger.update(false, None, true);
+        assert_eq!(trigger.update(true, None, true), (None, false));
+        assert_eq!(trigger.update(false, None, true), (None, false));
     }
 
     #[test]
     fn a_trigger_held_as_the_panel_opens_is_neither_click_nor_snapshot() {
         let on = Some(vec2(100.0, 100.0));
         let mut trigger = TriggerArbiter::new();
-        assert_eq!(trigger.update(true, on), (None, false));
-        assert_eq!(trigger.update(true, None), (None, false));
+        assert_eq!(trigger.update(true, on, true), (None, false));
+        assert_eq!(trigger.update(true, None, false), (None, false));
+    }
+
+    /// A ray from in front of `facing_panel` toward `target` (panel-local
+    /// metres, the panel 0.3 x 0.225 m about its centre).
+    fn distance_to(origin: Vector3<f32>, target: Vector3<f32>) -> f32 {
+        let (origin, target) = (origin.map(world), target.map(world));
+        ray_distance(&facing_panel(), origin, target - origin)
+    }
+
+    #[test]
+    fn a_ray_on_the_face_is_at_zero_and_off_the_edge_at_its_gap() {
+        let front = vec3(0.1, 0.05, 0.3);
+        assert!(distance_to(front, vec3(0.0, 0.0, 0.0)) < 1e-4);
+        // Aimed 3 cm right of the right edge (x = 0.15): within the margin.
+        let gap = distance_to(front, vec3(0.18, 0.0, 0.0));
+        assert!((gap - 0.03).abs() < 2e-3, "{gap}");
+        assert!(gap <= PANEL_MARGIN);
+        // 10 cm off: the snapshot's.
+        assert!(distance_to(front, vec3(0.25, 0.0, 0.0)) > PANEL_MARGIN);
+    }
+
+    #[test]
+    fn a_ray_missing_the_plane_still_counts_how_close_it_passes() {
+        // Parallel to the face, 2 cm in front of it: hits no plane.
+        let skim = distance_to(vec3(-0.5, 0.0, 0.02), vec3(0.5, 0.0, 0.02));
+        assert!((skim - 0.02).abs() < 2e-3, "{skim}");
+        // Aimed away from a panel 4 cm behind the controller: its origin is
+        // the closest the ray gets.
+        let away = distance_to(vec3(0.0, 0.0, 0.04), vec3(0.0, 0.0, 1.0));
+        assert!((away - 0.04).abs() < 2e-3, "{away}");
+        // Aimed away from far off: nowhere near.
+        assert!(distance_to(vec3(0.0, 0.0, 0.3), vec3(0.0, 0.0, 1.0)) > PANEL_MARGIN);
     }
 }

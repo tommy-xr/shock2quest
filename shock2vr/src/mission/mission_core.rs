@@ -701,7 +701,9 @@ fn draw_pose_workbench(
     else {
         return bench.environment;
     };
-    let rebase = Matrix4::from_translation(bench.item.position)
+    // Turned for viewing, the extra views included.
+    let rebase = bench.turn
+        * Matrix4::from_translation(bench.item.position)
         * Matrix4::from(bench.item.rotation)
         * Matrix4::from_scale(bench.item_scale)
         * from_world;
@@ -3300,6 +3302,8 @@ pub struct MissionCore {
     vr_comfort: crate::vr_comfort::VrComfort,
     reference_grid: crate::reference_grid::ReferenceGrid,
     pub level_name: String,
+    /// `GameOptions::multimodal`: the cyber interface offers grip posing.
+    multimodal: bool,
     /// What reflective materials see; `None` without a 25AE capture.
     environment: Option<Rc<engine::texture::CubeTexture>>,
     pub gui: GuiManager,
@@ -4444,6 +4448,7 @@ impl MissionCore {
             ),
             environment: crate::environment_map::load(asset_cache, &mission),
             level_name: mission,
+            multimodal: game_options.multimodal,
             entity_info: entity_info_rc.clone(),
             template_to_particle_riders,
             template_to_particle_attachees,
@@ -10474,7 +10479,10 @@ impl MissionCore {
                 let step = |axis, forward| vec![Effect::StepPsiSelection { axis, forward }];
                 if !matches!(
                     button,
-                    ReadoutButton::Logs | ReadoutButton::SystemMenu | ReadoutButton::CloseUseMode
+                    ReadoutButton::Logs
+                        | ReadoutButton::SystemMenu
+                        | ReadoutButton::CloseUseMode
+                        | ReadoutButton::PoseHeldItem
                 ) && weapon
                     .and_then(|entity| {
                         crate::wielded_weapon::resolve_weapon_target(&self.world, Some(entity))
@@ -10529,6 +10537,11 @@ impl MissionCore {
                     // through a global effect rather than opened from here.
                     ReadoutButton::SystemMenu => {
                         vec![Effect::GlobalEffect(GlobalEffect::OpenPauseMenu)]
+                    }
+                    // The workbench does not open over the interface, so
+                    // leave it first.
+                    ReadoutButton::PoseHeldItem => {
+                        vec![self.leave_use_mode(), Effect::ToggleGripPoseTool]
                     }
                 }
             }
@@ -11457,10 +11470,19 @@ impl MissionCore {
             }
         }
         let (weapon, _) = self.flat_ui.ammo_selection();
-        self.flat_ui.set_readouts(
-            (self.use_mode || self.flat_ui.device)
-                .then(|| crate::hud::readouts::UseModeReadouts::from_world(&self.world, weapon)),
+        let pose = crate::hud::readouts::pose_entry(
+            self.multimodal,
+            crate::developer_mode::enabled(),
+            self.interaction.can_pose_held_item(),
         );
+        self.flat_ui
+            .set_readouts((self.use_mode || self.flat_ui.device).then(|| {
+                crate::hud::readouts::UseModeReadouts {
+                    // The interface only: a held device's screen has no room.
+                    pose: pose.filter(|_| self.use_mode),
+                    ..crate::hud::readouts::UseModeReadouts::from_world(&self.world, weapon)
+                }
+            }));
     }
 
     fn leave_use_mode(&mut self) -> Effect {

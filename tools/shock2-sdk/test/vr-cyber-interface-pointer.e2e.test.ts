@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { UiElement, UiPanelPose, UiState } from "../src/index.js";
+import { isolatedDataRoot } from "./helpers/isolated-data-root.js";
 import {
   canvasCenter as center,
   clickCanvasWithRay,
@@ -166,5 +169,75 @@ test(
       wrench.entity_id,
       "the taken item must stay held while the squeeze is held",
     );
+  },
+);
+
+/** Launch medsci1 in VR on a private data root, with developer mode on or off. */
+async function launchWithDeveloperMode(developer: boolean, flags: string[]) {
+  const data = isolatedDataRoot([
+    "developer-mode", "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+  ]);
+  if (developer) writeFileSync(join(data.root, "developer-mode"), "Developer mode enabled\n");
+  const game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: ["--vr", ...flags] });
+  await game.step({ frames: 30 });
+  return { data, game };
+}
+
+const isPose = (el: UiElement) => el.label === "pose_held_item";
+
+test(
+  "the cyber interface's Pose button needs multimodal and developer mode, and opens the grip pose workbench",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 300_000 },
+  async () => {
+    // Developer mode without simultaneous hands and controllers: no button.
+    {
+      const { data, game } = await launchWithDeveloperMode(true, []);
+      using _data = data;
+      await using _game = game;
+      const ui = await openInterface(game);
+      assert.equal(ui.mode, "use");
+      assert.ok(!ui.readout.some(isPose), "no Pose without multimodal");
+      assert.ok(!ui.readout_elements.some((el) => el.text === "POSE"));
+    }
+    // Multimodal without developer mode: none either.
+    {
+      const { data, game } = await launchWithDeveloperMode(false, ["--multimodal"]);
+      using _data = data;
+      await using _game = game;
+      const ui = await openInterface(game);
+      assert.ok(!ui.readout_elements.some((el) => el.text === "POSE"), "no Pose without developer mode");
+    }
+
+    const { data, game } = await launchWithDeveloperMode(true, ["--multimodal"]);
+    using _data = data;
+    await using _game = game;
+    const wrench = await game.player.spawnItem("Wrench");
+    let ui = await openInterface(game);
+    // Empty-handed: shown, but not pressable, and says why.
+    assert.ok(!ui.readout.some(isPose), "nothing held: not clickable");
+    assert.ok(ui.readout_elements.some((el) => el.text === "POSE"));
+    assert.ok(ui.readout_elements.some((el) => el.text === "hold an item"));
+
+    // Take the wrench into the right hand with a squeeze on its slot.
+    const panel = requirePanel(ui);
+    const slot = slotFor(ui, wrench.entity_id)!;
+    await aimVrHandAtCanvas(game, panel, center(slot), { squeeze: 0 });
+    await game.step({ frames: 3 });
+    await aimVrHandAtCanvas(game, panel, center(slot), { squeeze: 1 });
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player.right_hand_entity_id, wrench.entity_id);
+    ui = await game.ui.state();
+    const pose = ui.readout.find(isPose);
+    assert.ok(pose, "holding the wrench, Pose is pressable");
+    assert.deepEqual(pose.rect.slice(0, 2), [288, 332], "above MENU");
+
+    // The free left hand's ray presses it: the interface closes and the
+    // workbench opens on the wrench.
+    await clickCanvasWithRay(game, panel, center(pose), "left");
+    await game.step({ frames: 3 });
+    assert.notEqual((await game.ui.state()).mode, "use", "the interface closed");
+    const posing = (await game.info()).player.hand_grips.find((g) => g.pose_tool);
+    assert.equal(posing?.hand, "right", "the workbench poses the right hand");
+    assert.equal(posing?.entity_id, wrench.entity_id);
   },
 );

@@ -51,6 +51,11 @@ struct PointerStyle {
     colors: BeamColors,
     dot_size: f32,
     both_hands: bool,
+    /// Air left at the hand end of the beam.
+    clearance: f32,
+    /// A ray off the panel still draws this long a beam (no dot), so the
+    /// player sees where it points before it reaches the panel.
+    miss_length: Option<f32>,
 }
 
 impl PointerStyle {
@@ -59,6 +64,8 @@ impl PointerStyle {
             colors,
             both_hands: false,
             dot_size: crate::dev_params::get(crate::dev_params::VR_POINTER_DOT_SIZE),
+            clearance: BEAM_HAND_CLEARANCE,
+            miss_length: None,
         }
     }
 }
@@ -140,19 +147,20 @@ fn beam_objects(
     start: Vector3<f32>,
     along: Vector3<f32>,
     length: f32,
+    clearance: f32,
     [halo, core]: BeamColors,
     seconds: f32,
 ) -> Vec<SceneObject> {
     // The hand fills the first stretch of the ray. A beam no longer than that
     // would be entirely inside the glove, so there is nothing to draw - the
     // hand is already touching what it points at.
-    if length <= BEAM_HAND_CLEARANCE {
+    if length <= clearance {
         return Vec::new();
     }
     let direction = along / length;
     laser_material::beam(
-        start + direction * BEAM_HAND_CLEARANCE,
-        direction * (length - BEAM_HAND_CLEARANCE),
+        start + direction * clearance,
+        direction * (length - clearance),
         (BEAM_HALO_RADIUS, halo),
         (BEAM_CORE_RADIUS, core),
         seconds,
@@ -273,6 +281,37 @@ pub fn pointer_beams(
     objects
 }
 
+/// [`pointer_beams`] for a tool panel within arm's reach: every tracked
+/// controller in `pass` always shows its beam, `miss_length` long when it
+/// misses the panel, starting `clearance` out of the hand. The default
+/// clearance (a pointing glove's length) would swallow the whole beam of a
+/// controller held this close to the panel. Untagged; the caller labels it.
+pub fn tool_pointer_beams(
+    pass: &FrontendPointerPass,
+    canvas_size: Vector2<f32>,
+    panel: &WorldPanel,
+    panel_layers: usize,
+    clearance: f32,
+    miss_length: f32,
+) -> Vec<SceneObject> {
+    render_pointer_rays(
+        None,
+        false,
+        pass,
+        canvas_size,
+        panel,
+        panel_layers,
+        None,
+        PointerStyle {
+            both_hands: true,
+            clearance,
+            miss_length: Some(miss_length),
+            ..PointerStyle::with_dev_dot(DEVICE_BEAM)
+        },
+        0.0,
+    )
+}
+
 /// The pointer's objects for one frame. Split out from [`PointerVisuals`] so
 /// the geometry can be exercised without an asset cache (`glove: None` with
 /// `draw_hand` draws the fallback proxy, exactly as a missing model does at
@@ -295,12 +334,18 @@ fn render_pointer_rays(
         let end = (pass.is_active(index) || style.both_hands)
             .then(|| pointer_beam_end(ray, canvas_size, panel, panel_layers))
             .flatten();
-        if let Some(end) = end {
-            let along = end - ray.origin;
+        let beam_end = end.or_else(|| {
+            style
+                .miss_length
+                .map(|length| ray.origin + ray.direction * length)
+        });
+        if let Some(beam_end) = beam_end {
+            let along = beam_end - ray.origin;
             objects.extend(beam_objects(
                 ray.origin,
                 along,
                 along.magnitude(),
+                style.clearance,
                 style.colors,
                 seconds,
             ));
@@ -370,6 +415,8 @@ mod tests {
         colors: MENU_BEAM,
         dot_size: 0.05,
         both_hands: false,
+        clearance: BEAM_HAND_CLEARANCE,
+        miss_length: None,
     };
 
     fn pass(right: Hand, left: Hand) -> FrontendPointerPass {
@@ -664,6 +711,35 @@ mod tests {
         assert!(pass.rays[0].canvas_hit.is_some());
         // Just the proxy and the dot - no beam buried in the hand.
         assert_eq!(rays(true, &pass, &panel, None).len(), 2);
+    }
+
+    /// A tool panel within reach: a controller just in front of it still
+    /// shows its beam, and one aimed off it shows a beam into the room.
+    #[test]
+    fn a_tool_panel_beam_shows_up_close_and_off_the_panel() {
+        let panel = test_panel();
+        let hit = canvas_to_panel_world(CANVAS, &panel, vec2(320.0, 240.0));
+        let close = Hand {
+            position: hit + panel.normal() * (BEAM_HAND_CLEARANCE * 0.6),
+            rotation: Quaternion::from_arc(vec3(0.0, 0.0, -1.0), -panel.normal(), None),
+            ..Hand::default()
+        };
+        let untracked = Hand {
+            rotation: Quaternion::zero(),
+            ..Hand::default()
+        };
+        let tool = |pass: &FrontendPointerPass| {
+            tool_pointer_beams(pass, CANVAS, &panel, LAYERS, 0.02, 2.0).len()
+        };
+        let on = pass(close, untracked.clone());
+        assert!(
+            rays(false, &on, &panel, None).len() < 3,
+            "the menu beam is swallowed"
+        );
+        // Halo, core and dot.
+        assert_eq!(tool(&on), 3);
+        // Off the panel: halo and core, no dot.
+        assert_eq!(tool(&pass(hand_aimed_away(0.0), untracked)), 2);
     }
 
     #[test]

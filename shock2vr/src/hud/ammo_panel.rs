@@ -159,6 +159,8 @@ pub enum ReadoutButton {
     Logs,
     SelectLeftHand,
     SelectRightHand,
+    /// Open the grip pose workbench on the held item (developer, multimodal).
+    PoseHeldItem,
 }
 
 impl ReadoutButton {
@@ -178,6 +180,7 @@ impl ReadoutButton {
             ReadoutButton::Logs => "logs",
             ReadoutButton::SelectLeftHand => "select_left_hand",
             ReadoutButton::SelectRightHand => "select_right_hand",
+            ReadoutButton::PoseHeldItem => "pose_held_item",
         }
     }
 }

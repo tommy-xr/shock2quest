@@ -674,6 +674,9 @@ pub struct GameOptions {
     pub debug_ai: bool,
     pub debug_pathfinding: bool,
     pub experimental_features: HashSet<String>,
+    /// The headset tracks hands and controllers at once (Quest multimodal),
+    /// so a hand can be posed while the other holds its controller.
+    pub multimodal: bool,
 }
 
 impl GameOptions {
@@ -702,8 +705,16 @@ impl Default for GameOptions {
             debug_pathfinding: false,
             render_particles: true,
             experimental_features: HashSet::new(),
+            multimodal: false,
         }
     }
+}
+
+/// Whether the open grip pose workbench reads this frame's controls: not
+/// under the pause menu, nor while a system overlay has the session's input
+/// focus. Otherwise its controls are held released, to be let go first.
+fn workbench_owns_input(pause_menu_over: bool, session_focused: bool) -> bool {
+    !pause_menu_over && session_focused
 }
 
 /// A level transition that has been started (outgoing scene already saved, loading
@@ -851,6 +862,9 @@ pub struct Game {
     simulation_clock: fixed_step::FixedStepClock,
     simulation_input: simulation_input::TickInput,
     simulation_focused: bool,
+    /// The headset session has input focus (no system overlay over it),
+    /// whatever the simulation clock does with it.
+    session_focused: bool,
 
     /// The red rim tint shown for a moment after the player takes damage. Like
     /// the pause menu, it lives here because it is a view-locked layer over
@@ -1763,6 +1777,7 @@ impl Game {
             ),
             simulation_input: Default::default(),
             simulation_focused: true,
+            session_focused: true,
             hit_feedback: hit_feedback::HitFeedback::new(),
             head_pose: (
                 vec3(0.0, player_eye_height_for(false) / dark::SCALE_FACTOR, 0.0),
@@ -1971,8 +1986,11 @@ impl Game {
             // comes back.
             self.time_suspended += time.elapsed;
             // The grip pose workbench holds the world still like the pause
-            // menu, but owns the hands - unless the pause menu is over it.
-            if workbench && !self.pause_menu.suspends_scene() {
+            // menu, but owns the hands - unless the pause menu or a system
+            // overlay is over it, which holds its controls released.
+            if workbench
+                && workbench_owns_input(self.pause_menu.suspends_scene(), self.session_focused)
+            {
                 self.active_game_scene
                     .update_pose_workbench(time.elapsed, input_context, actions);
             } else if workbench {
@@ -2305,6 +2323,7 @@ impl Game {
     /// Freeze the opt-in simulation while the runtime cannot receive input.
     /// The runtime also resets its elapsed-time origin on focus transitions.
     pub fn set_simulation_focus(&mut self, focused: bool) {
+        self.session_focused = focused;
         if !self
             .options
             .experimental_features
@@ -3570,6 +3589,13 @@ mod tests {
     use super::*;
     use cgmath::{Deg, InnerSpace, Rotation3};
     use std::path::PathBuf;
+
+    #[test]
+    fn the_workbench_takes_input_only_focused_and_unpaused() {
+        assert!(workbench_owns_input(false, true));
+        assert!(!workbench_owns_input(true, true), "pause menu over it");
+        assert!(!workbench_owns_input(false, false), "system overlay up");
+    }
 
     #[test]
     fn sprite_namespaces_avoid_object_texture_collisions() {

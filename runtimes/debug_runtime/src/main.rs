@@ -190,6 +190,12 @@ struct Args {
     #[arg(long)]
     defer_transitions: bool,
 
+    /// Report simultaneous hands and controllers (Quest multimodal), as a
+    /// headset that enabled it does: offers developer grip posing on the
+    /// cyber interface.
+    #[arg(long)]
+    multimodal: bool,
+
     /// Opaque instance identifier echoed by /v1/health, so the client that
     /// launched this process can verify it is talking to its own instance
     /// and not another agent's runtime that happens to hold the same port.
@@ -679,6 +685,7 @@ fn run_game_blocking(
         debug_ai: false,
         render_particles: true,
         experimental_features,
+        multimodal: args.multimodal,
         ..GameOptions::default()
     };
 

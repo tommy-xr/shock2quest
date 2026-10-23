@@ -147,6 +147,11 @@ pub trait PlayerInteraction {
     /// (VR only; see `interaction::pose_tool`).
     fn toggle_grip_pose_tool(&mut self) {}
 
+    /// Whether a hand holds an item the grip pose tool can pose.
+    fn can_pose_held_item(&self) -> bool {
+        false
+    }
+
     /// Whether the grip pose tool is open: its workbench holds the mission
     /// still and owns the hands.
     fn pose_workbench_open(&self) -> bool {
@@ -453,12 +458,13 @@ struct GripGeometry {
 }
 
 /// What the mission draws for the grip pose workbench instead of itself: the
-/// held item's world pose and grip scale there, each extra view, the
-/// workbench's fixed lights and its plain room.
+/// held item's world pose and grip scale there, how the bench is turned for
+/// viewing, each extra view, the workbench's fixed lights and its plain room.
 pub struct PoseWorkbench {
     pub entity: EntityId,
     pub item: GripPose,
     pub item_scale: f32,
+    pub turn: Matrix4<f32>,
     pub views: Option<[Matrix4<f32>; 3]>,
     pub lights: Option<std::rc::Rc<engine::scene::light::LightArray>>,
     pub environment: Vec<SceneObject>,
@@ -1168,6 +1174,7 @@ impl VrInteraction {
             tool,
             self.fitted_grips[tool.hand].as_ref(),
             self.grip_library.as_ref(),
+            handed_item(world, tool.entity),
         )
         .map(|_| ());
         let Some(grip) = self.fitted_grips[tool.hand]
@@ -1199,14 +1206,18 @@ impl VrInteraction {
         }
         tool.floor_y = floor_y;
         // The input in world space, for the panel. Only a controller in hand
-        // aims a ray: an untracked one, or one set down while its hand is
-        // tracked, gets the zero rotation, which aims none.
+        // aims a ray (`pose_tool::controller_in_hand`); any other gets the
+        // zero rotation, which aims none.
         let mut pointing = input.clone();
         for (index, hand) in [&mut pointing.left_hand, &mut pointing.right_hand]
             .into_iter()
             .enumerate()
         {
-            let in_hand = hand.joints.is_none() && tracking.is_none_or(|t| t.hands[index]);
+            let in_hand = pose_tool::controller_in_hand(
+                index == tool.hand,
+                hand.joints.is_some(),
+                tracking.is_none_or(|t| t.hands[index]),
+            );
             hand.joints = hand
                 .joints
                 .map(|joints| joints.map(|p| hand_world_position(player_pos, player_rotation, p)));
@@ -1220,16 +1231,28 @@ impl VrInteraction {
         let (event, snapshot) = tool.point(&pointing);
         // The other hand's controller (held while the posing hand is
         // tracked) drives the tool; its trigger snapshots unless the press
-        // began on the panel.
+        // began on the panel, and its squeeze turns the bench. Only while it
+        // is in hand (it aims a ray): its other controls disarm, like the
+        // trigger, until let go in hand.
         let free = [Handedness::Left, Handedness::Right][1 - tool.hand];
         let control = [&input.left_hand, &input.right_hand][1 - tool.hand];
-        tool.observe(
-            [pointing.left_hand.joints, pointing.right_hand.joints],
-            snapshot && control.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
-            dt,
+        let in_hand = crate::util::tracked_rotation(
+            [&pointing.left_hand, &pointing.right_hand][1 - tool.hand].rotation,
         );
-        tool.cycle_contact_view(control.thumbstick_click);
-        grip.item_scale = pose_tool::GripPoseTool::scale(grip.item_scale, control.thumbstick.y, dt);
+        tool.turn_with(
+            in_hand,
+            control.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD,
+        );
+        // The posing hand into the unturned bench, which the tool works in.
+        // The free hand pinches to snapshot only with no controller in it:
+        // a hand round its controller can read as a pinch.
+        let mut tracked = [pointing.left_hand.joints, pointing.right_hand.joints];
+        tracked[tool.hand] = tracked[tool.hand].map(|joints| joints.map(|p| tool.to_bench(p)));
+        tracked[1 - tool.hand] = tracked[1 - tool.hand].filter(|_| in_hand.is_none());
+        tool.observe(tracked, snapshot, dt);
+        tool.cycle_contact_view(control.thumbstick_click, in_hand.is_some());
+        let stick = tool.scale_input(control.thumbstick.y, in_hand.is_some());
+        let scaled = pose_tool::GripPoseTool::scale(grip.item_scale, stick, dt);
         // The controllers in hand, which `pointing` gave a rotation.
         tool.controllers = std::array::from_fn(|i| {
             let hand = [&pointing.left_hand, &pointing.right_hand][i];
@@ -1266,15 +1289,20 @@ impl VrInteraction {
                 }
                 capture.map(|joints| {
                     let error = pose_tool::tip_error_mm(renderer, &joints, handedness);
-                    (joints, renderer.open_joints(handedness), error)
+                    let fitted = pose_tool::tracked_glove(renderer, &joints, handedness)
+                        .map(|glove| glove.joints);
+                    (joints, renderer.open_joints(handedness), error, fitted)
                 })
             }
             None => None,
         };
         drop(glove_slot);
-        if let Some((joints, glove, error)) = capture {
-            self.capture_grip(world, joints, glove, error);
+        if let Some((joints, glove, error, fitted)) = capture {
+            if self.capture_grip(world, joints, glove, error) {
+                self.log_capture_joints(&joints, fitted.as_ref(), player_pos, player_rotation);
+            }
         }
+        self.scale_pose_tool_item(scaled);
         self.place_pose_tool_item(contact);
         let Some(event) = event else {
             return;
@@ -1285,25 +1313,82 @@ impl VrInteraction {
         match event {
             pose_tool::panel::PanelEvent::Save => self.save_staged(),
             pose_tool::panel::PanelEvent::Discard => self.discard_staged(),
-            pose_tool::panel::PanelEvent::SwitchHand => self.switch_pose_hand(contact),
+            pose_tool::panel::PanelEvent::SwitchHand => self.switch_pose_hand(world, contact),
             pose_tool::panel::PanelEvent::Contacts => {
                 if let Some(tool) = self.pose_tool.as_mut() {
                     tool.step_contact_view();
+                }
+            }
+            pose_tool::panel::PanelEvent::ResetView => {
+                if let Some(tool) = self.pose_tool.as_mut() {
+                    tool.reset_view();
                 }
             }
             pose_tool::panel::PanelEvent::Exit => self.exit_pose_tool(),
         }
     }
 
+    /// Draw the posed item at `scale`. Resizing is an edit like a capture:
+    /// with nothing staged it stages the current grip, so Save, Discard and
+    /// the exit auto-save treat it alike.
+    fn scale_pose_tool_item(&mut self, scale: f32) {
+        let Some(tool) = self.pose_tool.as_mut() else {
+            return;
+        };
+        let Some(held) = self.fitted_grips[tool.hand].as_ref() else {
+            return;
+        };
+        let Some(current) = held.resolved.as_ref() else {
+            return;
+        };
+        if current.item_scale == scale {
+            return;
+        }
+        if tool.staged.is_none() {
+            println!(
+                "SHOCK2QUEST_VR_GRIP_POSE_TOOL staged=true reason=scale model={} hand={}",
+                held.model,
+                ["left", "right"][tool.hand]
+            );
+            let grip = current
+                .clone()
+                .rescaled(1.0 / crate::world_scale::WorldScale::active().personal());
+            self.stage_grip(grip);
+        }
+        let Some(tool) = self.pose_tool.as_mut() else {
+            return;
+        };
+        tool.saved = false;
+        if let Some(grip) = self.fitted_grips[tool.hand]
+            .as_mut()
+            .and_then(|held| held.resolved.as_mut())
+        {
+            grip.item_scale = scale;
+        }
+    }
+
+    /// The hand the grip pose tool would pose, and its fitted item. The right
+    /// hand first: it is the usual gun hand. Overrides are keyed like the
+    /// libraries, which a magazine's fit key is not.
+    fn poseable_held_item(&self) -> Option<(usize, &HeldGrip)> {
+        [1, 0].into_iter().find_map(|i| {
+            let held = self.fitted_grips[i]
+                .as_ref()
+                .filter(|held| held.resolved.is_some() && !held.model.starts_with("magazine:"))?;
+            Some((i, held))
+        })
+    }
+
     /// Pose the other hand: its grip for the same item, from the library,
     /// holding the item where it is on the bench.
-    fn switch_pose_hand(&mut self, contact: Vector3<f32>) {
+    fn switch_pose_hand(&mut self, world: &World, contact: Vector3<f32>) {
         let Some(tool) = self.pose_tool.as_mut() else {
             return;
         };
         let held = self.fitted_grips[tool.hand].as_ref();
+        let handed = handed_item(world, tool.entity);
         let (Ok(grip), Some(held), Some(item)) = (
-            pose_hand_switch(tool, held, self.grip_library.as_ref())
+            pose_hand_switch(tool, held, self.grip_library.as_ref(), handed)
                 .map(|grip| grip.clone().for_world_scale()),
             held.cloned(),
             tool.item_placed,
@@ -1334,7 +1419,7 @@ impl VrInteraction {
     }
 
     /// Leave the workbench, saving a staged capture first. One that fails to
-    /// save is not applied.
+    /// save keeps the workbench open, with the error, to retry or discard.
     fn exit_pose_tool(&mut self) {
         if self
             .pose_tool
@@ -1342,6 +1427,14 @@ impl VrInteraction {
             .is_some_and(|tool| tool.staged.is_some())
         {
             self.save_staged();
+            if self
+                .pose_tool
+                .as_ref()
+                .is_some_and(|tool| tool.last_save_error.is_some())
+            {
+                println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=true reason=save_failed");
+                return;
+            }
         }
         self.close_pose_tool();
         println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=false");
@@ -1404,22 +1497,22 @@ impl VrInteraction {
 
     /// Stage the queued tracked-hand capture as the held item's grip: apply it
     /// now as a preview, unsaved, and re-seat the held hand so the item does
-    /// not move.
+    /// not move. Whether it staged.
     fn capture_grip(
         &mut self,
         world: &World,
         joints: crate::hand_capture::HandJoints,
         glove: crate::hand_capture::HandJoints,
         tip_error_mm: Option<[f32; 5]>,
-    ) {
+    ) -> bool {
         let Some(tool) = self.pose_tool.as_mut() else {
-            return;
+            return false;
         };
         let Some(held) = self.fitted_grips[tool.hand].as_ref() else {
-            return;
+            return false;
         };
         let Some(current) = held.resolved.as_ref() else {
-            return;
+            return false;
         };
         let handedness = [Handedness::Left, Handedness::Right][tool.hand];
         let contact = grip_contact(world, held.entity);
@@ -1435,21 +1528,12 @@ impl VrInteraction {
         ) else {
             println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=false reason=degenerate_joints");
             tool.capture_failure = Some("degenerate_joints".to_owned());
-            return;
-        };
-        // Authored, like every library and overrides entry.
-        let entry = crate::vr_grip::BakedGripEntry {
-            authored: true,
-            model: held.model.clone(),
-            hand: if tool.hand == 0 { "left" } else { "right" }.to_owned(),
-            surface_hash: String::new(),
-            kinematics_hash: String::new(),
-            hints_hash: String::new(),
-            grip,
+            return false;
         };
         println!(
             "SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=true staged=true model={} hand={}",
-            entry.model, entry.hand
+            held.model,
+            ["left", "right"][tool.hand]
         );
         // The metric the mapping is tuned against: glove vs tracked fingertips.
         if let Some(errors) = tip_error_mm {
@@ -1458,8 +1542,43 @@ impl VrInteraction {
                 errors.map(|e| format!("{e:.1}")).join(",")
             );
         }
-        // A re-capture replaces the staged entry but keeps the grip from
-        // before the first one, which is what discarding returns to.
+        let Some(entry) = self.stage_grip(grip) else {
+            return false;
+        };
+        let Some(tool) = self.pose_tool.as_mut() else {
+            return false;
+        };
+        // The glove now sits where the tracked hand held the item. The grip
+        // previews in place while the mission is frozen; it refits from the
+        // library when the workbench closes.
+        tool.hand_pose = hand_pose;
+        if let Some(held) = self.fitted_grips[tool.hand].as_mut() {
+            held.resolved = Some(entry.grip.for_world_scale());
+            held.source = "prepared";
+            held.authored = true;
+        }
+        true
+    }
+
+    /// Stage `grip` (authored units, like every library and overrides
+    /// entry) as the posing hand's entry for its item, ahead of the library.
+    /// It replaces a staged entry but keeps the grip from before the first,
+    /// which is what discarding returns to.
+    fn stage_grip(
+        &mut self,
+        grip: crate::vr_grip::ResolvedGrip,
+    ) -> Option<crate::vr_grip::BakedGripEntry> {
+        let tool = self.pose_tool.as_mut()?;
+        let held = self.fitted_grips[tool.hand].as_ref()?;
+        let entry = crate::vr_grip::BakedGripEntry {
+            authored: true,
+            model: held.model.clone(),
+            hand: ["left", "right"][tool.hand].to_owned(),
+            surface_hash: String::new(),
+            kinematics_hash: String::new(),
+            hints_hash: String::new(),
+            grip,
+        };
         let staged = match tool.staged.take() {
             Some(staged) => {
                 if let Some(library) = &mut self.grip_library {
@@ -1472,28 +1591,57 @@ impl VrInteraction {
             }
             None => StagedGrip {
                 entry: entry.clone(),
-                previous: self.fitted_grips[tool.hand].clone(),
+                previous: Some(held.clone()),
                 hand_pose: tool.hand_pose,
             },
         };
         tool.staged = Some(staged);
         tool.last_save_error = None;
         tool.saved = false;
-        // The glove now sits where the tracked hand held the item. The grip
-        // previews in place while the mission is frozen; it refits from the
-        // library when the workbench closes.
-        tool.hand_pose = hand_pose;
-        if let Some(held) = self.fitted_grips[tool.hand].as_mut() {
-            held.resolved = Some(entry.grip.clone().for_world_scale());
-            held.source = "prepared";
-            held.authored = true;
-        }
         if let Some(library) = &mut self.grip_library {
             library.prepend(crate::vr_grip::GripLibrary {
-                entries: vec![entry],
+                entries: vec![entry.clone()],
                 ..Default::default()
             });
         }
+        Some(entry)
+    }
+
+    /// Log a staged capture's tracked joints and the glove fitted over them
+    /// (`raw`/`fitted`, in the unturned bench) as pawn-local input, the
+    /// form hand recordings keep, for mapping work without a recording.
+    fn log_capture_joints(
+        &self,
+        raw: &crate::hand_capture::HandJoints,
+        fitted: Option<&crate::hand_capture::HandJoints>,
+        player_pos: Vector3<f32>,
+        player_rotation: Quaternion<f32>,
+    ) {
+        let (Some(tool), Some(fitted)) = (self.pose_tool.as_ref(), fitted) else {
+            return;
+        };
+        let Some(held) = self.fitted_grips[tool.hand].as_ref() else {
+            return;
+        };
+        let local = |joints: &crate::hand_capture::HandJoints| {
+            joints.map(|p| {
+                crate::virtual_hand::hand_local_position(
+                    player_pos,
+                    player_rotation,
+                    tool.from_bench(p),
+                )
+            })
+        };
+        println!(
+            "{}",
+            crate::hand_capture::joints_log_line(
+                [Handedness::Left, Handedness::Right][tool.hand],
+                &held.model,
+                crate::world_scale::WorldScale::active().factor(),
+                &local(raw),
+                &local(fitted),
+            )
+        );
     }
 
     /// Write the staged capture (at its current item scale) to the overrides
@@ -1574,7 +1722,14 @@ fn pose_hand_switch<'a>(
     tool: &pose_tool::GripPoseTool,
     held: Option<&HeldGrip>,
     library: Option<&'a crate::vr_grip::GripLibrary>,
+    handed: bool,
 ) -> Result<&'a crate::vr_grip::ResolvedGrip, String> {
+    // The bench draws the item as its holder holds it; a handed weapon is
+    // mirrored in the other hand, so a grip for that hand would be posed
+    // against the wrong mesh.
+    if handed {
+        return Err("hold it in that hand".to_owned());
+    }
     if tool.staged.is_some() {
         return Err("save or discard first".to_owned());
     }
@@ -1582,6 +1737,15 @@ fn pose_hand_switch<'a>(
     held.zip(library)
         .and_then(|(held, library)| library.lookup(&held.model, other))
         .ok_or_else(|| format!("no {other} grip to start from"))
+}
+
+/// Whether `entity` is drawn per hand: glove weapons take each hand's model
+/// frame, mirroring asymmetric geometry between them.
+fn handed_item(world: &World, entity: EntityId) -> bool {
+    use shipyard::{Get, View};
+    world
+        .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+        .is_ok_and(|weapons| weapons.get(entity).is_ok())
 }
 
 /// Remove a staged entry from the library: always the first for its model
@@ -2465,34 +2629,33 @@ impl PlayerInteraction for VrInteraction {
             self.exit_pose_tool();
             return;
         }
-        // The right hand first: it is the usual gun hand. Overrides are keyed
-        // like the libraries, which a magazine's fit key is not.
-        let Some((hand, held)) = [1, 0].into_iter().find_map(|i| {
-            let held = self.fitted_grips[i]
-                .as_ref()
-                .filter(|held| held.resolved.is_some() && !held.model.starts_with("magazine:"))?;
-            Some((i, held))
-        }) else {
+        let Some((hand, held)) = self.poseable_held_item() else {
             println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=false reason=no_fitted_held_item");
             return;
         };
-        let virtual_hand = [&self.left_hand, &self.right_hand][hand];
         println!(
             "SHOCK2QUEST_VR_GRIP_POSE_TOOL active=true model={} hand={hand}",
             held.model
         );
+        let entity = held.entity;
+        let virtual_hand = [&self.left_hand, &self.right_hand][hand];
+        let hand_pose = GripPose {
+            position: virtual_hand.get_position(),
+            rotation: virtual_hand.get_rotation(),
+        };
         self.support = None;
         self.slide = None;
         self.pose_tool_pulses.clear();
         self.pose_tool = Some(pose_tool::GripPoseTool::new(
             hand,
-            held.entity,
-            GripPose {
-                position: virtual_hand.get_position(),
-                rotation: virtual_hand.get_rotation(),
-            },
+            entity,
+            hand_pose,
             crate::paths::data_root().join(crate::vr_grip::GRIP_OVERRIDES_FILE),
         ));
+    }
+
+    fn can_pose_held_item(&self) -> bool {
+        self.poseable_held_item().is_some()
     }
 
     fn pose_workbench_open(&self) -> bool {
@@ -2542,6 +2705,7 @@ impl PlayerInteraction for VrInteraction {
             entity: tool.entity,
             item: tool.item_placed?,
             item_scale: tool.item.map_or(1.0, |(_, scale)| scale),
+            turn: tool.turn_matrix(),
             views: tool.views(),
             lights: tool.lights(),
             environment: tool.environment(),
@@ -3347,22 +3511,86 @@ mod tests {
     }
 
     #[test]
-    fn a_staged_pose_that_fails_to_save_on_exit_is_not_applied() {
+    fn a_staged_pose_that_fails_to_save_on_exit_stays_open_to_retry() {
         let dir = crate::test_support::TempDir::new("pose-exit-save-fails");
         // The overrides path is a directory: the save fails.
         let mut interaction = staged_workbench(dir.path().to_path_buf());
         interaction.toggle_grip_pose_tool();
+        assert!(interaction.pose_workbench_open(), "kept open");
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        assert!(tool.staged.is_some(), "with the pose");
+        assert!(tool.last_save_error.is_some(), "and why it failed");
+        assert!(interaction.take_pose_tool_pulses().is_empty());
+        // Repaired, exiting again saves and closes.
+        let path = dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
+        interaction.pose_tool.as_mut().unwrap().overrides_path = path.clone();
+        interaction.toggle_grip_pose_tool();
         assert!(!interaction.pose_workbench_open());
         assert!(
-            interaction
-                .grip_library
-                .as_ref()
-                .unwrap()
+            crate::vr_grip::GripLibrary::load_overrides(&path)
+                .expect("saved")
                 .lookup("wrench_h", "right")
-                .is_none(),
-            "the unsaved capture leaves the library"
+                .is_some()
         );
-        assert!(interaction.take_pose_tool_pulses().is_empty());
+    }
+
+    #[test]
+    fn a_scale_edit_after_saving_is_unsaved_and_saves_on_exit() {
+        let dir = crate::test_support::TempDir::new("pose-scale-save");
+        let path = dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
+        let mut interaction = staged_workbench(path.clone());
+        interaction.save_staged();
+        assert!(interaction.pose_tool.as_ref().unwrap().saved);
+        let before = interaction.fitted_grips[1]
+            .as_ref()
+            .unwrap()
+            .resolved
+            .as_ref()
+            .unwrap()
+            .item_scale;
+        interaction.scale_pose_tool_item(before * 1.5);
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        assert!(
+            tool.staged.is_some() && !tool.saved,
+            "Unsaved, Save enabled"
+        );
+        interaction.toggle_grip_pose_tool();
+        assert!(!interaction.pose_workbench_open());
+        let saved = crate::vr_grip::GripLibrary::load_overrides(&path).expect("saved on exit");
+        let authored = before / crate::world_scale::WorldScale::active().personal();
+        let scale = saved.lookup("wrench_h", "right").unwrap().item_scale;
+        assert!((scale - authored * 1.5).abs() < 1e-5, "{scale}");
+    }
+
+    #[test]
+    fn a_handed_weapon_cannot_switch_hands_on_the_bench() {
+        let dir = crate::test_support::TempDir::new("pose-handed");
+        let interaction = staged_workbench(dir.path().join("o.json"));
+        let mut tool = interaction.pose_tool.unwrap();
+        tool.staged = None;
+        let library = crate::vr_grip::GripLibrary {
+            entries: vec![crate::vr_grip::BakedGripEntry {
+                authored: true,
+                model: "wrench_h".into(),
+                hand: "left".into(),
+                surface_hash: String::new(),
+                kinematics_hash: String::new(),
+                hints_hash: String::new(),
+                grip: interaction.fitted_grips[1]
+                    .as_ref()
+                    .unwrap()
+                    .resolved
+                    .clone()
+                    .unwrap(),
+            }],
+            ..Default::default()
+        };
+        let held = interaction.fitted_grips[1].as_ref();
+        assert!(pose_hand_switch(&tool, held, Some(&library), false).is_ok());
+        assert_eq!(
+            pose_hand_switch(&tool, held, Some(&library), true).err(),
+            Some("hold it in that hand".to_owned())
+        );
     }
 
     #[test]
