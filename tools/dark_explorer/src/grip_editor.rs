@@ -1,7 +1,7 @@
 //! Local authoring of prepared grips. The preview and runtime share geometry,
 //! glove poses, transforms, and pose validation.
 use crate::model_preview::{ModelPreview, PreviewScene};
-use cgmath::{Deg, Euler, InnerSpace, Matrix3, Matrix4, Quaternion, Rad, SquareMatrix, Transform};
+use cgmath::{Deg, Euler, InnerSpace, Matrix4, Quaternion, Rad};
 use eframe::egui;
 use shock2vr::{
     Handedness,
@@ -98,9 +98,37 @@ pub fn default_library_path() -> PathBuf {
 }
 
 /// Each override replaces the pose the runtime would pick for its model and
-/// hand (keeping that entry's provenance), or joins the pickup library.
+/// hand (keeping that entry's provenance), or joins the pickup library. A
+/// glove weapon posed for one hand only also replaces the other hand's,
+/// mirrored, as play holds it before the overrides are cleared.
 fn merge_overrides(libraries: &mut [GripLibrary], overrides: GripLibrary) -> Result<(), String> {
-    for entry in overrides.entries {
+    let posed = |model: &str, hand: &str| {
+        overrides
+            .entries
+            .iter()
+            .any(|e| e.model == model && e.hand == hand)
+    };
+    let mut merges = Vec::new();
+    for entry in &overrides.entries {
+        merges.push(entry.clone());
+        let (other, other_name) = match entry.hand.as_str() {
+            "left" => (Handedness::Right, "right"),
+            _ => (Handedness::Left, "left"),
+        };
+        if let Some(mirror) = shock2vr::vr_weapon_grip::named_model_mirror(&entry.model)
+            .filter(|_| !posed(&entry.model, other_name))
+        {
+            let grip = shock2vr::vr_grip::hand_model_mirror(mirror, other)
+                .and_then(|mirror| entry.grip.mirrored(mirror))
+                .ok_or("Invalid model reflection or grip")?;
+            merges.push(BakedGripEntry {
+                hand: other_name.to_owned(),
+                grip,
+                ..entry.clone()
+            });
+        }
+    }
+    for entry in merges {
         let existing = libraries.iter_mut().find_map(|library| {
             library
                 .entries
@@ -280,25 +308,9 @@ fn transfer_grip(
 ) -> Result<(), String> {
     let mut grip = source.clone();
     if let Some(model_mirror) = mirror {
-        // The glove reflects across hand X. Guns and posed melee geometry use
-        // their own model reflection, including the melee contact-origin offset.
-        let scale = Matrix4::from_scale(grip.item_scale);
-        let pose = Handedness::Left.mirror()
-            * Matrix4::from_translation(grip.offset)
-            * Matrix4::from(grip.rotation)
-            * scale
-            * model_mirror.invert().ok_or("Invalid model reflection")?
-            * Matrix4::from_scale(1.0 / grip.item_scale);
-        grip.offset = pose.w.truncate();
-        grip.rotation = Quaternion::from(Matrix3::from_cols(
-            pose.x.truncate(),
-            pose.y.truncate(),
-            pose.z.truncate(),
-        ))
-        .normalize();
-        grip.anchor = model_mirror
-            .transform_point(cgmath::Point3::from(grip.anchor))
-            .into();
+        grip = grip
+            .mirrored(model_mirror)
+            .ok_or("Invalid model reflection or grip")?;
     }
     grip.contacts = [None; 5];
     grip.score = 0.0;
@@ -1295,6 +1307,7 @@ pub(crate) fn tweak_slider(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::Transform;
     #[test]
     fn overrides_replace_the_entry_the_runtime_picks_or_join_pickups() {
         let (_dir, doc) = document();
@@ -1349,6 +1362,56 @@ mod tests {
             .find(|e| e.model == entry.model && e.hand == entry.hand)
             .unwrap();
         assert_eq!(merged.grip.fingers, entry.grip.fingers);
+    }
+
+    #[test]
+    fn a_glove_weapon_posed_for_one_hand_merges_mirrored_into_the_other() {
+        let (_dir, doc) = document();
+        let weapons: GripLibrary =
+            serde_json::from_str(include_str!("../../../assets/vr-weapon-grips.json")).unwrap();
+        let mut libraries = vec![doc.library.clone(), weapons];
+        let entry = |libraries: &[GripLibrary], model: &str, hand: &str| {
+            libraries
+                .iter()
+                .flat_map(|l| &l.entries)
+                .find(|e| e.model == model && e.hand == hand)
+                .unwrap()
+                .clone()
+        };
+        let moved = |mut e: BakedGripEntry| {
+            e.grip.offset.x += 0.05;
+            e
+        };
+        // The shotgun and a mug posed right only; the wrench posed both hands.
+        let shotgun = moved(entry(&libraries, "sg_h", "right"));
+        let mug_left = entry(&libraries, "mug", "left");
+        let wrench_left = moved(entry(&libraries, "wrench_h", "left"));
+        let overrides = GripLibrary {
+            entries: vec![
+                shotgun.clone(),
+                moved(entry(&libraries, "mug", "right")),
+                moved(entry(&libraries, "wrench_h", "right")),
+                wrench_left.clone(),
+            ],
+            ..Default::default()
+        };
+        merge_overrides(&mut libraries, overrides).unwrap();
+        // The shotgun's left hand takes the right pose mirrored, as play does.
+        let mirror = shock2vr::vr_weapon_grip::named_model_mirror("sg_h").unwrap();
+        let expected = shotgun.grip.mirrored(mirror).unwrap();
+        let left = entry(&libraries, "sg_h", "left");
+        assert!(left.authored);
+        assert_eq!(
+            (left.grip.offset, left.grip.rotation),
+            (expected.offset, expected.rotation)
+        );
+        // A prop is drawn alike in both hands: its left is untouched.
+        assert_eq!(entry(&libraries, "mug", "left").grip, mug_left.grip);
+        // A left pose of its own wins.
+        assert_eq!(
+            entry(&libraries, "wrench_h", "left").grip.offset,
+            wrench_left.grip.offset
+        );
     }
 
     fn curls_mut(grip: &mut ResolvedGrip) -> (&mut [f32; 5], &mut Option<[f32; 5]>) {

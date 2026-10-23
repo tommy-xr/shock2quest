@@ -123,6 +123,49 @@ impl ResolvedGrip {
             [bounds.max.x, bounds.max.y, bounds.max.z],
         ])
     }
+
+    /// This grip for the other hand: hand and item reflected together through
+    /// the hand's mirror plane (`Handedness::mirror`, as the glove is drawn),
+    /// the item in the other hand's frame. `mirror` takes this hand's item
+    /// frame to the other's (`hand_model_mirror`). With grip `G` and hand
+    /// reflection `X`, the other hand's is `X·G·mirror⁻¹`: a rotation, since
+    /// both reflections flip handedness. Fingers are kept; the glove mirrors
+    /// them. `None` if `mirror` is no reflection.
+    pub fn mirrored(&self, mirror: Matrix4<f32>) -> Option<ResolvedGrip> {
+        use cgmath::{Matrix3, SquareMatrix, Transform};
+        let hand = Handedness::Left.mirror();
+        let back = mirror.invert()?;
+        let linear =
+            |m: Matrix4<f32>| Matrix3::from_cols(m.x.truncate(), m.y.truncate(), m.z.truncate());
+        let turned = linear(hand) * Matrix3::from(self.rotation) * linear(back);
+        let rotation = Quaternion::from(turned).normalize();
+        let proper = (0..3).all(|c| (Matrix3::from(rotation)[c] - turned[c]).magnitude() < 1e-4);
+        let item = |p: [f32; 3]| mirror.transform_point(Point3::from(p)).into();
+        let grip = ResolvedGrip {
+            // The item origin moves by the reflection's own translation.
+            offset: hand.transform_vector(
+                self.offset
+                    + self
+                        .rotation
+                        .rotate_vector(back.w.truncate() * self.item_scale),
+            ),
+            rotation,
+            contacts: self.contacts.map(|contact| contact.map(item)),
+            anchor: item(self.anchor),
+            ..self.clone()
+        };
+        (proper && grip.is_valid()).then_some(grip)
+    }
+}
+
+/// `model_mirror` (an item's right-hand frame into its left's) as the map
+/// from the other hand's frame into `hand`'s.
+pub fn hand_model_mirror(model_mirror: Matrix4<f32>, hand: Handedness) -> Option<Matrix4<f32>> {
+    use cgmath::SquareMatrix;
+    match hand {
+        Handedness::Left => Some(model_mirror),
+        Handedness::Right => model_mirror.invert(),
+    }
 }
 
 /// A grip's finger shape: either per-finger curls (fitted or slider-authored)
@@ -798,6 +841,9 @@ pub struct GripLibrary {
     pub version: u32,
     pub solver_revision: u32,
     pub entries: Vec<BakedGripEntry>,
+    /// How many leading entries came from the headset overrides (`prepend`).
+    #[serde(skip)]
+    pub headset: usize,
 }
 
 impl GripLibrary {
@@ -811,6 +857,78 @@ impl GripLibrary {
             .iter()
             .find(|entry| entry.model == model && entry.hand == hand && entry.grip.is_valid())
             .map(|entry| &entry.grip)
+    }
+
+    /// The grip `hand` holds `model` with, and whether it is the other hand's,
+    /// to mirror. For a `mirrorable` item the other hand's grip stands in when
+    /// it comes from a higher source: one posed on the headset outranks this
+    /// hand's shipped grip, so posing one hand poses both. This hand's own
+    /// entry wins within a source.
+    pub fn select(
+        &self,
+        model: &str,
+        hand: Handedness,
+        mirrorable: bool,
+    ) -> Option<(&ResolvedGrip, bool)> {
+        let name = |hand| match hand {
+            Handedness::Left => "left",
+            Handedness::Right => "right",
+        };
+        if !mirrorable {
+            return self.lookup(model, name(hand)).map(|grip| (grip, false));
+        }
+        if self.version != 1 {
+            return None;
+        }
+        let other = hand.other();
+        let (headset, shipped) = self.entries.split_at(self.headset.min(self.entries.len()));
+        [headset, shipped].into_iter().find_map(|source| {
+            let find = |hand| {
+                source
+                    .iter()
+                    .find(|e| e.model == model && e.hand == name(hand) && e.grip.is_valid())
+                    .map(|e| &e.grip)
+            };
+            find(hand)
+                .map(|grip| (grip, false))
+                .or_else(|| find(other).map(|grip| (grip, true)))
+        })
+    }
+
+    /// `select`'s grip for `hand`, mirrored if it is the other hand's, and
+    /// whether it was. `model_mirror` is the item's right-to-left frame
+    /// (`vr_weapon_grip::model_mirror`); `None` for an item drawn alike in
+    /// either hand, which only ever takes its own hand's grip.
+    pub fn lookup_for(
+        &self,
+        model: &str,
+        hand: Handedness,
+        model_mirror: Option<Matrix4<f32>>,
+    ) -> Option<(ResolvedGrip, bool)> {
+        let (grip, other) = self.select(model, hand, model_mirror.is_some())?;
+        if !other {
+            return Some((grip.clone(), false));
+        }
+        // A grip that will not mirror leaves this hand its own, if any.
+        model_mirror
+            .and_then(|mirror| grip.mirrored(hand_model_mirror(mirror, hand)?))
+            .map(|mirrored| (mirrored, true))
+            .or_else(|| self.lookup_for(model, hand, None))
+    }
+
+    /// Remove the first entry for `model` and `hand` (a staged one: staging
+    /// prepends).
+    pub fn remove_first(&mut self, model: &str, hand: &str) {
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|e| e.model == model && e.hand == hand)
+        {
+            self.entries.remove(index);
+            if index < self.headset {
+                self.headset -= 1;
+            }
+        }
     }
 }
 
@@ -829,6 +947,7 @@ pub const GRIP_RESOURCES: [&str; 4] = [
 impl GripLibrary {
     /// Put `overrides` ahead of every entry; `lookup` takes the first match.
     pub fn prepend(&mut self, overrides: GripLibrary) {
+        self.headset += overrides.entries.len();
         self.entries.splice(0..0, overrides.entries);
     }
 }
@@ -878,6 +997,7 @@ impl Default for GripLibrary {
             version: 1,
             solver_revision: SOLVER_REVISION,
             entries: Vec::new(),
+            headset: 0,
         }
     }
 }
@@ -1316,6 +1436,7 @@ mod tests {
                 hints_hash: "old-hints".into(),
                 grip: grip.clone(),
             }],
+            headset: 0,
         };
         assert_eq!(library.lookup("mug", "right"), Some(&grip));
         assert!(library.lookup("mug", "left").is_none());
@@ -1436,5 +1557,229 @@ mod tests {
         }
         grip.item_scale = 0.8;
         assert!(grip.is_valid());
+    }
+
+    fn turned_grip() -> ResolvedGrip {
+        ResolvedGrip {
+            item_scale: 0.6,
+            offset: vec3(0.03, -0.02, 0.05),
+            rotation: (Quaternion::from_angle_y(cgmath::Deg(-70.0))
+                * Quaternion::from_angle_x(cgmath::Deg(15.0)))
+            .normalize(),
+            contacts: [Some([0.1, 0.2, 0.3]), None, None, None, None],
+            anchor: [0.4, -0.1, 0.2],
+            ..plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one())
+        }
+    }
+
+    /// `grip`'s item-frame point `q` in hand space.
+    fn held_point(grip: &ResolvedGrip, q: Vector3<f32>) -> Vector3<f32> {
+        grip.offset + grip.rotation.rotate_vector(q * grip.item_scale)
+    }
+
+    fn assert_close(a: Vector3<f32>, b: Vector3<f32>) {
+        assert!((a - b).magnitude() < 1e-4, "{a:?} vs {b:?}");
+    }
+
+    #[test]
+    fn a_mirrored_grip_holds_the_mirror_image_of_the_item() {
+        use cgmath::{Matrix3, SquareMatrix, Transform};
+        let right = turned_grip();
+        let hand = Handedness::Left.mirror();
+        // A gun's reflection across its barrel plane, and a melee rig's
+        // through a plane off its origin.
+        for mirror in [
+            crate::vr_config::gun_model_frame("sg_h", Handedness::Left),
+            Matrix4::from_translation(vec3(0.2, 0.0, 0.0))
+                * hand
+                * Matrix4::from_translation(vec3(-0.2, 0.0, 0.0)),
+        ] {
+            let left = right.mirrored(mirror).unwrap();
+            assert!((Matrix3::from(left.rotation).determinant() - 1.0).abs() < 1e-4);
+            for q in [
+                vec3(0.0, 0.0, 0.0),
+                vec3(1.0, -0.5, 0.25),
+                vec3(-0.3, 0.7, 0.9),
+            ] {
+                // Each point of the left-hand item lands where the right
+                // hand's lands, reflected across the hand.
+                let left_q = mirror.transform_point(Point3::from_vec(q)).to_vec();
+                assert_close(
+                    held_point(&left, left_q),
+                    hand.transform_vector(held_point(&right, q)),
+                );
+            }
+            assert_eq!(left.fingers, right.fingers);
+            assert_eq!(left.item_scale, right.item_scale);
+            let contact = mirror.transform_point(point3(0.1, 0.2, 0.3));
+            assert_eq!(left.contacts[0], Some(contact.into()));
+            // And back again.
+            let again = left.mirrored(mirror.invert().unwrap()).unwrap();
+            assert_close(again.offset, right.offset);
+            assert!(again.rotation.dot(right.rotation).abs() > 1.0 - 1e-6);
+            assert_close(again.anchor.into(), right.anchor.into());
+        }
+        // A rotation is no mirror: the result would be a reflection.
+        assert!(
+            right
+                .mirrored(Matrix4::from_angle_y(cgmath::Deg(30.0)))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_mirrored_gun_fires_along_its_own_controllers_aim() {
+        use cgmath::Transform;
+        let mirror = crate::vr_config::gun_model_frame("sg_h", Handedness::Left);
+        let aim = vec3(0.0, 0.0, -1.0);
+        // The `_h` barrel runs along -X.
+        let barrel = vec3(-1.0, 0.0, 0.0);
+        let left_barrel = mirror.transform_vector(barrel);
+        let fires = |grip: &ResolvedGrip, barrel| grip.rotation.rotate_vector(barrel);
+        // Aligned: both hands fire straight down their controller.
+        let aligned = ResolvedGrip {
+            rotation: Quaternion::from_angle_y(cgmath::Deg(-90.0)),
+            ..turned_grip()
+        };
+        assert_close(fires(&aligned, barrel), aim);
+        assert_close(fires(&aligned.mirrored(mirror).unwrap(), left_barrel), aim);
+        // Off by some angle: the left is off by as much, mirrored.
+        let right = turned_grip();
+        let left = right.mirrored(mirror).unwrap();
+        assert_close(
+            fires(&left, left_barrel),
+            Handedness::Left.mirror_point(fires(&right, barrel)),
+        );
+        assert!(
+            (fires(&left, left_barrel).angle(aim).0 - fires(&right, barrel).angle(aim).0).abs()
+                < 1e-5
+        );
+    }
+
+    #[test]
+    fn shipped_left_weapon_grips_are_their_mirrored_right_ones() {
+        let path = format!(
+            "{}/../assets/vr-weapon-grips.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let library: GripLibrary =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for entry in library.entries.iter().filter(|e| e.hand == "right") {
+            let mirror = crate::vr_weapon_grip::named_model_mirror(&entry.model).unwrap();
+            let mirrored = entry.grip.mirrored(mirror).unwrap();
+            let left = library.lookup(&entry.model, "left").unwrap();
+            assert!(
+                (mirrored.offset - left.offset).magnitude() < 1e-4,
+                "{}",
+                entry.model
+            );
+            assert!(
+                mirrored.rotation.dot(left.rotation).abs() > 1.0 - 1e-6,
+                "{}",
+                entry.model
+            );
+        }
+    }
+
+    fn entry(model: &str, hand: &str, offset: f32) -> BakedGripEntry {
+        BakedGripEntry {
+            authored: false,
+            model: model.into(),
+            hand: hand.into(),
+            surface_hash: String::new(),
+            kinematics_hash: String::new(),
+            hints_hash: String::new(),
+            grip: ResolvedGrip {
+                offset: vec3(offset, 0.0, 0.0),
+                ..turned_grip()
+            },
+        }
+    }
+
+    #[test]
+    fn a_headset_pose_stands_in_mirrored_for_the_other_hand_of_a_mirrored_item() {
+        let offset = |selected: Option<(&ResolvedGrip, bool)>| {
+            selected.map(|(grip, other)| (grip.offset.x, other))
+        };
+        let mut library = GripLibrary {
+            entries: vec![
+                entry("sg_h", "left", 1.0),
+                entry("sg_h", "right", 2.0),
+                entry("atek_h", "right", 3.0),
+            ],
+            ..Default::default()
+        };
+        // Shipped only: each hand its own; a missing hand mirrors the other.
+        assert_eq!(
+            offset(library.select("sg_h", Handedness::Left, true)),
+            Some((1.0, false))
+        );
+        assert_eq!(
+            offset(library.select("atek_h", Handedness::Left, true)),
+            Some((3.0, true))
+        );
+        assert_eq!(
+            offset(library.select("atek_h", Handedness::Left, false)),
+            None
+        );
+        // A right pose from the headset outranks the shipped left...
+        library.prepend(GripLibrary {
+            entries: vec![entry("sg_h", "right", 4.0)],
+            ..Default::default()
+        });
+        assert_eq!(
+            offset(library.select("sg_h", Handedness::Left, true)),
+            Some((4.0, true))
+        );
+        assert_eq!(
+            offset(library.select("sg_h", Handedness::Right, true)),
+            Some((4.0, false))
+        );
+        // ...but not for an item drawn alike in both hands.
+        assert_eq!(
+            offset(library.select("sg_h", Handedness::Left, false)),
+            Some((1.0, false))
+        );
+        // A left pose from the headset wins for the left.
+        library.prepend(GripLibrary {
+            entries: vec![entry("sg_h", "left", 5.0)],
+            ..Default::default()
+        });
+        assert_eq!(
+            offset(library.select("sg_h", Handedness::Left, true)),
+            Some((5.0, false))
+        );
+        assert_eq!(
+            offset(library.select("sg_h", Handedness::Right, true)),
+            Some((4.0, false))
+        );
+        // Unstaged, the left falls back to the headset right, mirrored.
+        library.remove_first("sg_h", "left");
+        assert_eq!(library.headset, 1);
+        assert_eq!(
+            offset(library.select("sg_h", Handedness::Left, true)),
+            Some((4.0, true))
+        );
+        let mirror = crate::vr_config::gun_model_frame("sg_h", Handedness::Left);
+        let (grip, mirrored) = library
+            .lookup_for("sg_h", Handedness::Left, Some(mirror))
+            .unwrap();
+        assert!(mirrored);
+        assert_eq!(Some(grip), library.entries[0].grip.mirrored(mirror));
+        // One that will not mirror leaves the hand its own.
+        let (grip, mirrored) = library
+            .lookup_for(
+                "sg_h",
+                Handedness::Left,
+                Some(Matrix4::from_angle_y(cgmath::Deg(30.0))),
+            )
+            .unwrap();
+        assert_eq!((grip.offset.x, mirrored), (1.0, false));
+        library.remove_first("sg_h", "right");
+        assert_eq!(library.headset, 0);
+        assert_eq!(
+            offset(library.select("sg_h", Handedness::Left, true)),
+            Some((1.0, false))
+        );
     }
 }

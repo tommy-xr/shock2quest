@@ -197,13 +197,6 @@ fn hand_name(hand: Handedness) -> &'static str {
     }
 }
 
-fn other(hand: Handedness) -> Handedness {
-    match hand {
-        Handedness::Left => Handedness::Right,
-        Handedness::Right => Handedness::Left,
-    }
-}
-
 /// How the free hand works the tool. With its controller: the buttons as
 /// printed on it (X/Y on the left, A/B on the right). Tracked with no
 /// controller in it: fingertip taps and pinches. Saving is on the panel. A
@@ -217,7 +210,7 @@ pub(in crate::interaction) fn legend(
 ) -> Vec<String> {
     let hold = format!(
         "Hold the item with the {} controller",
-        hand_name(other(free))
+        hand_name(free.other())
     );
     let snapshot = match slot {
         Slot::Rest => "snapshot",
@@ -319,7 +312,7 @@ pub(in crate::interaction) fn emit(
         ),
         (
             POSE_HAND,
-            format!("Pose: {}", hand_name(other(view.posing))),
+            format!("Pose: {}", hand_name(view.posing.other())),
             PanelEvent::SwitchHand,
             view.switch.clone(),
         ),
@@ -380,7 +373,7 @@ pub(in crate::interaction) fn emit(
         }
     }
     let lines = legend(
-        other(view.posing),
+        view.posing.other(),
         view.fingertip,
         view.support,
         view.test_hold,
