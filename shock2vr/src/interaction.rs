@@ -1336,16 +1336,28 @@ impl VrInteraction {
         let mut glove_slot = self.glove_renderer.borrow_mut();
         let capture = match glove_slot.as_mut().and_then(|renderer| renderer.as_mut()) {
             Some(renderer) => {
-                let live = tool.tracked[posing]
-                    .and_then(|joints| pose_tool::tracked_glove(renderer, &joints, handedness));
-                tool.tip_error_mm = live.as_ref().map(|glove| glove.tip_error_mm());
-                tool.hand_size_ratio = live.as_ref().map(|glove| glove.fit.size_ratio);
+                // Fitted once here, and drawn from these by `render`.
+                tool.gloves = std::array::from_fn(|i| {
+                    tracked[i].and_then(|joints| {
+                        pose_tool::tracked_glove(
+                            renderer,
+                            &joints,
+                            [Handedness::Left, Handedness::Right][i],
+                        )
+                    })
+                });
+                let live = tool.gloves[posing].as_ref();
+                tool.tip_error_mm = live.map(|glove| glove.tip_error_mm());
+                tool.hand_size_ratio = live.map(|glove| glove.fit.size_ratio);
                 capture.map(|joints| {
                     let fitted = pose_tool::tracked_glove(renderer, &joints, handedness);
                     (joints, fitted)
                 })
             }
-            None => None,
+            None => {
+                tool.gloves = [None, None];
+                None
+            }
         };
         drop(glove_slot);
         if let Some((joints, fitted)) = capture {
