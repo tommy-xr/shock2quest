@@ -26,6 +26,7 @@ use crate::hand_pose::{FingerBones, HandShape, Pose};
 use crate::vr_config::Handedness;
 use crate::vr_grip::{BakedGripEntry, FingerPose, GripOverrides, ResolvedGrip};
 use crate::vr_support::{GripPose, SupportPose};
+pub(super) use crate::weapon_muzzle::{AimLines, CONTROLLER_AIM};
 
 // Distances below are physical (metres): tracked hands, the glove and the
 // held item keep their real size at any world scale. `world` converts.
@@ -216,8 +217,11 @@ pub(super) struct GripPoseTool {
     /// The item's pump travel as frozen on the bench (scaled model space,
     /// zero for no pump): play puts the support palm at its anchor plus this.
     pub pump_travel: Vector3<f32>,
-    /// While test-holding a gun with its controller tracked, where it fires
-    /// and where the controller aims.
+    /// Whether a gun's aim is shown, and while it is, where the gun fires
+    /// and where its controller aims (unturned bench, or test-held with the
+    /// controller tracked): on the bench, the glove's grip frame is where
+    /// the controller would be.
+    pub show_aim: bool,
     pub aim: Option<AimLines>,
     /// How the bench is turned for viewing about `pivot`, and while the
     /// free controller's squeeze turns it, that controller's rotation and
@@ -256,39 +260,6 @@ impl TestHold {
             self.trigger = trigger;
         }
         self.controller = controller.or(self.controller);
-    }
-}
-
-/// A test-held gun's aim, world space: its muzzle and the way it fires, and
-/// the controller's position and the way it aims.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct AimLines {
-    pub muzzle: Vector3<f32>,
-    pub firing: Vector3<f32>,
-    pub controller: Vector3<f32>,
-    pub aim: Vector3<f32>,
-}
-
-impl AimLines {
-    /// For the item's model drawn at `model` and `scale`, held by
-    /// `controller`.
-    pub fn new(
-        model: GripPose,
-        scale: f32,
-        muzzle: crate::weapon_muzzle::MuzzleFallback,
-        controller: GripPose,
-    ) -> Self {
-        use cgmath::EuclideanSpace;
-        Self {
-            muzzle: model.point(muzzle.point.to_vec() * scale),
-            firing: model.rotation.rotate_vector(muzzle.axis).normalize(),
-            controller: controller.position,
-            aim: controller.rotation.rotate_vector(CONTROLLER_AIM),
-        }
-    }
-
-    pub fn error_deg(&self) -> f32 {
-        Deg::from(self.firing.angle(self.aim)).0
     }
 }
 
@@ -341,6 +312,7 @@ impl GripPoseTool {
             test_hold: None,
             muzzle: None,
             pump_travel: Vector3::new(0.0, 0.0, 0.0),
+            show_aim: true,
             aim: None,
             turn: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             turning: None,
@@ -421,6 +393,14 @@ impl GripPoseTool {
             Err("no barrel".to_owned())
         } else {
             Ok(())
+        }
+    }
+
+    /// Whether the aim toggle can act, or why not: on a gun.
+    pub fn aim_entry(&self) -> Result<(), String> {
+        match self.muzzle {
+            Some(_) => Ok(()),
+            None => Err("no barrel".to_owned()),
         }
     }
 
@@ -619,6 +599,8 @@ impl GripPoseTool {
             // Ending a test hold is always allowed.
             "test_hold_disabled": view.test_hold_entry.err().filter(|_| !view.test_hold),
             "align_disabled": view.align.err(),
+            "aim_disabled": view.aim.err(),
+            "show_aim": self.show_aim,
             "slot_disabled": view.slot_entry.err(),
             "hover": self.hover,
             "panel": placed,
@@ -633,7 +615,7 @@ impl GripPoseTool {
         let hold = self.test_hold.map(|hold| panel::Hold {
             controller: posing,
             tracked: hold.tracked,
-            aim_error_deg: self.aim.map(|aim| aim.error_deg()),
+            aim_error_deg: self.aim.map(|aim| aim.error_deg),
             saved: self.saved,
         });
         panel::PanelView {
@@ -648,6 +630,9 @@ impl GripPoseTool {
             test_hold: self.test_hold.is_some(),
             test_hold_entry: self.test_hold_entry(),
             align: self.align_entry(),
+            aim: self.aim_entry(),
+            show_aim: self.show_aim,
+            aim_error_deg: self.aim.map(|aim| aim.error_deg),
             switch: self.switch.clone(),
             support: self.support,
             support_mode: self.support_mode.clone(),
@@ -1190,12 +1175,14 @@ pub(super) fn render_panel(
     objects
 }
 
-/// A test-held gun's two aim lines (`AimLines`): where it fires, from its
-/// muzzle, and where its controller aims, from the controller.
+/// A gun's two aim lines (`AimLines`): where it fires, from its muzzle, and
+/// where its controller aims, from the controller (on the bench, its glove's
+/// grip frame). Drawn turned with the bench.
 pub(super) fn render_aim(tool: &GripPoseTool) -> Vec<SceneObject> {
     let Some(aim) = tool.aim else {
         return Vec::new();
     };
+    let turn = tool.turn_matrix();
     let mut lines: Vec<SceneObject> = [
         (aim.muzzle, aim.firing, FIRING_LINE),
         (aim.controller, aim.aim, AIM_LINE),
@@ -1209,6 +1196,10 @@ pub(super) fn render_aim(tool: &GripPoseTool) -> Vec<SceneObject> {
             (world(AIM_LINE_CORE), core),
             0.0,
         )
+    })
+    .map(|mut line| {
+        line.set_transform(turn * line.get_transform());
+        line
     })
     .collect();
     crate::util::tag_render_source(&mut lines, crate::util::render_source::GRIP_WORKBENCH_AIM);
@@ -1238,14 +1229,6 @@ pub(super) fn hand_for_item(
         rotation,
     }
 }
-
-/// The controller's aim in its own frame: play's hand ray, and the way a gun
-/// held with an aligned grip fires.
-pub(super) const CONTROLLER_AIM: Vector3<f32> = Vector3 {
-    x: 0.0,
-    y: 0.0,
-    z: -1.0,
-};
 
 /// Which way `grip`'s item fires in hand space, given its barrel (item
 /// space, `weapon_muzzle`'s axis).

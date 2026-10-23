@@ -14939,10 +14939,7 @@ impl MissionCore {
                             for vhot in vhots.iter_mut() {
                                 vhot.point = mirror.transform_point(vhot.point);
                             }
-                            if let Some(muzzle) = muzzle.as_mut() {
-                                muzzle.point = mirror.transform_point(muzzle.point);
-                                muzzle.axis = mirror.transform_vector(muzzle.axis);
-                            }
+                            muzzle = muzzle.map(|muzzle| muzzle.framed(mirror));
                         }
                         // An articulated VR-wielded first-person model (hand +
                         // arm + gun as skeleton sub-objects) renders unposed

@@ -1,28 +1,41 @@
 //! Muzzle geometry in the rendered weapon's local frame. Authored ID 0 wins;
 //! missing points use the barrel end of the visible gun, excluding its arms.
+//! Also a held gun's aim against its controller (`AimLines`), which the grip
+//! tools show.
 use cgmath::{
-    EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Transform, Vector3, point3, vec3,
+    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad, Rotation, Transform,
+    Vector3, point3, vec3,
 };
 use collision::{Aabb, Aabb3};
 use dark::{
     importers::{GLOVE_WEAPON_IMPORTER, GRIP_SURFACE_IMPORTER},
     properties::PropModelName,
+    ss2_bin_obj_loader::Vhot,
 };
 use engine::assets::asset_cache::AssetCache;
 use shipyard::{Component, EntityId, Get, View, World};
 
 use crate::{
     mission::entity_creator::CreateEntityOptions, physics::PhysicsWorld,
-    runtime_props::RuntimePropVhots, scripts::Effect,
+    runtime_props::RuntimePropVhots, scripts::Effect, vr_config::Handedness, vr_support::GripPose,
 };
 
-#[derive(Component, Clone, Copy, Debug)]
-pub(crate) struct MuzzleFallback {
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct MuzzleFallback {
     pub point: Point3<f32>,
     pub axis: Vector3<f32>,
 }
 
 impl MuzzleFallback {
+    /// This muzzle in the frame `frame` draws its model in (a held gun's
+    /// `gun_model_frame`).
+    pub(crate) fn framed(self, frame: Matrix4<f32>) -> Self {
+        Self {
+            point: frame.transform_point(self.point),
+            axis: frame.transform_vector(self.axis),
+        }
+    }
+
     /// Unit right/up/forward frame at this attachment. Item scaling affects the
     /// attachment position, never launched projectile size or velocity.
     pub(crate) fn shot_frame(self, transform: Matrix4<f32>) -> Matrix4<f32> {
@@ -118,29 +131,99 @@ fn muzzle(world: &World, weapon: EntityId) -> (Point3<f32>, Option<Vector3<f32>>
         .borrow::<View<MuzzleFallback>>()
         .ok()
         .and_then(|v| v.get(weapon).ok().copied());
-    let authored = world.borrow::<View<RuntimePropVhots>>().ok().and_then(|v| {
-        v.get(weapon).ok().and_then(|vhots| {
-            vhots
-                .0
-                .iter()
-                .min_by_key(|vhot| vhot.id)
-                .map(|vhot| (vhot.id, vhot.point))
-        })
-    });
+    let vhots = world.borrow::<View<RuntimePropVhots>>().ok();
+    let vhots = vhots
+        .as_ref()
+        .and_then(|v| v.get(weapon).ok())
+        .map_or(&[][..], |vhots| vhots.0.as_slice());
     let axis = fallback.map(|f| f.axis).or_else(|| {
         world
             .borrow::<View<PropModelName>>()
             .ok()
             .and_then(|v| v.get(weapon).ok().and_then(|name| barrel_axis(&name.0)))
     });
-    let point = authored
+    (muzzle_point(vhots, fallback.map(|f| f.point)), axis)
+}
+
+/// Where a model's muzzle is: its authored vhot 0, else the barrel-end
+/// fallback, else (unprofiled assets) its lowest-ID vhot, else its origin.
+fn muzzle_point(vhots: &[Vhot], fallback: Option<Point3<f32>>) -> Point3<f32> {
+    let authored = vhots
+        .iter()
+        .min_by_key(|vhot| vhot.id)
+        .map(|vhot| (vhot.id, vhot.point));
+    authored
         .filter(|(id, _)| *id == 0)
         .map(|(_, point)| point)
-        .or(fallback.map(|f| f.point))
-        // Unprofiled assets retain their previous lowest-ID fallback.
+        .or(fallback)
         .or(authored.map(|(_, point)| point))
-        .unwrap_or_else(|| point3(0.0, 0.0, 0.0));
-    (point, axis)
+        .unwrap_or_else(|| point3(0.0, 0.0, 0.0))
+}
+
+/// A gun's muzzle as play sets it on the model wielded in `hand`
+/// (`ChangeModel`): `muzzle_point` over the glove weapon model, in the hand's
+/// rendered frame. `None` for anything else, or with no known barrel.
+pub fn held_muzzle(cache: &mut AssetCache, name: &str, hand: Handedness) -> Option<MuzzleFallback> {
+    let name = name.to_ascii_lowercase();
+    let name = name.trim_end_matches(".bin");
+    if !crate::vr_weapon_grip::supports_model(name) {
+        return None;
+    }
+    let fallback = load_fallback(cache, name)?;
+    let source = cache.get_opt(&GLOVE_WEAPON_IMPORTER, &format!("{name}.bin"))?;
+    let vhots = source.as_ref().as_ref()?.model.vhots();
+    let muzzle = MuzzleFallback {
+        point: muzzle_point(&vhots, Some(fallback.point)),
+        axis: fallback.axis,
+    };
+    Some(muzzle.framed(crate::vr_config::gun_model_frame(name, hand)))
+}
+
+/// The controller's aim in its own frame: play's hand ray, and the way a gun
+/// held with an aligned grip fires.
+pub const CONTROLLER_AIM: Vector3<f32> = Vector3 {
+    x: 0.0,
+    y: 0.0,
+    z: -1.0,
+};
+
+/// Degrees between the way an item turned by `rotation` (its grip's, in the
+/// controller's frame) fires along `barrel` (its muzzle axis) and the
+/// controller's aim. 0 fires straight; roll about the barrel does not count.
+pub fn aim_error_deg(rotation: Quaternion<f32>, barrel: Vector3<f32>) -> f32 {
+    let firing = rotation.rotate_vector(barrel);
+    // atan2 stays exact near 0°, where acos of a rounded cosine does not.
+    let (sin, cos) = (
+        firing.cross(CONTROLLER_AIM).magnitude(),
+        firing.dot(CONTROLLER_AIM),
+    );
+    Deg::from(Rad(sin.atan2(cos))).0
+}
+
+/// A held gun's aim: its muzzle and the way it fires, and the controller's
+/// position and the way it aims, all in the space `model` and `controller`
+/// are in; and how far apart the two directions are (`aim_error_deg`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AimLines {
+    pub muzzle: Vector3<f32>,
+    pub firing: Vector3<f32>,
+    pub controller: Vector3<f32>,
+    pub aim: Vector3<f32>,
+    pub error_deg: f32,
+}
+
+impl AimLines {
+    /// For the item's model drawn at `model` and `scale`, held by
+    /// `controller`.
+    pub fn new(model: GripPose, scale: f32, muzzle: MuzzleFallback, controller: GripPose) -> Self {
+        Self {
+            muzzle: model.point(muzzle.point.to_vec() * scale),
+            firing: model.rotation.rotate_vector(muzzle.axis).normalize(),
+            controller: controller.position,
+            aim: controller.rotation.rotate_vector(CONTROLLER_AIM),
+            error_deg: aim_error_deg(controller.rotation.invert() * model.rotation, muzzle.axis),
+        }
+    }
 }
 
 /// Keep a forward spawn offset on the firing side of any intervening surface.
@@ -237,6 +320,48 @@ mod tests {
             ]),
         ));
         assert_eq!(resolve(&world, weapon).point, point);
+    }
+
+    #[test]
+    fn aim_error_reads_how_far_a_grip_turns_the_barrel_off_the_controller() {
+        use cgmath::{Deg, Rotation3};
+        let barrel = vec3(-1.0, 0.0, 0.0);
+        // Turns the -X barrel onto the controller's -Z.
+        let straight = Quaternion::from_angle_y(Deg(-90.0));
+        assert!(aim_error_deg(straight, barrel).abs() < 1e-4);
+        let rolled = straight * Quaternion::from_angle_x(Deg(40.0));
+        assert!(
+            aim_error_deg(rolled, barrel).abs() < 1e-4,
+            "roll is not aim"
+        );
+        for (offset, expected) in [
+            (Quaternion::from_angle_y(Deg(12.0)), 12.0),
+            (Quaternion::from_angle_x(Deg(-7.0)), 7.0),
+            (Quaternion::from_angle_y(Deg(180.0)), 180.0),
+        ] {
+            let error = aim_error_deg(offset * straight, barrel);
+            assert!((error - expected).abs() < 1e-3, "{error} vs {expected}");
+        }
+        // The lines read the grip's error wherever the controller is.
+        let controller = GripPose {
+            position: vec3(1.0, 2.0, 3.0),
+            rotation: Quaternion::from_angle_z(Deg(30.0)) * Quaternion::from_angle_x(Deg(50.0)),
+        };
+        let grip = Quaternion::from_angle_y(Deg(12.0)) * straight;
+        let lines = AimLines::new(
+            GripPose {
+                position: controller.position,
+                rotation: controller.rotation * grip,
+            },
+            1.0,
+            MuzzleFallback {
+                point: point3(-1.0, 0.0, 0.0),
+                axis: barrel,
+            },
+            controller,
+        );
+        assert!((lines.error_deg - 12.0).abs() < 1e-3);
+        assert!((Deg::from(lines.firing.angle(lines.aim)).0 - 12.0).abs() < 1e-3);
     }
 
     #[test]
