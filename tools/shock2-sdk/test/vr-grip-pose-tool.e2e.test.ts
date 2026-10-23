@@ -1244,7 +1244,7 @@ test(
     await game.input.trigger("LeftHandLowerButton");
     await game.step({ frames: 2 });
     let posed = await tool();
-    assert.deepEqual(posed.test_hold, { tracked: true });
+    assert.deepEqual(posed.test_hold, { tracked: true, nudging: false });
     assert.ok(Math.abs(posed.aim_error_deg! - capturedOff) < 0.05, `aim error ${posed.aim_error_deg}`);
     assert.equal(posed.panel.status, `Aim off by ${posed.aim_error_deg!.toFixed(1)} deg`);
     const aimLines = (await game.scene.objects()).objects.filter((o) => o.source === "grip_workbench_aim");
@@ -1253,7 +1253,7 @@ test(
     await game.input.set("right_hand.tracked", 0);
     await game.step({ frames: 2 });
     posed = await tool();
-    assert.deepEqual(posed.test_hold, { tracked: false });
+    assert.deepEqual(posed.test_hold, { tracked: false, nudging: false });
     assert.equal(posed.aim_error_deg, null);
     assert.equal(posed.panel.status, "Pick up the Right controller");
     await game.input.set("right_hand.tracked", 1);
@@ -1311,6 +1311,107 @@ test(
     const fires = muzzleFrameOf(await game.entities.detail(gun.id)).forward;
     const shotOff = (Math.acos(Math.min(1, dot(normalize(fires), normalize(aim)))) * 180) / Math.PI;
     assert.ok(shotOff < 1, `shots leave ${shotOff} deg off the controller`);
+  },
+);
+
+test(
+  "grip pose tool: in test hold the free controller's squeeze nudges the gun in the glove, staged on release",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using _data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    const rightGrip = async () => (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
+    const gun = await holdShotgun(game);
+    await game.input.set("head.position", [0, 1, 0]);
+    await game.step({ frames: 2 });
+    const unit = await metresPerWorldUnit(game);
+    await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 2 });
+    const tool = async () => (await rightGrip()).pose_tool!;
+
+    // A rest snapshot (fingers only) to test-hold.
+    const controller = (await game.input.state()).right_hand;
+    const { toLocal } = await workbench(game);
+    const bench = (await game.scene.objects({ entityId: gun.id })).objects[0]!.position;
+    await game.input.setMany({
+      "right_hand.squeeze": 0,
+      "right_hand.position": [controller.position[0] + 1, controller.position[1] - 0.5, controller.position[2]],
+      "right_hand.joints": handInMetres().map((p) => toLocal(add(bench, scale(add(p, [0.1, -0.05, 0.05]), 1 / unit)))),
+    });
+    await aimAway(game, "left");
+    await game.step({ frames: 30 });
+    await click(game, "left");
+    assert.equal((await tool()).staged, true, `staged (${(await tool()).capture_failure})`);
+    const before = (await rightGrip()).grip!;
+
+    // Test hold starts with the left controller already squeezed: no nudge
+    // until it is let go.
+    await game.input.setMany({
+      "right_hand.joints": null, "right_hand.position": controller.position, "left_hand.squeeze": 1,
+    });
+    await game.input.trigger("LeftHandLowerButton");
+    await game.step({ frames: 2 });
+    assert.deepEqual((await tool()).test_hold, { tracked: true, nudging: false });
+    const gunAt = async () => (await game.scene.objects({ entityId: gun.id })).objects[0]!.position;
+    const held = await gunAt();
+    const { player } = await game.info();
+    const grabbedAt = add(held, scale([-0.15, 0, 0.05], 1 / unit));
+    const grabbedTurn = quatFromTo([0, 0, -1], [0, 1, 0]);
+    const freeAt = (position: Vec3, rotation: Quat) => setHandWorldPose(game, player, "left", position, rotation);
+    await freeAt(add(grabbedAt, scale([0, 0.05, 0], 1 / unit)), grabbedTurn);
+    await game.step({ frames: 2 });
+    assert.equal((await tool()).test_hold?.nudging, false, "held as test hold starts");
+    assert.ok(distance(await gunAt(), held) < 1e-4, "the gun stays in the glove");
+
+    // Let go and squeeze again: the gun follows the left controller.
+    await freeAt(grabbedAt, grabbedTurn);
+    await game.input.set("left_hand.squeeze", 0);
+    await game.step({ frames: 1 });
+    await game.input.set("left_hand.squeeze", 1);
+    await game.step({ frames: 1 });
+    assert.equal((await tool()).test_hold?.nudging, true);
+    const gloveAt = async () =>
+      (await game.scene.objects()).objects.find((o) => o.name === "Right grip glove")!.position;
+    const glove = await gloveAt();
+    const aimBefore = (await tool()).aim_error_deg!;
+    const pitch = (degrees: number): Quat => [Math.sin((degrees * Math.PI) / 360), 0, 0, Math.cos((degrees * Math.PI) / 360)];
+    const turn = quatMultiply(yaw(15), pitch(-6));
+    const shift = scale([0.02, 0.01, -0.03], 1 / unit);
+    await freeAt(add(grabbedAt, shift), quatMultiply(turn, grabbedTurn));
+    await game.step({ frames: 1 });
+    const expected = add(add(grabbedAt, shift), quatRotate(turn, sub(held, grabbedAt)));
+    assert.ok(distance(await gunAt(), expected) < 1e-3, `dragged to ${await gunAt()} vs ${expected}`);
+    assert.ok(distance(await gloveAt(), glove) < 1e-4, "the glove stays on its controller");
+    assert.ok(Math.abs((await tool()).aim_error_deg! - aimBefore) > 1,
+      `the aim readout follows: ${(await tool()).aim_error_deg} vs ${aimBefore}`);
+    assertClose((await rightGrip()).grip!.offset, before.offset, 1e-6, "staged only on release");
+
+    // Let go: the grip that holds it there is staged; fingers, glove turn
+    // and scale are kept.
+    await game.input.set("left_hand.squeeze", 0);
+    await game.step({ frames: 2 });
+    assert.deepEqual((await tool()).test_hold, { tracked: true, nudging: false });
+    assert.equal((await tool()).staged, true);
+    const nudged = (await rightGrip()).grip!;
+    assert.ok(distance(xyz(nudged.offset), xyz(before.offset)) > 1e-3, "a new offset");
+    assert.deepEqual(nudged.hand_rotation, before.hand_rotation);
+    assert.equal(nudged.item_scale, before.item_scale);
+    assertSameBones(fingers(nudged).bones, fingers(before).bones!, "fingers kept");
+    assert.ok(distance(await gunAt(), expected) < 1e-3, "held where it was let go");
+
+    // Grabbed again, the left controller lost: dropped, nothing staged.
+    await game.input.set("left_hand.squeeze", 1);
+    await game.step({ frames: 1 });
+    await freeAt(add(add(grabbedAt, shift), scale([0, 0.05, 0], 1 / unit)), quatMultiply(turn, grabbedTurn));
+    await game.step({ frames: 1 });
+    assert.ok(distance(await gunAt(), expected) > 0.01, "dragging");
+    await game.input.set("left_hand.tracked", 0);
+    await game.step({ frames: 2 });
+    assert.equal((await tool()).test_hold?.nudging, false);
+    assertClose((await rightGrip()).grip!.offset, nudged.offset, 1e-6, "nothing staged");
+    assert.ok(distance(await gunAt(), expected) < 1e-3, "back in the glove");
   },
 );
 

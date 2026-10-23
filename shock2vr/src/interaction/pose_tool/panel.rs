@@ -272,7 +272,11 @@ pub(in crate::interaction) fn legend(
         Handedness::Right => ("A", "B"),
     };
     if test_hold {
-        return vec![hold, format!("{lower}: end test hold    {upper}: discard")];
+        return vec![
+            hold,
+            format!("{lower}: end test hold    {upper}: discard"),
+            "Squeeze: move the item in the hand".to_owned(),
+        ];
     }
     vec![
         format!("{} controller   Trigger: {snapshot}", hand_name(free)),
@@ -823,11 +827,12 @@ mod tests {
         assert!(
             lines.contains("Hold the item with the Right controller")
                 && lines.contains("X: end test hold")
-                && lines.contains("Y: discard"),
+                && lines.contains("Y: discard")
+                && lines.contains("Squeeze: move the item in the hand"),
             "{lines}"
         );
         assert!(
-            !lines.contains("snapshot") && !lines.contains("Squeeze"),
+            !lines.contains("snapshot") && !lines.contains("turn"),
             "{lines}"
         );
         let tapping = legend(Handedness::Left, true, false, true, Slot::Rest).join(" ");
