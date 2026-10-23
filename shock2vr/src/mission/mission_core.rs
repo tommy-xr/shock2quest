@@ -701,11 +701,18 @@ fn draw_pose_workbench(
     else {
         return bench.environment;
     };
+    // The other hand's model frame, reflected about the model origin (the
+    // drawn frame sits at the grip contact).
+    let mirror = bench.mirror.map(|mirror| {
+        let contact = crate::interaction::grip_contact(world, bench.entity);
+        Matrix4::from_translation(-contact) * mirror * Matrix4::from_translation(contact)
+    });
     // Turned for viewing, the extra views included.
     let rebase = bench.turn
         * Matrix4::from_translation(bench.item.position)
         * Matrix4::from(bench.item.rotation)
         * Matrix4::from_scale(bench.item_scale)
+        * mirror.unwrap_or_else(Matrix4::identity)
         * from_world;
     // The item's own model; effects tagged with it (a laser sight) are left
     // out, rather than left behind at the frozen hand or turned across the
@@ -726,6 +733,10 @@ fn draw_pose_workbench(
         for object in &item {
             let mut copy = object.clone();
             copy.set_transform(placement * object.get_transform());
+            // A reflection turns the faces inside out.
+            if mirror.is_some() {
+                copy.set_backface_culling(copy.backface_culling().map(dark::model::flip_winding));
+            }
             copy.set_lights(bench.lights.clone());
             let tag = engine::scene::SceneObjectDebugTag {
                 source: Some(crate::util::render_source::GRIP_WORKBENCH.to_owned()),

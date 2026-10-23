@@ -413,7 +413,7 @@ pub struct VrInteraction {
 }
 
 /// A held item's per-model grip contact offset (`RuntimePropVrGripOffset`).
-fn grip_contact(world: &World, entity: EntityId) -> Vector3<f32> {
+pub(crate) fn grip_contact(world: &World, entity: EntityId) -> Vector3<f32> {
     world
         .borrow::<shipyard::View<crate::runtime_props::RuntimePropVrGripOffset>>()
         .ok()
@@ -458,12 +458,14 @@ struct GripGeometry {
 }
 
 /// What the mission draws for the grip pose workbench instead of itself: the
-/// held item's world pose and grip scale there, how the bench is turned for
-/// viewing, each extra view, the workbench's lights and its floor.
+/// held item's world pose and grip scale there, its model frame for the posed
+/// hand if mirrored from the holder's, how the bench is turned for viewing,
+/// each extra view, the workbench's lights and its floor.
 pub struct PoseWorkbench {
     pub entity: EntityId,
     pub item: GripPose,
     pub item_scale: f32,
+    pub mirror: Option<Matrix4<f32>>,
     pub turn: Matrix4<f32>,
     pub views: Option<[Matrix4<f32>; 3]>,
     pub lights: Option<std::rc::Rc<engine::scene::light::LightArray>>,
@@ -488,6 +490,9 @@ enum StagedGrip {
 
 #[derive(Clone)]
 struct HeldGrip {
+    /// A glove weapon's right-hand model frame into its left's
+    /// (`vr_weapon_grip::model_mirror`); `None` for an item drawn alike in
+    /// either hand.
     model_mirror: Option<cgmath::Matrix4<f32>>,
     entity: EntityId,
     model: String,
@@ -731,11 +736,16 @@ impl VrInteraction {
                     });
                 let curls = model
                     .and_then(|model| {
+                        // The grip the hand will take; fingers are alike mirrored.
                         self.grip_library
                             .as_ref()?
-                            .lookup(&model, if i == 0 { "left" } else { "right" })
+                            .select(
+                                &model,
+                                [Handedness::Left, Handedness::Right][i],
+                                crate::vr_weapon_grip::supports_model(&model),
+                            )
                             // Bone poses pre-curl with the generic grab shape.
-                            .and_then(|grip| grip.fingers.rest_curls().copied())
+                            .and_then(|(grip, _)| grip.fingers.rest_curls().copied())
                     })
                     .unwrap_or([0.85, 0.6, 0.9, 0.9, 0.9]);
                 Target::Grab(curls)
@@ -1182,9 +1192,9 @@ impl VrInteraction {
             tool,
             self.fitted_grips[tool.hand].as_ref(),
             self.grip_library.as_ref(),
-            handed_item(world, tool.entity),
         )
         .map(|_| ());
+        let frame = pose_frame(tool, self.fitted_grips[tool.hand].as_ref());
         tool.support_mode = support_mode(
             tool,
             self.fitted_grips[tool.hand].as_ref(),
@@ -1222,7 +1232,16 @@ impl VrInteraction {
             tool.eye = eye;
         }
         tool.floor_y = floor_y;
-        tool.muzzle = crate::weapon_muzzle::known(world, tool.entity);
+        tool.muzzle = crate::weapon_muzzle::known(world, tool.entity).map(|muzzle| match frame {
+            Some(frame) => {
+                use cgmath::Transform;
+                crate::weapon_muzzle::MuzzleFallback {
+                    point: frame.transform_point(muzzle.point),
+                    axis: frame.transform_vector(muzzle.axis),
+                }
+            }
+            None => muzzle,
+        });
         // Test hold: the posing controller holds the item, posed as
         // `VirtualHand` poses it in play. An untracked one (zero rotation, or
         // the runtime says so) places nothing.
@@ -1355,7 +1374,7 @@ impl VrInteraction {
             pose_tool::panel::PanelEvent::Discard => self.discard_staged(),
             pose_tool::panel::PanelEvent::TestHold => self.toggle_test_hold(),
             pose_tool::panel::PanelEvent::AlignAim => self.align_aim(contact),
-            pose_tool::panel::PanelEvent::SwitchHand => self.switch_pose_hand(world, contact),
+            pose_tool::panel::PanelEvent::SwitchHand => self.switch_pose_hand(contact),
             pose_tool::panel::PanelEvent::SupportMode => self.toggle_support_mode(),
             pose_tool::panel::PanelEvent::Slot => {
                 if let Some(tool) = self.pose_tool.as_mut()
@@ -1429,15 +1448,14 @@ impl VrInteraction {
 
     /// Pose the other hand: its grip for the same item, from the library,
     /// holding the item where it is on the bench.
-    fn switch_pose_hand(&mut self, world: &World, contact: Vector3<f32>) {
+    fn switch_pose_hand(&mut self, contact: Vector3<f32>) {
         let Some(tool) = self.pose_tool.as_mut() else {
             return;
         };
         let held = self.fitted_grips[tool.hand].as_ref();
-        let handed = handed_item(world, tool.entity);
         let (Ok(grip), Some(held), Some(item)) = (
-            pose_hand_switch(tool, held, self.grip_library.as_ref(), handed)
-                .map(|grip| grip.clone().for_world_scale()),
+            pose_hand_switch(tool, held, self.grip_library.as_ref())
+                .map(crate::vr_grip::ResolvedGrip::for_world_scale),
             held.cloned(),
             tool.item_placed,
         ) else {
@@ -2004,19 +2022,13 @@ fn support_mode(
 }
 
 /// The library grip (authored size) the pose tool's other hand would start
-/// from for the same item, or why it cannot switch to it.
-fn pose_hand_switch<'a>(
+/// from for the same item, mirrored as play would hold it, or why it cannot
+/// switch to it.
+fn pose_hand_switch(
     tool: &pose_tool::GripPoseTool,
     held: Option<&HeldGrip>,
-    library: Option<&'a crate::vr_grip::GripLibrary>,
-    handed: bool,
-) -> Result<&'a crate::vr_grip::ResolvedGrip, String> {
-    // The bench draws the item as its holder holds it; a handed weapon is
-    // mirrored in the other hand, so a grip for that hand would be posed
-    // against the wrong mesh.
-    if handed {
-        return Err("hold it in that hand".to_owned());
-    }
+    library: Option<&crate::vr_grip::GripLibrary>,
+) -> Result<crate::vr_grip::ResolvedGrip, String> {
     if tool.support {
         return Err("posing the support grip".to_owned());
     }
@@ -2026,19 +2038,22 @@ fn pose_hand_switch<'a>(
     if tool.staged.is_some() {
         return Err("save or discard first".to_owned());
     }
-    let other = ["left", "right"][1 - tool.hand];
+    let other = [Handedness::Left, Handedness::Right][1 - tool.hand];
     held.zip(library)
-        .and_then(|(held, library)| library.lookup(&held.model, other))
-        .ok_or_else(|| format!("no {other} grip to start from"))
+        .and_then(|(held, library)| library.lookup_for(&held.model, other, held.model_mirror))
+        .map(|(grip, _)| grip)
+        .ok_or_else(|| format!("no {} grip to start from", ["left", "right"][1 - tool.hand]))
 }
 
-/// Whether `entity` is drawn per hand: glove weapons take each hand's model
-/// frame, mirroring asymmetric geometry between them.
-fn handed_item(world: &World, entity: EntityId) -> bool {
-    use shipyard::{Get, View};
-    world
-        .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
-        .is_ok_and(|weapons| weapons.get(entity).is_ok())
+/// The posed hand's item frame from its holder's, when the grip hand is not
+/// the holder and the item is drawn mirrored between hands: the bench and its
+/// muzzle show the item as that hand would hold it.
+fn pose_frame(tool: &pose_tool::GripPoseTool, held: Option<&HeldGrip>) -> Option<Matrix4<f32>> {
+    if tool.hand == tool.holder {
+        return None;
+    }
+    let hand = [Handedness::Left, Handedness::Right][tool.hand];
+    crate::vr_grip::hand_model_mirror(held?.model_mirror?, hand)
 }
 
 /// Remove a staged entry from the library: always the first for its model
@@ -2047,13 +2062,7 @@ fn unstage_library_entry(
     library: &mut crate::vr_grip::GripLibrary,
     entry: &crate::vr_grip::BakedGripEntry,
 ) {
-    if let Some(index) = library
-        .entries
-        .iter()
-        .position(|e| e.model == entry.model && e.hand == entry.hand)
-    {
-        library.entries.remove(index);
-    }
+    library.remove_first(&entry.model, &entry.hand);
 }
 
 impl PlayerInteraction for VrInteraction {
@@ -2290,15 +2299,22 @@ impl PlayerInteraction for VrInteraction {
             {
                 let start = std::time::Instant::now();
                 let hand_name = if index == 0 { "left" } else { "right" };
+                let handedness = [Handedness::Left, Handedness::Right][index];
+                // A glove weapon is drawn mirrored in the left hand; one hand's
+                // grip, mirrored, holds it in the other.
+                let model_mirror = if crate::vr_weapon_grip::supports_model(&model) {
+                    crate::vr_weapon_grip::model_mirror(assets, &format!("{model}.bin"))
+                } else {
+                    None
+                };
                 let eligible = magazine.is_some()
                     || bake
                     || self
                         .grip_library
                         .as_ref()
                         .unwrap()
-                        .entries
-                        .iter()
-                        .any(|entry| entry.model == model && entry.hand == hand_name);
+                        .select(&model, handedness, model_mirror.is_some())
+                        .is_some();
                 let geometry = if eligible {
                     self.grip_geometry
                         .entry(format!("{model}:{hand_name}"))
@@ -2357,6 +2373,7 @@ impl PlayerInteraction for VrInteraction {
                     )
                 });
                 let has_prepared_magazine = prepared_magazine.is_some();
+                let mut mirrored = false;
                 let resolved = if has_prepared_magazine {
                     prepared_magazine
                 } else if let Some(magazine) = magazine.as_ref() {
@@ -2394,13 +2411,18 @@ impl PlayerInteraction for VrInteraction {
                     self.grip_library
                         .as_ref()
                         .unwrap()
-                        .lookup(&model, hand_name)
-                        .cloned()
+                        .lookup_for(&model, handedness, model_mirror)
+                        .map(|(grip, other)| {
+                            mirrored = other;
+                            grip
+                        })
                 };
                 let source = if has_prepared_magazine {
                     "prepared"
                 } else if bake || magazine.is_some() {
                     "bake"
+                } else if mirrored {
+                    "mirrored"
                 } else if resolved.is_some() {
                     "prepared"
                 } else {
@@ -2470,11 +2492,6 @@ impl PlayerInteraction for VrInteraction {
                     .as_ref()
                     .zip(geometry)
                     .and_then(|(grip, geometry)| grip.item_bounds(&geometry.triangles));
-                let model_mirror = if crate::vr_support::supports_model(&model) {
-                    crate::vr_weapon_grip::model_mirror(assets, &format!("{model}.bin"))
-                } else {
-                    None
-                };
                 self.fitted_grips[index] = Some(HeldGrip {
                     model_mirror,
                     item_bounds,
@@ -3009,6 +3026,7 @@ impl PlayerInteraction for VrInteraction {
             entity: tool.entity,
             item: tool.item_placed?,
             item_scale: tool.item.map_or(1.0, |(_, scale)| scale),
+            mirror: pose_frame(tool, self.fitted_grips[tool.hand].as_ref()),
             turn: tool.turn_matrix(),
             views: tool.views(),
             lights: tool.lights(),
@@ -4073,7 +4091,7 @@ mod tests {
             "{reported} vs {off}"
         );
         assert_eq!(
-            pose_hand_switch(tool, interaction.fitted_grips[1].as_ref(), None, false),
+            pose_hand_switch(tool, interaction.fitted_grips[1].as_ref(), None),
             Err("end test hold first".to_owned())
         );
         assert_eq!(
@@ -4199,34 +4217,71 @@ mod tests {
     }
 
     #[test]
-    fn a_handed_weapon_cannot_switch_hands_on_the_bench() {
+    fn a_handed_weapon_poses_its_other_hand_mirrored_unless_that_hand_has_its_own() {
+        use cgmath::Rotation3;
         let dir = crate::test_support::TempDir::new("pose-handed");
         let interaction = staged_workbench(dir.path().join("o.json"));
         let mut tool = interaction.pose_tool.unwrap();
         tool.staged = None;
-        let library = crate::vr_grip::GripLibrary {
-            entries: vec![crate::vr_grip::BakedGripEntry {
+        let base = interaction.fitted_grips[1].as_ref().unwrap();
+        let grip = |offset: Vector3<f32>, yaw: f32| crate::vr_grip::ResolvedGrip {
+            offset,
+            rotation: Quaternion::from_angle_y(cgmath::Deg(yaw)),
+            ..base.resolved.clone().unwrap()
+        };
+        let entry =
+            |hand: &str, grip: crate::vr_grip::ResolvedGrip| crate::vr_grip::BakedGripEntry {
                 authored: true,
                 model: "wrench_h".into(),
-                hand: "left".into(),
+                hand: hand.into(),
                 surface_hash: String::new(),
                 kinematics_hash: String::new(),
                 hints_hash: String::new(),
-                grip: interaction.fitted_grips[1]
-                    .as_ref()
-                    .unwrap()
-                    .resolved
-                    .clone()
-                    .unwrap(),
-            }],
+                grip,
+            };
+        let shipped_left = grip(vec3(0.0, 0.1, 0.0), 0.0);
+        let posed_right = grip(vec3(0.05, 0.01, 0.02), 30.0);
+        let mut library = crate::vr_grip::GripLibrary {
+            entries: vec![entry("left", shipped_left.clone())],
             ..Default::default()
         };
-        let held = interaction.fitted_grips[1].as_ref();
-        assert!(pose_hand_switch(&tool, held, Some(&library), false).is_ok());
+        library.prepend(crate::vr_grip::GripLibrary {
+            entries: vec![entry("right", posed_right.clone())],
+            ..Default::default()
+        });
+        let held = interaction.fitted_grips[1].clone().unwrap();
+        // The right hand's headset pose, mirrored, outranks the shipped left.
         assert_eq!(
-            pose_hand_switch(&tool, held, Some(&library), true).err(),
-            Some("hold it in that hand".to_owned())
+            pose_hand_switch(&tool, Some(&held), Some(&library)),
+            Ok(posed_right.mirrored(Handedness::Left.mirror()).unwrap())
         );
+        // An item drawn alike in both hands keeps its own hand's grip.
+        let unmirrored = HeldGrip {
+            model_mirror: None,
+            ..held.clone()
+        };
+        assert_eq!(
+            pose_hand_switch(&tool, Some(&unmirrored), Some(&library)),
+            Ok(shipped_left)
+        );
+        // A left pose of its own wins.
+        let posed_left = grip(vec3(0.0, 0.0, 0.07), -10.0);
+        library.prepend(crate::vr_grip::GripLibrary {
+            entries: vec![entry("left", posed_left.clone())],
+            ..Default::default()
+        });
+        assert_eq!(
+            pose_hand_switch(&tool, Some(&held), Some(&library)),
+            Ok(posed_left)
+        );
+        // The bench draws the item mirrored only for the hand not holding it.
+        assert_eq!(pose_frame(&tool, Some(&held)), None);
+        tool.hand = 0;
+        assert_eq!(
+            pose_frame(&tool, Some(&held)),
+            Some(Handedness::Left.mirror())
+        );
+        assert_eq!(pose_frame(&tool, Some(&unmirrored)), None);
     }
 
     #[test]
