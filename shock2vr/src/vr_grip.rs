@@ -1,7 +1,8 @@
 //! Deterministic pickup fitting against visible triangles. All outputs are
 //! hand-local; tracked motion never re-runs the search or changes item scale.
 use cgmath::{
-    EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3, Vector3, vec3,
+    EuclideanSpace, InnerSpace, Matrix4, One, Point3, Quaternion, Rotation, Rotation3, Vector3,
+    vec3,
 };
 use rapier3d::{
     na,
@@ -53,10 +54,7 @@ pub struct ResolvedGrip {
     /// a gun's aim correction (`weapon_muzzle::aim_turn`). Play puts the
     /// glove at controller · this and the item at controller · this ·
     /// (`offset`, `rotation`).
-    #[serde(
-        default = "identity_rotation",
-        skip_serializing_if = "is_identity_rotation"
-    )]
+    #[serde(default = "Quaternion::one", skip_serializing_if = "One::is_one")]
     pub hand_rotation: Quaternion<f32>,
     #[serde(flatten)]
     pub fingers: FingerPose,
@@ -68,14 +66,6 @@ pub struct ResolvedGrip {
 
 fn default_item_scale() -> f32 {
     1.0
-}
-
-pub fn identity_rotation() -> Quaternion<f32> {
-    Quaternion::new(1.0, 0.0, 0.0, 0.0)
-}
-
-fn is_identity_rotation(rotation: &Quaternion<f32>) -> bool {
-    *rotation == identity_rotation()
 }
 
 impl ResolvedGrip {
@@ -93,18 +83,6 @@ impl ResolvedGrip {
         GripPose {
             position: glove.position,
             rotation: glove.rotation * self.hand_rotation.conjugate(),
-        }
-    }
-
-    /// This grip placing its item straight off the controller: the glove
-    /// turn folded into `offset` and `rotation`, for placements that take no
-    /// glove.
-    pub fn item_in_controller(&self) -> ResolvedGrip {
-        ResolvedGrip {
-            offset: self.hand_rotation.rotate_vector(self.offset),
-            rotation: (self.hand_rotation * self.rotation).normalize(),
-            hand_rotation: identity_rotation(),
-            ..self.clone()
         }
     }
 
@@ -156,7 +134,7 @@ impl ResolvedGrip {
                 .all(|c| c.is_finite())
     }
 
-    /// Bounds of the visible fitted item in controller-local space, for capture framing.
+    /// Bounds of the visible fitted item in the glove's frame, for capture framing.
     pub fn item_bounds(&self, triangles: &[[Point3<f32>; 3]]) -> Option<[[f32; 3]; 2]> {
         use collision::{Aabb, Aabb3};
         let points = triangles.iter().flatten().map(|p| {
@@ -913,7 +891,7 @@ impl GripSurface {
             pose_family: "broad".to_owned(),
             offset,
             rotation,
-            hand_rotation: identity_rotation(),
+            hand_rotation: Quaternion::one(),
             fingers: FingerPose::curls(curls),
             contacts,
             anchor: [0.0; 3],
@@ -2044,15 +2022,12 @@ mod tests {
             "{}",
             error(&left, left_barrel)
         );
-        // Folded into the controller frame, it is the mirror of the right.
-        let (right_held, left_held) = (right.item_in_controller(), left.item_in_controller());
+        // In the controller's frame, the item is the mirror of the right's.
+        let in_controller = |grip: &ResolvedGrip, q| grip.hand_rotation * held_point(grip, q);
         let q = vec3(0.3, -0.2, 0.5);
         assert_close(
-            held_point(
-                &left_held,
-                mirror.transform_point(Point3::from_vec(q)).to_vec(),
-            ),
-            Handedness::Left.mirror_point(held_point(&right_held, q)),
+            in_controller(&left, mirror.transform_point(Point3::from_vec(q)).to_vec()),
+            Handedness::Left.mirror_point(in_controller(&right, q)),
         );
     }
 
@@ -2064,7 +2039,7 @@ mod tests {
         let plain = serde_json::to_value(&grip).unwrap();
         assert!(plain.get("hand_rotation").is_none(), "{plain}");
         let decoded: ResolvedGrip = serde_json::from_value(plain).unwrap();
-        assert_eq!(decoded.hand_rotation, identity_rotation());
+        assert!(decoded.hand_rotation.is_one());
         let turned = ResolvedGrip {
             hand_rotation: Quaternion::from_angle_x(cgmath::Deg(12.0)),
             ..grip

@@ -1389,13 +1389,13 @@ impl VrInteraction {
             pose_tool::panel::PanelEvent::TestHold => self.toggle_test_hold(),
             pose_tool::panel::PanelEvent::AlignAim => self.align_aim(1.0),
             pose_tool::panel::PanelEvent::AlignLess | pose_tool::panel::PanelEvent::AlignMore => {
-                let step = if event == pose_tool::panel::PanelEvent::AlignMore {
-                    1.0
-                } else {
-                    -1.0
+                // To the next tenth that way, from wherever it is.
+                let tenths = |amount: f32| match event {
+                    pose_tool::panel::PanelEvent::AlignMore => (amount * 10.0 + 1e-3).floor() + 1.0,
+                    _ => (amount * 10.0 - 1e-3).ceil() - 1.0,
                 };
                 if let Some(amount) = self.pose_tool.as_ref().and_then(|tool| tool.align_amount) {
-                    self.align_aim(((amount * 10.0).round() + step) / 10.0);
+                    self.align_aim(tenths(amount).clamp(0.0, 10.0) / 10.0);
                 }
             }
             pose_tool::panel::PanelEvent::ShowAim => {
@@ -1555,7 +1555,7 @@ impl VrInteraction {
                 .muzzle
                 .filter(|_| shown)
                 .map(|muzzle| pose_tool::AimLines::new(model, grip.item_scale, muzzle, controller));
-            tool.align_amount = tool.muzzle.map(|muzzle| {
+            tool.align_amount = tool.muzzle.and_then(|muzzle| {
                 crate::weapon_muzzle::aim_turn_amount(
                     grip.rotation,
                     muzzle.axis,
@@ -1597,8 +1597,13 @@ impl VrInteraction {
         let Some(current) = held.resolved.clone() else {
             return;
         };
+        let hand_rotation = crate::weapon_muzzle::aim_turn(current.rotation, muzzle.axis, amount);
+        // Already there (a step past either end): nothing to stage.
+        if hand_rotation == current.hand_rotation {
+            return;
+        }
         let grip = crate::vr_grip::ResolvedGrip {
-            hand_rotation: crate::weapon_muzzle::aim_turn(current.rotation, muzzle.axis, amount),
+            hand_rotation,
             ..current
         };
         println!(
@@ -1684,10 +1689,14 @@ impl VrInteraction {
                     item,
                     contact,
                     current.item_scale,
-                    current.hand_rotation,
                     personal,
                 );
-                (crate::vr_grip::ResolvedGrip { fingers, ..grip }, hand_pose)
+                let grip = crate::vr_grip::ResolvedGrip {
+                    fingers,
+                    hand_rotation: current.hand_rotation,
+                    ..grip
+                };
+                (grip, hand_pose)
             }
         };
         println!(
@@ -3004,10 +3013,11 @@ impl PlayerInteraction for VrInteraction {
             position: virtual_hand.get_position(),
             rotation: virtual_hand.get_rotation(),
         };
-        let hand_pose = match held.resolved.as_ref() {
-            Some(grip) => grip.glove_pose(controller),
-            None => controller,
-        };
+        // A poseable item always has a grip.
+        let hand_pose = held
+            .resolved
+            .as_ref()
+            .map_or(controller, |grip| grip.glove_pose(controller));
         self.support = None;
         self.slide = None;
         self.pose_tool_pulses.clear();
@@ -3226,13 +3236,16 @@ impl PlayerInteraction for VrInteraction {
                 else {
                     continue;
                 };
-                let grip = grip.item_in_controller();
+                let glove = grip.glove_pose(GripPose {
+                    position: hand.get_position(),
+                    rotation: hand.get_rotation(),
+                });
                 for contact in grip.contacts.iter().flatten() {
                     let local = grip.offset
                         + grip
                             .rotation
                             .rotate_vector(vec3(contact[0], contact[1], contact[2]));
-                    let point = hand.get_position() + hand.get_rotation().rotate_vector(local);
+                    let point = glove.point(local);
                     let mut marker = SceneObject::new(
                         engine::scene::color_material::create(vec3(0.0, 1.0, 1.0)),
                         Box::new(engine::scene::cube::create()),
@@ -4271,8 +4284,13 @@ mod tests {
             (before.offset, before.rotation)
         );
         interaction.align_aim(1.0);
+        // Saved, a step past full stages nothing.
+        interaction.save_staged();
+        interaction.align_aim(1.0);
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        assert!(tool.saved && tool.staged.is_none());
 
-        // Leaving mid-hold saves the aligned grip.
+        // Leaving mid-hold keeps the saved aligned grip.
         interaction.toggle_grip_pose_tool();
         assert!(!interaction.pose_workbench_open());
         let saved = crate::vr_grip::GripOverrides::load(&path).expect("saved on exit");
@@ -4285,7 +4303,7 @@ mod tests {
     /// the bench glove lands on the tracked glove and the item stays put.
     #[test]
     fn a_gun_snapshot_leaves_the_glove_where_the_tracked_hand_was() {
-        use cgmath::{Deg, Rad, Rotation3};
+        use cgmath::{Deg, Rotation3};
         let (mut world, entity, _physics, mut interaction, mut input) = wrench_support_fixture();
         world.add_component(entity, dark::properties::PropModelName("sg_h".to_owned()));
         // An aligned grip: its glove turned off the controller.
@@ -4322,16 +4340,9 @@ mod tests {
             tool.hand_pose.position,
             glove.fit.position
         );
-        let turned = Deg::from(Rad(2.0
-            * tool
-                .hand_pose
-                .rotation
-                .normalize()
-                .dot(glove.fit.rotation.normalize())
-                .abs()
-                .min(1.0)
-                .acos()))
-        .0;
+        let turned = crate::weapon_muzzle::turn_deg(
+            tool.hand_pose.rotation.normalize().conjugate() * glove.fit.rotation.normalize(),
+        );
         assert!(turned < 0.1, "the glove turned {turned} deg off the hand");
         let grip = interaction.fitted_grips[1]
             .as_ref()
@@ -4350,8 +4361,8 @@ mod tests {
         assert!((tool.aim.unwrap().error_deg - expected).abs() < 1e-3);
     }
 
-    /// On the bench a gun's aim shows while toggled on, from the glove's grip
-    /// frame, and reads as test hold reads the same grip; anything without a
+    /// On the bench a gun's aim shows while toggled on, from where the glove
+    /// puts the controller, and reads as test hold reads the same grip; anything without a
     /// barrel has none.
     #[test]
     fn a_guns_aim_shows_on_the_bench_while_toggled_and_reads_as_test_hold_does() {

@@ -1217,7 +1217,8 @@ pub(super) fn render_aim(tool: &GripPoseTool) -> Vec<SceneObject> {
     lines
 }
 
-/// Where a grip puts its item for a hand pose (as `fit_held_items` places it).
+/// Where a grip puts its item for a glove pose (`ResolvedGrip::glove_pose`
+/// of the controller, as `fit_held_items` places it).
 pub(super) fn item_pose(hand: GripPose, grip: &ResolvedGrip, contact: Vector3<f32>) -> GripPose {
     let offset = grip.offset + grip.rotation.rotate_vector(contact * grip.item_scale);
     GripPose {
@@ -1243,16 +1244,15 @@ pub(super) fn hand_for_item(
 
 /// The grip that holds the item (`item`, drawn at `item_scale` about
 /// `contact`) where the glove fitted over a tracked hand (`fit`) holds it,
-/// with the glove turned `hand_rotation` off its controller, and the hand
-/// pose that draws that glove. The grip is in authored units (`personal`
-/// being the world scale's `WorldScale::personal`), as the library and
-/// overrides store grips, so it holds the item alike at any world scale.
+/// and the hand pose that draws that glove. The grip is in authored units
+/// (`personal` being the world scale's `WorldScale::personal`), as the
+/// library and overrides store grips, so it holds the item alike at any
+/// world scale.
 pub(super) fn captured_grip(
     fit: &HandFit,
     item: GripPose,
     contact: Vector3<f32>,
     item_scale: f32,
-    hand_rotation: Quaternion<f32>,
     personal: f32,
 ) -> (ResolvedGrip, GripPose) {
     let to_hand = fit.rotation.invert();
@@ -1265,7 +1265,7 @@ pub(super) fn captured_grip(
         // The item origin, less the per-item contact placement adds.
         offset: origin - rotation.rotate_vector(contact * item_scale),
         rotation,
-        hand_rotation,
+        hand_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
         fingers: crate::vr_grip::FingerPose::Bones {
             bones: fit.bones,
             trigger_bones: None,
@@ -1339,7 +1339,7 @@ mod tests {
             pose_family: "captured".into(),
             offset: vec3(0.1, -0.2, 0.3),
             rotation: Quaternion::from_angle_y(Deg(30.0)),
-            hand_rotation: crate::vr_grip::identity_rotation(),
+            hand_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             fingers: FingerPose::curls([0.5; 5]),
             contacts: [None; 5],
             anchor: [0.0; 3],
@@ -1366,8 +1366,8 @@ mod tests {
         a.normalize().dot(b.normalize()).abs() > 1.0 - 1e-6
     }
 
-    /// Aligning turns only the glove off the controller, by the slider's
-    /// share of the shortest arc: the hand keeps its place on the item, and
+    /// Aligning turns only the glove off the controller, by a share of the
+    /// shortest arc that reads back: the hand keeps its place on the item, and
     /// play holds the item at controller · turn · grip.
     #[test]
     fn aligning_turns_the_glove_so_the_barrel_fires_down_the_controller() {
@@ -1399,13 +1399,18 @@ mod tests {
             );
             let glove = aligned.glove_pose(controller);
             let item = item_pose(glove, &aligned, vec3(0.0, 0.0, 0.0));
-            let folded = item_pose(
-                controller,
-                &aligned.item_in_controller(),
-                vec3(0.0, 0.0, 0.0),
+            let origin = controller.position
+                + (controller.rotation * aligned.hand_rotation).rotate_vector(aligned.offset);
+            assert!((item.position - origin).magnitude() < 1e-5);
+            let read = crate::weapon_muzzle::aim_turn_amount(
+                aligned.rotation,
+                BARREL,
+                aligned.hand_rotation,
             );
-            assert!((item.position - folded.position).magnitude() < 1e-5);
-            assert!(same_rotation(item.rotation, folded.rotation));
+            assert!(
+                (read.unwrap() - amount).abs() < 1e-3,
+                "{read:?} vs {amount}"
+            );
             assert!(same_rotation(
                 item.rotation,
                 controller.rotation * aligned.hand_rotation * aligned.rotation
@@ -1426,8 +1431,14 @@ mod tests {
         }
         assert_eq!(
             aim_turn(skewed.rotation, BARREL, 0.0),
-            crate::vr_grip::identity_rotation(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
             "no turn is exactly none, so it is not saved"
+        );
+        // A turn kept from another grip is off this one's arc: no share of it.
+        let other = Quaternion::from_angle_x(Deg(15.0));
+        assert_eq!(
+            crate::weapon_muzzle::aim_turn_amount(skewed.rotation, BARREL, other),
+            None
         );
     }
 
@@ -1708,7 +1719,6 @@ mod tests {
             item,
             contact,
             0.8 / captured,
-            crate::vr_grip::identity_rotation(),
             1.0 / captured,
         );
         let unit = crate::METERS_PER_WORLD_UNIT * resolved;
@@ -1937,17 +1947,8 @@ mod tests {
         let hand = real_hand().map(|p| item.position + vec3(0.02, -0.03, 0.05) / unit + p / unit);
         let glove = real_hand().map(|p| p * 0.9 / crate::METERS_PER_WORLD_UNIT);
         let contact = vec3(0.0, 0.1, 0.0);
-        let capture = |joints: &HandJoints| {
-            captured_grip(
-                &fitted(joints, glove),
-                item,
-                contact,
-                0.8,
-                crate::vr_grip::identity_rotation(),
-                1.0,
-            )
-            .0
-        };
+        let capture =
+            |joints: &HandJoints| captured_grip(&fitted(joints, glove), item, contact, 0.8, 1.0).0;
         let unturned = capture(&hand);
         // Turned, the real hand holds the drawn (turned) item the same way:
         // the tool reads it back in the unturned bench.

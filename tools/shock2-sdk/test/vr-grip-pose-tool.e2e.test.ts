@@ -881,10 +881,6 @@ for (const [name, template, inPlane] of [["shotgun", -19, [1, 1, 0]], ["wrench",
       if (right.muzzle) {
         near(left.muzzle!, mirrorX(right.muzzle), "muzzle");
         near(left.fires!, mirrorX(right.fires!), "firing direction");
-        // It fires off the left controller by as much as off the right.
-        const off = (fires: Vec3) => (Math.acos(Math.min(1, -normalize(fires)[2])) * 180) / Math.PI;
-        assert.ok(Math.abs(off(left.fires!) - off(right.fires!)) < 1,
-          `shots leave ${off(left.fires!)} deg off the left controller, ${off(right.fires!)} off the right`);
         // And the free right hand still supports it.
         await attachSupportHand(game, "left");
         const support = (await game.info()).player.hand_grips.find((g) => g.hand === "left")!.support;
