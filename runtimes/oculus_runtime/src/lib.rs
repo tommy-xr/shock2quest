@@ -674,6 +674,7 @@ fn main() {
         // Projectile orbs/trails are authored particles, not optional polish.
         render_particles: true,
         debug_skeletons: false,
+        multimodal,
         ..GameOptions::default()
     };
     // NativeActivity owns Android lifecycle and input queues on this thread.

@@ -38,6 +38,17 @@ pub fn hand_world_position(
     pawn_pos + HAND_OFFSET + pawn_rotation.rotate_vector(hand_local)
 }
 
+/// [`hand_world_position`] inverted: a world point in pawn-local input space.
+pub fn hand_local_position(
+    pawn_pos: Vector3<f32>,
+    pawn_rotation: Quaternion<f32>,
+    world: Vector3<f32>,
+) -> Vector3<f32> {
+    pawn_rotation
+        .invert()
+        .rotate_vector(world - pawn_pos - HAND_OFFSET)
+}
+
 /// Maximum world-space distance from the hand/eye to a frob target's visible
 /// surface. Retail `shock2.gam` authors `GAMEPARAM.Frob Dist = 50`; the
 /// original `PickSetFocus` treats that as squared SS2 units, while this engine

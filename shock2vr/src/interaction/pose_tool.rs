@@ -2,7 +2,8 @@
 //! mission and shows, in a plain room of its own, the held item with its saved
 //! grip's glove floating in front of the player. A tracked hand forms the grip around it; the other hand's
 //! controller trigger (or its tracked pinch) stages that pose live, its lower
-//! button saves it as a headset override and its upper button discards it.
+//! button saves it as a headset override and its upper button discards it,
+//! and its squeeze turns the bench to examine it.
 //! A panel beside the bench (`panel`) shows the state and repeats the controls.
 pub(super) mod panel;
 
@@ -37,8 +38,10 @@ const STEADY_SECONDS: f32 = 0.3;
 /// Every joint stays this close to its window mean to count as steady.
 /// Quest 3 hands held still stray up to ~13 mm.
 const STEADY_DISTANCE: f32 = 0.015;
-/// Natural-log item scale change per second at full thumbstick.
+/// Natural-log item scale change per second at full thumbstick, and the
+/// thumbstick travel below which it does nothing.
 const SCALE_RATE: f32 = 0.7;
+const SCALE_DEAD_ZONE: f32 = 0.2;
 /// The grip editor's authored item scale range.
 const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.1..=3.0;
 /// A glove joint this close to the item's surface touches it.
@@ -60,6 +63,18 @@ const BENCH_DROP: f32 = 0.3;
 const BENCH_ASIDE: f32 = 0.1;
 /// The workbench room's width, centred on where the player stood.
 const ROOM_SIZE: f32 = 12.0;
+/// The panel beam starts this far out of the controller (its glove holds
+/// the controller, not a pointing finger), and runs this far when it misses.
+const BEAM_CLEARANCE: f32 = 0.04;
+const BEAM_MISS_LENGTH: f32 = 1.0;
+
+/// Whether a hand's controller is held, so aims the panel ray. The runtime
+/// must track it; the posing hand's is set down once that hand is tracked.
+/// The free hand's joints say nothing: with simultaneous hands and
+/// controllers a hand holding its controller can report joints too.
+pub(super) fn controller_in_hand(posing: bool, joints: bool, tracked: bool) -> bool {
+    tracked && !(posing && joints)
+}
 
 /// A physical distance in world units at the active world scale.
 fn world(metres: f32) -> f32 {
@@ -127,11 +142,23 @@ pub(super) struct GripPoseTool {
     pub poke: panel::Poke,
     /// Whether the other hand can be posed instead, or why not.
     pub switch: Result<(), String>,
+    /// The free hand is tracked, so it works the panel by fingertip.
+    fingertip: bool,
+    /// How the bench is turned for viewing about `pivot`, and while the
+    /// free controller's squeeze turns it, that controller's rotation and
+    /// the turn as the squeeze began.
+    pub turn: Quaternion<f32>,
+    turning: Option<(Quaternion<f32>, Quaternion<f32>)>,
+    squeezed: bool,
+    /// The free thumbstick was seen centred in hand since last out of it.
+    stick_armed: bool,
     /// Recent posing-hand frames, each with the time since the one before
     /// (zero for the oldest), spanning the steady window.
     recent: VecDeque<(HandJoints, f32)>,
     requested: bool,
     pinching: bool,
+    /// The free hand was lost since last seen open.
+    pinch_lost: bool,
     clicked: bool,
 }
 
@@ -177,18 +204,29 @@ impl GripPoseTool {
             triggers: [panel::TriggerArbiter::new(); 2],
             poke: Default::default(),
             switch: Ok(()),
+            fingertip: false,
+            turn: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            turning: None,
+            squeezed: true,
+            stick_armed: false,
             recent: VecDeque::new(),
             // Entered "already pressed": a trigger, pinch or click held as
             // the workbench opens must be let go before it acts.
             requested: true,
             pinching: false,
+            pinch_lost: false,
             clicked: true,
         }
     }
 
     /// The leading edge of the free controller's thumbstick click steps the
-    /// contact spheres and joint markers to the next `ContactView`.
-    pub fn cycle_contact_view(&mut self, click: bool) {
+    /// contact spheres and joint markers to the next `ContactView`. Out of
+    /// hand it is disarmed, as if held, until let go in hand.
+    pub fn cycle_contact_view(&mut self, click: bool, in_hand: bool) {
+        if !in_hand {
+            self.clicked = true;
+            return;
+        }
         if click && !self.clicked {
             self.step_contact_view();
         }
@@ -230,7 +268,9 @@ impl GripPoseTool {
         self.capture_failure = None;
         self.saved = false;
         self.recent.clear();
+        // The newly free hand pinches once seen open.
         self.pinching = false;
+        self.pinch_lost = true;
         self.poke = Default::default();
         // The panel moves to the newly free hand's side.
         if self.placed {
@@ -243,11 +283,15 @@ impl GripPoseTool {
     }
 
     /// Ignore whatever is held now, as on entry: for frames the workbench
-    /// was not updated (the pause menu over it).
+    /// was not updated (the pause menu over it, or the app unfocused).
     pub fn rearm(&mut self) {
         self.triggers = [panel::TriggerArbiter::new(); 2];
         self.requested = true;
+        self.pinch_lost = true;
         self.clicked = true;
+        self.squeezed = true;
+        self.turning = None;
+        self.stick_armed = false;
         self.poke = Default::default();
         // Frames from before the pause are not part of a steady window now.
         self.recent.clear();
@@ -275,27 +319,47 @@ impl GripPoseTool {
         }
         self.pointer = crate::ui::vr_frontend_pointer_pass(&aimed, panel::CANVAS, &placed);
         // Each trigger's press belongs to whatever its own ray was on as it
-        // went down; only the free controller's can snapshot.
+        // went down; only the free controller's can snapshot. A controller
+        // with no ray presses nothing, and is disarmed (as if held) until let
+        // go with one.
         let mut click = None;
         let mut snapshot = false;
         for (index, hand) in [&input.left_hand, &input.right_hand]
             .into_iter()
             .enumerate()
         {
-            let hit = self
+            let ray = self
                 .pointer
                 .rays
                 .iter()
-                .find(|ray| crate::vr_config::hand_slot(ray.handedness) == index)
-                .and_then(|ray| ray.canvas_hit);
-            let (clicked, world) = self.triggers[index]
-                .update(hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD, hit);
+                .find(|ray| crate::vr_config::hand_slot(ray.handedness) == index);
+            if ray.is_none() {
+                self.triggers[index] = panel::TriggerArbiter::new();
+                continue;
+            }
+            let hit = ray.and_then(|ray| ray.canvas_hit);
+            // A ray just off the panel's edge is a missed button, not a
+            // snapshot.
+            let near = ray.is_some_and(|ray| {
+                panel::ray_distance(&placed, ray.origin, ray.direction) <= panel::PANEL_MARGIN
+            });
+            let (clicked, world) = self.triggers[index].update(
+                hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
+                hit,
+                near,
+            );
             click = click.or(clicked);
             if index != self.hand {
                 snapshot = world;
             }
         }
-        let free = [&input.left_hand, &input.right_hand][1 - self.hand].joints;
+        // The free fingertip presses only with no controller in that hand: a
+        // hand reaching with its controller would press what its ray skipped.
+        let free = [&input.left_hand, &input.right_hand][1 - self.hand];
+        let free = free
+            .joints
+            .filter(|_| crate::util::tracked_rotation(free.rotation).is_none());
+        self.fingertip = free.is_some();
         let poked = self.poke.update(&placed, free.as_ref());
         self.hover = self
             .pointer
@@ -330,6 +394,8 @@ impl GripPoseTool {
             "switch_disabled": view.switch.err(),
             "hover": self.hover,
             "panel": placed,
+            // The bench's view turn about its pivot (world space).
+            "view": { "turn": self.turn, "pivot": self.pivot() },
         })
     }
 
@@ -346,7 +412,77 @@ impl GripPoseTool {
             contact_view: self.contact_view,
             switch: self.switch.clone(),
             staged: self.staged.is_some(),
+            fingertip: self.fingertip,
         }
+    }
+
+    /// While the free controller's squeeze is held (from its leading edge),
+    /// the bench turns 1:1 with the controller; let go, it stays turned.
+    /// `controller` is its world rotation, `None` while it aims no ray.
+    pub fn turn_with(&mut self, controller: Option<Quaternion<f32>>, squeeze: bool) {
+        // Out of hand it lets go, and is disarmed (as if held) until
+        // released in hand: a grab never resumes against a stale rotation.
+        let Some(now) = controller else {
+            self.turning = None;
+            self.squeezed = true;
+            return;
+        };
+        if !squeeze {
+            self.turning = None;
+        } else {
+            match self.turning {
+                Some((grabbed, turn)) => {
+                    self.turn = (now * grabbed.invert() * turn).normalize();
+                }
+                None if !self.squeezed => self.turning = Some((now, self.turn)),
+                None => {}
+            }
+        }
+        self.squeezed = squeeze;
+    }
+
+    /// The free controller's thumbstick y for scaling: zero out of hand, and
+    /// after that (or on entry) until it is seen centred in hand.
+    pub fn scale_input(&mut self, thumbstick_y: f32, in_hand: bool) -> f32 {
+        if !in_hand {
+            self.stick_armed = false;
+        } else if thumbstick_y.abs() < SCALE_DEAD_ZONE {
+            self.stick_armed = true;
+        }
+        if self.stick_armed { thumbstick_y } else { 0.0 }
+    }
+
+    pub fn reset_view(&mut self) {
+        self.turn = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        self.turning = None;
+    }
+
+    /// What the bench is turned about: the item's origin.
+    pub fn pivot(&self) -> Vector3<f32> {
+        self.item
+            .map_or(self.hand_pose.position, |(item, _)| item.position)
+    }
+
+    /// Draws the bench (item, posed gloves, their spheres) as turned. The
+    /// tool works in the unturned bench, so captures stay relative to the
+    /// item.
+    pub fn turn_matrix(&self) -> Matrix4<f32> {
+        let pivot = self.pivot();
+        Matrix4::from_translation(pivot)
+            * Matrix4::from(self.turn)
+            * Matrix4::from_translation(-pivot)
+    }
+
+    /// A world point (where the real hand is) in the unturned bench.
+    pub fn to_bench(&self, point: Vector3<f32>) -> Vector3<f32> {
+        let pivot = self.pivot();
+        pivot + self.turn.invert().rotate_vector(point - pivot)
+    }
+
+    /// A bench point where it is drawn, in the world.
+    pub fn from_bench(&self, point: Vector3<f32>) -> Vector3<f32> {
+        let pivot = self.pivot();
+        pivot + self.turn.rotate_vector(point - pivot)
     }
 
     /// Fixed lights for the workbench (no mission light reaches it), around
@@ -416,7 +552,21 @@ impl GripPoseTool {
             }
             None => self.recent.clear(),
         }
-        self.pinching = pinching(self.pinching, tracked[1 - self.hand].as_ref());
+        // Losing the free hand is not letting go of a pinch, nor is finding
+        // it pinched one: after a loss it must be seen open to pinch again.
+        match tracked[1 - self.hand].as_ref() {
+            None => {
+                self.pinch_lost = true;
+                self.pinching = false;
+            }
+            Some(joints) if self.pinch_lost => {
+                if !pinching(true, Some(joints)) {
+                    self.pinch_lost = false;
+                    self.pinching = false;
+                }
+            }
+            Some(joints) => self.pinching = pinching(self.pinching, Some(joints)),
+        }
         let requested = trigger || self.pinching;
         if requested && !self.requested {
             match steady_mean(&self.recent) {
@@ -437,7 +587,7 @@ impl GripPoseTool {
     /// Thumbstick y grows or shrinks the item (`item_scale` as drawn) while
     /// its controller is held.
     pub fn scale(item_scale: f32, thumbstick_y: f32, dt: f32) -> f32 {
-        if thumbstick_y.abs() < 0.2 {
+        if thumbstick_y.abs() < SCALE_DEAD_ZONE {
             return item_scale;
         }
         let personal = crate::world_scale::WorldScale::active().personal();
@@ -851,6 +1001,12 @@ pub(super) fn render(
             lights.clone(),
         ));
     }
+    // Built in the unturned bench; drawn turned with it (the live glove so
+    // lands back on the real hand).
+    let turn = tool.turn_matrix();
+    for object in &mut posed {
+        object.set_transform(turn * object.get_transform());
+    }
     // The posing gloves again in each extra view; the mission redraws the
     // item itself into those views.
     for view in tool.views().into_iter().flatten() {
@@ -864,7 +1020,9 @@ pub(super) fn render(
     objs
 }
 
-/// The control panel, with a beam from the controller pointing at it.
+/// The control panel, and a beam from each controller in hand, wherever it
+/// points: the panel is within reach, so the player needs to see the aim
+/// before the ray reaches it.
 pub(super) fn render_panel(
     tool: &GripPoseTool,
     assets: &mut engine::assets::asset_cache::AssetCache,
@@ -881,18 +1039,23 @@ pub(super) fn render_panel(
         crate::ui::VR_COMPONENT_Z_STEP,
     );
     let layers = crate::ui::canvas_layers(&objects, &placed);
-    objects.extend(crate::ui::pointer_beams(
-        &tool.pointer,
-        panel::CANVAS,
-        &placed,
-        layers,
-        0.0,
-        false,
-    ));
     crate::util::tag_render_source(
         &mut objects,
         crate::util::render_source::GRIP_WORKBENCH_PANEL,
     );
+    let mut beams = crate::ui::tool_pointer_beams(
+        &tool.pointer,
+        panel::CANVAS,
+        &placed,
+        layers,
+        world(BEAM_CLEARANCE),
+        world(BEAM_MISS_LENGTH),
+    );
+    crate::util::tag_render_source(
+        &mut beams,
+        crate::util::render_source::GRIP_WORKBENCH_POINTER,
+    );
+    objects.extend(beams);
     objects
 }
 
@@ -1272,6 +1435,204 @@ mod tests {
         tool
     }
 
+    fn turned_by(a: Quaternion<f32>, b: Quaternion<f32>) -> bool {
+        a.normalize().dot(b.normalize()).abs() > 1.0 - 1e-5
+    }
+
+    #[test]
+    fn a_squeeze_turns_the_bench_with_the_controller_and_it_stays_turned() {
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let mut tool = tool_with_item(vec3(1.0, 2.0, 3.0), vec3(1.0, 2.0, 6.0));
+        let grab = Quaternion::from_angle_x(Deg(10.0));
+        let quarter = Quaternion::from_angle_y(Deg(90.0));
+        // A squeeze held as the workbench opens turns nothing.
+        tool.turn_with(Some(grab), true);
+        tool.turn_with(Some(quarter * grab), true);
+        assert!(turned_by(tool.turn, identity));
+        // A fresh squeeze turns it 1:1 with the controller.
+        tool.turn_with(Some(grab), false);
+        tool.turn_with(Some(grab), true);
+        tool.turn_with(Some(quarter * grab), true);
+        assert!(turned_by(tool.turn, quarter));
+        // Lost mid-turn: it holds; let go: it stays.
+        tool.turn_with(None, true);
+        tool.turn_with(Some(grab), false);
+        assert!(turned_by(tool.turn, quarter));
+        // A second squeeze turns on from there.
+        tool.turn_with(Some(grab), true);
+        tool.turn_with(Some(quarter * grab), true);
+        assert!(turned_by(tool.turn, quarter * quarter));
+        // About the item, which stays put.
+        let pivot = tool.pivot();
+        let moved = tool.turn_matrix() * pivot.extend(1.0);
+        assert!((moved.truncate() - pivot).magnitude() < 1e-5);
+        tool.reset_view();
+        assert!(turned_by(tool.turn, identity));
+    }
+
+    #[test]
+    fn turning_the_bench_never_changes_what_a_hand_captures() {
+        let mut tool = tool_with_item(vec3(1.0, 2.0, 3.0), vec3(1.0, 2.0, 6.0));
+        let (item, _) = tool.item.unwrap();
+        let unit = crate::world_scale::meters_per_world_unit();
+        let hand = real_hand().map(|p| item.position + vec3(0.02, -0.03, 0.05) / unit + p / unit);
+        let glove = real_hand().map(|p| p * 0.9 / crate::METERS_PER_WORLD_UNIT);
+        let contact = vec3(0.0, 0.1, 0.0);
+        let capture = |joints: &HandJoints| {
+            captured_grip(joints, &glove, Handedness::Right, item, contact, 0.8, 1.0)
+                .unwrap()
+                .0
+        };
+        let unturned = capture(&hand);
+        // Turned, the real hand holds the drawn (turned) item the same way:
+        // the tool reads it back in the unturned bench.
+        tool.turn = Quaternion::from_axis_angle(vec3(0.3, 1.0, 0.2).normalize(), Deg(75.0));
+        let seen = hand.map(|p| tool.from_bench(p));
+        let turned = capture(&seen.map(|p| tool.to_bench(p)));
+        assert!((turned.offset - unturned.offset).magnitude() < 1e-4);
+        assert!(turned_by(turned.rotation, unturned.rotation));
+        assert_eq!(turned.item_scale, unturned.item_scale);
+    }
+
+    #[test]
+    fn a_free_controller_out_of_hand_never_snapshots_and_must_let_go_on_return() {
+        use crate::input_context::InputContext;
+        use crate::ui::test_support::{hand_aimed_away, test_panel};
+        let mut tool = posing_tool();
+        tool.panel = Some(test_panel());
+        let mut input = InputContext::default();
+        input.left_hand = hand_aimed_away(0.0);
+        tool.point(&input);
+        // Set down (no ray), its trigger pressed: nothing.
+        input.left_hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        input.left_hand.trigger_value = 1.0;
+        assert_eq!(tool.point(&input), (None, false));
+        // Back in hand with the trigger still down: still nothing.
+        input.left_hand = hand_aimed_away(1.0);
+        assert_eq!(tool.point(&input), (None, false));
+        input.left_hand.trigger_value = 0.0;
+        tool.point(&input);
+        input.left_hand.trigger_value = 1.0;
+        assert_eq!(tool.point(&input), (None, true), "a fresh press in hand");
+        // Out of hand, its other controls disarm too.
+        tool.cycle_contact_view(false, true);
+        let view = tool.contact_view;
+        tool.cycle_contact_view(true, false);
+        tool.cycle_contact_view(true, true);
+        assert_eq!(tool.contact_view, view, "a click held from out of hand");
+    }
+
+    #[test]
+    fn a_turn_or_resize_lost_out_of_hand_resumes_only_after_letting_go() {
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let mut tool = tool_with_item(vec3(1.0, 2.0, 3.0), vec3(1.0, 2.0, 6.0));
+        let grab = Quaternion::from_angle_x(Deg(10.0));
+        let quarter = Quaternion::from_angle_y(Deg(90.0));
+        tool.turn_with(Some(grab), false);
+        tool.turn_with(Some(grab), true);
+        // Lost mid-turn, found again still squeezed and turned: no jump.
+        tool.turn_with(None, true);
+        tool.turn_with(Some(quarter * grab), true);
+        assert!(turned_by(tool.turn, identity));
+        // The stick resizes only once seen centred in hand.
+        assert_eq!(
+            tool.scale_input(1.0, true),
+            0.0,
+            "pushed as the bench opened"
+        );
+        assert_eq!(tool.scale_input(0.0, true), 0.0);
+        assert_eq!(tool.scale_input(1.0, true), 1.0);
+        assert_eq!(tool.scale_input(1.0, false), 0.0, "out of hand");
+        assert_eq!(
+            tool.scale_input(1.0, true),
+            0.0,
+            "back in hand, still pushed"
+        );
+    }
+
+    #[test]
+    fn losing_the_pinching_hand_never_makes_a_second_capture() {
+        let mut tool = posing_tool();
+        let open = Some(hand_with_tips(1.0));
+        let pinch = Some(hand_with_tips(0.0));
+        hold(&mut tool, [0.0; STEADY_FRAMES], FRAME);
+        tool.observe([open, posing(0.0)], false, FRAME);
+        tool.observe([pinch, posing(0.0)], false, FRAME);
+        assert!(tool.capture.take().is_some(), "a pinch captures");
+        tool.observe([None, posing(0.0)], false, FRAME);
+        tool.observe([pinch, posing(0.0)], false, FRAME);
+        assert!(
+            tool.capture.is_none(),
+            "found still pinched: the same pinch"
+        );
+        tool.observe([open, posing(0.0)], false, FRAME);
+        tool.observe([pinch, posing(0.0)], false, FRAME);
+        assert!(tool.capture.is_some(), "seen open, a new pinch captures");
+    }
+
+    #[test]
+    fn a_free_controller_aims_even_while_its_hand_reports_joints() {
+        // Quest multimodal: the hand holding the free controller is tracked
+        // too. That controller still aims; only the posing hand's tracked
+        // joints mean its controller is set down.
+        assert!(controller_in_hand(false, true, true));
+        assert!(controller_in_hand(false, false, true));
+        assert!(!controller_in_hand(true, true, true));
+        assert!(controller_in_hand(true, false, true));
+        assert!(!controller_in_hand(false, false, false), "untracked");
+    }
+
+    #[test]
+    fn a_tracked_free_hand_taps_only_without_its_controller() {
+        use crate::input_context::InputContext;
+        use crate::ui::test_support::{hand_aimed_away, test_panel};
+        let panel = test_panel();
+        let contacts =
+            crate::ui::canvas_to_panel_world(panel::CANVAS, &panel, cgmath::vec2(297.0, 146.0));
+        // The free (left) index tip pushed from in front to through Contacts.
+        let tip_at = |depth: f32| {
+            let mut joints = [vec3(0.0, 0.0, 0.0); HAND_JOINT_COUNT];
+            joints[crate::hand_capture::TIPS[1]] = contacts + panel.normal() * world(depth);
+            Some(joints)
+        };
+        for (holding, presses) in [(true, false), (false, true)] {
+            let mut tool = posing_tool();
+            tool.panel = Some(panel);
+            let mut input = InputContext::default();
+            input.left_hand = hand_aimed_away(0.0);
+            if !holding {
+                input.left_hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+            }
+            input.left_hand.joints = tip_at(0.02);
+            tool.point(&input);
+            assert_eq!(tool.panel_view().fingertip, !holding);
+            input.left_hand.joints = tip_at(-0.015);
+            let (event, _) = tool.point(&input);
+            assert_eq!(
+                event == Some(panel::PanelEvent::Contacts),
+                presses,
+                "holding the controller: {holding}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_press_aimed_just_off_the_panel_edge_does_not_snapshot() {
+        use crate::input_context::InputContext;
+        use crate::ui::test_support::{hand_aimed_at, test_panel};
+        // Just right of Exit, past the panel's edge (x 400): ~2 cm off on
+        // the test panel, then ~15 cm off.
+        for (x, snapshots) in [(405.0, false), (440.0, true)] {
+            let mut tool = posing_tool();
+            tool.panel = Some(test_panel());
+            let mut input = InputContext::default();
+            input.left_hand = hand_aimed_at(panel::CANVAS, cgmath::vec2(x, 191.0), 0.0);
+            assert_eq!(tool.point(&input), (None, false));
+            input.left_hand.trigger_value = 1.0;
+            assert_eq!(tool.point(&input), (None, snapshots), "aimed at x {x}");
+        }
+    }
+
     #[test]
     fn views_sit_beside_the_item_turned_toward_the_viewer() {
         use cgmath::Transform;
@@ -1464,16 +1825,16 @@ mod tests {
     fn a_thumbstick_click_cycles_contacts_full_off_once_per_press() {
         let mut tool = posing_tool();
         assert_eq!(tool.contact_view, ContactView::Contacts, "the default");
-        tool.cycle_contact_view(true);
+        tool.cycle_contact_view(true, true);
         assert_eq!(
             tool.contact_view,
             ContactView::Contacts,
             "held as the workbench opened"
         );
         let click = |tool: &mut GripPoseTool| {
-            tool.cycle_contact_view(false);
-            tool.cycle_contact_view(true);
-            tool.cycle_contact_view(true);
+            tool.cycle_contact_view(false, true);
+            tool.cycle_contact_view(true, true);
+            tool.cycle_contact_view(true, true);
             tool.contact_view
         };
         assert_eq!(click(&mut tool), ContactView::Full);

@@ -830,7 +830,8 @@ impl FlatUiHost {
                     .and_then(|r| match spec.button {
                         ReadoutButton::SystemMenu
                         | ReadoutButton::Logs
-                        | ReadoutButton::CloseUseMode => None,
+                        | ReadoutButton::CloseUseMode
+                        | ReadoutButton::PoseHeldItem => None,
                         ReadoutButton::SelectLeftHand => r.hand_entities[0],
                         ReadoutButton::SelectRightHand => r.hand_entities[1],
                         _ => r.weapon,
@@ -4212,6 +4213,7 @@ mod tests {
             resources: [0; 2],
             hazards: Default::default(),
             alarm_seconds: None,
+            pose: None,
             bio: Default::default(),
             ammo: crate::hud::ammo_panel::AmmoReadout {
                 ammo: Some(12),
@@ -4546,6 +4548,7 @@ mod tests {
             resources: [0; 2],
             hazards: Default::default(),
             alarm_seconds: None,
+            pose: None,
             bio: Default::default(),
             ammo: Default::default(),
         }));

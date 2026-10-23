@@ -1471,10 +1471,14 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "SwitchHand" | "Contacts" | "Exit";
+          event: "Save" | "Discard" | "SwitchHand" | "Contacts" | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;
+      /** How the free controller's squeeze has turned the bench for
+       * viewing (world-space rotation about `pivot`, the item's origin);
+       * captures stay relative to the unturned item. */
+      view: { turn: ResolvedGrip["rotation"]; pivot: ResolvedGrip["offset"] };
     };
   } | null;
   /** Pistol slide contact, independent of the ordinary two-hand support grip. */

@@ -6,7 +6,7 @@ import { findRepoRoot, GameServer, setHandWorldPose } from "../src/index.js";
 import type { ResolvedGrip, Vec3 } from "../src/types.js";
 import { isolatedDataRoot } from "./helpers/isolated-data-root.js";
 import {
-  add, cross, holdDebugMug, normalize, quatConjugate, quatFromTo, quatMultiply, quatRotate, scale, sub,
+  add, aimVrHandAt, cross, holdDebugMug, normalize, quatConjugate, quatFromTo, quatMultiply, quatRotate, scale, sub,
 } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
@@ -108,7 +108,7 @@ test(
     // the control panel.
     const benchScene = (await game.scene.objects()).objects;
     const strays = benchScene
-      .filter((o) => !["grip_workbench", "player_hands", "grip_workbench_panel"].includes(o.source ?? ""))
+      .filter((o) => !["grip_workbench", "player_hands", "grip_workbench_panel", "grip_workbench_pointer"].includes(o.source ?? ""))
       .map((o) => `${o.source}:${o.name ?? o.model}`);
     assert.equal(strays.length, 0, `no mission objects, saw ${strays.slice(0, 8).join(", ")}`);
     const environment = benchScene.filter((o) => o.source === "grip_workbench" && o.entity_id === null);
@@ -142,6 +142,13 @@ test(
     const scaled = grip.grip!.item_scale;
     assert.ok(scaled > unscaled * 1.2, `${unscaled} -> ${scaled}`);
     assert.ok(Math.abs((await benchScale()) - scaled) < 1e-3, `drawn at ${await benchScale()}, grip ${scaled}`);
+    // A resize is an unsaved edit, which Y (the free controller's upper
+    // button) discards like a capture.
+    assert.equal(grip.pose_tool?.staged, true, "resizing stages the grip");
+    await game.input.trigger("LeftHandUpperButton");
+    await game.step({ frames: 2 });
+    grip = await rightGrip();
+    assert.ok(Math.abs(grip.grip!.item_scale - unscaled) < 1e-6, "discarded back to its size");
     const fitted = grip.grip;
     assert.ok(fitted && !("bones" in fitted), "the mug starts on its shipped grip");
 
@@ -432,7 +439,7 @@ test(
     assert.ok(panelDraws.length > 0, "the panel is drawn");
     assert.equal((await tool()).panel.status, "Pose, then snapshot");
     // Nothing staged: Save and Discard are disabled.
-    assert.deepEqual((await tool()).panel.panel!.buttons.map((b) => b.event), ["SwitchHand", "Contacts", "Exit"]);
+    assert.deepEqual((await tool()).panel.panel!.buttons.map((b) => b.event), ["SwitchHand", "Contacts", "ResetView", "Exit"]);
     const { v, s } = (await tool()).panel.panel!.rotation;
     const panelUp = (metres: number) => scale(quatRotate([v.x, v.y, v.z, s], [0, 1, 0]), metres);
 
@@ -466,12 +473,13 @@ test(
     assert.ok(Math.abs(pulses.last[0]!.amplitude - 0.9) < 1e-6, "the save's click");
     const saved = readFileSync(path, "utf8");
 
-    // Stage again, then poke Discard with the free hand's tracked index tip:
-    // from 3 cm in front to 1.5 cm through the button. Its ray stands down
-    // while the hand is tracked.
+    // Stage again, then set the free controller down (untracked) and poke
+    // Discard with that hand's tracked index tip: from 3 cm in front to
+    // 1.5 cm through the button.
     await aimAway(game, "left");
     await click(game, "left");
     assert.equal((await tool()).staged, true);
+    await game.input.set("left_hand.tracked", 0);
     const { toLocal } = await workbench(game);
     const panel = (await tool()).panel.panel!;
     const discard = xyz(panel.buttons.find((b) => b.event === "Discard")!.center);
@@ -490,7 +498,7 @@ test(
     await game.step({ frames: 1 });
     assert.equal((await tool()).staged, false, "a centimetre through presses Discard");
     assert.equal(readFileSync(path, "utf8"), saved, "discarding writes nothing");
-    await game.input.set("left_hand.joints", null);
+    await game.input.setMany({ "left_hand.joints": null, "left_hand.tracked": 1 });
     await game.step({ frames: 1 });
 
     // The tracked hand pushed into the mug buzzes the free controller, and
@@ -566,6 +574,163 @@ test(
     assert.ok(!grips.some((g) => g.hand === "left"), "the left hand holds nothing");
   },
 );
+
+test(
+  "grip pose tool panel: the beam always shows, a press just off the panel never snapshots, a squeeze turns only the view",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    const path = join(data.root, "vr-grip-overrides.json");
+    const { unit, hand } = await openWorkbench(game);
+    const tool = async () => (await workbench(game)).tool;
+    const beam = async () =>
+      (await game.scene.objects()).objects.filter((o) => o.source === "grip_workbench_pointer").length;
+
+    // The free controller shows its beam within reach of the panel, and
+    // aimed at nothing at all.
+    await aimAtButton(game, "left", "Exit", unit, { standOff: 0.12 });
+    await game.step({ frames: 1 });
+    assert.ok((await tool()).panel.hover, "aimed at Exit from 12 cm");
+    assert.equal(await beam(), 3, "a beam (halo and core) and its hit dot, 12 cm from the panel");
+    await aimAway(game, "left");
+    await game.step({ frames: 1 });
+    assert.equal(await beam(), 2, "aimed away: the beam still shows, with no dot");
+
+    // Set down (untracked), the free controller draws no beam and its
+    // trigger snapshots nothing - nor when it is picked up still pressed.
+    await game.input.setMany({ "left_hand.tracked": 0, "left_hand.trigger": 1 });
+    await game.step({ frames: 2 });
+    assert.equal(await beam(), 0, "no beam out of hand");
+    await game.input.set("left_hand.tracked", 1);
+    await game.step({ frames: 2 });
+    await game.input.set("left_hand.trigger", 0);
+    await game.step({ frames: 2 });
+    assert.equal((await tool()).staged, false, "no snapshot from a controller out of hand");
+
+    // Quest multimodal: the hand holding the free controller is tracked too.
+    // Its controller still aims, and its trigger clicks rather than snapshots.
+    await game.input.set("left_hand.joints", trackedHand([hand[0] - 0.4, hand[1], hand[2]], unit, { left: true }));
+    await aimAtButton(game, "left", "Contacts", unit);
+    await click(game, "left");
+    assert.equal((await tool()).contact_view, "full", "the ray clicked Contacts");
+    assert.equal((await tool()).staged, false, "and did not snapshot");
+    // Nor does that hand, closed round its controller, pinch a snapshot.
+    await game.input.set("left_hand.joints",
+      trackedHand([hand[0] - 0.4, hand[1], hand[2]], unit, { left: true, pinch: true }));
+    await game.step({ frames: 3 });
+    assert.equal((await tool()).staged, false, "a pinch with the controller in hand is no snapshot");
+    await game.input.set("left_hand.joints", null);
+
+    // A press aimed 2 cm past the panel's edge beside Exit is a missed
+    // button: no snapshot. 15 cm past it, it snapshots.
+    const panel = (await tool()).panel.panel!;
+    const { v, s } = panel.rotation;
+    const right = quatRotate([v.x, v.y, v.z, s], [1, 0, 0]);
+    const exit = xyz(panel.buttons.find((b) => b.event === "Exit")!.center);
+    const edgeMetres = (panel.size.x / 2 - dot(sub(exit, xyz(panel.center)), right)) * unit;
+    await aimAtButton(game, "left", "Exit", unit, { miss: scale(right, edgeMetres + 0.02) });
+    await game.step({ frames: 1 });
+    assert.equal((await tool()).panel.hover, null, "off the panel");
+    await click(game, "left");
+    assert.equal((await tool()).staged, false, "2 cm off the edge does not snapshot");
+    await aimAtButton(game, "left", "Exit", unit, { miss: scale(right, edgeMetres + 0.15) });
+    await click(game, "left");
+    assert.equal((await tool()).staged, true, "15 cm off the edge snapshots");
+    await aimAtButton(game, "left", "Save", unit);
+    await click(game, "left");
+    const unturned = JSON.parse(readFileSync(path, "utf8")).entries[0].grip as ResolvedGrip;
+
+    // Untracked, the posing hand shows the saved glove on the bench.
+    await game.input.set("right_hand.joints", null);
+    await game.step({ frames: 2 });
+    const glove = async () =>
+      (await game.scene.objects()).objects.filter((o) => o.name === "Right grip glove").at(-1)!.position;
+    const before = await glove();
+    // Squeeze the free controller and turn it a quarter turn about world up.
+    const { player } = await game.info();
+    await aimAway(game, "left");
+    const start = (await game.input.state()).left_hand.rotation as [number, number, number, number];
+    await game.input.set("left_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    const quarter: [number, number, number, number] = [0, Math.SQRT1_2, 0, Math.SQRT1_2];
+    await game.input.set("left_hand.rotation",
+      quatMultiply(quatConjugate(player.rotation), quatMultiply(quarter, quatMultiply(player.rotation, start))));
+    await game.step({ frames: 2 });
+    await game.input.set("left_hand.squeeze", 0);
+    await game.step({ frames: 2 });
+    const { turn, pivot } = (await tool()).panel.view;
+    const turned = [turn.v.x, turn.v.y, turn.v.z, turn.s];
+    assert.ok(Math.abs(dot4(turned, quarter)) > 1 - 1e-4, `turned ${JSON.stringify(turn)}`);
+    // The glove turns with the item about it, and stays turned.
+    const expected = add(xyz(pivot), quatRotate(quarter, sub(before, xyz(pivot))));
+    assert.ok(distance(before, expected) > 0.02 / unit, "the glove sits off the pivot");
+    assert.ok(distance(await glove(), expected) < 1e-3 / unit, `${await glove()} vs ${expected}`);
+
+    // The real hand holding the turned mug as it held the unturned one
+    // saves the same grip: captures stay relative to the item.
+    const toWorld = (p: Vec3) => add(player.position, quatRotate(player.rotation, p));
+    const toLocal = (w: Vec3) => quatRotate(quatConjugate(player.rotation), sub(w, player.position));
+    await game.input.set("right_hand.joints", trackedHand(hand, unit).map((p) =>
+      toLocal(add(xyz(pivot), quatRotate(quarter, sub(toWorld(p), xyz(pivot)))))));
+    await game.step({ frames: 30 });
+    await aimAway(game, "left");
+    await click(game, "left");
+    assert.equal((await tool()).staged, true);
+    await aimAtButton(game, "left", "Save", unit);
+    await click(game, "left");
+    assertClose(JSON.parse(readFileSync(path, "utf8")).entries[0].grip, unturned, 1e-3);
+
+    // Reset view turns it back.
+    await aimAtButton(game, "left", "ResetView", unit);
+    await click(game, "left");
+    const reset = (await tool()).panel.view.turn;
+    assert.ok(Math.abs(reset.s) > 1 - 1e-6, `reset ${JSON.stringify(reset)}`);
+
+    // Resizing after a save is an unsaved edit, and Exit saves it.
+    assert.equal((await tool()).panel.status, "Saved");
+    await game.input.set("left_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 20 });
+    await game.input.set("left_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 1 });
+    assert.equal((await tool()).panel.status, "Unsaved pose");
+    assert.ok((await tool()).panel.panel!.buttons.some((b) => b.event === "Save"), "Save is enabled");
+    await aimAtButton(game, "left", "Exit", unit);
+    await click(game, "left");
+    const grown = JSON.parse(readFileSync(path, "utf8")).entries[0].grip as ResolvedGrip;
+    assert.ok(grown.item_scale > unturned.item_scale * 1.1, `${unturned.item_scale} -> ${grown.item_scale}`);
+  },
+);
+
+test(
+  "grip pose tool panel: a handed weapon cannot switch the bench to the other hand",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using _data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const pistol = (await game.entities.list()).entities.find((e) => e.template_id === -17)!;
+    await aimVrHandAt(game, pistol.position, 0.2, 1, 0, { hand: "right" });
+    await game.step({ frames: 5 });
+    assert.equal((await game.info()).player.right_hand_entity_id, pistol.id);
+    await game.input.set("head.position", [0, 1, 0]);
+    await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 5 });
+    const { tool, hand } = await workbench(game);
+    assert.equal(hand, "right");
+    // Its left-hand model is the mirror image: a grip for that hand would be
+    // posed against the wrong mesh.
+    assert.equal(tool.panel.switch_disabled, "hold it in that hand");
+    assert.ok(!tool.panel.panel!.buttons.some((b) => b.event === "SwitchHand"));
+  },
+);
+
+const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const dot4 = (a: number[], b: number[]) => a.reduce((sum, x, i) => sum + x * b[i]!, 0);
 
 /** Numbers within `tolerance`, everything else equal, recursively. */
 function assertClose(actual: unknown, expected: unknown, tolerance: number, path = "grip"): void {
