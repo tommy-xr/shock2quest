@@ -520,19 +520,33 @@ impl VirtualHand {
                         });
                     }
 
-                    msgs.push(VirtualHandEffect::SetPositionRotation {
-                        entity_id,
-                        // The offset is hand-local (e.g. seating a weapon's
-                        // grip in the palm), so it must rotate with the hand
-                        position: hand_position
-                            + hand_rotation.rotate_vector(
-                                vr_offsets.offset
-                                    * crate::world_scale::WorldScale::active().personal(),
-                            ),
-                        rotation: hand_rotation * vr_offsets.rotation,
-                        scale: vec3(1.0, 1.0, 1.0)
-                            * crate::world_scale::WorldScale::active().personal(),
-                    });
+                    // A set-down controller (Quest: the zero quaternion)
+                    // leaves the item, and the hand, where they last were.
+                    let tracked = crate::vr_support::GripPose {
+                        position: input_hand.position,
+                        rotation: input_hand.rotation,
+                    }
+                    .is_tracked();
+                    let (hand_position, hand_rotation) = if tracked {
+                        (hand_position, hand_rotation)
+                    } else {
+                        (prev.position, prev.rotation)
+                    };
+                    if tracked {
+                        msgs.push(VirtualHandEffect::SetPositionRotation {
+                            entity_id,
+                            // The offset is hand-local (e.g. seating a weapon's
+                            // grip in the palm), so it must rotate with the hand
+                            position: hand_position
+                                + hand_rotation.rotate_vector(
+                                    vr_offsets.offset
+                                        * crate::world_scale::WorldScale::active().personal(),
+                                ),
+                            rotation: hand_rotation * vr_offsets.rotation,
+                            scale: vec3(1.0, 1.0, 1.0)
+                                * crate::world_scale::WorldScale::active().personal(),
+                        });
+                    }
 
                     let updated_hand = VirtualHand {
                         position: hand_position,
@@ -1925,6 +1939,51 @@ mod tests {
         assert!(!crate::scripts::script_util::is_download_pickup(
             &world, invalid
         ));
+    }
+
+    /// Quest reports a set-down controller as the zero quaternion. A hand
+    /// still holding an item there (the grip workbench's posing hand, on
+    /// exit) must not place it with that pose: it normalizes to NaN, which
+    /// poisons the broad phase.
+    #[test]
+    fn a_held_item_stays_put_while_its_controller_is_untracked() {
+        let mut world = World::new();
+        let item = world.add_entity(dark::properties::PropSoftType(1));
+        let mut tracked = Hand::default();
+        tracked.position = vec3(0.1, 1.0, -0.2);
+        tracked.squeeze_value = 1.0;
+        let held = VirtualHand::new(Handedness::Right).grab_entity(&world, item);
+        let update = |hand: &VirtualHand, input: &Hand| {
+            VirtualHand::update(
+                hand,
+                &PhysicsWorld::new(),
+                &world,
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                input,
+                None,
+                Vector3::zero(),
+                1.0 / 60.0,
+            )
+        };
+        let (held, _) = update(&held, &tracked);
+        let mut untracked = tracked.clone();
+        untracked.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        untracked.position = Vector3::zero();
+        let (hand, effects) = update(&held, &untracked);
+        assert_eq!(hand.get_held_entity(), Some(item));
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, VirtualHandEffect::SetPositionRotation { .. })),
+            "the item is not moved"
+        );
+        assert_eq!(
+            hand.get_rotation(),
+            held.get_rotation(),
+            "the hand keeps its last pose"
+        );
+        assert_eq!(hand.get_position(), held.get_position());
     }
 
     #[test]

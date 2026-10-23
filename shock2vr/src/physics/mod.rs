@@ -4111,13 +4111,31 @@ impl PhysicsWorld {
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
     ) {
+        // A zero quaternion (an untracked Quest controller) or a non-finite
+        // pose would normalize to NaN and panic parry's broad-phase rebuild;
+        // the body keeps its last pose instead.
+        let finite = [
+            position.x,
+            position.y,
+            position.z,
+            rotation.s,
+            rotation.v.x,
+            rotation.v.y,
+            rotation.v.z,
+        ]
+        .into_iter()
+        .all(f32::is_finite);
+        let Some(rotation) = crate::util::tracked_rotation(rotation).filter(|_| finite) else {
+            tracing::warn!("[physics] ignored non-finite pose {position:?} {rotation:?}");
+            return;
+        };
         let nquat = nalgebra::geometry::Quaternion::new(
             rotation.s,
             rotation.v.x,
             rotation.v.y,
             rotation.v.z,
         );
-        let nquat_unit = UnitQuaternion::from_quaternion(nquat);
+        let nquat_unit = UnitQuaternion::new_unchecked(nquat);
         let mut xform = Isometry::identity();
         xform.append_rotation_mut(&nquat_unit);
         xform.translation = Translation {
@@ -10090,6 +10108,40 @@ mod tests {
         );
         let target = world.held_item_drives[&handle].target;
         assert!((world.get_position(target).unwrap().x - 0.0).abs() < 1.0e-4);
+    }
+
+    /// An untracked controller's zero quaternion (or any non-finite pose)
+    /// would normalize to NaN, drive the held body there and panic parry's
+    /// broad-phase rebuild. It is ignored: the body holds its last pose.
+    #[test]
+    fn a_non_finite_held_target_is_ignored() {
+        let (mut world, mut player) = world_with_floor();
+        let weapon = EntityId::from_inner(2).unwrap();
+        let handle = world.add_dynamic(
+            weapon,
+            vec3(-2.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.2, 0.4, 0.2)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        world.set_held_item_physical(weapon, CollisionGroup::held_inert());
+        world.set_position_rotation2(weapon, vec3(-2.0, 1.0, 0.0), identity_quat());
+        step(&mut world, &mut player, 1);
+        world.set_position_rotation2(
+            weapon,
+            vec3(0.0, 1.0, 0.0),
+            Quaternion::new(0.0, 0.0, 0.0, 0.0),
+        );
+        world.set_position_rotation2(weapon, vec3(f32::NAN, 1.0, 0.0), identity_quat());
+        step(&mut world, &mut player, 3);
+        let position = world.get_position(handle).unwrap();
+        assert!(
+            (position - vec3(-2.0, 1.0, 0.0)).magnitude() < 0.02,
+            "{position:?}"
+        );
     }
 
     /// A restored or newly wielded loose body may still carry a world pose
