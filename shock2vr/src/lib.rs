@@ -2417,10 +2417,12 @@ impl Game {
             }
             Some(PauseAction::LoadSelectedGame) => {
                 if let Some(path) = self.pause_menu.selected_save_path() {
+                    self.close_pose_workbench();
                     self.begin_save_load(path.to_string_lossy().into_owned());
                 }
             }
             Some(PauseAction::QuitToMainMenu) => {
+                self.close_pose_workbench();
                 // Keep the overlay open through the swap so the new menu
                 // inherits its placement before the pause session ends.
                 self.handle_global_effect(GlobalEffect::ShowMainMenu);
@@ -2475,6 +2477,14 @@ impl Game {
         self.apply_scene_effects(vec![Effect::CloseUseMode]);
         throwing::cancel_tracking(self.active_game_scene.world());
         self.pause_menu.open();
+    }
+
+    /// Leaving the mission from the pause menu closes the grip pose
+    /// workbench first: closing saves a staged capture.
+    fn close_pose_workbench(&mut self) {
+        if self.pose_workbench_open() {
+            self.apply_scene_effects(vec![Effect::ToggleGripPoseTool]);
+        }
     }
 
     /// Hand effects to the active scene, forwarding whatever global effects
