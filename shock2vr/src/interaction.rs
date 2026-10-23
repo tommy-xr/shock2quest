@@ -177,8 +177,9 @@ pub trait PlayerInteraction {
         None
     }
 
-    /// A face button pressed on the open workbench: its control hand saves
-    /// (lower) or discards (upper) the staged capture.
+    /// A face button pressed on the open workbench: its control hand toggles
+    /// test hold (lower) or discards the staged capture (upper). Save is on
+    /// the panel.
     fn pose_tool_button(&mut self, _hand: Handedness, _button: crate::hand_buttons::HandButton) {}
 
     /// A frame the open workbench is skipped (the pause menu is over it).
