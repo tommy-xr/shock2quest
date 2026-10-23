@@ -1440,6 +1440,12 @@ impl Game {
         self.pause_menu.is_open()
     }
 
+    /// Whether the grip pose workbench is up. Its free controller's
+    /// thumbstick click is its own while it is.
+    pub fn pose_workbench_open(&self) -> bool {
+        self.active_game_scene.pose_workbench_open()
+    }
+
     /// Name of the currently active scene (e.g. "medsci1.mis"), tracking
     /// level transitions
     /// Changes on every scene replacement, including reloading the same mission.
@@ -3847,6 +3853,10 @@ impl App {
             App::Ready(game) => game.render_time(),
             App::MissingAssets(_) => 0.0,
         }
+    }
+
+    pub fn pose_workbench_open(&self) -> bool {
+        matches!(self, App::Ready(game) if game.pose_workbench_open())
     }
 
     pub fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
