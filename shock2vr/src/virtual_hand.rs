@@ -436,16 +436,17 @@ impl VirtualHand {
             HandState::Grabbing { entity_id } => {
                 // See what we're hitting
                 let mut msgs = Vec::new();
+                let tracked = crate::vr_support::GripPose {
+                    position: input_hand.position,
+                    rotation: input_hand.rotation,
+                }
+                .is_tracked();
 
                 // A held download also collects on trigger, through the same
                 // drop a release takes. Never from an untracked fallback pose.
                 let trigger_collects = prev.trigger_value < 0.5
                     && input_hand.trigger_value > 0.5
-                    && crate::vr_support::GripPose {
-                        position: input_hand.position,
-                        rotation: input_hand.rotation,
-                    }
-                    .is_tracked()
+                    && tracked
                     && crate::scripts::script_util::is_download_pickup(world, entity_id);
 
                 // If we're holding onto something, but not grabbing, we can drop it
@@ -521,17 +522,8 @@ impl VirtualHand {
                     }
 
                     // A set-down controller (Quest: the zero quaternion)
-                    // leaves the item, and the hand, where they last were.
-                    let tracked = crate::vr_support::GripPose {
-                        position: input_hand.position,
-                        rotation: input_hand.rotation,
-                    }
-                    .is_tracked();
-                    let (hand_position, hand_rotation) = if tracked {
-                        (hand_position, hand_rotation)
-                    } else {
-                        (prev.position, prev.rotation)
-                    };
+                    // leaves the item where it is. The hand keeps that pose,
+                    // so tracking checks downstream still see it lost.
                     if tracked {
                         msgs.push(VirtualHandEffect::SetPositionRotation {
                             entity_id,
@@ -1978,12 +1970,14 @@ mod tests {
                 .any(|e| matches!(e, VirtualHandEffect::SetPositionRotation { .. })),
             "the item is not moved"
         );
-        assert_eq!(
-            hand.get_rotation(),
-            held.get_rotation(),
-            "the hand keeps its last pose"
+        assert!(
+            !crate::vr_support::GripPose {
+                position: hand.get_position(),
+                rotation: hand.get_rotation(),
+            }
+            .is_tracked(),
+            "the hand still reads as lost, so the refit places nothing either"
         );
-        assert_eq!(hand.get_position(), held.get_position());
     }
 
     #[test]

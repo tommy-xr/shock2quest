@@ -185,7 +185,8 @@ impl GloveRenderer {
         })
     }
 
-    /// `posed_joints` in authored units (world scale 1), as grips are fitted.
+    /// The glove's 26 skin joints posed with `pose`, in calibrated hand space
+    /// at authored size (world scale 1), as grips are fitted.
     fn authored_joints(
         &mut self,
         pose: &Pose,

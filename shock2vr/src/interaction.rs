@@ -3694,17 +3694,19 @@ mod tests {
         for _ in 0..3 {
             let effects = interaction.update(&context(&world, &physics, &input));
             assert_eq!(interaction.right_hand.get_held_entity(), Some(entity));
-            for effect in effects {
-                if let VirtualHandEffect::SetPositionRotation {
-                    position, rotation, ..
-                } = effect
-                {
-                    assert!(
-                        GripPose { position, rotation }.is_tracked(),
-                        "{position:?} {rotation:?}"
-                    );
-                }
-            }
+            assert!(
+                !effects.iter().any(|e| matches!(
+                    e,
+                    VirtualHandEffect::SetPositionRotation { entity_id, .. } if *entity_id == entity
+                )),
+                "the item is not placed"
+            );
+            // `fit_held_items` reads this pose: still lost, so it places nothing.
+            let pose = GripPose {
+                position: interaction.right_hand.get_position(),
+                rotation: interaction.right_hand.get_rotation(),
+            };
+            assert!(!pose.is_tracked());
         }
     }
 

@@ -4114,21 +4114,12 @@ impl PhysicsWorld {
         // A zero quaternion (an untracked Quest controller) or a non-finite
         // pose would normalize to NaN and panic parry's broad-phase rebuild;
         // the body keeps its last pose instead.
-        let finite = [
-            position.x,
-            position.y,
-            position.z,
-            rotation.s,
-            rotation.v.x,
-            rotation.v.y,
-            rotation.v.z,
-        ]
-        .into_iter()
-        .all(f32::is_finite);
-        let Some(rotation) = crate::util::tracked_rotation(rotation).filter(|_| finite) else {
+        let pose = crate::vr_support::GripPose { position, rotation };
+        if !pose.is_tracked() {
             tracing::warn!("[physics] ignored non-finite pose {position:?} {rotation:?}");
             return;
-        };
+        }
+        let rotation = rotation.normalize();
         let nquat = nalgebra::geometry::Quaternion::new(
             rotation.s,
             rotation.v.x,
