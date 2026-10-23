@@ -1294,13 +1294,25 @@ impl VrInteraction {
         let in_hand = crate::util::tracked_rotation(
             [&pointing.left_hand, &pointing.right_hand][1 - posing].rotation,
         );
-        // Test hold leaves the bench: no turning or scaling it (disarmed, as
-        // out of hand, until let go), and no posing-hand glove but the one
-        // holding the item.
-        tool.turn_with(
-            in_hand.filter(|_| !test_hold),
-            control.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD,
-        );
+        // Test hold leaves the bench: no turning or scaling it, and no
+        // posing-hand glove but the one holding the item. There the squeeze
+        // nudges instead: it carries the item, and the grip that holds it
+        // where it is let go is staged.
+        let squeeze = control.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD;
+        let nudged = if test_hold {
+            let nudger = in_hand
+                .map(|rotation| GripPose {
+                    position: [&pointing.left_hand, &pointing.right_hand][1 - posing].position,
+                    rotation,
+                })
+                .filter(|pose| pose.is_tracked());
+            let hand = tool.holding(grip);
+            tool.nudge_with(nudger, pose_tool::item_pose(hand, grip, contact), squeeze)
+                .map(|item| pose_tool::grip_for_item(hand, item, grip.clone(), contact))
+        } else {
+            tool.turn_with(in_hand, squeeze);
+            None
+        };
         // The posing hand into the unturned bench, which the tool works in.
         // The free hand pinches to snapshot only with no controller in it:
         // a hand round its controller can read as a pinch.
@@ -1374,6 +1386,10 @@ impl VrInteraction {
                 let fitted = fitted.map(|glove| glove.fit.joints);
                 self.log_capture_joints(&joints, fitted.as_ref(), player_pos, player_rotation);
             }
+        }
+        if let Some(grip) = nudged {
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL nudged=true staged=true");
+            self.stage_edit(grip);
         }
         self.scale_pose_tool_item(scaled);
         self.place_pose_tool_item(contact);
@@ -1549,6 +1565,12 @@ impl VrInteraction {
         };
         if let Some(grip) = held.resolved.as_ref() {
             let hand = tool.holding(grip);
+            // A nudge previews the grip it would stage, placed as play would.
+            let nudged = tool
+                .test_hold
+                .and_then(|hold| hold.nudge)
+                .map(|nudge| pose_tool::grip_for_item(hand, nudge.item(), grip.clone(), contact));
+            let grip = nudged.as_ref().unwrap_or(grip);
             let item = pose_tool::item_pose(hand, grip, contact);
             tool.item_placed = Some(item);
             // The views turn about the model origin, which a contact offset
@@ -2797,7 +2819,7 @@ impl PlayerInteraction for VrInteraction {
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
                 "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm_in_world()), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal),
-                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"mode": if tool.support { "support" } else { "primary" }, "posing": (["left", "right"][tool.posing()]), "slot": tool.slot.name(), "has_trigger_pose": grip.resolved.as_ref().is_some_and(|g| g.fingers.has_trigger_pose()), "staged": tool.staged.is_some(), "saved": tool.saved, "last_save_error": tool.last_save_error, "tip_error_mm": tool.tip_error_mm, "hand_size_ratio": tool.hand_size_ratio, "capture_failure": tool.capture_failure, "test_hold": tool.test_hold.map(|hold| serde_json::json!({"tracked": hold.tracked})), "aim_error_deg": tool.aim.map(|aim| aim.error_deg), "align_amount": tool.align_amount, "panel": tool.panel_diagnostics()}))}))
+                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"mode": if tool.support { "support" } else { "primary" }, "posing": (["left", "right"][tool.posing()]), "slot": tool.slot.name(), "has_trigger_pose": grip.resolved.as_ref().is_some_and(|g| g.fingers.has_trigger_pose()), "staged": tool.staged.is_some(), "saved": tool.saved, "last_save_error": tool.last_save_error, "tip_error_mm": tool.tip_error_mm, "hand_size_ratio": tool.hand_size_ratio, "capture_failure": tool.capture_failure, "test_hold": tool.test_hold.map(|hold| serde_json::json!({"tracked": hold.tracked, "nudging": hold.nudge.is_some()})), "aim_error_deg": tool.aim.map(|aim| aim.error_deg), "align_amount": tool.align_amount, "panel": tool.panel_diagnostics()}))}))
         }).collect())
     }
 
@@ -4478,6 +4500,172 @@ mod tests {
         let saved = saved.grips.lookup("wrench_h", "right").unwrap();
         assert!(aim_error(saved) < 1e-3, "{}", aim_error(saved));
         assert_eq!(saved.hand_rotation, aligned.hand_rotation);
+    }
+
+    /// Off test hold the free controller's squeeze turns only the view. In
+    /// test hold a fresh squeeze carries the gun (aim readout live) while
+    /// the glove stays on its controller; let go, the staged grip holds the
+    /// gun there as play would, fingers, glove turn and scale kept. Losing
+    /// the free controller mid-nudge drops it unstaged.
+    #[test]
+    fn a_squeeze_in_test_hold_nudges_the_gun_in_the_glove_and_stages_it_on_release() {
+        use cgmath::{Deg, Rotation3};
+        let (mut world, entity, _physics, mut interaction, mut input) = wrench_support_fixture();
+        world.add_component(entity, dark::properties::PropModelName("sg_h".to_owned()));
+        let grip = |interaction: &VrInteraction| {
+            interaction.fitted_grips[1]
+                .as_ref()
+                .unwrap()
+                .resolved
+                .clone()
+                .unwrap()
+        };
+        {
+            let resolved = interaction.fitted_grips[1]
+                .as_mut()
+                .unwrap()
+                .resolved
+                .as_mut()
+                .unwrap();
+            resolved.rotation = Quaternion::from_angle_y(Deg(-90.0));
+            resolved.offset = vec3(0.01, -0.02, -0.05);
+            resolved.hand_rotation = Quaternion::from_angle_x(Deg(8.0));
+        }
+        let dir = crate::test_support::TempDir::new("pose-nudge");
+        interaction.toggle_grip_pose_tool();
+        interaction.pose_tool.as_mut().unwrap().overrides_path =
+            dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
+        input.head.rotation = identity();
+        let origin = vec3(0.0, 0.0, 0.0);
+        let contact = grip_contact(&world, entity);
+        let step = |interaction: &mut VrInteraction, input: &InputContext| {
+            interaction.update_pose_tool(&world, input, origin, identity(), 0.0, 1.0 / 60.0);
+        };
+        // The free (left) controller in hand, squeezed and turned on the
+        // bench: the view turns, nothing stages.
+        input.left_hand.position = vec3(-0.2, 1.0, -0.3);
+        input.left_hand.rotation = Quaternion::from_angle_z(Deg(15.0));
+        step(&mut interaction, &input);
+        input.left_hand.squeeze_value = 1.0;
+        step(&mut interaction, &input);
+        let before = grip(&interaction);
+        input.left_hand.rotation = Quaternion::from_angle_y(Deg(30.0)) * input.left_hand.rotation;
+        step(&mut interaction, &input);
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        assert!(tool.turn.s < 0.99, "the view turned");
+        assert!(tool.staged.is_none(), "only the view");
+        assert_eq!(grip(&interaction).offset, before.offset);
+
+        // Test hold, the squeeze still held from the bench: no nudge.
+        let personal = crate::world_scale::WorldScale::active().personal();
+        interaction.stage_grip(before.clone().rescaled(1.0 / personal));
+        interaction.pose_tool_button(Handedness::Left, crate::hand_buttons::HandButton::Lower);
+        input.right_hand.position = vec3(0.2, 1.1, -0.3);
+        input.right_hand.rotation = Quaternion::from_angle_x(Deg(-20.0));
+        step(&mut interaction, &input);
+        let held = interaction.pose_tool.as_ref().unwrap().item_placed.unwrap();
+        input.left_hand.position += vec3(0.05, 0.0, 0.0);
+        step(&mut interaction, &input);
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        assert!(tool.test_hold.unwrap().nudge.is_none(), "held over");
+        assert_eq!(tool.item_placed.unwrap().position, held.position);
+
+        // Let go, squeeze again: the gun follows the left controller.
+        input.left_hand.squeeze_value = 0.0;
+        step(&mut interaction, &input);
+        input.left_hand.squeeze_value = 1.0;
+        step(&mut interaction, &input);
+        let free = |input: &InputContext| GripPose {
+            position: hand_world_position(origin, identity(), input.left_hand.position),
+            rotation: input.left_hand.rotation,
+        };
+        let grabbed = free(&input);
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        assert!(tool.test_hold.unwrap().nudge.is_some());
+        let glove = tool.holding(&before);
+        let aim_before = tool.aim.unwrap().error_deg;
+        let turn = Quaternion::from_angle_y(Deg(12.0)) * Quaternion::from_angle_x(Deg(-6.0));
+        let shift = vec3(0.02, 0.01, -0.03);
+        input.left_hand.position += shift;
+        input.left_hand.rotation = turn * input.left_hand.rotation;
+        step(&mut interaction, &input);
+        let moved = free(&input);
+        let world_shift = moved.position - grabbed.position;
+        let expected = GripPose {
+            position: grabbed.position
+                + world_shift
+                + turn.rotate_vector(held.position - grabbed.position),
+            rotation: turn * held.rotation,
+        };
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        let dragged = tool.item_placed.unwrap();
+        assert!(
+            (dragged.position - expected.position).magnitude() < 1e-5,
+            "{:?} vs {:?}",
+            dragged.position,
+            expected.position
+        );
+        assert!(dragged.rotation.normalize().dot(expected.rotation).abs() > 1.0 - 1e-6);
+        let still = tool.holding(&grip(&interaction));
+        assert_eq!(
+            (still.position, still.rotation),
+            (glove.position, glove.rotation),
+            "the glove stays on its controller"
+        );
+        assert!(
+            (tool.aim.unwrap().error_deg - aim_before).abs() > 1.0,
+            "the aim readout follows"
+        );
+        assert_eq!(
+            grip(&interaction).offset,
+            before.offset,
+            "staged only on release"
+        );
+
+        // Let go: staged, and play holds the gun exactly there.
+        input.left_hand.squeeze_value = 0.0;
+        step(&mut interaction, &input);
+        let nudged = grip(&interaction);
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        assert!(tool.staged.is_some() && !tool.saved);
+        assert_eq!(
+            (&nudged.fingers, nudged.hand_rotation, nudged.item_scale),
+            (&before.fingers, before.hand_rotation, before.item_scale)
+        );
+        let controller = GripPose {
+            position: hand_world_position(origin, identity(), input.right_hand.position),
+            rotation: input.right_hand.rotation,
+        };
+        let played = pose_tool::item_pose(nudged.glove_pose(controller), &nudged, contact);
+        assert!((played.position - expected.position).magnitude() < 1e-5);
+        assert!(played.rotation.normalize().dot(expected.rotation).abs() > 1.0 - 1e-6);
+        let rest = tool.item_placed.unwrap();
+        assert!((rest.position - expected.position).magnitude() < 1e-5);
+
+        // Grabbed again and the free controller lost: nothing staged, the gun
+        // back where the grip holds it.
+        input.left_hand.squeeze_value = 1.0;
+        step(&mut interaction, &input);
+        input.left_hand.position += vec3(0.0, 0.05, 0.0);
+        step(&mut interaction, &input);
+        assert!(
+            (interaction
+                .pose_tool
+                .as_ref()
+                .unwrap()
+                .item_placed
+                .unwrap()
+                .position
+                - rest.position)
+                .magnitude()
+                > 0.01
+        );
+        input.left_hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        step(&mut interaction, &input);
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        assert!(tool.test_hold.unwrap().nudge.is_none());
+        assert_eq!(grip(&interaction).offset, nudged.offset);
+        assert!((tool.item_placed.unwrap().position - rest.position).magnitude() < 1e-5);
     }
 
     /// A gun's rest snapshot stores the hand exactly where it was tracked:
