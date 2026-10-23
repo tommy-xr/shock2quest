@@ -170,6 +170,7 @@ pub fn held_muzzle(cache: &mut AssetCache, name: &str, hand: Handedness) -> Opti
         return None;
     }
     let fallback = load_fallback(cache, name)?;
+    // The magazine-in model: drawing the magazine out leaves the barrel alone.
     let source = cache.get_opt(&GLOVE_WEAPON_IMPORTER, &format!("{name}.bin"))?;
     let vhots = source.as_ref().as_ref()?.model.vhots();
     let muzzle = MuzzleFallback {
@@ -199,6 +200,14 @@ pub fn aim_error_deg(rotation: Quaternion<f32>, barrel: Vector3<f32>) -> f32 {
     );
     Deg::from(Rad(sin.atan2(cos))).0
 }
+
+/// How the grip tools draw `AimLines`: a metre long, the firing line orange
+/// and the controller's aim cyan (halo, core colours).
+pub const AIM_LINE_METRES: f32 = 1.0;
+pub const FIRING_LINE_COLORS: [Vector3<f32>; 2] =
+    [Vector3::new(1.0, 0.45, 0.1), Vector3::new(1.0, 0.8, 0.5)];
+pub const AIM_LINE_COLORS: [Vector3<f32>; 2] =
+    [Vector3::new(0.1, 0.7, 1.0), Vector3::new(0.6, 0.9, 1.0)];
 
 /// A held gun's aim: its muzzle and the way it fires, and the controller's
 /// position and the way it aims, all in the space `model` and `controller`

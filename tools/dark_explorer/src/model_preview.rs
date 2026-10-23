@@ -1268,14 +1268,15 @@ pub(crate) fn grip_aim(grip: &ResolvedGrip, muzzle: MuzzleFallback) -> AimLines 
     )
 }
 
-/// The aim lines a metre long, coloured as on the VR workbench: the firing
-/// line (orange) from the muzzle and the controller's aim (cyan).
+/// The aim lines as the VR workbench draws them (length and colours): the
+/// firing line from the muzzle and the controller's aim.
 fn aim_overlay(aim: &AimLines) -> [engine::scene::SceneObject; 2] {
     use engine::scene::{SceneObject, VertexPosition, color_material, lines_mesh};
-    let length = 1.0 / shock2vr::METERS_PER_WORLD_UNIT;
+    use shock2vr::weapon_muzzle::{AIM_LINE_COLORS, AIM_LINE_METRES, FIRING_LINE_COLORS};
+    let length = AIM_LINE_METRES / shock2vr::METERS_PER_WORLD_UNIT;
     [
-        (aim.muzzle, aim.firing, vec3(1.0, 0.45, 0.1)),
-        (aim.controller, aim.aim, vec3(0.1, 0.7, 1.0)),
+        (aim.muzzle, aim.firing, FIRING_LINE_COLORS[0]),
+        (aim.controller, aim.aim, AIM_LINE_COLORS[0]),
     ]
     .map(|(start, direction, color)| {
         SceneObject::new(
