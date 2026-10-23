@@ -393,19 +393,6 @@ pub(in crate::interaction) fn emit(
             PanelEvent::Slot,
             view.slot_entry.clone(),
         ),
-        (
-            RESET_VIEW,
-            "Reset view".to_owned(),
-            PanelEvent::ResetView,
-            Ok(()),
-        ),
-        (
-            SHOW_AIM,
-            aim_label(view.show_aim, view.aim_error_deg),
-            PanelEvent::ShowAim,
-            view.aim.clone(),
-        ),
-        (EXIT, "Exit".to_owned(), PanelEvent::Exit, Ok(())),
     ];
     match view.slot {
         Slot::Rest => buttons.push((
@@ -434,6 +421,21 @@ pub(in crate::interaction) fn emit(
             );
         }
     }
+    buttons.extend([
+        (
+            RESET_VIEW,
+            "Reset view".to_owned(),
+            PanelEvent::ResetView,
+            Ok(()),
+        ),
+        (
+            SHOW_AIM,
+            aim_label(view.show_aim, view.aim_error_deg),
+            PanelEvent::ShowAim,
+            view.aim.clone(),
+        ),
+        (EXIT, "Exit".to_owned(), PanelEvent::Exit, Ok(())),
+    ]);
     // Only a gun has an aim to show: the toggle is hidden for anything else,
     // as are Align's steps while it cannot act (too narrow to say why).
     let hidden_when_disabled = [

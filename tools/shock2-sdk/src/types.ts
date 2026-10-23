@@ -1494,6 +1494,11 @@ export interface HandGrip {
       show_aim: boolean;
       /** Why the Rest/Trigger slot button is disabled. */
       slot_disabled: string | null;
+      /** Whether a rest snapshot keeps the grip's placement (fingers only). */
+      keep_placement: boolean;
+      /** How far the trigger pose curls the index from rest toward a fist
+       * (0..1), null with no trigger pose. */
+      trigger_index: number | null;
       hover: { x: number; y: number } | null;
       panel: {
         center: ResolvedGrip["offset"];
@@ -1501,7 +1506,7 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "AlignLess" | "AlignMore" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "ResetView" | "Exit";
+          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "AlignLess" | "AlignMore" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "Placement" | "IndexLess" | "IndexMore" | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;
