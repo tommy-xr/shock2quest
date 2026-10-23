@@ -460,7 +460,7 @@ impl GripPoseTool {
             .map_or(self.hand_pose.position, |(item, _)| item.position)
     }
 
-    /// Draws the bench (item, posed gloves, their spheres) as turned. The
+    /// Draws the bench (item and posed gloves) as turned. The
     /// tool works in the unturned bench, so captures stay relative to the
     /// item.
     pub fn turn_matrix(&self) -> Matrix4<f32> {
