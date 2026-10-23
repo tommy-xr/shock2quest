@@ -1277,7 +1277,11 @@ impl GripEditor {
         }
         ui.small("Drag sliders or click values to type. Ball is a cupped starting pose; adjust curls to the item. Unsaved drafts stay when switching models.");
         if let Some(muzzle) = self.muzzle
-            && aim_controls(ui, &mut self.show_aim, &mut entry.grip, muzzle)
+            && ui
+                .add_enabled_ui(!busy, |ui| {
+                    aim_controls(ui, &mut self.show_aim, &mut entry.grip, muzzle)
+                })
+                .inner
         {
             entry.authored = true;
         }
@@ -1355,7 +1359,8 @@ fn aim_controls(
     grip: &mut ResolvedGrip,
     muzzle: MuzzleFallback,
 ) -> bool {
-    use shock2vr::weapon_muzzle::{aim_turn, aim_turn_amount};
+    use cgmath::One;
+    use shock2vr::weapon_muzzle::{aim_turn, aim_turn_amount, turn_deg};
     let mut amount = None;
     ui.horizontal(|ui| {
         ui.checkbox(show_aim, "Show aim");
@@ -1367,16 +1372,22 @@ fn aim_controls(
         if ui.button("Align aim").clicked() {
             amount = Some(1.0);
         }
-        let mut percent = aim_turn_amount(grip.rotation, muzzle.axis, grip.hand_rotation) * 100.0;
+        // A turn kept off Align's arc (from an earlier grip) has no share:
+        // the slider starts it over from none.
+        let along = aim_turn_amount(grip.rotation, muzzle.axis, grip.hand_rotation);
+        let mut percent = along.unwrap_or(0.0) * 100.0;
         if ui
             .add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix("%"))
             .changed()
         {
             amount = Some(percent / 100.0);
         }
-        if grip.hand_rotation != shock2vr::vr_grip::identity_rotation() {
-            let angle = 2.0 * grip.hand_rotation.normalize().s.abs().min(1.0).acos();
-            ui.label(format!("Hand turned {:.1}°", angle.to_degrees()));
+        if !grip.hand_rotation.is_one() {
+            let off_arc = if along.is_none() { ", off the aim" } else { "" };
+            ui.label(format!(
+                "Hand turned {:.1}°{off_arc}",
+                turn_deg(grip.hand_rotation)
+            ));
             if ui.button("Clear hand rotation").clicked() {
                 amount = Some(0.0);
             }

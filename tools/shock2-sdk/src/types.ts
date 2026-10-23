@@ -1420,7 +1420,7 @@ export interface WaitForOptions {
 
 /** Diagnostics from the same resolved pose used by gameplay and rendering. */
 export interface HandGrip {
-  /** Visible fitted mesh bounds in controller-local space, excluding the glove. */
+  /** Visible fitted mesh bounds in the glove's frame (the grip's offset and rotation), excluding the glove. */
   item_bounds: [Vec3, Vec3] | null;
   /** Manual Explorer override; solver contact samples do not validate this pose. */
   authored: boolean;
@@ -1443,7 +1443,7 @@ export interface HandGrip {
   finger_curls: FingerCurls | null;
   /** The finger bones drawn at `visual_trigger` (bone grips; null for curls). */
   finger_bones: ResolvedGrip["rotation"][] | null;
-  /** Glove pose following a physical melee body; null uses raw tracked pose. */
+  /** Where the held hand's glove is drawn: following a physical body, else its controller turned by the grip's `hand_rotation`; null while untracked. */
   glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
   /** The grip pose tool posing this hand: an unsaved capture is applied
    * live (`staged`) until saved; a failed save stays staged.

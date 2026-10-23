@@ -310,6 +310,12 @@ pub(in crate::interaction) fn emit(
     } else {
         Err("nothing staged".to_owned())
     };
+    // The steps move a turn on Align's arc; a kept turn off it needs Align first.
+    let steps = view.align.clone().and_then(|()| {
+        view.align_amount
+            .map(|_| ())
+            .ok_or_else(|| "align first".to_owned())
+    });
     let buttons = [
         (SAVE, "Save".to_owned(), PanelEvent::Save, staged.clone()),
         (DISCARD, "Discard".to_owned(), PanelEvent::Discard, staged),
@@ -332,7 +338,7 @@ pub(in crate::interaction) fn emit(
             ALIGN_LESS,
             "-".to_owned(),
             PanelEvent::AlignLess,
-            view.align.clone(),
+            steps.clone(),
         ),
         (
             ALIGN_AIM,
@@ -342,12 +348,7 @@ pub(in crate::interaction) fn emit(
             PanelEvent::AlignAim,
             view.align.clone(),
         ),
-        (
-            ALIGN_MORE,
-            "+".to_owned(),
-            PanelEvent::AlignMore,
-            view.align.clone(),
-        ),
+        (ALIGN_MORE, "+".to_owned(), PanelEvent::AlignMore, steps),
         (
             POSE_HAND,
             format!("Pose: {}", hand_name(view.posing.other())),
@@ -856,6 +857,15 @@ mod tests {
         ] {
             assert_eq!(event_at(&targets, rect.center()), Some(event));
         }
+        // A kept turn off Align's arc: Align, but no steps from it.
+        holding.align_amount = None;
+        let (canvas, targets) = emit(&holding, None);
+        assert!(texts(&canvas).contains(&"Align".to_owned()));
+        assert_eq!(
+            event_at(&targets, ALIGN_AIM.center()),
+            Some(PanelEvent::AlignAim)
+        );
+        assert_eq!(event_at(&targets, ALIGN_LESS.center()), None);
     }
 
     #[test]

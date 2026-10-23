@@ -216,20 +216,27 @@ pub fn aim_turn(rotation: Quaternion<f32>, barrel: Vector3<f32>, amount: f32) ->
     none.slerp(full, amount.min(1.0)).normalize()
 }
 
-/// How far along `aim_turn`'s arc a glove turn is (0..=1): its angle over
-/// the full turn's. 0 for a grip that already fires straight.
+/// Degrees `rotation` turns, about whatever axis.
+pub fn turn_deg(rotation: Quaternion<f32>) -> f32 {
+    // atan2 stays exact near 0°, as in `aim_error_deg`.
+    Deg::from(Rad(2.0 * rotation.v.magnitude().atan2(rotation.s.abs()))).0
+}
+
+/// How far along `aim_turn`'s arc a glove turn is (0..=1), or `None` for a
+/// turn off that arc: one kept from an earlier grip, which a snapshot does.
 pub fn aim_turn_amount(
     rotation: Quaternion<f32>,
     barrel: Vector3<f32>,
     hand_rotation: Quaternion<f32>,
-) -> f32 {
-    let full = aim_error_deg(rotation, barrel);
-    let turned = Deg::from(Rad(2.0 * hand_rotation.normalize().s.abs().min(1.0).acos())).0;
-    if full < 1e-3 {
-        0.0
-    } else {
-        (turned / full).clamp(0.0, 1.0)
+) -> Option<f32> {
+    let turned = turn_deg(hand_rotation);
+    if turned < 1e-3 {
+        return Some(0.0);
     }
+    let amount = turned / aim_error_deg(rotation, barrel);
+    let on_arc = amount <= 1.0 + 1e-3
+        && turn_deg(aim_turn(rotation, barrel, amount).conjugate() * hand_rotation) < 0.05;
+    on_arc.then_some(amount.min(1.0))
 }
 
 /// How the grip tools draw `AimLines`: a metre long, the firing line orange
