@@ -117,7 +117,7 @@ test(
     const panelRight = cross(scale(facing, -1), panelUp);
     const onPanel = ([x, y]: [number, number]) =>
       add(panelCenter, add(scale(panelRight, (x / 400 - 0.5) * 0.3 / unit), scale(panelUp, (0.5 - y / 400) * 0.3 / unit)));
-    for (const [event, canvasCenter] of [["Exit", [200, 290]], ["ResetView", [297, 246]]] as const) {
+    for (const [event, canvasCenter] of [["Exit", [297, 290]], ["ResetView", [297, 246]]] as const) {
       const button = xyz(panel.buttons.find((b) => b.event === event)!.center);
       const expected = onPanel([...canvasCenter]);
       assert.ok(distance(button, expected) < 0.005 / unit, `${event} ${button} vs ${expected}`);
@@ -1187,6 +1187,22 @@ test(
     const tool = async () => (await rightGrip()).pose_tool!;
     assert.equal((await tool()).panel.test_hold_disabled, "snapshot first");
     assert.equal((await tool()).panel.align_disabled, "test hold first");
+
+    // On the bench the aim shows by default, from the glove's grip frame:
+    // what play would fire with this grip. The panel's toggle hides it.
+    const aimDraws = async () =>
+      (await game.scene.objects()).objects.filter((o) => o.source === "grip_workbench_aim").length;
+    assert.equal((await tool()).panel.show_aim, true);
+    assert.ok(Math.abs((await tool()).aim_error_deg! - 20) < 0.05, `bench aim ${(await tool()).aim_error_deg}`);
+    assert.equal(await aimDraws(), 4, "two bench aim lines, halo and core each");
+    for (const shown of [false, true]) {
+      await aimAtButton(game, "left", "ShowAim", unit);
+      await game.step({ frames: 1 });
+      await click(game, "left");
+      assert.equal((await tool()).panel.show_aim, shown);
+      assert.equal(await aimDraws(), shown ? 4 : 0);
+      assert.equal((await tool()).aim_error_deg === null, !shown);
+    }
 
     // The tracked right hand round the grip, turned 28 degrees: the
     // controller set down, the left trigger snapshots.
