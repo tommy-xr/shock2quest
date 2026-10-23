@@ -7,6 +7,7 @@ use shock2vr::{
     Handedness,
     scenes::debug_interactions::INTERACTION_FIXTURES,
     vr_grip::{BakedGripEntry, FingerPose, GRIP_RESOURCES, GripHints, GripLibrary, ResolvedGrip},
+    weapon_muzzle::MuzzleFallback,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -458,6 +459,10 @@ pub struct GripEditor {
     prepare_missing: bool,
     fitting: Option<std::sync::mpsc::Receiver<Result<Vec<BakedGripEntry>, String>>>,
     fitting_model: String,
+    /// The model's muzzle as held in the selected hand (a gun's only), and
+    /// whether the preview draws its aim.
+    muzzle: Option<MuzzleFallback>,
+    show_aim: bool,
 }
 
 impl GripEditor {
@@ -519,6 +524,8 @@ impl GripEditor {
             prepare_missing: true,
             fitting: None,
             fitting_model: String::new(),
+            muzzle: None,
+            show_aim: true,
         }
     }
 
@@ -1015,6 +1022,7 @@ impl GripEditor {
                     None
                 }
             };
+            self.muzzle = preview.grip_muzzle(&key, hand);
             self.validated = Some(identity);
         }
         if self.support_mode {
@@ -1043,6 +1051,7 @@ impl GripEditor {
                 hand,
                 visual_grip,
                 self.support_editor.preview_profile(&self.model),
+                None,
             );
             preview.show_grip(
                 ui,
@@ -1267,6 +1276,14 @@ impl GripEditor {
             ui.label(&self.message);
         }
         ui.small("Drag sliders or click values to type. Ball is a cupped starting pose; adjust curls to the item. Unsaved drafts stay when switching models.");
+        if let Some(muzzle) = self.muzzle {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.show_aim, "Show aim");
+                if self.show_aim {
+                    ui.label(aim_readout(&entry.grip, muzzle));
+                }
+            });
+        }
         // Build first, then select the requested camera so the initial model
         // framing cannot overwrite it. show() keeps the same camera on edits.
         let mut visual_grip = entry.grip.clone();
@@ -1275,6 +1292,7 @@ impl GripEditor {
             hand,
             visual_grip,
             self.support_editor.preview_profile(&self.model),
+            self.muzzle.filter(|_| self.show_aim),
         );
         preview.show_grip(
             ui,
@@ -1321,6 +1339,13 @@ impl GripEditor {
             );
         }
     }
+}
+
+/// How far a gun held by `grip` fires off its controller's aim, as the VR
+/// workbench reads it: 0 fires straight in play.
+fn aim_readout(grip: &ResolvedGrip, muzzle: MuzzleFallback) -> String {
+    let deg = crate::model_preview::grip_aim(grip, muzzle).error_deg;
+    format!("Fires {deg:.1}° off the controller's aim (orange: fires, cyan: aims)")
 }
 
 /// Each value offers a coarse slider, small nudges, and optional exact entry.
@@ -1410,6 +1435,47 @@ pub(crate) mod tests {
             .into_iter()
             .map(|(text, _)| text)
             .collect()
+    }
+
+    /// The readout is the game's aim error (`weapon_muzzle`), so the shipped
+    /// shotgun grip reads straight and a turned one reads its turn; the
+    /// preview's lines run from the glove's origin and from the muzzle.
+    #[test]
+    fn the_aim_readout_is_the_games_aim_for_the_shipped_shotgun_grip() {
+        use cgmath::{EuclideanSpace, Rotation, Rotation3, point3, vec3};
+        let library: GripLibrary =
+            serde_json::from_str(include_str!("../../../assets/vr-weapon-grips.json")).unwrap();
+        let grip = library.lookup("sg_h", "right").unwrap().clone();
+        // The right-hand shotgun fires down its model's -X.
+        let muzzle = MuzzleFallback {
+            point: point3(-1.2, 0.1, 0.0),
+            axis: vec3(-1.0, 0.0, 0.0),
+        };
+        let straight = shock2vr::weapon_muzzle::aim_error_deg(grip.rotation, muzzle.axis);
+        assert!(
+            straight < 0.1,
+            "the shipped grip fires straight: {straight}"
+        );
+        assert!(aim_readout(&grip, muzzle).starts_with(&format!("Fires {straight:.1}°")));
+        let turned = ResolvedGrip {
+            rotation: Quaternion::from_angle_y(Deg(15.0)) * grip.rotation,
+            ..grip.clone()
+        };
+        assert!(
+            aim_readout(&turned, muzzle).starts_with("Fires 15.0°"),
+            "{}",
+            aim_readout(&turned, muzzle)
+        );
+        let aim = crate::model_preview::grip_aim(&turned, muzzle);
+        assert_eq!(
+            (aim.controller, aim.aim),
+            (vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, -1.0))
+        );
+        let tip = turned.offset
+            + turned
+                .rotation
+                .rotate_vector(muzzle.point.to_vec() * turned.item_scale);
+        assert!((aim.muzzle - tip).magnitude() < 1e-6);
     }
 
     #[test]
