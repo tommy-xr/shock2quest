@@ -1443,7 +1443,7 @@ export interface HandGrip {
   finger_curls: FingerCurls | null;
   /** The finger bones drawn at `visual_trigger` (bone grips; null for curls). */
   finger_bones: ResolvedGrip["rotation"][] | null;
-  /** Where the held hand's glove is drawn: following a physical body, else its controller turned by the grip's `hand_rotation`; null while untracked. */
+  /** Where the held hand's glove is drawn when not at its tracked pose: following a physical body, or its controller turned by the grip's `hand_rotation`; null uses the raw tracked pose. */
   glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
   /** The grip pose tool posing this hand: an unsaved capture is applied
    * live (`staged`) until saved; a failed save stays staged.
