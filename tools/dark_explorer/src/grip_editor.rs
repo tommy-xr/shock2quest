@@ -55,14 +55,15 @@ impl CurlPoseEditor {
                 curls,
                 trigger_curls,
             } => self.show(ui, curls, trigger_curls, preview_label, true),
-            FingerPose::Bones {
-                bones,
-                trigger_bones,
-            } => {
-                let estimate = shock2vr::vr_grip::bones_to_curls;
-                let (mut rest, mut pressed) =
-                    (estimate(bones), trigger_bones.as_ref().map(estimate));
-                self.show(ui, &mut rest, &mut pressed, preview_label, false);
+            FingerPose::Bones { .. } => {
+                let FingerPose::Curls {
+                    mut curls,
+                    mut trigger_curls,
+                } = fingers.to_curls()
+                else {
+                    unreachable!("to_curls returns curls")
+                };
+                self.show(ui, &mut curls, &mut trigger_curls, preview_label, false);
             }
         }
     }
@@ -90,13 +91,13 @@ impl CurlPoseEditor {
                 self.preview = 1.0;
             }
         });
-        if self.pressed && live {
+        if self.pressed {
             if pressed.is_none() {
                 ui.small("Pressed uses Rest until customized.");
-                if ui.button("Customize pressed pose").clicked() {
+                if live && ui.button("Customize pressed pose").clicked() {
                     *pressed = Some(*rest);
                 }
-            } else if ui.button("Use Rest for both").clicked() {
+            } else if live && ui.button("Use Rest for both").clicked() {
                 *pressed = None;
             }
         }
@@ -1436,6 +1437,7 @@ pub(crate) mod tests {
             snapshot,
             "only the fingers change"
         );
+        assert!(doc.dirty());
         doc.save().unwrap();
         let restored = GripDocument::load(doc.path.clone()).unwrap();
         assert_eq!(restored.library.entries[0].grip, converted);

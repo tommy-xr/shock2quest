@@ -368,22 +368,16 @@ const FINGER_BONES: [std::ops::Range<usize>; 5] = [0..4, 4..9, 9..14, 14..19, 19
 
 /// Inverse of `curls_to_bones`: per finger, the curl whose open -> fist blend
 /// is nearest `bones`. Exact for bones made from curls, a best fit otherwise.
-pub fn bones_to_curls(bones: &FingerBones) -> [f32; 5] {
+fn bones_to_curls(bones: &FingerBones) -> [f32; 5] {
     let open = open_right_hand().finger_bones();
     let fist = fist_right_hand().finger_bones();
     std::array::from_fn(|finger| {
-        // This finger's rotation error at `curl`, blended as `blend_per_finger` does.
+        // This finger's rotation error at `curl`, blended as `blend_per_finger`
+        // does (cgmath's slerp takes the shortest arc itself).
         let error = |curl: f32| -> f32 {
             FINGER_BONES[finger]
                 .clone()
-                .map(|i| {
-                    let b = if open[i].dot(fist[i]) < 0.0 {
-                        -fist[i]
-                    } else {
-                        fist[i]
-                    };
-                    rotation_error(open[i].slerp(b, curl), bones[i])
-                })
+                .map(|i| rotation_error(open[i].slerp(fist[i], curl), bones[i]))
                 .sum()
         };
         let min = if finger == 0 { MIN_THUMB_CURL } else { 0.0 };
@@ -402,9 +396,10 @@ fn rotation_error(a: Quaternion<f32>, b: Quaternion<f32>) -> f32 {
 fn minimize(f: impl Fn(f32) -> f32, min: f32, max: f32) -> f32 {
     const SAMPLES: usize = 40;
     let step = (max - min) / SAMPLES as f32;
-    let best = (0..=SAMPLES)
+    let (best, _) = (0..=SAMPLES)
         .map(|i| min + i as f32 * step)
-        .min_by(|a, b| f(*a).total_cmp(&f(*b)))
+        .map(|x| (x, f(x)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
         .unwrap();
     let (mut lo, mut hi) = ((best - step).max(min), (best + step).min(max));
     let ratio = (5f32.sqrt() - 1.0) / 2.0;
