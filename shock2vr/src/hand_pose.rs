@@ -257,6 +257,27 @@ impl HandPoseRetarget {
             model.set_joint_rotation(joint, rotation);
         }
     }
+
+    /// The basis `Q` that carries a bone's world rotation delta in pose
+    /// numbers (posed world rotation times the open pose's inverse) onto the
+    /// glove model: the model bone's delta is `Q Δ Qᵀ`. Improper, since the
+    /// pose numbers are left-handed. `model` must be this retarget's glove.
+    pub fn delta_basis(&self, model: &mut GlbModel) -> Matrix3<f32> {
+        // Every posed joint's model rotation is A·mirror(P_j)·C_j with
+        // A = wrist·C_1⁻¹·mirror(P_1)⁻¹, so deltas conjugate by A·S.
+        let wrist = model
+            .skeleton()
+            .node_index_for_joint(1)
+            .and_then(|node| model.get_global_transform(node))
+            .map_or(Quaternion::new(1.0, 0.0, 0.0, 0.0), |m| rotation_of(&m));
+        let open = open_right_hand();
+        let pose_wrist = open.bone_rotations[0] * open.bone_rotations[1];
+        let mirror = Matrix3::new(-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
+        Matrix3::from(wrist)
+            * Matrix3::from(self.frames[1].conjugate())
+            * mirror
+            * Matrix3::from(pose_wrist.conjugate())
+    }
 }
 
 /// Returns the open hand pose for the right hand (the plugin's bind pose)
@@ -490,7 +511,7 @@ pub fn fist_right_hand() -> Pose {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::Point3;
+    use cgmath::{Matrix, Point3};
     use collision::Aabb3;
     use dark::importers::skeleton_from_glb_bytes;
 
@@ -591,6 +612,41 @@ mod tests {
                 err < 1e-4,
                 "joint {joint} moved {err} m under the open (bind) pose"
             );
+        }
+    }
+
+    /// A posed glove is its bind skeleton with each bone turned by its pose
+    /// delta carried through `delta_basis`, which is what lets a fit solve in
+    /// the glove's own joints and still write pose rotations.
+    #[test]
+    fn delta_basis_carries_pose_rotations_onto_the_glove() {
+        let mut model = glove_model();
+        let parents = parent_joints(&model);
+        let bind = joint_positions(&mut model);
+        let retarget = HandPoseRetarget::for_right_glove(model.skeleton());
+        let basis = retarget.delta_basis(&mut model);
+        let world = |pose: &Pose| crate::hand_capture::forward_kinematics(pose).1;
+        let open = world(&open_right_hand());
+        let pose = open_right_hand().blend_per_finger(
+            &fist_right_hand(),
+            &FingerAmounts {
+                thumb: -0.6,
+                index: 0.3,
+                middle: 1.0,
+                ring: 0.7,
+                pinky: 0.5,
+            },
+        );
+        let posed_world = world(&pose);
+        retarget.apply(&pose, &mut model);
+        let posed = joint_positions(&mut model);
+        for joint in 2..26 {
+            let parent = parents[joint].unwrap();
+            let delta = Matrix3::from(posed_world[parent] * open[parent].conjugate());
+            let expected =
+                posed[parent] + basis * delta * basis.transpose() * (bind[joint] - bind[parent]);
+            let error = (expected - posed[joint]).magnitude();
+            assert!(error < 1e-5, "joint {joint}: {error} m");
         }
     }
 

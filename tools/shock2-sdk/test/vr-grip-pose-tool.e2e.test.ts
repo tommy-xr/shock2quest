@@ -203,10 +203,15 @@ test(
     assert.ok((await named("Right glove")) > 0, "for the live one");
     assert.equal(await named("contact sphere free"), 0);
     assert.equal(await named("tracked joint"), 6 * VIEWS);
-    // How far each glove fingertip lands from the tracked one.
-    const tipError = (await rightGrip()).pose_tool?.tip_error_mm;
+    // How far each glove fingertip lands from the tracked one: this flat,
+    // built hand's thumb to middle are within the glove's reach, so on them.
+    const live = (await rightGrip()).pose_tool;
+    const tipError = live?.tip_error_mm;
     assert.equal(tipError?.length, 5);
     assert.ok(tipError!.every((mm) => Number.isFinite(mm) && mm >= 0), `${tipError}`);
+    assert.ok(tipError!.slice(0, 3).every((mm) => mm < 3), `thumb to middle on the hand: ${tipError}`);
+    // About the glove's size.
+    assert.ok(Math.abs(live!.hand_size_ratio! - 1) < 0.1, `${live?.hand_size_ratio}`);
     // The free (left) controller's thumbstick click steps to every sphere and
     // marker, then none, then back to contacts only.
     const clickStick = async () => {

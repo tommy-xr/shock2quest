@@ -19,7 +19,7 @@ use shipyard::EntityId;
 
 use engine::scene::{SceneObject, light::LightArray};
 
-use crate::hand_capture::HandJoints;
+use crate::hand_capture::{HandFit, HandJoints};
 use crate::hand_glove::{GloveRenderer, HandLight};
 use crate::hand_pose::{HandShape, Pose};
 use crate::vr_config::Handedness;
@@ -125,6 +125,9 @@ pub(super) struct GripPoseTool {
     /// How far each glove fingertip (thumb..little) lands from the posing
     /// hand's tracked one this frame, in millimetres: the mapping's error.
     pub tip_error_mm: Option<[f32; 5]>,
+    /// The posing hand's size over the glove's this frame (wrist to middle
+    /// tip along the bones).
+    pub hand_size_ratio: Option<f32>,
     /// Why the last capture request captured nothing, until one succeeds.
     pub capture_failure: Option<String>,
     /// Which contact spheres and tracked-joint markers are drawn.
@@ -195,6 +198,7 @@ impl GripPoseTool {
             floor_y: hand_pose.position.y,
             controllers: [None, None],
             tip_error_mm: None,
+            hand_size_ratio: None,
             capture_failure: None,
             contact_view: ContactView::Contacts,
             saved: false,
@@ -265,6 +269,7 @@ impl GripPoseTool {
         self.hand_pose = hand_pose;
         self.surface = None;
         self.tip_error_mm = None;
+        self.hand_size_ratio = None;
         self.capture_failure = None;
         self.saved = false;
         self.recent.clear();
@@ -813,13 +818,19 @@ fn steady_mean(frames: &VecDeque<(HandJoints, f32)>) -> Result<HandJoints, Unste
     Ok(mean)
 }
 
-/// A tracked hand drawn as the glove: where its controller-grip frame sits,
-/// the finger pose matching it, and that pose's joints in world space.
+/// A tracked hand drawn as the glove: the glove fitted over it (world space)
+/// and the finger pose it draws with.
 pub(super) struct TrackedGlove {
-    pub position: Vector3<f32>,
-    pub rotation: Quaternion<f32>,
+    pub fit: HandFit,
     pub pose: Pose,
-    pub joints: HandJoints,
+}
+
+impl TrackedGlove {
+    /// How far (mm) each glove fingertip (thumb..little) lands from the
+    /// tracked one.
+    pub fn tip_error_mm(&self) -> [f32; 5] {
+        self.fit.tip_errors.map(millimetres)
+    }
 }
 
 pub(super) fn tracked_glove(
@@ -827,33 +838,11 @@ pub(super) fn tracked_glove(
     joints: &HandJoints,
     handedness: Handedness,
 ) -> Option<TrackedGlove> {
-    let open = renderer.open_joints(handedness);
-    let bones = crate::hand_capture::capture_finger_bones(joints, handedness)?;
-    let (position, rotation) = crate::hand_capture::hand_pose(joints, &open)?;
-    let pose = Pose::from_finger_bones(&bones);
-    let joints = renderer
-        .posed_joints(&pose, handedness)
-        .map(|joint| position + rotation.rotate_vector(joint));
+    let fit = crate::hand_capture::fit_hand(joints, &renderer.rig(handedness))?;
     Some(TrackedGlove {
-        position,
-        rotation,
-        pose,
-        joints,
+        pose: Pose::from_finger_bones(&fit.bones),
+        fit,
     })
-}
-
-/// Per-finger distance (mm) from each glove fingertip to the tracked one, for
-/// the glove drawn over `joints` (world space).
-pub(super) fn tip_error_mm(
-    renderer: &mut GloveRenderer,
-    joints: &HandJoints,
-    handedness: Handedness,
-) -> Option<[f32; 5]> {
-    let open = renderer.open_joints(handedness);
-    let bones = crate::hand_capture::capture_finger_bones(joints, handedness)?;
-    let posed = renderer.posed_joints(&Pose::from_finger_bones(&bones), handedness);
-    let errors = crate::hand_capture::tip_errors(joints, &open, &posed)?;
-    Some(errors.map(millimetres))
 }
 
 fn ball(center: Vector3<f32>, radius: f32, color: Vector3<f32>, name: &str) -> SceneObject {
@@ -921,8 +910,8 @@ pub(super) fn render(
             continue;
         };
         let drawn = renderer.render_hand(
-            glove.position,
-            glove.rotation,
+            glove.fit.position,
+            glove.fit.rotation,
             handedness(index),
             0.0,
             0.0,
@@ -940,7 +929,7 @@ pub(super) fn render(
         }
         posing_tracked = true;
         posed.extend(drawn);
-        posed.extend(contact_spheres(tool, &glove.joints, false));
+        posed.extend(contact_spheres(tool, &glove.fit.joints, false));
         let cyan = Vector3::new(0.1, 0.9, 1.0);
         posed.extend(
             joints
@@ -1069,24 +1058,22 @@ pub(super) fn item_pose(hand: GripPose, grip: &ResolvedGrip, contact: Vector3<f3
 }
 
 /// The grip that holds the item (`item`, drawn at `item_scale` about
-/// `contact`) where the tracked hand `joints` holds it, and the hand pose that
-/// draws the glove over that hand. `glove` is the open glove's joints as
-/// drawn. The grip is in authored units (`personal` being the world scale's
-/// `WorldScale::personal`), as the library and overrides store grips, so it
-/// holds the item alike at any world scale.
+/// `contact`) where the glove fitted over a tracked hand (`fit`) holds it,
+/// and the hand pose that draws that glove. The grip is in authored units
+/// (`personal` being the world scale's `WorldScale::personal`), as the
+/// library and overrides store grips, so it holds the item alike at any
+/// world scale.
 pub(super) fn captured_grip(
-    joints: &HandJoints,
-    glove: &HandJoints,
-    handedness: Handedness,
+    fit: &HandFit,
     item: GripPose,
     contact: Vector3<f32>,
     item_scale: f32,
     personal: f32,
-) -> Option<(ResolvedGrip, GripPose)> {
-    let bones = crate::hand_capture::capture_finger_bones(joints, handedness)?;
-    let (origin, rotation) =
-        crate::hand_capture::grip_transform(joints, glove, item.position, item.rotation)?;
-    let (position, hand_rotation) = crate::hand_capture::hand_pose(joints, glove)?;
+) -> (ResolvedGrip, GripPose) {
+    let to_hand = fit.rotation.invert();
+    // The item in the controller-grip frame that draws the glove.
+    let origin = to_hand.rotate_vector(item.position - fit.position);
+    let rotation = (to_hand * item.rotation).normalize();
     let grip = ResolvedGrip {
         item_scale,
         pose_family: "captured".into(),
@@ -1094,20 +1081,20 @@ pub(super) fn captured_grip(
         offset: origin - rotation.rotate_vector(contact * item_scale),
         rotation,
         fingers: crate::vr_grip::FingerPose::Bones {
-            bones,
+            bones: fit.bones,
             trigger_bones: None,
         },
         contacts: [None; 5],
         anchor: [0.0; 3],
         score: 0.0,
     };
-    Some((
+    (
         grip.rescaled(1.0 / personal),
         GripPose {
-            position,
-            rotation: hand_rotation,
+            position: fit.position,
+            rotation: fit.rotation,
         },
-    ))
+    )
 }
 
 /// Write `entry` into the overrides file, replacing its model and hand. A
@@ -1241,6 +1228,15 @@ mod tests {
         crate::hand_capture::tests::openxr_right_hand(0.0)
     }
 
+    /// A right-hand glove whose open joints are `open` fitted over `joints`.
+    fn fitted(joints: &HandJoints, open: HandJoints) -> HandFit {
+        let rig = crate::hand_capture::GloveRig {
+            open,
+            ..crate::hand_capture::tests::pose_rig(Handedness::Right)
+        };
+        crate::hand_capture::fit_hand(joints, &rig).unwrap()
+    }
+
     /// A grip captured at world scale `captured` and held at `resolved`, in
     /// metres: the item origin from each glove joint, the item's size per
     /// model unit and its rotation; and the grip as saved.
@@ -1259,15 +1255,12 @@ mod tests {
             rotation: Quaternion::from_angle_x(Deg(20.0)),
         };
         let (saved, _) = captured_grip(
-            &real_hand().map(|p| p / unit),
-            &glove.map(|p| p / captured),
-            Handedness::Right,
+            &fitted(&real_hand().map(|p| p / unit), glove.map(|p| p / captured)),
             item,
             contact,
             0.8 / captured,
             1.0 / captured,
-        )
-        .unwrap();
+        );
         let unit = crate::METERS_PER_WORLD_UNIT * resolved;
         let grip = saved.clone().rescaled(1.0 / resolved);
         let hand = GripPose {
@@ -1478,11 +1471,8 @@ mod tests {
         let hand = real_hand().map(|p| item.position + vec3(0.02, -0.03, 0.05) / unit + p / unit);
         let glove = real_hand().map(|p| p * 0.9 / crate::METERS_PER_WORLD_UNIT);
         let contact = vec3(0.0, 0.1, 0.0);
-        let capture = |joints: &HandJoints| {
-            captured_grip(joints, &glove, Handedness::Right, item, contact, 0.8, 1.0)
-                .unwrap()
-                .0
-        };
+        let capture =
+            |joints: &HandJoints| captured_grip(&fitted(joints, glove), item, contact, 0.8, 1.0).0;
         let unturned = capture(&hand);
         // Turned, the real hand holds the drawn (turned) item the same way:
         // the tool reads it back in the unturned bench.
