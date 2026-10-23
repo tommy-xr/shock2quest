@@ -2383,17 +2383,20 @@ impl PlayerInteraction for VrInteraction {
                     authored,
                 });
             }
+            let hand_pose = GripPose {
+                position: hand.get_position(),
+                rotation: hand.get_rotation(),
+            };
+            // An untracked hand (zero quaternion) places nothing: the item
+            // stays where it is.
             if let Some(grip) = self.fitted_grips[index]
                 .as_ref()
                 .and_then(|g| g.resolved.as_ref())
+                .filter(|_| hand_pose.is_tracked())
             {
                 // The acquisition frame may only contain HoldItem. Append its
                 // initial placement too, in the same effect pipeline as movement.
                 effects.retain(|effect| !matches!(effect, VirtualHandEffect::SetPositionRotation {entity_id,..} if *entity_id == entity));
-                let hand_pose = GripPose {
-                    position: hand.get_position(),
-                    rotation: hand.get_rotation(),
-                };
                 let item = pose_tool::item_pose(hand_pose, grip, grip_contact(world, entity));
                 effects.push(VirtualHandEffect::SetPositionRotation {
                     entity_id: entity,
@@ -3700,6 +3703,44 @@ mod tests {
             interaction.take_pose_tool_pulses(),
             vec![(Handedness::Left, crate::haptics::GRIP_POSE_SAVED)]
         );
+    }
+
+    /// Device crash: the posing hand's controller lies on the table, which
+    /// Quest reports as the zero quaternion. Leaving the workbench must not
+    /// place the still-held item with it (NaN -> parry broad-phase panic).
+    #[test]
+    fn leaving_the_workbench_with_the_posing_controller_set_down_places_nothing() {
+        let (world, entity, physics, mut interaction, mut input) = wrench_support_fixture();
+        let dir = crate::test_support::TempDir::new("pose-exit-untracked");
+        let hand_pose = GripPose {
+            position: input.right_hand.position,
+            rotation: identity(),
+        };
+        interaction.pose_tool = Some(pose_tool::GripPoseTool::new(
+            1,
+            entity,
+            hand_pose,
+            dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE),
+        ));
+        interaction.toggle_grip_pose_tool();
+        assert!(!interaction.pose_workbench_open());
+        input.right_hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        input.right_hand.squeeze_value = 0.0;
+        for _ in 0..3 {
+            let effects = interaction.update(&context(&world, &physics, &input));
+            assert_eq!(interaction.right_hand.get_held_entity(), Some(entity));
+            for effect in effects {
+                if let VirtualHandEffect::SetPositionRotation {
+                    position, rotation, ..
+                } = effect
+                {
+                    assert!(
+                        GripPose { position, rotation }.is_tracked(),
+                        "{position:?} {rotation:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
