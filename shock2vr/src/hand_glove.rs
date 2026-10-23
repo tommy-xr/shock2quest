@@ -101,6 +101,7 @@ pub struct GloveRenderer {
     fist: Pose,
     point: Pose,
     wrist_frames: Option<[Matrix4<f32>; 2]>,
+    open_joints: [Option<crate::hand_capture::HandJoints>; 2],
     materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
     lit_materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
 }
@@ -176,32 +177,52 @@ impl GloveRenderer {
             materials,
             lit_materials,
             wrist_frames: None,
+            open_joints: [None, None],
         })
+    }
+
+    /// The glove's 26 skin joints (SteamVR order, so `XR_EXT_hand_tracking`
+    /// order too) posed with `pose`, in calibrated hand space.
+    fn posed_joints(
+        &mut self,
+        pose: &Pose,
+        handedness: Handedness,
+    ) -> crate::hand_capture::HandJoints {
+        let transform = crate::vr_grip::glove_to_hand(handedness);
+        self.retarget.apply(pose, &mut self.model);
+        std::array::from_fn(|joint| {
+            let node = self.model.skeleton().node_index_for_joint(joint).unwrap();
+            (transform * self.model.get_global_transform(node).unwrap())
+                .w
+                .truncate()
+        })
+    }
+
+    /// The open glove's joints in calibrated hand space, to match against a
+    /// tracked hand.
+    pub fn open_joints(&mut self, handedness: Handedness) -> crate::hand_capture::HandJoints {
+        let slot = handedness as usize;
+        if self.open_joints[slot].is_none() {
+            let open = self.open.clone();
+            self.open_joints[slot] = Some(self.posed_joints(&open, handedness));
+        }
+        self.open_joints[slot].unwrap()
     }
 
     /// Sample the renderer's actual retargeted finger arcs once for fitting.
     pub fn grip_kinematics(&mut self, handedness: Handedness) -> crate::vr_grip::GripKinematics {
-        use crate::vr_grip::{CURL_STEPS, GripKinematics, glove_to_hand};
-        let transform = glove_to_hand(handedness);
+        use crate::vr_grip::{CURL_STEPS, GripKinematics};
         let mut fingers: [Vec<Vec<Vector3<f32>>>; 5] = std::array::from_fn(|_| Vec::new());
         let mut open_joints = Vec::new();
         let mut closed_joints = Vec::new();
         for step in 0..=CURL_STEPS {
             let pose = self.open.blend(&self.fist, step as f32 / CURL_STEPS as f32);
-            self.retarget.apply(&pose, &mut self.model);
-            let joints = (0..26)
-                .map(|joint| {
-                    let node = self.model.skeleton().node_index_for_joint(joint).unwrap();
-                    (transform * self.model.get_global_transform(node).unwrap())
-                        .w
-                        .truncate()
-                })
-                .collect::<Vec<_>>();
+            let joints = self.posed_joints(&pose, handedness);
             if step == 0 {
-                open_joints = joints.clone();
+                open_joints = joints.to_vec();
             }
             if step == CURL_STEPS {
-                closed_joints = joints.clone();
+                closed_joints = joints.to_vec();
             }
             for (finger, range) in [3..5, 7..10, 12..15, 17..20, 22..25]
                 .into_iter()

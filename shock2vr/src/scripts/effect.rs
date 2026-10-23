@@ -474,6 +474,10 @@ pub enum Effect {
     /// and panel presentation land with the flat UI host. No-op in VR.
     ToggleUseMode,
 
+    /// Start or stop authoring the held item's grip with tracked hands (VR
+    /// developer tool; see `interaction::pose_tool`). No-op in flat.
+    ToggleGripPoseTool,
+
     /// Leave the flat-mode "use" (metagame) mode and dismiss any open MFD
     /// panel, idempotently. Unlike [`Effect::ToggleUseMode`] this only ever
     /// closes, so the pause menu can suspend the metagame without having to

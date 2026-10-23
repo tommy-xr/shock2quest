@@ -9,6 +9,7 @@
 //! `mission_core` already processes in one place.
 
 mod climb_visual;
+mod pose_tool;
 mod slide;
 
 use std::{cell::RefCell, collections::HashMap};
@@ -141,6 +142,22 @@ pub trait PlayerInteraction {
     /// Entities held in (left, right) - for `PlayerInfo`. Flat reports its
     /// wielded weapon as the "left".
     fn held_entities(&self) -> (Option<EntityId>, Option<EntityId>);
+
+    /// Start or stop authoring the held item's grip with tracked hands
+    /// (VR only; see `interaction::pose_tool`).
+    fn toggle_grip_pose_tool(&mut self) {}
+
+    /// While the grip pose tool runs, this frame's input with its posing
+    /// hand held still and gripping, for every system that reads the hands.
+    fn pose_tool_input(
+        &mut self,
+        _input: &InputContext,
+        _player_pos: Vector3<f32>,
+        _player_rotation: Quaternion<f32>,
+        _dt: f32,
+    ) -> Option<InputContext> {
+        None
+    }
 
     /// A latched support grip, rather than proximity or the visual blend-out.
     fn is_supported(&self, _entity: EntityId) -> bool {
@@ -358,6 +375,17 @@ pub struct VrInteraction {
     climb_held_seconds: [f32; 2],
     climb_release_safe: bool,
     ui_point: [bool; 2],
+    /// Developer grip authoring with tracked hands (`toggle_grip_pose_tool`).
+    pose_tool: Option<pose_tool::GripPoseTool>,
+}
+
+/// A held item's per-model grip contact offset (`RuntimePropVrGripOffset`).
+fn grip_contact(world: &World, entity: EntityId) -> Vector3<f32> {
+    world
+        .borrow::<shipyard::View<crate::runtime_props::RuntimePropVrGripOffset>>()
+        .ok()
+        .and_then(|v| shipyard::Get::get(&v, entity).ok().map(|p| p.0))
+        .unwrap_or(Vector3::new(0.0, 0.0, 0.0))
 }
 
 struct SupportAttachment {
@@ -481,6 +509,7 @@ impl VrInteraction {
             climb_held_seconds: [0.0; 2],
             climb_release_safe: false,
             ui_point: [false; 2],
+            pose_tool: None,
         }
     }
 }
@@ -979,7 +1008,6 @@ impl VrInteraction {
     }
 
     fn apply_support(&mut self, world: &World, effects: &mut Vec<VirtualHandEffect>) {
-        use shipyard::{Get, View};
         self.visual_hands = [None, None];
         let poses = self.hand_poses();
         let candidate = self.support_candidate(world, poses, true);
@@ -1048,11 +1076,7 @@ impl VrInteraction {
                 position: c.primary_palm - rotation.rotate_vector(c.primary_anchor),
                 rotation,
             };
-            let contact = world
-                .borrow::<View<crate::runtime_props::RuntimePropVrGripOffset>>()
-                .ok()
-                .and_then(|v| v.get(c.entity).ok().map(|p| p.0))
-                .unwrap_or(Vector3::new(0.0, 0.0, 0.0));
+            let contact = grip_contact(world, c.entity);
             effects.retain(|e| !matches!(e, VirtualHandEffect::SetPositionRotation { entity_id, .. } if *entity_id == c.entity));
             effects.push(VirtualHandEffect::SetPositionRotation {
                 entity_id: c.entity,
@@ -1064,6 +1088,138 @@ impl VrInteraction {
                 self.support = None;
                 self.visual_hands = [None, None];
             }
+        }
+    }
+}
+
+impl VrInteraction {
+    /// While the pose tool runs: track the hands, scale the item, and return
+    /// the input with the posing hand held still and gripping - its
+    /// controller may be lying on a table.
+    fn update_pose_tool(
+        &mut self,
+        input: &InputContext,
+        player_pos: Vector3<f32>,
+        player_rotation: Quaternion<f32>,
+        dt: f32,
+    ) -> Option<InputContext> {
+        let tool = self.pose_tool.as_mut()?;
+        let holding = [&self.left_hand, &self.right_hand][tool.hand].get_held_entity();
+        if holding != Some(tool.entity) {
+            self.pose_tool = None;
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=false reason=item_released");
+            return None;
+        }
+        let world_joints = |hand: &crate::input_context::Hand| {
+            hand.joints
+                .map(|joints| joints.map(|p| hand_world_position(player_pos, player_rotation, p)))
+        };
+        tool.observe([
+            world_joints(&input.left_hand),
+            world_joints(&input.right_hand),
+        ]);
+        if let Some(grip) = self.fitted_grips[tool.hand]
+            .as_mut()
+            .and_then(|held| held.resolved.as_mut())
+        {
+            grip.item_scale =
+                pose_tool::GripPoseTool::scale(grip.item_scale, input.right_hand.thumbstick.y, dt);
+        }
+        let mut input = input.clone();
+        let hand = if tool.hand == 0 {
+            &mut input.left_hand
+        } else {
+            &mut input.right_hand
+        };
+        hand.position = crate::virtual_hand::hand_local_position(
+            player_pos,
+            player_rotation,
+            tool.hand_pose.position,
+        );
+        hand.rotation = player_rotation.invert() * tool.hand_pose.rotation;
+        hand.squeeze_value = 1.0;
+        hand.trigger_value = 0.0;
+        hand.a_value = 0.0;
+        if let Some(tracking) = &mut input.pose_tracking {
+            tracking.hands[tool.hand] = true;
+        }
+        Some(input)
+    }
+
+    /// Turn the queued tracked-hand capture into the held item's grip: save it
+    /// as a headset override, apply it now, and re-seat the held hand so the
+    /// item does not move.
+    fn capture_grip(
+        &mut self,
+        world: &World,
+        joints: crate::hand_capture::HandJoints,
+        glove: crate::hand_capture::HandJoints,
+    ) {
+        let Some(tool) = self.pose_tool.as_mut() else {
+            return;
+        };
+        let Some(held) = self.fitted_grips[tool.hand].as_ref() else {
+            return;
+        };
+        let Some(current) = held.resolved.as_ref() else {
+            return;
+        };
+        let handedness = [Handedness::Left, Handedness::Right][tool.hand];
+        let contact = grip_contact(world, held.entity);
+        let item = pose_tool::item_pose(tool.hand_pose, current, contact);
+        let (Some(bones), Some((origin, rotation)), Some((hand_position, hand_rotation))) = (
+            crate::hand_capture::capture_finger_bones(&joints, handedness),
+            crate::hand_capture::grip_transform(&joints, &glove, item.position, item.rotation),
+            crate::hand_capture::hand_pose(&joints, &glove),
+        ) else {
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=false reason=degenerate_joints");
+            return;
+        };
+        let entry = crate::vr_grip::BakedGripEntry {
+            authored: true,
+            model: held.model.clone(),
+            hand: if tool.hand == 0 { "left" } else { "right" }.to_owned(),
+            surface_hash: String::new(),
+            kinematics_hash: String::new(),
+            hints_hash: String::new(),
+            grip: crate::vr_grip::ResolvedGrip {
+                item_scale: current.item_scale,
+                pose_family: "captured".into(),
+                // The item origin, less the per-item contact placement adds.
+                offset: origin - rotation.rotate_vector(contact * current.item_scale),
+                rotation,
+                fingers: crate::vr_grip::FingerPose::Bones {
+                    bones,
+                    trigger_bones: None,
+                },
+                contacts: [None; 5],
+                anchor: [0.0; 3],
+                score: 0.0,
+            },
+        };
+        match pose_tool::save_override(&tool.overrides_path, &entry) {
+            Ok(()) => println!(
+                "SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=true model={} hand={} path={}",
+                entry.model,
+                entry.hand,
+                tool.overrides_path.display()
+            ),
+            Err(error) => println!(
+                "SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=true saved=false error=\"{error}\""
+            ),
+        }
+        // The glove now sits where the tracked hand held the item, and the
+        // next fit resolves the new pose (collider included) from the library.
+        tool.hand_pose = GripPose {
+            position: hand_position,
+            rotation: hand_rotation,
+        };
+        self.fitted_grips[tool.hand] = None;
+        if let Some(library) = &mut self.grip_library {
+            library.prepend(crate::vr_grip::GripLibrary {
+                entries: vec![entry],
+                ..Default::default()
+            });
         }
     }
 }
@@ -1458,11 +1614,7 @@ impl PlayerInteraction for VrInteraction {
                     if let (Some(grip), Some(geometry), Some(contact)) = (
                         resolved.as_ref(),
                         geometry,
-                        world
-                            .borrow::<View<crate::runtime_props::RuntimePropVrGripOffset>>()
-                            .ok()
-                            .and_then(|v| v.get(entity).ok().map(|p| p.0))
-                            .or(Some(cgmath::vec3(0.0, 0.0, 0.0))),
+                        Some(grip_contact(world, entity)),
                     ) {
                         let mut min = cgmath::vec3(f32::INFINITY, f32::INFINITY, f32::INFINITY);
                         let mut max = -min;
@@ -1511,22 +1663,31 @@ impl PlayerInteraction for VrInteraction {
                 // The acquisition frame may only contain HoldItem. Append its
                 // initial placement too, in the same effect pipeline as movement.
                 effects.retain(|effect| !matches!(effect, VirtualHandEffect::SetPositionRotation {entity_id,..} if *entity_id == entity));
-                use cgmath::Rotation;
-                let contact = world
-                    .borrow::<View<crate::runtime_props::RuntimePropVrGripOffset>>()
-                    .ok()
-                    .and_then(|v| v.get(entity).ok().map(|p| p.0))
-                    .unwrap_or(cgmath::vec3(0.0, 0.0, 0.0));
-                let offset = grip.offset + grip.rotation.rotate_vector(contact * grip.item_scale);
+                let hand_pose = GripPose {
+                    position: hand.get_position(),
+                    rotation: hand.get_rotation(),
+                };
+                let item = pose_tool::item_pose(hand_pose, grip, grip_contact(world, entity));
                 effects.push(VirtualHandEffect::SetPositionRotation {
                     entity_id: entity,
-                    position: hand.get_position() + hand.get_rotation().rotate_vector(offset),
-                    rotation: hand.get_rotation() * grip.rotation,
+                    position: item.position,
+                    rotation: item.rotation,
                     scale: cgmath::vec3(grip.item_scale, grip.item_scale, grip.item_scale),
                 });
             }
         }
+        // The glove to match a queued pose-tool capture against.
+        let capture = self.pose_tool.as_mut().and_then(|tool| {
+            let joints = tool.capture.take()?;
+            Some((
+                joints,
+                renderer.open_joints([Handedness::Left, Handedness::Right][tool.hand]),
+            ))
+        });
         drop(slot);
+        if let Some((joints, glove)) = capture {
+            self.capture_grip(world, joints, glove);
+        }
         self.apply_support(world, effects);
         let candidate = self.support_candidate(world, self.hand_poses(), true);
         for primary in 0..2 {
@@ -1824,6 +1985,11 @@ impl PlayerInteraction for VrInteraction {
             self.right_hand.reset_throw_motion();
             self.world_scale = scale;
         }
+        // Posing holds the item where it is; a support hand would move it.
+        let ctx = &InteractionContext {
+            support_enabled: ctx.support_enabled && self.pose_tool.is_none(),
+            ..*ctx
+        };
         self.body_hand_tracking =
             std::array::from_fn(|i| ctx.input.pose_tracking.is_none_or(|p| p.head && p.hands[i]));
         let mut slide_effects = self.update_slide(ctx);
@@ -1934,6 +2100,53 @@ impl PlayerInteraction for VrInteraction {
         left_msgs
     }
 
+    fn toggle_grip_pose_tool(&mut self) {
+        if let Some(tool) = self.pose_tool.take() {
+            // The real controller returns from wherever it was set down: that
+            // jump is not a throw.
+            [&mut self.left_hand, &mut self.right_hand][tool.hand].reset_throw_motion();
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=false");
+            return;
+        }
+        // The right hand first: it is the usual gun hand. Overrides are keyed
+        // like the libraries, which a magazine's fit key is not.
+        let Some((hand, held)) = [1, 0].into_iter().find_map(|i| {
+            let held = self.fitted_grips[i]
+                .as_ref()
+                .filter(|held| held.resolved.is_some() && !held.model.starts_with("magazine:"))?;
+            Some((i, held))
+        }) else {
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=false reason=no_fitted_held_item");
+            return;
+        };
+        let virtual_hand = [&self.left_hand, &self.right_hand][hand];
+        println!(
+            "SHOCK2QUEST_VR_GRIP_POSE_TOOL active=true model={} hand={hand}",
+            held.model
+        );
+        self.support = None;
+        self.slide = None;
+        self.pose_tool = Some(pose_tool::GripPoseTool::new(
+            hand,
+            held.entity,
+            GripPose {
+                position: virtual_hand.get_position(),
+                rotation: virtual_hand.get_rotation(),
+            },
+            crate::paths::data_root().join(crate::vr_grip::GRIP_OVERRIDES_FILE),
+        ));
+    }
+
+    fn pose_tool_input(
+        &mut self,
+        input: &InputContext,
+        player_pos: Vector3<f32>,
+        player_rotation: Quaternion<f32>,
+        dt: f32,
+    ) -> Option<InputContext> {
+        self.update_pose_tool(input, player_pos, player_rotation, dt)
+    }
+
     fn held_grip_anchor(&self, entity: EntityId) -> Option<Vector3<f32>> {
         let rig = self.grip_kinematics.as_ref()?;
         for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
@@ -2019,6 +2232,13 @@ impl PlayerInteraction for VrInteraction {
             ));
         }
         for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
+            if self
+                .pose_tool
+                .as_ref()
+                .is_some_and(|tool| tool.hides_controller_glove(index))
+            {
+                continue;
+            }
             let card_grip = self.body_tool_hands[index]
                 .then(|| self.personal_card_grip(index))
                 .flatten();
@@ -2055,6 +2275,36 @@ impl PlayerInteraction for VrInteraction {
                     lighting,
                 ),
             );
+        }
+        if let (Some(tool), Some(renderer)) = (&self.pose_tool, glove_renderer.as_deref_mut()) {
+            for (index, joints) in tool.tracked.iter().enumerate() {
+                let Some(joints) = joints else { continue };
+                let handedness = [Handedness::Left, Handedness::Right][index];
+                let glove = renderer.open_joints(handedness);
+                let (Some(bones), Some((position, rotation))) = (
+                    crate::hand_capture::capture_finger_bones(joints, handedness),
+                    crate::hand_capture::hand_pose(joints, &glove),
+                ) else {
+                    continue;
+                };
+                objs.extend(renderer.render_hand(
+                    position,
+                    rotation,
+                    handedness,
+                    0.0,
+                    0.0,
+                    false,
+                    None,
+                    Some((
+                        crate::hand_pose::HandShape::Pose(
+                            crate::hand_pose::Pose::from_finger_bones(&bones),
+                        ),
+                        1.0,
+                    )),
+                    crate::hand_glove::HandLight::Off,
+                    lighting.map(|lighting| lighting.at_player_position(position)),
+                ));
+            }
         }
         if self.grip_overlay {
             use cgmath::{Matrix4, Rotation, vec3};
