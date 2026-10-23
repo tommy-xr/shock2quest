@@ -1937,7 +1937,9 @@ impl Game {
         // scene is not updated at all, so a scene-routed effect could never
         // close the menu again.
         self.update_pause_menu(time, input_context, actions);
+        let workbench = self.active_game_scene.pose_workbench_open();
         let scene_suspended = self.pause_menu.suspends_scene()
+            || workbench
             || (self
                 .options
                 .experimental_features
@@ -1962,6 +1964,12 @@ impl Game {
             // and jumps every total-time-driven animation the moment the world
             // comes back.
             self.time_suspended += time.elapsed;
+            // The grip pose workbench holds the world still like the pause
+            // menu, but owns the hands - unless the pause menu is over it.
+            if workbench && !self.pause_menu.suspends_scene() {
+                self.active_game_scene
+                    .update_pose_workbench(time.elapsed, input_context, actions);
+            }
             actions.clear_triggered();
             return;
         }
@@ -2032,7 +2040,10 @@ impl Game {
             for tick in clock.advance(time.elapsed) {
                 let (input, effects) = self.simulation_input.next(input_context);
                 self.update_scene_tick(&tick, &input, effects);
-                if self.pending_save_load.is_some() {
+                // A load, or the grip pose workbench freezing the scene, ends
+                // the batch; the rest of its ticks stay pending.
+                if self.pending_save_load.is_some() || self.active_game_scene.pose_workbench_open()
+                {
                     break;
                 }
             }
@@ -2264,6 +2275,10 @@ impl Game {
             // toggle nothing would ever see.
             input::MenuPress::Short if self.pause_menu.is_open() => {
                 Some(InputAction::TogglePauseMenu)
+            }
+            // ...and the grip pose workbench, which suspends the scene too.
+            input::MenuPress::Short if self.active_game_scene.pose_workbench_open() => {
+                Some(InputAction::ToggleGripPoseTool)
             }
             input::MenuPress::Short => Some(InputAction::ToggleUseMode),
             input::MenuPress::Long => Some(InputAction::TogglePauseMenu),
@@ -3060,8 +3075,12 @@ impl Game {
     pub fn get_hand_lights(&self) -> Vec<engine::scene::light::SceneLight> {
         // The lights belong to the hands: with the hands suppressed they would
         // be two pools cast by nothing - and, being world lighting, they light
-        // the scene *before* the pause dim and show straight through it.
-        if self.pause_menu.is_open() || self.pending_save_load.is_some() {
+        // the scene *before* the pause dim and show straight through it. The
+        // grip pose workbench lights its own room.
+        if self.pause_menu.is_open()
+            || self.pending_save_load.is_some()
+            || self.active_game_scene.pose_workbench_open()
+        {
             return Vec::new();
         }
         self.active_game_scene.get_hand_lights(&self.options)
@@ -3189,6 +3208,7 @@ impl Game {
             && dev_params::get_bool(dev_params::VR_DEBUG_BODY)
             && !self.pause_menu.is_open()
             && !self.player_visuals_hidden()
+            && !self.active_game_scene.pose_workbench_open()
         {
             scene.extend(
                 self.active_game_scene
@@ -3246,8 +3266,11 @@ impl Game {
         // clamp the cameras use is a no-op standing.
         eye_position.y = eye_position.y.min(self.player_eye_cap_above_center());
 
+        // The grip pose workbench draws a room of its own, which the mission's
+        // view effects (water and hit tints, the drunk wave) stay out of.
+        let workbench = self.active_game_scene.pose_workbench_open();
         let water = swimming::WaterStatus::from_world(self.active_game_scene.world());
-        if water.tint > 0.001 {
+        if water.tint > 0.001 && !workbench {
             let mut layer = hit_feedback::vignette_layer_at_pose(
                 self.view_extents,
                 Matrix4::from_translation(eye_position)
@@ -3264,9 +3287,10 @@ impl Game {
         // The hit tint occupies the explicit scene-overlay layer: over the
         // world, behind scene UI and the pause menu, identically in flat and
         // VR. It remains view-locked, so only the eye pose differs.
-        if let Some(mut layer) =
-            self.hit_feedback
-                .render(self.view_extents, eye_position, eye_forward)
+        if let Some(mut layer) = self
+            .hit_feedback
+            .render(self.view_extents, eye_position, eye_forward)
+            .filter(|_| !workbench)
         {
             layer.set_transform(pawn_to_world * layer.get_transform());
             scene.push(layer);
@@ -3332,7 +3356,7 @@ impl Game {
         }
         scene.extend(pause_objects);
 
-        if !self.player_visuals_hidden() {
+        if !self.player_visuals_hidden() && !workbench {
             if let Ok(alcohol) = self
                 .world()
                 .borrow::<shipyard::UniqueView<alcohol::AlcoholVital>>()
@@ -3402,7 +3426,12 @@ impl Game {
         // with a gun welded to their face while the camera rolled onto the
         // floor - the two presentations diverging on exactly the beat this
         // feature exists for (AGENTS.md section 3).
-        let mut objs = if self.pause_menu.is_open() || self.player_visuals_hidden() {
+        // The grip pose workbench is a scene of its own, so none of this
+        // shows over it either (an item's label would read through).
+        let mut objs = if self.pause_menu.is_open()
+            || self.player_visuals_hidden()
+            || self.active_game_scene.pose_workbench_open()
+        {
             Vec::new()
         } else {
             self.active_game_scene.render_per_eye(
