@@ -65,6 +65,7 @@ impl CurlPoseEditor {
                     unreachable!("to_curls returns curls")
                 };
                 self.show(ui, &mut curls, &mut trigger_curls, preview_label, false);
+                trigger_index_slider(ui, fingers);
             }
         }
     }
@@ -131,6 +132,22 @@ impl CurlPoseEditor {
         });
         ui.label(preview_label);
         ui.add(egui::Slider::new(&mut self.preview, 0.0..=1.0));
+    }
+}
+
+/// A VR snapshot's trigger pose as its rest with the index curled toward a
+/// fist (`FingerPose::with_trigger_index`, as the VR workbench's Index steps).
+fn trigger_index_slider(ui: &mut egui::Ui, fingers: &mut FingerPose) {
+    let mut percent = fingers.trigger_index().unwrap_or(0.0) * 100.0;
+    if tweak_slider(
+        ui,
+        "Trigger index curl %",
+        &mut percent,
+        0.0..=100.0,
+        10.0,
+        0,
+    ) {
+        *fingers = fingers.with_trigger_index(percent / 100.0);
     }
 }
 
@@ -1570,6 +1587,30 @@ pub(crate) mod tests {
             aim_controls(ui, &mut show, &mut grip, muzzle);
         });
         assert_eq!(grip, before);
+    }
+
+    /// A VR snapshot offers the trigger index slider, which sets the trigger
+    /// pose through the game's own blend; a curl grip has its pressed curls.
+    #[test]
+    fn the_trigger_index_slider_curls_a_snapshots_index_as_the_game_does() {
+        let snapshot = FingerPose::curls([0.1, 0.2, 0.4, 0.5, 0.6]).to_bones();
+        let mut editor = CurlPoseEditor::default();
+        let mut fingers = snapshot.clone();
+        let drawn = click_button("Mode: VR snapshot", |ui| {
+            editor.show_fingers(ui, &mut fingers, "Preview")
+        });
+        assert!(
+            drawn.iter().any(|t| t == "Trigger index curl %"),
+            "{drawn:?}"
+        );
+        let mut curls = FingerPose::curls([0.5; 5]);
+        let drawn = click_button("Mode: Curls", |ui| {
+            editor.show_fingers(ui, &mut curls, "Preview")
+        });
+        assert!(!drawn.iter().any(|t| t == "Trigger index curl %"));
+
+        click_button("+", |ui| trigger_index_slider(ui, &mut fingers));
+        assert_eq!(fingers, snapshot.with_trigger_index(0.1));
     }
 
     #[test]
