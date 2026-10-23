@@ -436,7 +436,7 @@ test(
     assert.ok(panelDraws.length > 0, "the panel is drawn");
     assert.equal((await tool()).panel.status, "Pose, then snapshot");
     // Nothing staged: Save and Discard are disabled.
-    assert.deepEqual((await tool()).panel.panel!.buttons.map((b) => b.event), ["SwitchHand", "ResetView", "Exit"]);
+    assert.deepEqual((await tool()).panel.panel!.buttons.map((b) => b.event), ["SwitchHand", "Slot", "ResetView", "Exit"]);
     const { v, s } = (await tool()).panel.panel!.rotation;
     const panelUp = (metres: number) => scale(quatRotate([v.x, v.y, v.z, s], [0, 1, 0]), metres);
 
@@ -1009,5 +1009,128 @@ test(
     const fires = muzzleFrameOf(await game.entities.detail(gun.id)).forward;
     const shotOff = (Math.acos(Math.min(1, dot(normalize(fires), normalize(aim)))) * 180) / Math.PI;
     assert.ok(shotOff < 1, `shots leave ${shotOff} deg off the controller`);
+  },
+);
+
+/** `handInMetres` with the index finger hooked round a trigger. */
+function triggerHandInMetres(): Vec3[] {
+  const joints = handInMetres();
+  joints[8] = [-0.025, -0.035, -0.11];
+  joints[9] = [-0.025, -0.055, -0.095];
+  joints[10] = [-0.025, -0.06, -0.075];
+  return joints;
+}
+
+type Bones = ResolvedGrip["rotation"][];
+/** Bone poses equal as rotations (q and -q alike). */
+function assertSameBones(actual: Bones | null | undefined, expected: Bones, label: string): void {
+  assert.equal(actual?.length, expected.length, label);
+  actual!.forEach((q, i) => {
+    const e = expected[i]!;
+    const d = Math.abs(dot4([q.v.x, q.v.y, q.v.z, q.s], [e.v.x, e.v.y, e.v.z, e.s]));
+    assert.ok(d > 1 - 1e-5, `${label}: bone ${i} off (dot ${d})`);
+  });
+}
+const fingers = (grip: ResolvedGrip) => grip.fingers as { bones?: Bones; trigger_bones?: Bones };
+
+test(
+  "grip pose tool: the trigger slot snapshots the pulled fingers, which play blends to with the trigger",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    const path = join(data.root, "vr-grip-overrides.json");
+    let saved: ResolvedGrip;
+    {
+      await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+      const rightGrip = async () => (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
+      const gun = await holdShotgun(game);
+      await game.input.set("head.position", [0, 1, 0]);
+      await game.step({ frames: 2 });
+      const unit = await metresPerWorldUnit(game);
+      await game.input.trigger("ToggleGripPoseTool");
+      await game.step({ frames: 2 });
+      const tool = async () => (await rightGrip()).pose_tool!;
+      assert.equal((await tool()).slot, "rest");
+      assert.equal((await tool()).panel.slot_disabled, null);
+
+      // Rest: the tracked right hand round the grip, the controller set down.
+      const controller = (await game.input.state()).right_hand;
+      const { toLocal } = await workbench(game);
+      const bench = (await game.scene.objects({ entityId: gun.id })).objects[0]!.position;
+      const onGun = (hand: Vec3[]) => hand.map((p) => toLocal(add(bench, scale(add(p, [0.1, -0.05, 0.05]), 1 / unit))));
+      await game.input.setMany({
+        "right_hand.squeeze": 0,
+        "right_hand.position": [controller.position[0] + 1, controller.position[1] - 0.5, controller.position[2]],
+        "right_hand.joints": onGun(handInMetres()),
+      });
+      await aimAway(game, "left");
+      await game.step({ frames: 30 });
+      await click(game, "left");
+      assert.equal((await tool()).staged, true, `rest staged (${(await tool()).capture_failure})`);
+      const rest = (await rightGrip()).grip!;
+      assert.ok(fingers(rest).bones, "the rest capture is bones");
+      assert.equal((await tool()).has_trigger_pose, false, "curl trigger poses do not carry over");
+
+      // Trigger slot: the index hooked; only the fingers change.
+      await aimAtButton(game, "left", "Slot", unit);
+      await game.step({ frames: 1 });
+      await click(game, "left");
+      await aimAway(game, "left");
+      assert.equal((await tool()).slot, "trigger");
+      await game.input.set("right_hand.joints", onGun(triggerHandInMetres()));
+      await game.step({ frames: 30 });
+      await click(game, "left");
+      const posed = (await rightGrip()).grip!;
+      assert.equal((await tool()).has_trigger_pose, true, `trigger staged (${(await tool()).capture_failure})`);
+      assertClose(posed.offset, rest.offset, 1e-5, "offset");
+      assertClose(posed.rotation, rest.rotation, 1e-6, "rotation");
+      assert.equal(posed.item_scale, rest.item_scale);
+      assertSameBones(fingers(posed).bones, fingers(rest).bones!, "rest fingers kept");
+      const pulled = fingers(posed).trigger_bones!;
+      const moved = pulled.some((q, i) => Math.abs(dot4([q.v.x, q.v.y, q.v.z, q.s], [
+        fingers(rest).bones![i]!.v.x, fingers(rest).bones![i]!.v.y, fingers(rest).bones![i]!.v.z, fingers(rest).bones![i]!.s,
+      ])) < 0.99);
+      assert.ok(moved, "the pulled fingers differ from the rest");
+
+      // Save writes both; leaving, dropping and re-grabbing loads them.
+      await saveOnPanel(game, "left", unit);
+      saved = (JSON.parse(readFileSync(path, "utf8")) as { entries: { model: string; grip: ResolvedGrip }[] })
+        .entries.find((e) => e.model === "sg_h")!.grip;
+      assert.equal(fingers(saved).bones?.length, 24);
+      assert.equal(fingers(saved).trigger_bones?.length, 24);
+      await game.input.setMany({ "right_hand.joints": null, "right_hand.position": controller.position });
+      await game.input.trigger("ToggleGripPoseTool");
+      await game.step({ frames: 5 });
+      assert.equal((await rightGrip()).pose_tool, null);
+      await game.input.set("right_hand.squeeze", 1);
+      await game.step({ frames: 3 });
+      await game.input.set("right_hand.squeeze", 0);
+      await game.step({ frames: 5 });
+      assert.notEqual((await game.info()).player.right_hand_entity_id, gun.id, "dropped");
+      await holdShotgun(game);
+
+      // The glove's fingers follow the trigger from the rest pose to the pulled one.
+      await game.input.set("right_hand.trigger", 0);
+      await game.step({ frames: 2 });
+      let held = await rightGrip();
+      assert.equal(held.visual_trigger, 0);
+      assertSameBones(held.finger_bones, fingers(saved).bones!, "released: the rest pose");
+      await game.input.set("right_hand.trigger", 1);
+      await game.step({ frames: 2 });
+      held = await rightGrip();
+      assert.equal(held.visual_trigger, 1);
+      assertSameBones(held.finger_bones, fingers(saved).trigger_bones!, "pulled: the trigger pose");
+      await game.input.set("right_hand.trigger", 0);
+      await game.step({ frames: 2 });
+    }
+
+    // A fresh run loads both poses from the overrides.
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    await holdShotgun(game);
+    const loaded = (await game.info()).player.hand_grips.find((g) => g.hand === "right")!.grip!;
+    assertSameBones(fingers(loaded).bones, fingers(saved).bones!, "restart: rest");
+    assertSameBones(fingers(loaded).trigger_bones, fingers(saved).trigger_bones!, "restart: trigger");
   },
 );

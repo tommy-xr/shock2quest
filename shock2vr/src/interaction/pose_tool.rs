@@ -6,7 +6,8 @@
 //! would) and its upper button discards it, and its squeeze turns the bench
 //! to examine it. A gun's capture keeps the previous grip's aim.
 //! A panel beside the bench (`panel`) shows the state, saves, and repeats
-//! the controls.
+//! the controls. Its slot button picks which pose a snapshot sets: the rest
+//! grip, or the fingers with the trigger pulled (`Slot`).
 pub(super) mod panel;
 
 use std::collections::VecDeque;
@@ -21,9 +22,9 @@ use engine::scene::{SceneObject, light::LightArray};
 
 use crate::hand_capture::{HandFit, HandJoints};
 use crate::hand_glove::{GloveRenderer, HandLight};
-use crate::hand_pose::{HandShape, Pose};
+use crate::hand_pose::{FingerBones, HandShape, Pose};
 use crate::vr_config::Handedness;
-use crate::vr_grip::{BakedGripEntry, GripOverrides, ResolvedGrip};
+use crate::vr_grip::{BakedGripEntry, FingerPose, GripOverrides, ResolvedGrip};
 use crate::vr_support::{GripPose, SupportPose};
 
 // Distances below are physical (metres): tracked hands, the glove and the
@@ -78,6 +79,54 @@ const AIM_LINE: [Vector3<f32>; 2] = [Vector3::new(0.1, 0.7, 1.0), Vector3::new(0
 /// controllers a hand holding its controller can report joints too.
 pub(super) fn controller_in_hand(posing: bool, joints: bool, tracked: bool) -> bool {
     tracked && !(posing && joints)
+}
+
+/// Which pose of a primary grip a snapshot sets. `Rest` takes the whole
+/// grip (wrist, item placement, fingers); `Trigger` takes only the fingers,
+/// as play poses them with the trigger fully pulled (`trigger_bones`),
+/// leaving the wrist and item where the rest grip holds them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Slot {
+    #[default]
+    Rest,
+    Trigger,
+}
+
+impl Slot {
+    /// The trigger value play poses this slot's fingers at.
+    pub fn trigger(self) -> f32 {
+        match self {
+            Slot::Rest => 0.0,
+            Slot::Trigger => 1.0,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Slot::Rest => "rest",
+            Slot::Trigger => "trigger",
+        }
+    }
+}
+
+/// A snapshot's fingers (`captured`) in `slot`, given the grip's `current`
+/// ones. Rest: the new rest pose, keeping a captured trigger pose (a curl
+/// grip's `trigger_curls` are shaped for its curl rest, so they go). Trigger:
+/// the new trigger pose over the current rest, as bones.
+pub(super) fn slot_fingers(slot: Slot, current: &FingerPose, captured: FingerBones) -> FingerPose {
+    match slot {
+        Slot::Rest => FingerPose::Bones {
+            bones: captured,
+            trigger_bones: match current {
+                FingerPose::Bones { trigger_bones, .. } => *trigger_bones,
+                FingerPose::Curls { .. } => None,
+            },
+        },
+        Slot::Trigger => FingerPose::Bones {
+            bones: current.rest_bones(),
+            trigger_bones: Some(captured),
+        },
+    }
 }
 
 /// A physical distance in world units at the active world scale.
@@ -153,6 +202,8 @@ pub(super) struct GripPoseTool {
     /// the item offers it, or why not.
     pub support: bool,
     pub support_mode: Result<(), String>,
+    /// Which pose of the primary grip a snapshot sets.
+    pub slot: Slot,
     /// The free hand is tracked, so it works the panel by fingertip.
     fingertip: bool,
     /// Test hold: the posing hand's controller holds the item as play does.
@@ -181,20 +232,22 @@ pub(super) struct GripPoseTool {
 }
 
 /// Test hold's controller: its last tracked world pose (`None` until first
-/// tracked; the item stays on the bench till then) and whether it is
-/// tracked this frame.
+/// tracked; the item stays on the bench till then), whether it is tracked
+/// this frame, and its trigger, which poses the fingers as in play.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct TestHold {
     pub controller: Option<GripPose>,
     pub tracked: bool,
+    pub trigger: f32,
 }
 
 impl TestHold {
-    /// Follow this frame's controller pose; an untracked one (`None`) leaves
-    /// the item where it was, as play does.
-    pub fn follow(&mut self, controller: Option<GripPose>) {
+    /// Follow this frame's controller pose and trigger; an untracked one
+    /// (`None`) leaves the item where it was, as play does.
+    pub fn follow(&mut self, controller: Option<GripPose>, trigger: f32) {
         self.tracked = controller.is_some();
         self.controller = controller.or(self.controller);
+        self.trigger = trigger;
     }
 }
 
@@ -275,6 +328,7 @@ impl GripPoseTool {
             switch: Ok(()),
             support: false,
             support_mode: Err("one-handed".to_owned()),
+            slot: Slot::Rest,
             fingertip: false,
             test_hold: None,
             muzzle: None,
@@ -361,6 +415,39 @@ impl GripPoseTool {
         }
     }
 
+    /// Whether the slot can switch, or why not: a trigger pose is the
+    /// primary grip's (play blends any held item's fingers with its trigger),
+    /// and test hold snapshots nothing.
+    pub fn slot_entry(&self) -> Result<(), String> {
+        if self.support {
+            Err("primary grip only".to_owned())
+        } else if self.test_hold.is_some() {
+            Err("end test hold first".to_owned())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Switch the slot a snapshot sets, if `slot_entry` allows; whether it
+    /// changed.
+    pub fn toggle_slot(&mut self) -> bool {
+        if self.slot_entry().is_err() {
+            return false;
+        }
+        self.slot = match self.slot {
+            Slot::Rest => Slot::Trigger,
+            Slot::Trigger => Slot::Rest,
+        };
+        true
+    }
+
+    /// The trigger value the posed glove is drawn at: test hold's controller
+    /// trigger, as play poses it, else the slot's pose.
+    pub fn preview_trigger(&self) -> f32 {
+        self.test_hold
+            .map_or(self.slot.trigger(), |hold| hold.trigger)
+    }
+
     /// Start test hold (if `test_hold_entry` allows) or end it; whether it
     /// changed. Either way whatever is held acts only once let go.
     pub fn toggle_test_hold(&mut self) -> bool {
@@ -389,8 +476,9 @@ impl GripPoseTool {
     }
 
     /// A different hand is posed: what was tracked, averaged or pressed for
-    /// the old one starts over.
+    /// the old one starts over, from its rest slot.
     fn restart_posing(&mut self) {
+        self.slot = Slot::Rest;
         self.tip_error_mm = None;
         self.hand_size_ratio = None;
         self.capture_failure = None;
@@ -522,6 +610,7 @@ impl GripPoseTool {
             // Ending a test hold is always allowed.
             "test_hold_disabled": view.test_hold_entry.err().filter(|_| !view.test_hold),
             "align_disabled": view.align.err(),
+            "slot_disabled": view.slot_entry.err(),
             "hover": self.hover,
             "panel": placed,
             // The bench's view turn about its pivot (world space).
@@ -553,6 +642,8 @@ impl GripPoseTool {
             switch: self.switch.clone(),
             support: self.support,
             support_mode: self.support_mode.clone(),
+            slot: self.slot,
+            slot_entry: self.slot_entry(),
             staged: self.staged.is_some(),
             fingertip: self.fingertip,
         }
@@ -938,7 +1029,8 @@ fn named_glove(
 }
 
 /// The workbench's hands, lit by `lights`: the posing hand's glove posed on
-/// the item at its grip, each tracked hand live, each untracked controller
+/// the item at its grip (fingers in the slot's pose, or test hold's
+/// trigger's), each tracked hand live, each untracked controller
 /// as an open glove, and the posing gloves again in every extra view. While
 /// the posing hand is tracked its live glove replaces the saved grip's, which
 /// would only be in its way; a staged grip always shows, as the preview.
@@ -981,7 +1073,10 @@ pub(super) fn render(
         posing_tracked = true;
         posed.extend(drawn);
     }
-    let held = grip.map(|grip| (tool.holding(), grip.fingers.hand_shape_at(0.0)));
+    let held = grip.map(|grip| {
+        let trigger = tool.preview_trigger();
+        (tool.holding(), grip.fingers.hand_shape_at(trigger))
+    });
     let (posed_glove, frozen) = if tool.support {
         (support, held)
     } else {
@@ -1368,6 +1463,88 @@ mod tests {
         assert!(same_rotation(placed.rotation, item.rotation));
     }
 
+    fn bones(curl: f32) -> FingerBones {
+        FingerPose::curls([curl; 5]).rest_bones()
+    }
+
+    #[test]
+    fn a_trigger_snapshot_sets_the_pressed_fingers_over_the_rest() {
+        let captured = bones(0.9);
+        // A curl rest converts to bones exactly; its curl trigger is replaced.
+        let curls = FingerPose::Curls {
+            curls: [0.3; 5],
+            trigger_curls: Some([0.6; 5]),
+        };
+        assert_eq!(
+            slot_fingers(Slot::Trigger, &curls, captured),
+            FingerPose::Bones {
+                bones: bones(0.3),
+                trigger_bones: Some(captured),
+            }
+        );
+        // A bone rest is kept as it is.
+        let posed = FingerPose::Bones {
+            bones: bones(0.2),
+            trigger_bones: None,
+        };
+        assert_eq!(
+            slot_fingers(Slot::Trigger, &posed, captured),
+            FingerPose::Bones {
+                bones: bones(0.2),
+                trigger_bones: Some(captured),
+            }
+        );
+    }
+
+    #[test]
+    fn a_rest_snapshot_keeps_a_captured_trigger_pose_but_not_curls() {
+        let captured = bones(0.4);
+        let paired = FingerPose::Bones {
+            bones: bones(0.2),
+            trigger_bones: Some(bones(0.9)),
+        };
+        assert_eq!(
+            slot_fingers(Slot::Rest, &paired, captured),
+            FingerPose::Bones {
+                bones: captured,
+                trigger_bones: Some(bones(0.9)),
+            }
+        );
+        let curls = FingerPose::Curls {
+            curls: [0.3; 5],
+            trigger_curls: Some([0.6; 5]),
+        };
+        assert_eq!(
+            slot_fingers(Slot::Rest, &curls, captured),
+            FingerPose::Bones {
+                bones: captured,
+                trigger_bones: None,
+            }
+        );
+    }
+
+    #[test]
+    fn the_slot_switches_on_a_primary_grip_and_the_bench_glove_shows_it() {
+        let mut tool = posing_tool();
+        assert_eq!((tool.slot, tool.preview_trigger()), (Slot::Rest, 0.0));
+        assert!(tool.toggle_slot());
+        assert_eq!((tool.slot, tool.preview_trigger()), (Slot::Trigger, 1.0));
+        // Test hold draws the fingers at its controller's trigger.
+        tool.staged = Some(staged());
+        assert!(tool.toggle_test_hold());
+        assert_eq!(tool.slot_entry(), Err("end test hold first".to_owned()));
+        assert!(!tool.toggle_slot());
+        tool.test_hold.as_mut().unwrap().follow(None, 0.25);
+        assert_eq!(tool.preview_trigger(), 0.25);
+        assert!(tool.toggle_test_hold());
+        assert_eq!(tool.slot, Slot::Trigger);
+        // A support pose has no trigger slot: switching starts at rest.
+        tool.set_support(true);
+        assert_eq!(tool.slot, Slot::Rest);
+        assert_eq!(tool.slot_entry(), Err("primary grip only".to_owned()));
+        assert!(!tool.toggle_slot());
+    }
+
     fn staged() -> crate::interaction::StagedGrip {
         crate::interaction::StagedGrip::Grip {
             entry: entry("right", 1.0),
@@ -1425,12 +1602,15 @@ mod tests {
             position: vec3(1.0, 2.0, 3.0),
             rotation: Quaternion::from_angle_x(Deg(10.0)),
         };
-        tool.test_hold.as_mut().unwrap().follow(Some(controller));
+        tool.test_hold
+            .as_mut()
+            .unwrap()
+            .follow(Some(controller), 0.0);
         assert_eq!(tool.holding().position, controller.position);
         assert_eq!(tool.turn_matrix(), Matrix4::from_scale(1.0), "unturned");
         assert!(tool.views().is_none());
         // Lost: it stays where the controller last was.
-        tool.test_hold.as_mut().unwrap().follow(None);
+        tool.test_hold.as_mut().unwrap().follow(None, 0.0);
         assert!(!tool.test_hold.unwrap().tracked);
         assert_eq!(tool.holding().position, controller.position);
         let status = tool.panel_view().status.text();
@@ -1443,7 +1623,7 @@ mod tests {
         use crate::ui::test_support::{hand_aimed_at, hand_aimed_away, test_panel};
         let mut tool = posing_tool();
         tool.panel = Some(test_panel());
-        let reset_view = cgmath::vec2(103.0, 241.0);
+        let reset_view = panel::RESET_VIEW.center();
         let mut input = InputContext::default();
         // The posing (right) controller set down, resting on its trigger.
         input.right_hand = Hand {
@@ -1472,7 +1652,7 @@ mod tests {
         let mut tool = posing_tool();
         tool.panel = Some(test_panel());
         let mut input = InputContext::default();
-        input.left_hand = hand_aimed_at(panel::CANVAS, cgmath::vec2(103.0, 241.0), 0.0);
+        input.left_hand = hand_aimed_at(panel::CANVAS, panel::RESET_VIEW.center(), 0.0);
         tool.point(&input);
         // The pause menu over the workbench takes this press (its Resume).
         tool.rearm();
@@ -1869,7 +2049,7 @@ mod tests {
         use crate::ui::test_support::{hand_aimed_away, test_panel};
         let panel = test_panel();
         let reset_view =
-            crate::ui::canvas_to_panel_world(panel::CANVAS, &panel, cgmath::vec2(103.0, 241.0));
+            crate::ui::canvas_to_panel_world(panel::CANVAS, &panel, panel::RESET_VIEW.center());
         // The free (left) index tip pushed from in front to through Reset view.
         let tip_at = |depth: f32| {
             let mut joints = [vec3(0.0, 0.0, 0.0); HAND_JOINT_COUNT];
