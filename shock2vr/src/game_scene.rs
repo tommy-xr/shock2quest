@@ -176,6 +176,10 @@ pub trait GameScene {
     ) {
     }
 
+    /// A frame the open workbench is not updated (the pause menu is over
+    /// it): it ignores buttons held through it, as on entry.
+    fn hold_pose_workbench(&mut self) {}
+
     /// Whether this scene wants a 2D mouse cursor (e.g. a menu). Flat runtimes
     /// show the OS cursor and populate `InputContext::pointer` when true; by
     /// default scenes capture the mouse for look.

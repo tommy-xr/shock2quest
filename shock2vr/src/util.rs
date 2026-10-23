@@ -378,6 +378,8 @@ pub mod render_source {
     /// The grip pose workbench's scene: its held item and plain room. Its
     /// hands are [`PLAYER_HANDS`].
     pub const GRIP_WORKBENCH: &str = "grip_workbench";
+    /// The grip pose workbench's control panel and the beam aimed at it.
+    pub const GRIP_WORKBENCH_PANEL: &str = "grip_workbench_panel";
 }
 
 /// A tag that records only which render path produced an object.
