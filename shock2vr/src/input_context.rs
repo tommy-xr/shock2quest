@@ -117,11 +117,18 @@ impl InputContext {
         suppressed
     }
 
-    /// Translate the head and both hands by `offset`, keeping the rig's shape.
+    /// Translate the head and both hands (with any tracked joints) by
+    /// `offset`, keeping the rig's shape.
     pub fn shift_rig(&mut self, offset: Vector3<f32>) {
         self.head.position += offset;
-        self.left_hand.position += offset;
-        self.right_hand.position += offset;
+        for hand in [&mut self.left_hand, &mut self.right_hand] {
+            hand.position += offset;
+            if let Some(joints) = &mut hand.joints {
+                for joint in joints {
+                    *joint += offset;
+                }
+            }
+        }
     }
 }
 
@@ -179,6 +186,10 @@ pub struct Hand {
     pub trigger_value: f32,
     pub squeeze_value: f32,
     pub a_value: f32,
+    /// Tracked hand joints (`XR_EXT_hand_tracking` order), pawn-local world
+    /// units like `position`; `None` unless hand tracking sees this hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joints: Option<crate::hand_capture::HandJoints>,
 }
 
 impl Hand {
@@ -193,12 +204,26 @@ impl Hand {
             trigger_value: 0.0,
             squeeze_value: 0.0,
             a_value: 0.0,
+            joints: None,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shifting_the_rig_moves_tracked_joints_with_the_hand() {
+        let mut input = InputContext::default();
+        input.left_hand.joints = Some([Vector3::new(1.0, 2.0, 3.0); 26]);
+        input.shift_rig(Vector3::new(0.5, 0.0, -1.0));
+        assert_eq!(input.left_hand.position, Vector3::new(0.5, 0.0, -1.0));
+        assert_eq!(
+            input.left_hand.joints.unwrap()[7],
+            Vector3::new(1.5, 2.0, 2.0)
+        );
+        assert!(input.right_hand.joints.is_none());
+    }
+
     #[test]
     fn vr_moves_left_turns_right_and_requires_opt_in_to_fly() {
         let mut input = InputContext::default();

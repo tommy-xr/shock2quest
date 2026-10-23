@@ -2345,6 +2345,9 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
             a_value: h.a_value,
             world_target: None,
             world_position: None,
+            joints: h
+                .joints
+                .map(|joints| joints.iter().map(|p| [p.x, p.y, p.z]).collect()),
         }
     }
     commands::InputState {

@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use cgmath::{InnerSpace, Quaternion, Vector2};
 use serde_json::Value;
 
+use crate::hand_capture::HAND_JOINT_COUNT;
 use crate::input_context::{InputContext, Pointer2D};
 
 /// Head rotation for a yaw/pitch (degrees), matching the desktop runtime's
@@ -46,6 +47,7 @@ pub fn input_channels_help() -> &'static str {
      {left,right}_hand.position [x,y,z] (pawn-local), \
      {left,right}_hand.rotation [x,y,z,w], \
      {left,right}_hand.world_target [x,y,z] world, VR, within arm reach (debug runtime only; null clears), \
+     {left,right}_hand.joints 26 x [x,y,z] pawn-local tracked hand joints (XR_EXT_hand_tracking order; null clears, or on Quest releases to live tracking), \
      crouch 0|1 (stand-up refused without headroom), \
      lean -1..1 (flat only; negative left, positive right), \
      jump 0|1 (held; launches on the grounded rising edge), \
@@ -144,6 +146,25 @@ pub fn apply_input_patch(
             "position" => {
                 let p = arr(channel, value, 3)?;
                 hand.position = cgmath::vec3(p[0], p[1], p[2]);
+                Ok(())
+            }
+            "joints" if value.is_null() => {
+                hand.joints = None;
+                Ok(())
+            }
+            "joints" => {
+                let joints = value
+                    .as_array()
+                    .filter(|joints| joints.len() == HAND_JOINT_COUNT)
+                    .ok_or_else(|| {
+                        format!("channel '{channel}' expects {HAND_JOINT_COUNT} [x,y,z] joints or null, got {value}")
+                    })?;
+                let mut parsed = [cgmath::vec3(0.0, 0.0, 0.0); HAND_JOINT_COUNT];
+                for (joint, value) in parsed.iter_mut().zip(joints) {
+                    let p = arr(channel, value, 3)?;
+                    *joint = cgmath::vec3(p[0], p[1], p[2]);
+                }
+                hand.joints = Some(parsed);
                 Ok(())
             }
             "rotation" => {
@@ -351,7 +372,7 @@ fn canonical_channel(channel: &str) -> Result<(String, bool), String> {
             "trigger" | "trigger_value" => "trigger",
             "squeeze" | "squeeze_value" => "squeeze",
             "a" | "a_value" => "a",
-            "thumbstick" | "position" | "rotation" => field,
+            "thumbstick" | "position" | "rotation" | "joints" => field,
             _ => return Err(unknown_channel(channel)),
         };
         return Ok((format!("{side}_hand.{field}"), false));
@@ -618,6 +639,24 @@ mod tests {
         assert!(overrides.set("bogus.channel", json!(1.0)).is_err());
         assert!(overrides.set("jump", json!("yes")).is_err());
         assert!(overrides.is_empty());
+    }
+
+    #[test]
+    fn hand_joints_take_all_26_points_or_null() {
+        let mut input = InputContext::default();
+        let joints: Vec<_> = (0..26).map(|i| json!([i as f32, 1.0, 2.0])).collect();
+        apply_input_patch(&mut input, "left_hand.joints", &json!(joints)).unwrap();
+        assert_eq!(
+            input.left_hand.joints.unwrap()[25],
+            cgmath::vec3(25.0, 1.0, 2.0)
+        );
+        assert!(input.right_hand.joints.is_none());
+        assert!(apply_input_patch(&mut input, "left_hand.joints", &json!(joints[..25])).is_err());
+        let mut bad = joints.clone();
+        bad[3] = json!([0.0, 1.0]);
+        assert!(apply_input_patch(&mut input, "left_hand.joints", &json!(bad)).is_err());
+        apply_input_patch(&mut input, "left_hand.joints", &Value::Null).unwrap();
+        assert!(input.left_hand.joints.is_none());
     }
 
     #[test]
