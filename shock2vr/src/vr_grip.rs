@@ -367,28 +367,30 @@ impl FingerPose {
 
     /// This pose with its trigger pose set to the rest pose, index finger
     /// curled `amount` (0..=1) of the way toward a fist: pulling the trigger
-    /// moves only the index. Curl grips stay curls. The VR grip workbench's
-    /// Index steps and dark_explorer's trigger index slider both set it.
+    /// moves only the index; at 0 it moves nothing, so there is none. Curl
+    /// grips stay curls. The VR grip workbench's Index steps and
+    /// dark_explorer's trigger index slider both set it.
     pub fn with_trigger_index(&self, amount: f32) -> FingerPose {
         let amount = trigger_amount(amount);
+        let pulled = amount > 0.0;
         match self {
             FingerPose::Curls { curls, .. } => {
                 let mut pressed = *curls;
                 pressed[1] += amount * (1.0 - pressed[1]);
                 FingerPose::Curls {
                     curls: *curls,
-                    trigger_curls: Some(pressed),
+                    trigger_curls: pulled.then_some(pressed),
                 }
             }
             FingerPose::Bones { bones, .. } => {
                 let fist = fist_right_hand().finger_bones();
                 let mut pressed = *bones;
                 for i in FINGER_BONES[1].clone() {
-                    pressed[i] = slerp_shortest(bones[i], fist[i], amount);
+                    pressed[i] = bones[i].slerp(fist[i], amount);
                 }
                 FingerPose::Bones {
                     bones: *bones,
-                    trigger_bones: Some(pressed),
+                    trigger_bones: pulled.then_some(pressed),
                 }
             }
         }
@@ -420,9 +422,7 @@ impl FingerPose {
                 let error = |amount: f32| -> f32 {
                     FINGER_BONES[1]
                         .clone()
-                        .map(|i| {
-                            rotation_error(slerp_shortest(bones[i], fist[i], amount), pressed[i])
-                        })
+                        .map(|i| rotation_error(bones[i].slerp(fist[i], amount), pressed[i]))
                         .sum()
                 };
                 Some(minimize(error, 0.0, 1.0))
@@ -473,12 +473,6 @@ pub fn with_index(rest: &FingerBones, index: &FingerBones) -> FingerBones {
     let bones_of_index = FINGER_BONES[1].clone();
     bones[bones_of_index.clone()].copy_from_slice(&index[bones_of_index]);
     bones
-}
-
-/// `a` turned `amount` of the way to `b` along the shortest arc.
-fn slerp_shortest(a: Quaternion<f32>, b: Quaternion<f32>, amount: f32) -> Quaternion<f32> {
-    let b = if a.dot(b) < 0.0 { -b } else { b };
-    a.slerp(b, amount)
 }
 
 /// Inverse of `curls_to_bones`: per finger, the curl whose open -> fist blend
@@ -1549,9 +1543,14 @@ mod tests {
             trigger_bones: None,
         };
         assert_eq!(pose.trigger_index(), None);
+        assert_eq!(
+            pose.with_trigger_index(0.0),
+            pose,
+            "0%: the trigger moves nothing, so there is no trigger pose"
+        );
         let index = FINGER_BONES[1].clone();
-        let mut last = -1.0;
-        for step in 0..=10 {
+        let mut last = 0.0;
+        for step in 1..=10 {
             let amount = step as f32 / 10.0;
             let set = pose.with_trigger_index(amount);
             let FingerPose::Bones {
@@ -1577,9 +1576,6 @@ mod tests {
                     .map(|i| rotation_error(pressed[i], target[i]))
                     .sum()
             };
-            if step == 0 {
-                assert!(off(&rest) < 1e-3, "0% is the rest index");
-            }
             if step == 10 {
                 assert!(off(&fist) < 1e-3, "100% is the fist's index");
             }
@@ -1601,6 +1597,7 @@ mod tests {
             [0.1, 0.4, 0.5, 0.6]
         );
         assert!((curls.trigger_index().unwrap() - 0.5).abs() < 1e-6);
+        assert_eq!(curls.with_trigger_index(0.0), FingerPose::curls(rest_curls));
     }
 
     #[test]
