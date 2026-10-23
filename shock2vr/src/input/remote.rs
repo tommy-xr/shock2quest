@@ -44,7 +44,6 @@ pub fn input_channels_help() -> &'static str {
      pointer.position [x,y] in [0,1] (origin top-left; null clears), pointer.pressed 0|1, pointer.secondary 0|1, \
      {left,right}_hand.{trigger,squeeze,a} <number 0..1>, \
      {left,right}_hand.thumbstick [x,y] (+x right, +y forward), \
-     {left,right}_hand.thumbstick_click 0|1, \
      {left,right}_hand.tracked 0|1 (0: the controller is set down or lost), \
      {left,right}_hand.position [x,y,z] (pawn-local), \
      {left,right}_hand.rotation [x,y,z,w], \
@@ -155,16 +154,6 @@ pub fn apply_input_patch(
             }
             "a" | "a_value" => {
                 hand.a_value = num(channel, value)?;
-                Ok(())
-            }
-            "thumbstick_click" => {
-                hand.thumbstick_click = match num(channel, value)? {
-                    v if v == 0.0 => false,
-                    v if v == 1.0 => true,
-                    v => {
-                        return Err(format!("channel '{channel}' expects 0 or 1, got {v}"));
-                    }
-                };
                 Ok(())
             }
             "thumbstick" => {
@@ -401,7 +390,7 @@ fn canonical_channel(channel: &str) -> Result<(String, bool), String> {
             "trigger" | "trigger_value" => "trigger",
             "squeeze" | "squeeze_value" => "squeeze",
             "a" | "a_value" => "a",
-            "thumbstick" | "thumbstick_click" | "position" | "rotation" | "joints" => field,
+            "thumbstick" | "position" | "rotation" | "joints" => field,
             _ => return Err(unknown_channel(channel)),
         };
         return Ok((format!("{side}_hand.{field}"), false));

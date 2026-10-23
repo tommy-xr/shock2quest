@@ -161,21 +161,14 @@ test(
     };
     const named = async (prefix: string) =>
       (await game.scene.objects()).objects.filter((o) => o.name?.startsWith(prefix)).length;
-    // The bench plus three views: 4 copies of every joint.
-    const VIEWS = 4;
-    const JOINTS = 26;
 
     // Without hand tracking (controller-only, no multimodal) a capture says so.
     await pullTrigger();
     grip = await rightGrip();
     assert.equal(grip.pose_tool?.capture_failure, "no_joints");
     assert.equal(grip.pose_tool?.tip_error_mm, null, "no tracked hand, no tip error");
-    // Untracked, the saved grip's glove holds the mug. By default only its
-    // spheres touching or through the mug show; with nothing tracked there
-    // are no raw joint markers.
+    // Untracked, the saved grip's glove holds the mug.
     assert.ok((await named("Right grip glove")) > 0, "the saved grip's glove");
-    assert.equal(await named("contact sphere free"), 0);
-    assert.equal(await named("tracked joint"), 0);
 
     // A posing hand that shakes by 4 cm (2 cm either side of its mean) never
     // captures.
@@ -198,11 +191,9 @@ test(
     await game.input.set("right_hand.joints", trackedHand(hand, unit));
     await game.step({ frames: 30 });
     // The live glove replaces the saved grip's, which would be in the real
-    // hand's way. Its raw joints show markers on the wrist and fingertips.
+    // hand's way.
     assert.equal(await named("Right grip glove"), 0, "the saved glove steps aside");
     assert.ok((await named("Right glove")) > 0, "for the live one");
-    assert.equal(await named("contact sphere free"), 0);
-    assert.equal(await named("tracked joint"), 6 * VIEWS);
     // How far each glove fingertip lands from the tracked one: this flat,
     // built hand's thumb to middle are within the glove's reach, so on them.
     const live = (await rightGrip()).pose_tool;
@@ -212,22 +203,6 @@ test(
     assert.ok(tipError!.slice(0, 3).every((mm) => mm < 3), `thumb to middle on the hand: ${tipError}`);
     // About the glove's size.
     assert.ok(Math.abs(live!.hand_size_ratio! - 1) < 0.1, `${live?.hand_size_ratio}`);
-    // The free (left) controller's thumbstick click steps to every sphere and
-    // marker, then none, then back to contacts only.
-    const clickStick = async () => {
-      await game.input.set("left_hand.thumbstick_click", 1);
-      await game.step({ frames: 1 });
-      await game.input.set("left_hand.thumbstick_click", 0);
-      await game.step({ frames: 1 });
-      return (await rightGrip()).pose_tool?.contact_view;
-    };
-    assert.equal(await clickStick(), "full");
-    assert.equal(await named("contact sphere"), JOINTS * VIEWS, "every live glove joint");
-    assert.equal(await named("tracked joint"), JOINTS * VIEWS);
-    assert.equal(await clickStick(), "off");
-    assert.equal(await named("contact sphere"), 0);
-    assert.equal(await named("tracked joint"), 0);
-    assert.equal(await clickStick(), "contacts");
     await pullTrigger();
     grip = await rightGrip();
     assert.ok(grip.grip && "bones" in grip.grip, "the staged capture applies at once");
@@ -434,7 +409,7 @@ test(
     ]);
     await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
     const path = join(data.root, "vr-grip-overrides.json");
-    const { mug, unit } = await openWorkbench(game);
+    const { unit } = await openWorkbench(game);
     const tool = async () => (await workbench(game)).tool;
     const haptics = async () => (await game.info()).player.hand_feedback!.haptics!;
 
@@ -444,7 +419,7 @@ test(
     assert.ok(panelDraws.length > 0, "the panel is drawn");
     assert.equal((await tool()).panel.status, "Pose, then snapshot");
     // Nothing staged: Save and Discard are disabled.
-    assert.deepEqual((await tool()).panel.panel!.buttons.map((b) => b.event), ["SwitchHand", "Contacts", "ResetView", "Exit"]);
+    assert.deepEqual((await tool()).panel.panel!.buttons.map((b) => b.event), ["SwitchHand", "ResetView", "Exit"]);
     const { v, s } = (await tool()).panel.panel!.rotation;
     const panelUp = (metres: number) => scale(quatRotate([v.x, v.y, v.z, s], [0, 1, 0]), metres);
 
@@ -503,26 +478,6 @@ test(
     await game.step({ frames: 1 });
     assert.equal((await tool()).staged, false, "a centimetre through presses Discard");
     assert.equal(readFileSync(path, "utf8"), saved, "discarding writes nothing");
-    await game.input.setMany({ "left_hand.joints": null, "left_hand.tracked": 1 });
-    await game.step({ frames: 1 });
-
-    // The tracked hand pushed into the mug buzzes the free controller, and
-    // stops when contacts are hidden.
-    const mugDraw = (await game.scene.objects({ entityId: mug.id })).objects[0]!;
-    const into = handInMetres().map((p) => toLocal(add(mugDraw.position, scale(sub(p, [0, 0, -0.09]), 1 / unit))));
-    await game.input.set("right_hand.joints", into);
-    await game.step({ frames: 2 });
-    const buzzing = await haptics();
-    const penetrating = (await game.scene.objects()).objects.filter((o) => o.name === "contact sphere penetrating").length;
-    assert.ok(penetrating > 0, "joints go through the mug");
-    assert.ok(buzzing.last[0]!.amplitude > 0 && buzzing.last[0]!.amplitude <= 0.35 + 1e-6, `${JSON.stringify(buzzing.last[0])}`);
-    await aimAtButton(game, "left", "Contacts", unit);
-    await click(game, "left");
-    await click(game, "left");
-    assert.equal((await tool()).contact_view, "off", "the panel steps contacts: full, off");
-    const quiet = (await haptics()).sequence[0];
-    await game.step({ frames: 5 });
-    assert.equal((await haptics()).sequence[0], quiet, "no buzz with contacts off");
   },
 );
 
@@ -618,9 +573,13 @@ test(
     // Quest multimodal: the hand holding the free controller is tracked too.
     // Its controller still aims, and its trigger clicks rather than snapshots.
     await game.input.set("left_hand.joints", trackedHand([hand[0] - 0.4, hand[1], hand[2]], unit, { left: true }));
-    await aimAtButton(game, "left", "Contacts", unit);
+    await aimAtButton(game, "left", "ResetView", unit);
+    const haptics = async () => (await game.info()).player.hand_feedback!.haptics!;
+    const clicks = (await haptics()).sequence[0];
     await click(game, "left");
-    assert.equal((await tool()).contact_view, "full", "the ray clicked Contacts");
+    const clicked = await haptics();
+    assert.ok(clicked.sequence[0] > clicks && Math.abs(clicked.last[0]!.amplitude - 0.6) < 1e-6,
+      "the ray clicked Reset view");
     assert.equal((await tool()).staged, false, "and did not snapshot");
     // Nor does that hand, closed round its controller, pinch a snapshot.
     await game.input.set("left_hand.joints",

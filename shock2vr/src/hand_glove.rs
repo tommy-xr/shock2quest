@@ -185,19 +185,6 @@ impl GloveRenderer {
         })
     }
 
-    /// The glove's 26 skin joints (SteamVR order, so `XR_EXT_hand_tracking`
-    /// order too) posed with `pose`, in calibrated hand space as drawn: at the
-    /// world scale's personal size, like tracked joints.
-    pub(crate) fn posed_joints(
-        &mut self,
-        pose: &Pose,
-        handedness: Handedness,
-    ) -> crate::hand_capture::HandJoints {
-        let personal = crate::world_scale::WorldScale::active().personal();
-        self.authored_joints(pose, handedness)
-            .map(|joint| joint * personal)
-    }
-
     /// `posed_joints` in authored units (world scale 1), as grips are fitted.
     fn authored_joints(
         &mut self,
@@ -205,20 +192,6 @@ impl GloveRenderer {
         handedness: Handedness,
     ) -> crate::hand_capture::HandJoints {
         skin_joints(&mut self.model, &self.retarget, pose, handedness)
-    }
-
-    /// The joints of a glove drawn fully in `shape` (as `render_hand` draws
-    /// a fitted shape at blend 1), in calibrated hand space as drawn.
-    pub(crate) fn shape_joints(
-        &mut self,
-        shape: &HandShape,
-        handedness: Handedness,
-    ) -> crate::hand_capture::HandJoints {
-        let pose = match shape {
-            HandShape::Curls(amounts) => self.open.blend_per_finger(&self.fist, amounts),
-            HandShape::Pose(pose) => pose.clone(),
-        };
-        self.posed_joints(&pose, handedness)
     }
 
     /// The open glove's joints in calibrated hand space as drawn, to match
