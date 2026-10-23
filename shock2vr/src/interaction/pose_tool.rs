@@ -1500,21 +1500,6 @@ mod tests {
         FingerPose::curls([curl; 5]).rest_bones()
     }
 
-    /// The index finger's `FingerBones` (SteamVR bones 6..=10).
-    const INDEX: std::ops::Range<usize> = 4..9;
-
-    /// `pose`'s bones match `index` on the index finger and `others` elsewhere.
-    fn index_over(pose: &FingerBones, index: &FingerBones, others: &FingerBones) -> bool {
-        (0..pose.len()).all(|i| {
-            pose[i]
-                == if INDEX.contains(&i) {
-                    index[i]
-                } else {
-                    others[i]
-                }
-        })
-    }
-
     #[test]
     fn a_trigger_snapshot_sets_only_the_pulled_index_over_the_rest() {
         let captured = bones(0.9);
@@ -1537,8 +1522,9 @@ mod tests {
                 panic!("a bone pose with a trigger pose");
             };
             assert_eq!(kept, rest);
-            assert!(
-                index_over(&pulled, &captured, &rest),
+            assert_eq!(
+                pulled,
+                crate::vr_grip::with_index(&rest, &captured),
                 "the tracked index over the other four fingers at rest"
             );
         }
@@ -1559,8 +1545,9 @@ mod tests {
             panic!("a bone pose with a trigger pose");
         };
         assert_eq!(rest, captured);
-        assert!(
-            index_over(&pulled, &bones(0.9), &captured),
+        assert_eq!(
+            pulled,
+            crate::vr_grip::with_index(&captured, &bones(0.9)),
             "pulling moves only the index: the others follow the new rest"
         );
         let curls = FingerPose::Curls {

@@ -407,16 +407,6 @@ async function aimAway(game: GameServer, hand: "left" | "right"): Promise<void> 
   await game.input.set(`${hand}_hand.rotation`, toLocalRotation(quatFromTo([0, 0, -1], [0, 1, 0])));
 }
 
-/** Click the panel's Save with a controller, then aim it away again so its
- * next press snapshots. */
-async function saveOnPanel(game: GameServer, hand: "left" | "right", unit: number): Promise<void> {
-  await aimAtButton(game, hand, "Save", unit);
-  await game.step({ frames: 1 });
-  await click(game, hand);
-  await aimAway(game, hand);
-  await game.step({ frames: 1 });
-}
-
 /** Click a panel button with a controller, then aim it away again so its
  * next press snapshots. */
 async function pressButton(game: GameServer, hand: "left" | "right", event: PanelEvent, unit: number): Promise<void> {
@@ -426,6 +416,8 @@ async function pressButton(game: GameServer, hand: "left" | "right", event: Pane
   await aimAway(game, hand);
   await game.step({ frames: 1 });
 }
+
+const saveOnPanel = (game: GameServer, hand: "left" | "right", unit: number) => pressButton(game, hand, "Save", unit);
 
 /** Rest snapshots keep the grip's placement by default; switch them to
  * capture it from the tracked hand too. */
@@ -1415,13 +1407,14 @@ test(
       // The Index steps then set it as the rest index curled toward a fist,
       // from the snapshot's nearest tenth.
       const snapped = (await tool()).panel.trigger_index!;
-      assert.ok(snapped > 0 && snapped < 1, `the snapshot reads ${snapped}`);
+      // Above two tenths, so two steps down still pull the index.
+      assert.ok(snapped > 0.25 && snapped < 1, `the snapshot reads ${snapped}`);
       const panelBefore = (await tool()).panel.panel!.buttons.map((b) => b.event);
       assert.ok(panelBefore.includes("IndexLess") && panelBefore.includes("IndexMore") && !panelBefore.includes("Placement"),
         `${panelBefore}`);
       await pressButton(game, "left", "IndexLess", unit);
       await pressButton(game, "left", "IndexLess", unit);
-      const lower = Math.max(0, Math.ceil(snapped * 10 - 1e-3) - 2) / 10;
+      const lower = (Math.ceil(snapped * 10 - 1e-3) - 2) / 10;
       assert.ok(Math.abs((await tool()).panel.trigger_index! - lower) < 1e-3,
         `${snapped} two tenths down: ${(await tool()).panel.trigger_index} vs ${lower}`);
       indexOnly(fingers((await rightGrip()).grip!).trigger_bones!, "stepped");

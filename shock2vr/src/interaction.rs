@@ -1637,10 +1637,6 @@ impl VrInteraction {
             return;
         };
         let amount = next_tenth(current.fingers.trigger_index().unwrap_or(0.0), more);
-        // No trigger pose, stepped down: still the rest, nothing to stage.
-        if !more && !current.fingers.has_trigger_pose() {
-            return;
-        }
         let fingers = current.fingers.with_trigger_index(amount);
         // A step past either end changes nothing.
         if fingers == current.fingers {
@@ -2128,9 +2124,6 @@ fn pose_hand_switch(
         .ok_or_else(|| format!("no {} grip to start from", ["left", "right"][other]))
 }
 
-/// The posed hand's item frame from its holder's, when the grip hand is not
-/// the holder and the item is drawn mirrored between hands: the bench and its
-/// muzzle show the item as that hand would hold it.
 /// The next tenth of 0..=1 above (`more`) or below `amount`, from wherever
 /// it is: 0.43 steps to 0.5 or 0.4.
 fn next_tenth(amount: f32, more: bool) -> f32 {
@@ -2142,6 +2135,9 @@ fn next_tenth(amount: f32, more: bool) -> f32 {
     tenths.clamp(0.0, 10.0) / 10.0
 }
 
+/// The posed hand's item frame from its holder's, when the grip hand is not
+/// the holder and the item is drawn mirrored between hands: the bench and its
+/// muzzle show the item as that hand would hold it.
 fn pose_frame(tool: &pose_tool::GripPoseTool, held: Option<&HeldGrip>) -> Option<Matrix4<f32>> {
     if tool.hand == tool.holder {
         return None;
