@@ -729,6 +729,7 @@ async function inController(game: GameServer, hand: "left" | "right", item: numb
   const gun = detail.properties.some((p) => p.name === "WeaponMuzzle") ? muzzleFrameOf(detail) : null;
   return {
     origin: local(detail.position as Vec3),
+    rotation: quatMultiply(quatConjugate(rotation), detail.rotation as Quat),
     muzzle: gun && local(gun.position),
     fires: gun && quatRotate(quatConjugate(rotation), gun.forward),
     grip: player.hand_grips.find((g) => g.hand === hand)!,
@@ -738,7 +739,9 @@ async function inController(game: GameServer, hand: "left" | "right", item: numb
 /** Across the hand's mirror plane (controller-local X). */
 const mirrorX = ([x, y, z]: Vec3): Vec3 => [-x, y, z];
 
-for (const [name, template] of [["shotgun", -19], ["wrench", -928]] as const) {
+// Each item's mirror plane, by an item-frame direction lying in it: a gun
+// reflects across its barrel plane (z = 0), a melee rig across the hand's (x = 0).
+for (const [name, template, inPlane] of [["shotgun", -19, [1, 1, 0]], ["wrench", -928, [0, 1, 1]]] as const) {
   test(
     `grip pose tool: a ${name} grip posed for the right hand holds it mirrored in the left`,
     { skip: !enabled, timeout: 300_000 },
@@ -765,6 +768,11 @@ for (const [name, template] of [["shotgun", -19], ["wrench", -928]] as const) {
       const near = (a: Vec3, b: Vec3, what: string) =>
         assert.ok(distance(a, b) < 0.002 / unit, `${what}: ${a} vs ${b}`);
       near(left.origin, mirrorX(right.origin), "item origin");
+      // Turned alike: a direction in the item's mirror plane is the same
+      // item direction in either hand's frame.
+      const along = (q: Quat) => quatRotate(q, normalize([...inPlane] as Vec3));
+      assert.ok(distance(along(left.rotation), mirrorX(along(right.rotation))) < 1e-3,
+        `item rotation: ${along(left.rotation)} vs ${mirrorX(along(right.rotation))}`);
       assert.equal(left.grip.source, "mirrored");
       if (right.muzzle) {
         near(left.muzzle!, mirrorX(right.muzzle), "muzzle");
@@ -782,10 +790,10 @@ for (const [name, template] of [["shotgun", -19], ["wrench", -928]] as const) {
 }
 
 test(
-  "grip pose tool panel: posing the other hand of a handed weapon draws it mirrored",
+  "grip pose tool panel: posing the other hand of a handed weapon draws it mirrored and saves its own pose",
   { skip: !enabled, timeout: 300_000 },
   async () => {
-    using _data = isolatedDataRoot([
+    using data = isolatedDataRoot([
       "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
     ]);
     await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
@@ -815,6 +823,40 @@ test(
         assert.notEqual(o.backface_culling, before[i]!.backface_culling, `${o.name} culls the other winding`);
       }
     });
+
+    // Capture the tracked left hand round the mirrored gun (turned 28 degrees
+    // the other way); the free right controller snapshots and saves.
+    const controller = (await game.input.state()).right_hand;
+    const { toLocal } = await workbench(game);
+    const bench = (await game.scene.objects({ entityId: gun.id })).objects[0]!.position;
+    await game.input.set("left_hand.joints", handInMetres({ left: true }).map((p) =>
+      toLocal(add(bench, scale(add(quatRotate(yaw(-28), p), [-0.1, -0.05, 0.05]), 1 / unit)))));
+    await aimAway(game, "right");
+    await game.step({ frames: 30 });
+    await click(game, "right");
+    assert.equal((await workbench(game)).tool.staged, true, "the left hand's pose is staged");
+    await saveOnPanel(game, "right", unit);
+    const saved = JSON.parse(readFileSync(join(data.root, "vr-grip-overrides.json"), "utf8")) as {
+      entries: { model: string; hand: string; grip: ResolvedGrip }[];
+    };
+    assert.deepEqual(saved.entries.map((e) => [e.model, e.hand]), [["sg_h", "left"]]);
+    // The capture kept the mirrored grip's aim: in the left frame the
+    // barrel still runs along -X, down the controller.
+    assert.ok(aimOff(saved.entries[0]!.grip) < 0.1, `left capture aim ${aimOff(saved.entries[0]!.grip)}`);
+
+    // In play the left hand takes its own saved pose.
+    await game.input.setMany({
+      "left_hand.joints": null, "right_hand.position": controller.position, "right_hand.squeeze": 1,
+    });
+    await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 5 });
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 5 });
+    await holdDebugMug(game, "left", -19);
+    const left = (await game.info()).player.hand_grips.find((g) => g.hand === "left")!;
+    assert.equal(left.entity_id, gun.id);
+    assert.equal(left.source, "prepared");
+    assertClose(left.grip!.rotation, saved.entries[0]!.grip.rotation, 1e-5, "rotation");
   },
 );
 

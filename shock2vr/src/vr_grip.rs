@@ -880,10 +880,7 @@ impl GripLibrary {
         if self.version != 1 {
             return None;
         }
-        let other = match hand {
-            Handedness::Left => Handedness::Right,
-            Handedness::Right => Handedness::Left,
-        };
+        let other = hand.other();
         let (headset, shipped) = self.entries.split_at(self.headset.min(self.entries.len()));
         [headset, shipped].into_iter().find_map(|source| {
             let find = |hand| {
@@ -912,8 +909,11 @@ impl GripLibrary {
         if !other {
             return Some((grip.clone(), false));
         }
-        let mirrored = grip.mirrored(hand_model_mirror(model_mirror?, hand)?)?;
-        Some((mirrored, true))
+        // A grip that will not mirror leaves this hand its own, if any.
+        model_mirror
+            .and_then(|mirror| grip.mirrored(hand_model_mirror(mirror, hand)?))
+            .map(|mirrored| (mirrored, true))
+            .or_else(|| self.lookup_for(model, hand, None))
     }
 
     /// Remove the first entry for `model` and `hand` (a staged one: staging
@@ -1778,6 +1778,15 @@ mod tests {
             .unwrap();
         assert!(mirrored);
         assert_eq!(Some(grip), library.entries[0].grip.mirrored(mirror));
+        // One that will not mirror leaves the hand its own.
+        let (grip, mirrored) = library
+            .lookup_for(
+                "sg_h",
+                Handedness::Left,
+                Some(Matrix4::from_angle_y(cgmath::Deg(30.0))),
+            )
+            .unwrap();
+        assert_eq!((grip.offset.x, mirrored), (1.0, false));
         library.remove_first("sg_h", "right");
         assert_eq!(library.headset, 0);
         assert_eq!(
