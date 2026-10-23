@@ -390,7 +390,7 @@ fn canonical_channel(channel: &str) -> Result<(String, bool), String> {
             "trigger" | "trigger_value" => "trigger",
             "squeeze" | "squeeze_value" => "squeeze",
             "a" | "a_value" => "a",
-            "thumbstick" | "position" | "rotation" | "joints" => field,
+            "thumbstick" | "position" | "rotation" | "joints" | "tracked" => field,
             _ => return Err(unknown_channel(channel)),
         };
         return Ok((format!("{side}_hand.{field}"), false));
@@ -516,6 +516,29 @@ mod tests {
         apply_input_patch(&mut input, "left_hand.tracked", &json!(1)).unwrap();
         assert_eq!(input.pose_tracking.unwrap().hands, [true, true]);
         assert!(apply_input_patch(&mut input, "right_hand.tracked", &json!(0.5)).is_err());
+    }
+
+    // Quest drives channels through `InputOverrides`, which canonicalizes first.
+    #[test]
+    fn tracked_can_be_overridden_and_released() {
+        let live = || InputContext {
+            pose_tracking: Some(crate::input_context::PoseTracking {
+                head: true,
+                hands: [true; 2],
+            }),
+            ..InputContext::default()
+        };
+        let mut overrides = InputOverrides::default();
+        overrides.set("right_hand.tracked", json!(0)).unwrap();
+        let mut input = live();
+        overrides.apply(&mut input);
+        assert_eq!(input.pose_tracking.unwrap().hands, [true, false]);
+
+        overrides.set("right_hand.tracked", Value::Null).unwrap();
+        assert!(overrides.is_empty());
+        let mut input = live();
+        overrides.apply(&mut input);
+        assert_eq!(input.pose_tracking.unwrap().hands, [true, true]);
     }
 
     #[test]
