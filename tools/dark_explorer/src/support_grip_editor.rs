@@ -3,7 +3,6 @@ use crate::grip_editor::{CurlPoseEditor, default_library_path, persist_json, twe
 use eframe::egui;
 use shock2vr::{
     Handedness,
-    vr_grip::FingerPose,
     vr_support::{SupportPose, SupportProfile, SupportRegion},
 };
 use std::{collections::BTreeMap, path::PathBuf};
@@ -305,17 +304,11 @@ impl SupportEditor {
                             }
                         }
                         columns[2].strong("Support finger curls");
-                        match &mut profile.fingers {
-                            FingerPose::Curls { curls, trigger_curls } => self.curl_editor.show(
-                                &mut columns[2],
-                                curls,
-                                trigger_curls,
-                                "Support trigger preview",
-                            ),
-                            FingerPose::Bones { .. } => {
-                                columns[2].small("Bone pose captured in VR; curls do not apply.");
-                            }
-                        }
+                        self.curl_editor.show_fingers(
+                            &mut columns[2],
+                            &mut profile.fingers,
+                            "Support trigger preview",
+                        );
                     });
                     if profile.region.is_some() {
                         ui.add(egui::Slider::new(&mut self.region_preview, 0.0..=1.0).text("Position along region"));
@@ -372,6 +365,55 @@ impl SupportEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shock2vr::vr_grip::FingerPose;
+
+    #[test]
+    fn converting_a_vr_snapshot_keeps_the_support_placement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("support.json");
+        let bones = FingerPose::curls([0.1, 0.4, 0.6, 0.7, 0.9]).to_bones();
+        let snapshot = SupportProfile {
+            palm_anchor: [-0.2, 0.1, 0.03],
+            region: Some(SupportRegion {
+                start: [-0.2, 0.1, 0.03],
+                end: [-0.4, 0.1, 0.03],
+            }),
+            motion: None,
+            rotation_degrees: [5.0, -30.0, 90.0],
+            fingers: bones.clone(),
+            grab_radius: 0.07,
+            release_distance: 0.12,
+            max_swing_degrees: 75.0,
+        };
+        let profiles = BTreeMap::from([("fsn_h", snapshot)]);
+        std::fs::write(&path, serde_json::to_vec(&profiles).unwrap()).unwrap();
+        let mut editor = SupportEditor::new(Some(path));
+        let before = editor.profile("fsn_h").unwrap().clone();
+        assert_eq!(before.fingers, bones);
+        crate::grip_editor::tests::click_button("Convert fingers to curls", |ui| {
+            editor.show(
+                ui,
+                "fsn_h",
+                Handedness::Right,
+                1.0,
+                cgmath::SquareMatrix::identity(),
+                true,
+            )
+        });
+        let after = editor.profile("fsn_h").unwrap();
+        assert_eq!(after.fingers, bones.to_curls());
+        assert_eq!(
+            SupportProfile {
+                fingers: before.fingers.clone(),
+                ..after.clone()
+            },
+            before,
+            "only the fingers change"
+        );
+        assert!(editor.dirty());
+        editor.save().unwrap();
+    }
+
     #[test]
     fn trigger_preview_does_not_change_saved_support_curls() {
         let dir = tempfile::tempdir().unwrap();
