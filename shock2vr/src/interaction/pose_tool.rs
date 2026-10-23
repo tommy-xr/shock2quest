@@ -3,6 +3,9 @@
 //! grip's glove floating in front of the player. A tracked hand forms the grip around it; the other hand's
 //! controller trigger (or its tracked pinch) stages that pose live, its lower
 //! button saves it as a headset override and its upper button discards it.
+//! A panel beside the bench (`panel`) shows the state and repeats the controls.
+pub(super) mod panel;
+
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
@@ -69,9 +72,11 @@ fn millimetres(world_units: f32) -> f32 {
 }
 
 pub(super) struct GripPoseTool {
-    /// The posing hand (0 left, 1 right) and the item it holds.
+    /// The posing hand (0 left, 1 right), the item it poses and the hand that
+    /// holds that item in the mission (the posing hand, unless switched).
     pub hand: usize,
     pub entity: EntityId,
+    pub holder: usize,
     /// World pose of the posing hand's glove: where it held the item until
     /// the workbench is placed, then on the workbench.
     pub hand_pose: GripPose,
@@ -94,6 +99,8 @@ pub(super) struct GripPoseTool {
     /// Where the player stood when the workbench was placed: the extra
     /// views face it.
     pub viewer: Vector3<f32>,
+    /// And the way they faced, which the panel is placed from.
+    gaze: Quaternion<f32>,
     /// World height of the player's real floor, which the workbench floor
     /// lies on.
     pub floor_y: f32,
@@ -107,6 +114,19 @@ pub(super) struct GripPoseTool {
     pub capture_failure: Option<String>,
     /// Which contact spheres and tracked-joint markers are drawn.
     pub contact_view: ContactView,
+    /// A save succeeded and nothing was staged since.
+    pub saved: bool,
+    /// The control panel, placed with the bench, and this frame's pointing
+    /// at it: the controller rays and the pointer in canvas pixels (a ray's,
+    /// else the free fingertip's).
+    pub panel: Option<crate::ui::WorldPanel>,
+    pub pointer: crate::ui::FrontendPointerPass,
+    pub hover: Option<cgmath::Vector2<f32>>,
+    /// Who each controller's (left, right) trigger press belongs to.
+    pub triggers: [panel::TriggerArbiter; 2],
+    pub poke: panel::Poke,
+    /// Whether the other hand can be posed instead, or why not.
+    pub switch: Result<(), String>,
     /// Recent posing-hand frames, each with the time since the one before
     /// (zero for the oldest), spanning the steady window.
     recent: VecDeque<(HandJoints, f32)>,
@@ -132,6 +152,7 @@ impl GripPoseTool {
         Self {
             hand,
             entity,
+            holder: hand,
             hand_pose,
             placed: false,
             tracked: [None, None],
@@ -143,11 +164,19 @@ impl GripPoseTool {
             surface: None,
             item_placed: None,
             viewer: hand_pose.position,
+            gaze: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             floor_y: hand_pose.position.y,
             controllers: [None, None],
             tip_error_mm: None,
             capture_failure: None,
             contact_view: ContactView::Contacts,
+            saved: false,
+            panel: None,
+            pointer: Default::default(),
+            hover: None,
+            triggers: [panel::TriggerArbiter::new(); 2],
+            poke: Default::default(),
+            switch: Ok(()),
             recent: VecDeque::new(),
             // Entered "already pressed": a trigger, pinch or click held as
             // the workbench opens must be let go before it acts.
@@ -161,13 +190,17 @@ impl GripPoseTool {
     /// contact spheres and joint markers to the next `ContactView`.
     pub fn cycle_contact_view(&mut self, click: bool) {
         if click && !self.clicked {
-            self.contact_view = self.contact_view.next();
+            self.step_contact_view();
         }
         self.clicked = click;
     }
 
+    pub fn step_contact_view(&mut self) {
+        self.contact_view = self.contact_view.next();
+    }
+
     /// Move the posing hand, and so its item, from `item_position` onto the
-    /// workbench in front of this head pose.
+    /// workbench in front of this head pose, and hang the panel beside it.
     pub fn place(
         &mut self,
         head_position: Vector3<f32>,
@@ -177,7 +210,143 @@ impl GripPoseTool {
         let spot = bench_spot(head_position, head_rotation, self.hand);
         self.hand_pose.position += spot - item_position;
         self.viewer = head_position;
+        self.gaze = head_rotation;
+        self.panel = Some(panel::place(
+            head_position,
+            head_rotation,
+            [Handedness::Left, Handedness::Right][self.hand],
+        ));
         self.placed = true;
+    }
+
+    /// Pose the other hand instead, its glove at `hand_pose` (holding the
+    /// item where it is): what was tracked, averaged or pressed for the old
+    /// hand starts over.
+    pub fn retarget(&mut self, hand: usize, hand_pose: GripPose) {
+        self.hand = hand;
+        self.hand_pose = hand_pose;
+        self.surface = None;
+        self.tip_error_mm = None;
+        self.capture_failure = None;
+        self.saved = false;
+        self.recent.clear();
+        self.pinching = false;
+        self.poke = Default::default();
+        // The panel moves to the newly free hand's side.
+        if self.placed {
+            self.panel = Some(panel::place(
+                self.viewer,
+                self.gaze,
+                [Handedness::Left, Handedness::Right][hand],
+            ));
+        }
+    }
+
+    /// Ignore whatever is held now, as on entry: for frames the workbench
+    /// was not updated (the pause menu over it).
+    pub fn rearm(&mut self) {
+        self.triggers = [panel::TriggerArbiter::new(); 2];
+        self.requested = true;
+        self.clicked = true;
+        self.poke = Default::default();
+        // Frames from before the pause are not part of a steady window now.
+        self.recent.clear();
+    }
+
+    /// This frame's pointing at the panel, from world-space `input` whose
+    /// rays are only the controllers held (an untracked or set-down one has
+    /// the zero rotation): the button a controller ray clicked or the free
+    /// hand's index fingertip poked, and whether the trigger press in flight
+    /// is the snapshot's rather than the panel's.
+    pub fn point(
+        &mut self,
+        input: &crate::input_context::InputContext,
+    ) -> (Option<panel::PanelEvent>, bool) {
+        let Some(placed) = self.panel else {
+            return (None, false);
+        };
+        // A controller with no ray (set down, untracked) cannot claim the
+        // panel, even resting on its trigger.
+        let mut aimed = input.clone();
+        for hand in [&mut aimed.left_hand, &mut aimed.right_hand] {
+            if crate::util::tracked_rotation(hand.rotation).is_none() {
+                hand.trigger_value = 0.0;
+            }
+        }
+        self.pointer = crate::ui::vr_frontend_pointer_pass(&aimed, panel::CANVAS, &placed);
+        // Each trigger's press belongs to whatever its own ray was on as it
+        // went down; only the free controller's can snapshot.
+        let mut click = None;
+        let mut snapshot = false;
+        for (index, hand) in [&input.left_hand, &input.right_hand]
+            .into_iter()
+            .enumerate()
+        {
+            let hit = self
+                .pointer
+                .rays
+                .iter()
+                .find(|ray| crate::vr_config::hand_slot(ray.handedness) == index)
+                .and_then(|ray| ray.canvas_hit);
+            let (clicked, world) = self.triggers[index]
+                .update(hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD, hit);
+            click = click.or(clicked);
+            if index != self.hand {
+                snapshot = world;
+            }
+        }
+        let free = [&input.left_hand, &input.right_hand][1 - self.hand].joints;
+        let poked = self.poke.update(&placed, free.as_ref());
+        self.hover = self
+            .pointer
+            .point()
+            .or_else(|| panel::fingertip_hover(&placed, free.as_ref()));
+        let (_, targets) = panel::emit(&self.panel_view(), self.hover);
+        let event = click
+            .or(poked)
+            .and_then(|point| panel::event_at(&targets, point));
+        (event, snapshot)
+    }
+
+    /// The panel's state for `/v1/info`: its status line, and where it and
+    /// each enabled button are (world space), for automation to press them.
+    pub fn panel_diagnostics(&self) -> serde_json::Value {
+        let view = self.panel_view();
+        let placed = self.panel.map(|placed| {
+            let (_, targets) = panel::emit(&view, None);
+            serde_json::json!({
+                "center": placed.center,
+                "rotation": placed.rotation,
+                "normal": placed.normal(),
+                "size": placed.size,
+                "buttons": targets.iter().map(|(rect, event)| serde_json::json!({
+                    "event": format!("{event:?}"),
+                    "center": crate::ui::canvas_to_panel_world(panel::CANVAS, &placed, rect.center()),
+                })).collect::<Vec<_>>(),
+            })
+        });
+        serde_json::json!({
+            "status": view.status.text(),
+            "switch_disabled": view.switch.err(),
+            "hover": self.hover,
+            "panel": placed,
+        })
+    }
+
+    /// What the panel shows.
+    pub fn panel_view(&self) -> panel::PanelView {
+        panel::PanelView {
+            posing: [Handedness::Left, Handedness::Right][self.hand],
+            status: panel::Status::derive(
+                self.staged.is_some(),
+                self.saved,
+                self.last_save_error.as_deref(),
+                self.capture_failure.as_deref(),
+            ),
+            contact_view: self.contact_view,
+            switch: self.switch.clone(),
+            staged: self.staged.is_some(),
+        }
     }
 
     /// Fixed lights for the workbench (no mission light reaches it), around
@@ -299,19 +468,37 @@ impl GripPoseTool {
 
     /// How a world-space glove joint meets the held item's surface.
     pub fn contact(&self, point: Vector3<f32>) -> Contact {
+        self.contact_depth(point).0
+    }
+
+    /// How deep (metres) a world-space glove joint is through the item, when
+    /// it is (`Contact::Penetrating`).
+    pub fn penetration(&self, point: Vector3<f32>) -> Option<f32> {
+        match self.contact_depth(point) {
+            (Contact::Penetrating, depth) => Some(depth),
+            _ => None,
+        }
+    }
+
+    /// The contact, and the joint's distance from the item's surface (metres).
+    fn contact_depth(&self, point: Vector3<f32>) -> (Contact, f32) {
         let (Some((item, scale)), Some(surface)) = (self.item, &self.surface) else {
-            return Contact::Free;
+            return (Contact::Free, f32::INFINITY);
         };
         let local = item.rotation.invert().rotate_vector(point - item.position) / scale;
         let (distance, behind) = surface.project(Point3::from_vec(local));
         let distance = distance * scale;
-        if behind && (surface.is_closed() || distance > world(OPEN_PENETRATION)) {
+        let contact = if behind && (surface.is_closed() || distance > world(OPEN_PENETRATION)) {
             Contact::Penetrating
         } else if distance < world(TOUCH_DISTANCE) {
             Contact::Touching
         } else {
             Contact::Free
-        }
+        };
+        (
+            contact,
+            distance * crate::world_scale::meters_per_world_unit(),
+        )
     }
 }
 
@@ -677,6 +864,38 @@ pub(super) fn render(
     objs
 }
 
+/// The control panel, with a beam from the controller pointing at it.
+pub(super) fn render_panel(
+    tool: &GripPoseTool,
+    assets: &mut engine::assets::asset_cache::AssetCache,
+) -> Vec<SceneObject> {
+    let Some(placed) = tool.panel else {
+        return Vec::new();
+    };
+    let (canvas, _) = panel::emit(&tool.panel_view(), tool.hover);
+    let mut objects = canvas.render_world_space(
+        assets,
+        placed.transform(),
+        None,
+        None,
+        crate::ui::VR_COMPONENT_Z_STEP,
+    );
+    let layers = crate::ui::canvas_layers(&objects, &placed);
+    objects.extend(crate::ui::pointer_beams(
+        &tool.pointer,
+        panel::CANVAS,
+        &placed,
+        layers,
+        0.0,
+        false,
+    ));
+    crate::util::tag_render_source(
+        &mut objects,
+        crate::util::render_source::GRIP_WORKBENCH_PANEL,
+    );
+    objects
+}
+
 /// Where a grip puts its item for a hand pose (as `fit_held_items` places it).
 pub(super) fn item_pose(hand: GripPose, grip: &ResolvedGrip, contact: Vector3<f32>) -> GripPose {
     let offset = grip.offset + grip.rotation.rotate_vector(contact * grip.item_scale);
@@ -785,6 +1004,62 @@ mod tests {
             rotation: Quaternion::from_angle_y(Deg(0.0)),
         };
         GripPoseTool::new(1, EntityId::dead(), pose, PathBuf::new())
+    }
+
+    #[test]
+    fn each_trigger_press_is_decided_by_its_own_ray() {
+        use crate::input_context::{Hand, InputContext};
+        use crate::ui::test_support::{hand_aimed_at, hand_aimed_away, test_panel};
+        let mut tool = posing_tool();
+        tool.panel = Some(test_panel());
+        let contacts = cgmath::vec2(297.0, 146.0);
+        let mut input = InputContext::default();
+        // The posing (right) controller set down, resting on its trigger.
+        input.right_hand = Hand {
+            rotation: Quaternion::new(0.0, 0.0, 0.0, 0.0),
+            trigger_value: 1.0,
+            ..Hand::default()
+        };
+        input.left_hand = hand_aimed_at(panel::CANVAS, contacts, 0.0);
+        assert_eq!(tool.point(&input), (None, false));
+        input.left_hand.trigger_value = 1.0;
+        assert_eq!(
+            tool.point(&input),
+            (Some(panel::PanelEvent::Contacts), false),
+            "the free trigger clicks where its ray is"
+        );
+        input.left_hand = hand_aimed_away(0.0);
+        tool.point(&input);
+        input.left_hand.trigger_value = 1.0;
+        assert_eq!(tool.point(&input), (None, true), "and snapshots off it");
+    }
+
+    #[test]
+    fn a_trigger_held_through_a_skipped_frame_neither_clicks_nor_snapshots() {
+        use crate::input_context::InputContext;
+        use crate::ui::test_support::{hand_aimed_at, hand_aimed_away, test_panel};
+        let mut tool = posing_tool();
+        tool.panel = Some(test_panel());
+        let mut input = InputContext::default();
+        input.left_hand = hand_aimed_at(panel::CANVAS, cgmath::vec2(297.0, 146.0), 0.0);
+        tool.point(&input);
+        // The pause menu over the workbench takes this press (its Resume).
+        tool.rearm();
+        input.left_hand.trigger_value = 1.0;
+        assert_eq!(tool.point(&input), (None, false));
+        input.left_hand = hand_aimed_away(1.0);
+        assert_eq!(tool.point(&input), (None, false));
+    }
+
+    #[test]
+    fn switching_hands_moves_the_panel_to_the_newly_free_side() {
+        let mut tool = posing_tool();
+        let head = vec3(0.0, 5.0, 0.0);
+        tool.place(head, Quaternion::new(1.0, 0.0, 0.0, 0.0), head);
+        // Posing right, ahead is -Z: the panel hangs on the left (-X).
+        assert!(tool.panel.unwrap().center.x < 0.0);
+        tool.retarget(0, tool.hand_pose);
+        assert!(tool.panel.unwrap().center.x > 0.0);
     }
 
     fn posing(x: f32) -> Option<HandJoints> {

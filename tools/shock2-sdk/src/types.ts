@@ -1456,6 +1456,26 @@ export interface HandGrip {
     tip_error_mm: number[] | null;
     capture_failure: string | null;
     contact_view: "contacts" | "full" | "off";
+    /** A save succeeded and nothing was staged since. */
+    saved: boolean;
+    /** The workbench's control panel: its status line, why "Pose: <other
+     * hand>" is disabled (null when enabled), the pointer on it in canvas
+     * pixels, and where it and each enabled button are (world space). */
+    panel: {
+      status: string;
+      switch_disabled: string | null;
+      hover: { x: number; y: number } | null;
+      panel: {
+        center: ResolvedGrip["offset"];
+        rotation: ResolvedGrip["rotation"];
+        normal: ResolvedGrip["offset"];
+        size: { x: number; y: number };
+        buttons: {
+          event: "Save" | "Discard" | "SwitchHand" | "Contacts" | "Exit";
+          center: ResolvedGrip["offset"];
+        }[];
+      } | null;
+    };
   } | null;
   /** Pistol slide contact, independent of the ordinary two-hand support grip. */
   slide?: {

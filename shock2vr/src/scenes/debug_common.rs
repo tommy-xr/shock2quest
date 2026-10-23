@@ -282,6 +282,10 @@ impl GameScene for DebugScene {
         self.core.update_pose_workbench(elapsed, input, actions);
     }
 
+    fn hold_pose_workbench(&mut self) {
+        self.core.hold_pose_workbench();
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
@@ -527,6 +531,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
         actions: &crate::input::InputActionState,
     ) {
         self.core.update_pose_workbench(elapsed, input, actions);
+    }
+
+    fn hold_pose_workbench(&mut self) {
+        self.core.hold_pose_workbench();
     }
 
     fn is_pausable(&self) -> bool {
