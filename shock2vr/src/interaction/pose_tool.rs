@@ -49,12 +49,14 @@ const VIEW_SPACING: f32 = 0.35;
 const BENCH_AHEAD: f32 = 0.45;
 const BENCH_DROP: f32 = 0.3;
 const BENCH_ASIDE: f32 = 0.1;
-/// The workbench floor's width, centred on where the player stood.
-const FLOOR_SIZE: f32 = 12.0;
-/// The head-following key light: this far above and behind the head (away
-/// from the bench), and its brightness on what it lights a metre away.
+/// The workbench's floor grid: its width (centred on where the player
+/// stood), line spacing and line width.
+const FLOOR_SIZE: f32 = 6.0;
+const GRID_SPACING: f32 = 0.5;
+const GRID_LINE_WIDTH: f32 = 0.015;
+/// The head-following key light: this far above the head, and its
+/// brightness on what it lights a metre away.
 const HEAD_LIGHT_UP: f32 = 0.2;
-const HEAD_LIGHT_BACK: f32 = 0.15;
 const HEAD_LIGHT_AT_METRE: f32 = 0.6;
 /// The panel beam starts this far out of the controller (its glove holds
 /// the controller, not a pointing finger), and runs this far when it misses.
@@ -231,7 +233,6 @@ impl GripPoseTool {
         self.hand_pose.position += spot - item_position;
         self.viewer = head_position;
         self.gaze = head_rotation;
-        self.eye = head_position;
         self.panel = Some(panel::place(
             head_position,
             head_rotation,
@@ -507,11 +508,8 @@ impl GripPoseTool {
                 Quaternion::from_angle_y(Rad((-ahead.x).atan2(-ahead.z)))
             });
         let mut lights = (*crate::object_lighting::gallery_lights(item, yaw)?).clone();
-        let back = normalized_horizontal(self.eye - item).unwrap_or(Vector3::new(0.0, 0.0, 0.0));
         lights.add_light(engine::scene::light::PointLight {
-            position: self.eye
-                + back * world(HEAD_LIGHT_BACK)
-                + Vector3::unit_y() * world(HEAD_LIGHT_UP),
+            position: self.eye + Vector3::unit_y() * world(HEAD_LIGHT_UP),
             // Inverse-distance falloff in world units: this is
             // HEAD_LIGHT_AT_METRE a metre away at any world scale.
             color_intensity: cgmath::Vector4::new(
@@ -520,7 +518,7 @@ impl GripPoseTool {
                 1.0,
                 HEAD_LIGHT_AT_METRE * world(1.0) * crate::object_lighting::gallery_brightness(),
             ),
-            range: world(FLOOR_SIZE),
+            range: 150.0,
         });
         Some(Rc::new(crate::object_lighting::with_ambient_floor(
             lights,
@@ -528,24 +526,44 @@ impl GripPoseTool {
         )))
     }
 
-    /// The workbench's room, for spatial reference: a grid floor at the
-    /// player's real floor and nothing else, so the cleared background (alpha
-    /// 0) lets a headset's passthrough show the real room around it.
+    /// The workbench's room, for spatial reference: grid lines on the
+    /// player's real floor and nothing else. Passthrough has no depth, so
+    /// anything opaque hides the real room, the real hand included; between
+    /// the lines the cleared background (alpha 0) lets a headset show it.
     pub fn environment(&self) -> Vec<SceneObject> {
-        let below = Vector3::new(self.viewer.x, self.floor_y, self.viewer.z);
-        let thickness = world(0.02);
-        let floor_size = world(FLOOR_SIZE);
-        let mut floor = crate::scenes::debug_common::shaded_cube_object(
-            Vector3::new(0.32, 0.33, 0.35),
-            below - Vector3::unit_y() * (thickness / 2.0),
-            Vector3::new(floor_size, thickness, floor_size),
-        );
-        floor.set_debug_tag(Some(Rc::new(engine::scene::SceneObjectDebugTag {
-            name: Some("workbench floor".to_owned()),
+        let centre = Vector3::new(self.viewer.x, self.floor_y, self.viewer.z);
+        let (size, width) = (world(FLOOR_SIZE), world(GRID_LINE_WIDTH));
+        let lines = (FLOOR_SIZE / GRID_SPACING).round() as usize;
+        let tag = Rc::new(engine::scene::SceneObjectDebugTag {
+            name: Some("workbench grid".to_owned()),
             source: Some(crate::util::render_source::GRIP_WORKBENCH.to_owned()),
             ..Default::default()
-        })));
-        vec![floor]
+        });
+        (0..=lines)
+            .flat_map(|i| {
+                let offset = world(i as f32 * GRID_SPACING) - size / 2.0;
+                // One line along Z at this x, one along X at this z; tops on the floor.
+                [
+                    (
+                        Vector3::new(offset, 0.0, 0.0),
+                        Vector3::new(width, width, size),
+                    ),
+                    (
+                        Vector3::new(0.0, 0.0, offset),
+                        Vector3::new(size, width, width),
+                    ),
+                ]
+            })
+            .map(|(offset, scale)| {
+                let mut line = crate::scenes::debug_common::cube_object(
+                    Vector3::new(0.55, 0.58, 0.62),
+                    centre + offset - Vector3::unit_y() * (width / 2.0),
+                    scale,
+                );
+                line.set_debug_tag(Some(tag.clone()));
+                line
+            })
+            .collect()
     }
 
     /// Take this frame's tracked hands. The leading edge of `trigger` (the
@@ -1586,13 +1604,22 @@ mod tests {
         let mut tool = tool_with_item(item, item + vec3(4.0, 1.0, 0.0));
         tool.floor_y = -0.5;
         let room = tool.environment();
-        // Only the floor: nothing walls in the background, which passthrough
-        // shows on a headset.
-        assert_eq!(room.len(), 1);
-        let floor = &room[0];
-        let top = floor.get_transform() * cgmath::Vector4::new(0.0, 0.5, 0.0, 1.0);
-        assert!((top.y - tool.floor_y).abs() < 1e-5, "{top:?}");
-        assert!((top.x - tool.viewer.x).abs() < 1e-5 && (top.z - tool.viewer.z).abs() < 1e-5);
+        // Only thin grid lines on the floor: nothing opaque fills the
+        // background or the floor, which passthrough shows on a headset.
+        assert!(!room.is_empty());
+        let mut centre = vec3(0.0, 0.0, 0.0);
+        for line in &room {
+            let transform = line.get_transform();
+            let top = transform * cgmath::Vector4::new(0.0, 0.5, 0.0, 1.0);
+            assert!((top.y - tool.floor_y).abs() < 1e-5, "{top:?}");
+            let (x, z) = (transform.x.magnitude(), transform.z.magnitude());
+            assert!(
+                x.min(z) <= world(GRID_LINE_WIDTH) + 1e-5,
+                "a line, not a slab: {x} x {z}"
+            );
+            centre += top.truncate() / room.len() as f32;
+        }
+        assert!((centre.x - tool.viewer.x).abs() < 1e-4 && (centre.z - tool.viewer.z).abs() < 1e-4);
         // `None` only with object lighting off: a process-wide dev param that
         // a parallel test may flip, so it is not forced here.
         if let Some(lights) = tool.lights() {
@@ -1606,7 +1633,7 @@ mod tests {
     }
 
     #[test]
-    fn a_key_light_follows_the_head_from_above_and_behind() {
+    fn a_key_light_follows_the_head_from_just_above_it() {
         let item = vec3(1.0, 2.0, 3.0);
         let mut tool = tool_with_item(item, item + vec3(4.0, 1.0, 0.0));
         for eye in [item + vec3(3.0, 1.0, 0.0), item + vec3(0.0, 1.0, -3.0)] {
@@ -1616,13 +1643,9 @@ mod tests {
                 return;
             };
             let head = lights.get_light(2).unwrap().position();
-            assert!(head.y > eye.y, "above the head: {head:?}");
-            let from_item = |p: Vector3<f32>| vec3(p.x - item.x, 0.0, p.z - item.z);
-            let (light, eye_out) = (from_item(head), from_item(eye));
             assert!(
-                light.magnitude() > eye_out.magnitude()
-                    && light.normalize().dot(eye_out.normalize()) > 0.999,
-                "behind the head, away from the bench: {head:?} for {eye:?}"
+                (head - eye - vec3(0.0, world(HEAD_LIGHT_UP), 0.0)).magnitude() < 1e-5,
+                "just above the head: {head:?} for {eye:?}"
             );
         }
     }

@@ -104,17 +104,18 @@ test(
     const bench = draws[0]!.position;
     assert.ok(distance(bench, spot) < 0.02 / unit, `bench ${bench} vs ${spot}`);
     // The workbench is a scene of its own: none of the mission is drawn (its
-    // world, labels, HUD), only the mug, the hands, a floor, a backdrop and
-    // the control panel.
+    // world, labels, HUD), only the mug, the hands, a floor grid and the
+    // control panel. Nothing fills the background, which passthrough shows on
+    // Quest.
     const benchScene = (await game.scene.objects()).objects;
     const strays = benchScene
       .filter((o) => !["grip_workbench", "player_hands", "grip_workbench_panel", "grip_workbench_pointer"].includes(o.source ?? ""))
       .map((o) => `${o.source}:${o.name ?? o.model}`);
     assert.equal(strays.length, 0, `no mission objects, saw ${strays.slice(0, 8).join(", ")}`);
     const environment = benchScene.filter((o) => o.source === "grip_workbench" && o.entity_id === null);
-    assert.deepEqual(environment.map((o) => o.name).sort(), ["workbench backdrop", "workbench floor"],
-      "a floor and a backdrop, and no dim");
-    const floor = environment.find((o) => o.name === "workbench floor")!;
+    assert.ok(environment.length > 0 && environment.every((o) => o.name === "workbench grid"),
+      `only grid lines, and no dim: ${[...new Set(environment.map((o) => o.name))]}`);
+    const floor = environment[0]!;
     assert.ok(floor.position[1] < bench[1], "the floor is below the bench");
     // Walking round it (head moved and turned) leaves it where it is.
     await game.input.setMany({ "head.position": [0.6, 0, 0.4], "head.look": [70, 20] });
