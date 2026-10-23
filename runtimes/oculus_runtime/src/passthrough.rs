@@ -1,4 +1,5 @@
-//! Optional reconstruction underlay for the glove fit scene.
+//! Optional reconstruction underlay for the glove fit scene and the grip
+//! workbench.
 use openxr as xr;
 
 pub struct FitPassthrough {

@@ -459,7 +459,7 @@ struct GripGeometry {
 
 /// What the mission draws for the grip pose workbench instead of itself: the
 /// held item's world pose and grip scale there, how the bench is turned for
-/// viewing, each extra view, the workbench's fixed lights and its plain room.
+/// viewing, each extra view, the workbench's lights and its floor.
 pub struct PoseWorkbench {
     pub entity: EntityId,
     pub item: GripPose,
@@ -1217,6 +1217,9 @@ impl VrInteraction {
                 gaze,
                 pose_tool::item_pose(tool.hand_pose, grip, contact).position,
             );
+        }
+        if let Some((eye, _)) = head {
+            tool.eye = eye;
         }
         tool.floor_y = floor_y;
         // The input in world space, for the panel. Only a controller in hand
