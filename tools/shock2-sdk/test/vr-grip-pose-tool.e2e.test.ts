@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { attachSupportHand, findRepoRoot, GameServer, setHandWorldPose } from "../src/index.js";
@@ -603,6 +603,17 @@ test(
     await game.input.trigger("TogglePauseMenu");
     await game.step({ frames: 10 });
     assert.equal((await game.info()).paused, true);
+    // An unreadable overrides file fails the save: the capture, and the
+    // mission, stay.
+    writeFileSync(path, "{ hand edited, oops");
+    await vrClickCanvasPoint(game, pauseEntry(4));
+    await game.step({ frames: 10 });
+    assert.equal((await game.info()).mission, "debug_minimal", "quit refused");
+    const tool = (await workbench(game)).tool;
+    assert.equal(tool.staged, true);
+    assert.ok(tool.last_save_error, "the save error shows");
+
+    unlinkSync(path);
     await vrClickCanvasPoint(game, pauseEntry(4));
     await game.step({ frames: 10 });
     assert.equal((await game.info()).mission, "main_menu", "quit");

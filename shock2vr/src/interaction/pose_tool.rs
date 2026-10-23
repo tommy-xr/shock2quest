@@ -1314,11 +1314,7 @@ pub(super) fn captured_grip(
 
 /// Write `entry` into the overrides file, replacing its model and hand.
 pub(super) fn save_override(path: &Path, entry: &BakedGripEntry) -> std::io::Result<()> {
-    edit_overrides(path, |overrides| {
-        let entries = &mut overrides.grips.entries;
-        entries.retain(|e| e.model != entry.model || e.hand != entry.hand);
-        entries.push(entry.clone());
-    })
+    edit_overrides(path, |overrides| overrides.replace_grip(entry.clone()))
 }
 
 /// Write a captured support pose into the overrides file, replacing its
@@ -1329,6 +1325,7 @@ pub(super) fn save_support_override(
     pose: &SupportPose,
 ) -> std::io::Result<()> {
     edit_overrides(path, |overrides| {
+        overrides.unread.support.remove(model);
         overrides.support.insert(model.to_owned(), pose.clone());
     })
 }
@@ -2332,7 +2329,8 @@ mod tests {
         );
     }
 
-    /// One unreadable entry neither blocks a save nor is lost by it.
+    /// One unreadable entry neither blocks a save nor is lost by it, unless
+    /// the save replaces its model and hand.
     #[test]
     fn saving_keeps_an_entry_this_build_cannot_read() {
         let dir = crate::test_support::TempDir::new("pose-tool-unread");
@@ -2340,14 +2338,20 @@ mod tests {
         save_override(&path, &entry("right", 0.8)).unwrap();
         let mut file: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let unread = serde_json::json!({"model": "sg_h", "hand": "left", "grip": "newer"});
+        let unread = serde_json::json!({"model": "mug", "hand": "right", "grip": "newer"});
         file["entries"].as_array_mut().unwrap().push(unread.clone());
         std::fs::write(&path, file.to_string()).unwrap();
+        let saved = || -> Vec<serde_json::Value> {
+            let file: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            file["entries"].as_array().unwrap().clone()
+        };
         save_override(&path, &entry("left", 0.8)).unwrap();
-        let saved: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(saved["entries"].as_array().unwrap().len(), 3);
-        assert!(saved["entries"].as_array().unwrap().contains(&unread));
+        assert_eq!(saved().len(), 3);
+        assert!(saved().contains(&unread));
+        save_override(&path, &entry("right", 1.5)).unwrap();
+        assert_eq!(saved().len(), 2);
+        assert!(!saved().contains(&unread));
         assert_eq!(GripOverrides::load(&path).unwrap().grips.entries.len(), 2);
     }
 }

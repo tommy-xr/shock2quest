@@ -1062,23 +1062,27 @@ impl GripOverrides {
         Ok(overrides)
     }
 
-    /// The file's JSON, `unread` written back after the readable entries.
-    /// A readable entry for the same model and hand (or support pose for the
-    /// same model) replaces an unread one.
+    /// Replace `model`/`hand`'s grip: the readable entry and any unread one.
+    pub fn replace_grip(&mut self, entry: BakedGripEntry) {
+        let (model, hand) = (entry.model.as_str(), entry.hand.as_str());
+        self.unread
+            .entries
+            .retain(|raw| raw["model"] != model || raw["hand"] != hand);
+        let entries = &mut self.grips.entries;
+        entries.retain(|e| e.model != model || e.hand != hand);
+        entries.push(entry);
+    }
+
+    /// The file's JSON, `unread` written back after the readable entries (a
+    /// readable support pose wins its model's key).
     pub fn to_json(&self) -> serde_json::Result<Vec<u8>> {
         use serde_json::Value;
         let mut value = serde_json::to_value(self)?;
         let object = value
             .as_object_mut()
             .expect("a struct serializes as an object");
-        let read = |raw: &Value| {
-            self.grips
-                .entries
-                .iter()
-                .any(|e| raw["model"] == e.model.as_str() && raw["hand"] == e.hand.as_str())
-        };
         if let Some(Value::Array(entries)) = object.get_mut("entries") {
-            entries.extend(self.unread.entries.iter().filter(|raw| !read(raw)).cloned());
+            entries.extend(self.unread.entries.iter().cloned());
         }
         let unread_support: serde_json::Map<_, _> = self
             .unread
