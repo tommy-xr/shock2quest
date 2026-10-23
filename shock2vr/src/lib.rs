@@ -2416,13 +2416,13 @@ impl Game {
                 }
             }
             Some(PauseAction::LoadSelectedGame) => {
-                if let Some(path) = self.pause_menu.selected_save_path() {
-                    self.close_pose_workbench();
+                if let Some(path) = self.pause_menu.selected_save_path()
+                    && self.close_pose_workbench()
+                {
                     self.begin_save_load(path.to_string_lossy().into_owned());
                 }
             }
-            Some(PauseAction::QuitToMainMenu) => {
-                self.close_pose_workbench();
+            Some(PauseAction::QuitToMainMenu) if self.close_pose_workbench() => {
                 // Keep the overlay open through the swap so the new menu
                 // inherits its placement before the pause session ends.
                 self.handle_global_effect(GlobalEffect::ShowMainMenu);
@@ -2457,7 +2457,8 @@ impl Game {
                 };
                 self.apply_scene_effects(Effect::flatten(vec![effect]));
             }
-            None => {}
+            // Nothing, or a Quit the workbench's failed save refused.
+            Some(PauseAction::QuitToMainMenu) | None => {}
         }
     }
 
@@ -2480,11 +2481,13 @@ impl Game {
     }
 
     /// Leaving the mission from the pause menu closes the grip pose
-    /// workbench first: closing saves a staged capture.
-    fn close_pose_workbench(&mut self) {
+    /// workbench first: closing saves a staged capture. Whether it closed: a
+    /// failed save keeps it open (with its error), and the mission with it.
+    fn close_pose_workbench(&mut self) -> bool {
         if self.pose_workbench_open() {
             self.apply_scene_effects(vec![Effect::ToggleGripPoseTool]);
         }
+        !self.pose_workbench_open()
     }
 
     /// Hand effects to the active scene, forwarding whatever global effects
