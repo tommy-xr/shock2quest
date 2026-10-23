@@ -8,7 +8,7 @@ use super::world;
 use crate::ui::{HAlign, PanelPlacement, Rect, UiCanvas, VAlign, WorldPanel};
 use crate::vr_config::Handedness;
 
-pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 340.0 };
+pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 390.0 };
 /// Physical panel width; its height keeps the canvas aspect.
 const PANEL_WIDTH: f32 = 0.3;
 /// Where the panel hangs from the eye: nearer and lower than the bench, and
@@ -35,28 +35,49 @@ const TITLE: Rect = Rect::new(10.0, 4.0, 380.0, 26.0);
 const STATUS: Rect = Rect::new(10.0, 32.0, 380.0, 34.0);
 const SAVE: Rect = Rect::new(10.0, 74.0, 186.0, 44.0);
 const DISCARD: Rect = Rect::new(204.0, 74.0, 186.0, 44.0);
-const POSE_HAND: Rect = Rect::new(10.0, 124.0, 186.0, 44.0);
-const SUPPORT_MODE: Rect = Rect::new(204.0, 124.0, 186.0, 44.0);
-const RESET_VIEW: Rect = Rect::new(10.0, 174.0, 380.0, 34.0);
-const EXIT: Rect = Rect::new(10.0, 214.0, 380.0, 32.0);
-const LEGEND: Rect = Rect::new(10.0, 254.0, 380.0, 80.0);
+const TEST_HOLD: Rect = Rect::new(10.0, 124.0, 186.0, 44.0);
+const ALIGN_AIM: Rect = Rect::new(204.0, 124.0, 186.0, 44.0);
+const POSE_HAND: Rect = Rect::new(10.0, 174.0, 186.0, 44.0);
+const SUPPORT_MODE: Rect = Rect::new(204.0, 174.0, 186.0, 44.0);
+const RESET_VIEW: Rect = Rect::new(10.0, 224.0, 380.0, 34.0);
+const EXIT: Rect = Rect::new(10.0, 264.0, 380.0, 32.0);
+const LEGEND: Rect = Rect::new(10.0, 304.0, 380.0, 80.0);
+/// A test-held gun aiming within this many degrees of its controller reads
+/// as aligned.
+const ALIGNED_DEG: f32 = 1.0;
 
 /// What a panel button does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::interaction) enum PanelEvent {
     Save,
     Discard,
+    TestHold,
+    AlignAim,
     SwitchHand,
     SupportMode,
     ResetView,
     Exit,
 }
 
-/// The status line, from the tool's state. A failure says why until the next
-/// capture, save or discard; otherwise a staged pose is unsaved.
+/// Test hold as the status line shows it: the posing hand's controller,
+/// whether it is tracked (else the player must pick it up), a gun's aim
+/// error against it, and whether the grip was saved since the last edit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::interaction) struct Hold {
+    pub controller: Handedness,
+    pub tracked: bool,
+    pub aim_error_deg: Option<f32>,
+    pub saved: bool,
+}
+
+/// The status line, from the tool's state. A failed save says why until the
+/// next save or discard; then test hold shows its controller and aim; then a
+/// failed capture says why until the next one; otherwise a staged pose is
+/// unsaved.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::interaction) enum Status {
     SaveFailed(String),
+    TestHold(Hold),
     CaptureFailed(String),
     Unsaved,
     Saved,
@@ -69,9 +90,12 @@ impl Status {
         saved: bool,
         last_save_error: Option<&str>,
         capture_failure: Option<&str>,
+        test_hold: Option<Hold>,
     ) -> Self {
         if let Some(error) = last_save_error {
             Status::SaveFailed(error.to_owned())
+        } else if let Some(hold) = test_hold {
+            Status::TestHold(hold)
         } else if let Some(reason) = capture_failure {
             Status::CaptureFailed(reason.to_owned())
         } else if staged {
@@ -86,6 +110,21 @@ impl Status {
     pub fn text(&self) -> String {
         match self {
             Status::SaveFailed(error) => format!("Save failed: {error}"),
+            Status::TestHold(hold) if !hold.tracked => {
+                format!("Pick up the {} controller", hand_name(hold.controller))
+            }
+            // The bitmap fonts carry no degree sign.
+            Status::TestHold(hold) => {
+                let text = hold.aim_error_deg.map_or("Test hold".to_owned(), |deg| {
+                    format!("Aim off by {deg:.1} deg")
+                });
+                // Save is clicked while holding: confirm it here too.
+                if hold.saved {
+                    format!("{text}, saved")
+                } else {
+                    text
+                }
+            }
             // The reasons `GripPoseTool::observe` and `capture_grip` give.
             Status::CaptureFailed(reason) => match reason.as_str() {
                 "no_joints" => "No hand tracked".to_owned(),
@@ -107,7 +146,17 @@ impl Status {
     fn color(&self) -> [u8; 3] {
         match self {
             Status::SaveFailed(_) | Status::CaptureFailed(_) => [150, 40, 34],
-            Status::Unsaved => [150, 108, 24],
+            Status::TestHold(Hold {
+                tracked: true,
+                aim_error_deg: Some(deg),
+                ..
+            }) if *deg <= ALIGNED_DEG => [34, 120, 56],
+            Status::TestHold(Hold {
+                tracked: true,
+                aim_error_deg: None,
+                ..
+            }) => [48, 58, 76],
+            Status::Unsaved | Status::TestHold(_) => [150, 108, 24],
             Status::Saved => [34, 120, 56],
             Status::Ready => [48, 58, 76],
         }
@@ -126,6 +175,11 @@ pub(in crate::interaction) struct PanelView {
     pub support_mode: Result<(), String>,
     /// A snapshot awaits Save or Discard.
     pub staged: bool,
+    /// Test holding, and whether it can start or why not.
+    pub test_hold: bool,
+    pub test_hold_entry: Result<(), String>,
+    /// Whether Align aim can act, or why not.
+    pub align: Result<(), String>,
     /// The free hand is tracked with no controller in it: it taps the
     /// buttons and pinches to snapshot.
     pub fingertip: bool,
@@ -147,25 +201,37 @@ fn other(hand: Handedness) -> Handedness {
 
 /// How the free hand works the tool. With its controller: the buttons as
 /// printed on it (X/Y on the left, A/B on the right). Tracked with no
-/// controller in it: fingertip taps and pinches.
+/// controller in it: fingertip taps and pinches. Saving is on the panel.
 pub(in crate::interaction) fn legend(
     free: Handedness,
     fingertip: bool,
     support: bool,
+    test_hold: bool,
 ) -> Vec<String> {
+    let hold = format!(
+        "Hold the item with the {} controller",
+        hand_name(other(free))
+    );
     if fingertip {
         return vec![
             "Tap buttons with your fingertip".to_owned(),
-            "Pinch: snapshot".to_owned(),
+            if test_hold {
+                hold
+            } else {
+                "Pinch: snapshot".to_owned()
+            },
         ];
     }
     let (lower, upper) = match free {
         Handedness::Left => ("X", "Y"),
         Handedness::Right => ("A", "B"),
     };
+    if test_hold {
+        return vec![hold, format!("{lower}: end test hold    {upper}: discard")];
+    }
     vec![
         format!("{} controller   Trigger: snapshot", hand_name(free)),
-        format!("{lower}: save    {upper}: discard"),
+        format!("{lower}: test hold    {upper}: discard"),
         // A support pose leaves the item's scale to the grip.
         if support {
             "Squeeze: turn".to_owned()
@@ -219,6 +285,27 @@ pub(in crate::interaction) fn emit(
     let buttons = [
         (SAVE, "Save".to_owned(), PanelEvent::Save, staged.clone()),
         (DISCARD, "Discard".to_owned(), PanelEvent::Discard, staged),
+        if view.test_hold {
+            (
+                TEST_HOLD,
+                "End test hold".to_owned(),
+                PanelEvent::TestHold,
+                Ok(()),
+            )
+        } else {
+            (
+                TEST_HOLD,
+                "Test hold".to_owned(),
+                PanelEvent::TestHold,
+                view.test_hold_entry.clone(),
+            )
+        },
+        (
+            ALIGN_AIM,
+            "Align aim".to_owned(),
+            PanelEvent::AlignAim,
+            view.align.clone(),
+        ),
         (
             POSE_HAND,
             format!("Pose: {}", hand_name(other(view.posing))),
@@ -271,7 +358,12 @@ pub(in crate::interaction) fn emit(
             }
         }
     }
-    let lines = legend(other(view.posing), view.fingertip, view.support);
+    let lines = legend(
+        other(view.posing),
+        view.fingertip,
+        view.support,
+        view.test_hold,
+    );
     // Spaced for the controller legend, which is the longest.
     let line_height = LEGEND.h / 3.0;
     for (i, line) in lines.iter().enumerate() {
@@ -493,12 +585,15 @@ mod tests {
             support_mode: Err("one-handed".to_owned()),
             staged: false,
             fingertip: false,
+            test_hold: false,
+            test_hold_entry: Err("snapshot first".to_owned()),
+            align: Err("test hold first".to_owned()),
         }
     }
 
     #[test]
     fn a_tracked_free_hand_is_told_to_tap_not_shown_controller_buttons() {
-        let lines = legend(Handedness::Left, true, false);
+        let lines = legend(Handedness::Left, true, false, false);
         assert_eq!(lines[0], "Tap buttons with your fingertip");
         let all = lines.join(" ");
         assert!(
@@ -525,7 +620,7 @@ mod tests {
     #[test]
     fn the_status_line_reports_failures_first_then_the_staged_pose() {
         let line = |staged, saved, save: Option<&str>, capture: Option<&str>| {
-            Status::derive(staged, saved, save, capture).text()
+            Status::derive(staged, saved, save, capture, None).text()
         };
         assert_eq!(line(false, false, None, None), "Pose, then snapshot");
         assert_eq!(line(true, false, None, None), "Unsaved pose");
@@ -555,15 +650,15 @@ mod tests {
 
     #[test]
     fn the_legend_names_the_free_controllers_own_buttons() {
-        let left = legend(Handedness::Left, false, false).join(" ");
+        let left = legend(Handedness::Left, false, false, false).join(" ");
         assert!(
-            left.contains("X: save") && left.contains("Y: discard"),
+            left.contains("X: test hold") && left.contains("Y: discard"),
             "{left}"
         );
         assert!(left.contains("Squeeze: turn"), "{left}");
-        let right = legend(Handedness::Right, false, false).join(" ");
+        let right = legend(Handedness::Right, false, false, false).join(" ");
         assert!(
-            right.contains("A: save") && right.contains("B: discard"),
+            right.contains("A: test hold") && right.contains("B: discard"),
             "{right}"
         );
         // A controller in the free hand cannot poke the panel.
@@ -571,9 +666,91 @@ mod tests {
             !right.contains("Finger") && !right.contains("Tap"),
             "{right}"
         );
+        // Saving is on the panel only.
+        assert!(!right.contains("save"), "{right}");
         // Posing the right hand frees the left controller.
         let (canvas, _) = emit(&view(Status::Ready), None);
-        assert!(texts(&canvas).iter().any(|t| t.contains("X: save")));
+        assert!(texts(&canvas).iter().any(|t| t.contains("X: test hold")));
+    }
+
+    #[test]
+    fn test_hold_names_the_controller_to_hold_and_how_to_go_back() {
+        let lines = legend(Handedness::Left, false, false, true).join(" ");
+        assert!(
+            lines.contains("Hold the item with the Right controller")
+                && lines.contains("X: end test hold")
+                && lines.contains("Y: discard"),
+            "{lines}"
+        );
+        assert!(
+            !lines.contains("snapshot") && !lines.contains("Squeeze"),
+            "{lines}"
+        );
+        let tapping = legend(Handedness::Left, true, false, true).join(" ");
+        assert!(!tapping.contains("Pinch"), "{tapping}");
+    }
+
+    #[test]
+    fn test_hold_reports_its_controller_and_the_guns_aim() {
+        let hold = |tracked, aim_error_deg| Hold {
+            controller: Handedness::Right,
+            tracked,
+            aim_error_deg,
+            saved: false,
+        };
+        let line = |capture: Option<&str>, held| {
+            Status::derive(true, false, None, capture, Some(held)).text()
+        };
+        assert_eq!(
+            line(None, hold(false, Some(3.0))),
+            "Pick up the Right controller"
+        );
+        assert_eq!(line(None, hold(true, Some(28.24))), "Aim off by 28.2 deg");
+        let saved = Hold {
+            saved: true,
+            ..hold(true, Some(0.0))
+        };
+        assert_eq!(line(None, saved), "Aim off by 0.0 deg, saved");
+        assert_eq!(line(None, hold(true, None)), "Test hold", "not a gun");
+        assert_eq!(
+            line(Some("no_joints"), hold(true, None)),
+            "Test hold",
+            "a stale capture failure gives way to test hold"
+        );
+        assert_eq!(
+            Status::derive(true, false, Some("disk full"), None, Some(hold(true, None))).text(),
+            "Save failed: disk full"
+        );
+        assert_eq!(
+            Status::TestHold(hold(true, Some(0.4))).color(),
+            Status::Saved.color(),
+            "aligned reads as done"
+        );
+    }
+
+    #[test]
+    fn test_hold_needs_a_snapshot_and_align_needs_a_test_held_gun() {
+        let (canvas, targets) = emit(&view(Status::Ready), None);
+        let shown = texts(&canvas);
+        assert!(shown.contains(&"snapshot first".to_owned()));
+        assert!(shown.contains(&"test hold first".to_owned()));
+        assert_eq!(event_at(&targets, TEST_HOLD.center()), None);
+        assert_eq!(event_at(&targets, ALIGN_AIM.center()), None);
+        let mut holding = view(Status::Unsaved);
+        holding.test_hold = true;
+        holding.test_hold_entry = Err("snapshot first".to_owned());
+        holding.align = Ok(());
+        let (canvas, targets) = emit(&holding, None);
+        assert!(texts(&canvas).contains(&"End test hold".to_owned()));
+        assert_eq!(
+            event_at(&targets, TEST_HOLD.center()),
+            Some(PanelEvent::TestHold),
+            "ending test hold is always allowed"
+        );
+        assert_eq!(
+            event_at(&targets, ALIGN_AIM.center()),
+            Some(PanelEvent::AlignAim)
+        );
     }
 
     #[test]
