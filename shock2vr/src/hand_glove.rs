@@ -19,7 +19,7 @@ use engine::{
 };
 
 use crate::{
-    hand_pose::{self, FingerAmounts, HandPoseRetarget, Pose},
+    hand_pose::{self, FingerAmounts, HandPoseRetarget, HandShape, Pose},
     vr_config::Handedness,
 };
 
@@ -272,7 +272,7 @@ impl GloveRenderer {
         squeeze_value: f32,
         holding: bool,
         anticipation: Option<&crate::hand_anticipation::HandAnticipation>,
-        fitted: Option<(FingerAmounts, f32)>,
+        fitted: Option<(HandShape, f32)>,
         light: HandLight,
         lights: Option<Rc<engine::scene::light::LightArray>>,
     ) -> Vec<SceneObject> {
@@ -300,19 +300,30 @@ impl GloveRenderer {
                 pinky: squeeze_value,
             }
         };
-        if let Some((fitted, blend)) = fitted {
-            let t = blend.clamp(0.0, 1.0);
-            amounts = FingerAmounts {
-                thumb: amounts.thumb * (1.0 - t) + fitted.thumb * t,
-                index: amounts.index * (1.0 - t) + fitted.index * t,
-                middle: amounts.middle * (1.0 - t) + fitted.middle * t,
-                ring: amounts.ring * (1.0 - t) + fitted.ring * t,
-                pinky: amounts.pinky * (1.0 - t) + fitted.pinky * t,
-            };
-        }
-        let pose = match anticipation.filter(|_| !holding && fitted.is_none()) {
+        let has_fitted = fitted.is_some();
+        let fitted_pose = match fitted {
+            Some((HandShape::Curls(fitted), blend)) => {
+                let t = blend.clamp(0.0, 1.0);
+                amounts = FingerAmounts {
+                    thumb: amounts.thumb * (1.0 - t) + fitted.thumb * t,
+                    index: amounts.index * (1.0 - t) + fitted.index * t,
+                    middle: amounts.middle * (1.0 - t) + fitted.middle * t,
+                    ring: amounts.ring * (1.0 - t) + fitted.ring * t,
+                    pinky: amounts.pinky * (1.0 - t) + fitted.pinky * t,
+                };
+                None
+            }
+            // Bone poses blend in rotation space from the curl pose below.
+            Some((HandShape::Pose(pose), blend)) => Some((pose, blend)),
+            None => None,
+        };
+        let pose = match anticipation.filter(|_| !holding && !has_fitted) {
             Some(preview) => preview.pose(&self.open, &self.point, &self.fist, amounts),
             None => self.open.blend_per_finger(&self.fist, &amounts),
+        };
+        let pose = match fitted_pose {
+            Some((fitted, blend)) => pose.blend(&fitted, blend.clamp(0.0, 1.0)),
+            None => pose,
         };
         let materials = if lights.is_some() {
             &self.lit_materials
