@@ -72,6 +72,9 @@ const BEAM_MISS_LENGTH: f32 = 1.0;
 /// `weapon_muzzle`'s, shared with dark_explorer).
 const AIM_LINE_HALO: f32 = 0.004;
 const AIM_LINE_CORE: f32 = 0.0012;
+/// A test-hold nudge let go within this of where it started stages nothing.
+const NUDGE_MIN_MM: f32 = 0.1;
+const NUDGE_MIN_DEG: f32 = 0.01;
 
 /// Whether a hand's controller is held, so aims the panel ray. The runtime
 /// must track it; the posing hand's is set down once that hand is tracked.
@@ -564,11 +567,8 @@ impl GripPoseTool {
         self.triggers = [panel::TriggerArbiter::new(); 2];
         self.requested = true;
         self.pinch_lost = true;
-        self.squeezed = true;
+        self.cancel_nudge();
         self.turning = None;
-        if let Some(hold) = self.test_hold.as_mut() {
-            hold.nudge = None;
-        }
         self.stick_armed = false;
         self.poke = Default::default();
         // Frames from before the pause are not part of a steady window now.
@@ -749,12 +749,22 @@ impl GripPoseTool {
         self.squeezed = squeeze;
     }
 
+    /// Drop a nudge in progress unstaged (pausing, discarding); the squeeze
+    /// acts again only once let go.
+    pub fn cancel_nudge(&mut self) {
+        if let Some(hold) = self.test_hold.as_mut() {
+            hold.nudge = None;
+        }
+        self.squeezed = true;
+    }
+
     /// Test hold's nudge: from the leading edge of the free controller's
     /// squeeze (`controller`, its world pose, `None` while it aims no ray)
     /// the item, at `item` as held now, keeps its pose relative to that
     /// controller. Returns where the item is as the squeeze lets go, for the
-    /// grip to hold it there. Losing either controller drops the nudge
-    /// unstaged, and the squeeze is disarmed until let go in hand.
+    /// grip to hold it there, unless that is still where it is held (a
+    /// squeeze without a move is no edit). Losing either controller drops
+    /// the nudge unstaged, and the squeeze is disarmed until let go in hand.
     pub fn nudge_with(
         &mut self,
         controller: Option<GripPose>,
@@ -776,7 +786,15 @@ impl GripPoseTool {
             }
             None
         } else {
-            hold.nudge.take().map(|nudge| nudge.item())
+            hold.nudge
+                .take()
+                .map(|nudge| nudge.item())
+                .filter(|released| {
+                    millimetres((released.position - item.position).magnitude()) > NUDGE_MIN_MM
+                        || crate::weapon_muzzle::turn_deg(
+                            item.rotation.normalize().conjugate() * released.rotation,
+                        ) > NUDGE_MIN_DEG
+                })
         };
         self.squeezed = squeeze;
         released
@@ -2138,6 +2156,11 @@ mod tests {
         // Let go: where it was left, and the nudge ends.
         let released = tool.nudge_with(Some(moved), item, false).expect("released");
         assert!(close(released, expected));
+        assert!(tool.test_hold.unwrap().nudge.is_none());
+        // A squeeze let go without a move is no edit.
+        assert!(tool.nudge_with(Some(moved), expected, true).is_none());
+        assert!(tool.test_hold.unwrap().nudge.is_some());
+        assert!(tool.nudge_with(Some(moved), expected, false).is_none());
         assert!(tool.test_hold.unwrap().nudge.is_none());
     }
 

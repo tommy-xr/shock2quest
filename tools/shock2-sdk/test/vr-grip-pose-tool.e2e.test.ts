@@ -1362,7 +1362,7 @@ test(
     const freeAt = (position: Vec3, rotation: Quat) => setHandWorldPose(game, player, "left", position, rotation);
     await freeAt(add(grabbedAt, scale([0, 0.05, 0], 1 / unit)), grabbedTurn);
     await game.step({ frames: 2 });
-    assert.equal((await tool()).test_hold?.nudging, false, "held over from the bench");
+    assert.equal((await tool()).test_hold?.nudging, false, "held as test hold starts");
     assert.ok(distance(await gunAt(), held) < 1e-4, "the gun stays in the glove");
 
     // Let go and squeeze again: the gun follows the left controller.

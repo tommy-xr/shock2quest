@@ -1938,6 +1938,8 @@ impl VrInteraction {
         let Some(tool) = self.pose_tool.as_mut() else {
             return;
         };
+        // A nudge in progress would stage again on release.
+        tool.cancel_nudge();
         let Some(staged) = tool.staged.take() else {
             return;
         };
@@ -4556,7 +4558,7 @@ mod tests {
         assert!(tool.staged.is_none(), "only the view");
         assert_eq!(grip(&interaction).offset, before.offset);
 
-        // Test hold, the squeeze still held from the bench: no nudge.
+        // A squeeze held as test hold starts: no nudge.
         let personal = crate::world_scale::WorldScale::active().personal();
         interaction.stage_grip(before.clone().rescaled(1.0 / personal));
         interaction.pose_tool_button(Handedness::Left, crate::hand_buttons::HandButton::Lower);
@@ -4666,6 +4668,31 @@ mod tests {
         assert!(tool.test_hold.unwrap().nudge.is_none());
         assert_eq!(grip(&interaction).offset, nudged.offset);
         assert!((tool.item_placed.unwrap().position - rest.position).magnitude() < 1e-5);
+
+        // Discarded mid-nudge: back to the grip from before, and letting go
+        // stages nothing.
+        input.left_hand.rotation = Quaternion::from_angle_z(Deg(15.0));
+        input.left_hand.squeeze_value = 0.0;
+        step(&mut interaction, &input);
+        input.left_hand.squeeze_value = 1.0;
+        step(&mut interaction, &input);
+        input.left_hand.position += vec3(0.0, -0.05, 0.0);
+        step(&mut interaction, &input);
+        assert!(
+            interaction
+                .pose_tool
+                .as_ref()
+                .unwrap()
+                .test_hold
+                .unwrap()
+                .nudge
+                .is_some()
+        );
+        interaction.pose_tool_button(Handedness::Left, crate::hand_buttons::HandButton::Upper);
+        input.left_hand.squeeze_value = 0.0;
+        step(&mut interaction, &input);
+        assert!(interaction.pose_tool.as_ref().unwrap().staged.is_none());
+        assert_eq!(grip(&interaction).offset, before.offset);
     }
 
     /// A gun's rest snapshot stores the hand exactly where it was tracked:
