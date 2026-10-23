@@ -98,6 +98,22 @@ pub(crate) fn load_fallback(cache: &mut AssetCache, name: &str) -> Option<Muzzle
 }
 
 pub(crate) fn resolve(world: &World, weapon: EntityId) -> MuzzleFallback {
+    let (point, axis) = muzzle(world, weapon);
+    MuzzleFallback {
+        point,
+        axis: axis.unwrap_or_else(|| vec3(-1.0, 0.0, 0.0)),
+    }
+}
+
+/// `resolve` for an item whose barrel is known (`barrel_axis`); `None` for
+/// anything else, which `resolve` defaults to -X.
+pub(crate) fn known(world: &World, item: EntityId) -> Option<MuzzleFallback> {
+    let (point, axis) = muzzle(world, item);
+    Some(MuzzleFallback { point, axis: axis? })
+}
+
+/// A weapon's muzzle point, and its barrel axis if known.
+fn muzzle(world: &World, weapon: EntityId) -> (Point3<f32>, Option<Vector3<f32>>) {
     let fallback = world
         .borrow::<View<MuzzleFallback>>()
         .ok()
@@ -111,25 +127,20 @@ pub(crate) fn resolve(world: &World, weapon: EntityId) -> MuzzleFallback {
                 .map(|vhot| (vhot.id, vhot.point))
         })
     });
-    let axis = fallback
-        .map(|f| f.axis)
-        .or_else(|| {
-            world
-                .borrow::<View<PropModelName>>()
-                .ok()
-                .and_then(|v| v.get(weapon).ok().and_then(|name| barrel_axis(&name.0)))
-        })
-        .unwrap_or_else(|| vec3(-1.0, 0.0, 0.0));
-    MuzzleFallback {
-        point: authored
-            .filter(|(id, _)| *id == 0)
-            .map(|(_, point)| point)
-            .or(fallback.map(|f| f.point))
-            // Unprofiled assets retain their previous lowest-ID fallback.
-            .or(authored.map(|(_, point)| point))
-            .unwrap_or_else(|| point3(0.0, 0.0, 0.0)),
-        axis,
-    }
+    let axis = fallback.map(|f| f.axis).or_else(|| {
+        world
+            .borrow::<View<PropModelName>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().and_then(|name| barrel_axis(&name.0)))
+    });
+    let point = authored
+        .filter(|(id, _)| *id == 0)
+        .map(|(_, point)| point)
+        .or(fallback.map(|f| f.point))
+        // Unprofiled assets retain their previous lowest-ID fallback.
+        .or(authored.map(|(_, point)| point))
+        .unwrap_or_else(|| point3(0.0, 0.0, 0.0));
+    (point, axis)
 }
 
 /// Keep a forward spawn offset on the firing side of any intervening surface.

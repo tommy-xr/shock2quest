@@ -1222,9 +1222,25 @@ impl VrInteraction {
             tool.eye = eye;
         }
         tool.floor_y = floor_y;
+        tool.muzzle = crate::weapon_muzzle::known(world, tool.entity);
+        // Test hold: the posing controller holds the item, posed as
+        // `VirtualHand` poses it in play. An untracked one (zero rotation, or
+        // the runtime says so) places nothing.
+        let test_hold = tool.test_hold.is_some();
+        if let Some(hold) = tool.test_hold.as_mut() {
+            let hand = [&input.left_hand, &input.right_hand][posing];
+            let pose = GripPose {
+                position: hand_world_position(player_pos, player_rotation, hand.position),
+                rotation: player_rotation * hand.rotation,
+            };
+            hold.follow(
+                (pose.is_tracked() && tracking.is_none_or(|t| t.hands[posing])).then_some(pose),
+            );
+        }
         // The input in world space, for the panel. Only a controller in hand
         // aims a ray (`pose_tool::controller_in_hand`); any other gets the
-        // zero rotation, which aims none.
+        // zero rotation, which aims none. A test-holding controller aims the
+        // item instead.
         let mut pointing = input.clone();
         for (index, hand) in [&mut pointing.left_hand, &mut pointing.right_hand]
             .into_iter()
@@ -1234,7 +1250,7 @@ impl VrInteraction {
                 index == posing,
                 hand.joints.is_some(),
                 tracking.is_none_or(|t| t.hands[index]),
-            );
+            ) && !(test_hold && index == posing);
             hand.joints = hand
                 .joints
                 .map(|joints| joints.map(|p| hand_world_position(player_pos, player_rotation, p)));
@@ -1256,19 +1272,27 @@ impl VrInteraction {
         let in_hand = crate::util::tracked_rotation(
             [&pointing.left_hand, &pointing.right_hand][1 - posing].rotation,
         );
+        // Test hold leaves the bench: no turning or scaling it (disarmed, as
+        // out of hand, until let go), and no posing-hand glove but the one
+        // holding the item.
         tool.turn_with(
-            in_hand,
+            in_hand.filter(|_| !test_hold),
             control.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD,
         );
         // The posing hand into the unturned bench, which the tool works in.
         // The free hand pinches to snapshot only with no controller in it:
         // a hand round its controller can read as a pinch.
         let mut tracked = [pointing.left_hand.joints, pointing.right_hand.joints];
-        tracked[posing] = tracked[posing].map(|joints| joints.map(|p| tool.to_bench(p)));
+        tracked[posing] = tracked[posing]
+            .filter(|_| !test_hold)
+            .map(|joints| joints.map(|p| tool.to_bench(p)));
         tracked[1 - posing] = tracked[1 - posing].filter(|_| in_hand.is_none());
         tool.observe(tracked, snapshot, dt);
         // A support pose leaves the item's scale to its grip.
-        let stick = tool.scale_input(control.thumbstick.y, in_hand.is_some() && !tool.support);
+        let stick = tool.scale_input(
+            control.thumbstick.y,
+            in_hand.is_some() && !tool.support && !test_hold,
+        );
         let scaled = pose_tool::GripPoseTool::scale(grip.item_scale, stick, dt);
         // The controllers in hand, which `pointing` gave a rotation.
         tool.controllers = std::array::from_fn(|i| {
@@ -1328,6 +1352,8 @@ impl VrInteraction {
         match event {
             pose_tool::panel::PanelEvent::Save => self.save_staged(),
             pose_tool::panel::PanelEvent::Discard => self.discard_staged(),
+            pose_tool::panel::PanelEvent::TestHold => self.toggle_test_hold(),
+            pose_tool::panel::PanelEvent::AlignAim => self.align_aim(contact),
             pose_tool::panel::PanelEvent::SwitchHand => self.switch_pose_hand(world, contact),
             pose_tool::panel::PanelEvent::SupportMode => self.toggle_support_mode(),
             pose_tool::panel::PanelEvent::ResetView => {
@@ -1337,6 +1363,9 @@ impl VrInteraction {
             }
             pose_tool::panel::PanelEvent::Exit => self.exit_pose_tool(),
         }
+        // Drawn as the event left it (test hold ended, aim aligned), not a
+        // frame late.
+        self.place_pose_tool_item(contact);
     }
 
     /// Draw the posed item at `scale`. Resizing is an edit like a capture:
@@ -1406,13 +1435,7 @@ impl VrInteraction {
         ) else {
             return;
         };
-        // `item_pose` inverted: the hand pose that puts the item at `item`.
-        let rotation = item.rotation * grip.rotation.invert();
-        let offset = grip.offset + grip.rotation.rotate_vector(contact * grip.item_scale);
-        let hand_pose = GripPose {
-            position: item.position - rotation.rotate_vector(offset),
-            rotation,
-        };
+        let hand_pose = pose_tool::hand_for_item(item, &grip, contact);
         let other = 1 - tool.hand;
         println!(
             "SHOCK2QUEST_VR_GRIP_POSE_TOOL posing={} model={}",
@@ -1451,7 +1474,9 @@ impl VrInteraction {
         println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=false");
     }
 
-    /// Where the posed item is drawn, for the mission and the extra views.
+    /// Where the posed item is drawn, for the mission and the extra views:
+    /// on the bench, or test-held by its controller (placed as play places
+    /// a held item), with a gun's aim lines.
     fn place_pose_tool_item(&mut self, contact: Vector3<f32>) {
         let Some(tool) = self.pose_tool.as_mut() else {
             return;
@@ -1460,12 +1485,71 @@ impl VrInteraction {
             return;
         };
         if let Some(grip) = held.resolved.as_ref() {
-            let item = pose_tool::item_pose(tool.hand_pose, grip, contact);
+            let hand = tool.holding();
+            let item = pose_tool::item_pose(hand, grip, contact);
             tool.item_placed = Some(item);
             // The views turn about the model origin, which a contact offset
             // does not move.
-            let model = pose_tool::item_pose(tool.hand_pose, grip, Vector3::new(0.0, 0.0, 0.0));
+            let model = pose_tool::item_pose(hand, grip, Vector3::new(0.0, 0.0, 0.0));
             tool.item = Some((model, grip.item_scale));
+            tool.aim = tool
+                .test_hold
+                .filter(|hold| hold.tracked)
+                .zip(tool.muzzle)
+                .map(|(_, muzzle)| pose_tool::AimLines::new(model, grip.item_scale, muzzle, hand));
+        }
+    }
+
+    /// Start or end test hold, from the free controller's lower button or
+    /// the panel.
+    fn toggle_test_hold(&mut self) {
+        let Some(tool) = self.pose_tool.as_mut() else {
+            return;
+        };
+        if tool.toggle_test_hold() {
+            println!(
+                "SHOCK2QUEST_VR_GRIP_POSE_TOOL test_hold={}",
+                tool.test_hold.is_some()
+            );
+        }
+    }
+
+    /// Turn the test-held gun's grip so its barrel fires down the controller
+    /// (`pose_tool::aimed`), keeping its roll, hand placement and fingers;
+    /// staged like any edit. The bench item stays put: its glove turns.
+    fn align_aim(&mut self, contact: Vector3<f32>) {
+        let Some(tool) = self.pose_tool.as_mut() else {
+            return;
+        };
+        let (Ok(()), Some(muzzle)) = (tool.align_entry(), tool.muzzle) else {
+            return;
+        };
+        let Some(held) = self.fitted_grips[tool.hand].as_ref() else {
+            return;
+        };
+        let Some(current) = held.resolved.clone() else {
+            return;
+        };
+        let bench = pose_tool::item_pose(tool.hand_pose, &current, contact);
+        let grip = pose_tool::aimed(current, muzzle.axis, pose_tool::CONTROLLER_AIM);
+        println!(
+            "SHOCK2QUEST_VR_GRIP_POSE_TOOL aligned=true staged=true model={} hand={}",
+            held.model,
+            ["left", "right"][tool.hand]
+        );
+        let personal = crate::world_scale::WorldScale::active().personal();
+        let Some(entry) = self.stage_grip(grip.rescaled(1.0 / personal)) else {
+            return;
+        };
+        let Some(tool) = self.pose_tool.as_mut() else {
+            return;
+        };
+        let grip = entry.grip.for_world_scale();
+        tool.hand_pose = pose_tool::hand_for_item(bench, &grip, contact);
+        if let Some(held) = self.fitted_grips[tool.hand].as_mut() {
+            held.resolved = Some(grip);
+            held.source = "prepared";
+            held.authored = true;
         }
     }
 
@@ -1512,17 +1596,33 @@ impl VrInteraction {
         };
         let contact = grip_contact(world, held.entity);
         let item = pose_tool::item_pose(tool.hand_pose, current, contact);
-        let (grip, hand_pose) = pose_tool::captured_grip(
-            &fitted.fit,
-            item,
-            contact,
-            current.item_scale,
-            crate::world_scale::WorldScale::active().personal(),
-        );
+        let personal = crate::world_scale::WorldScale::active().personal();
+        let (grip, mut hand_pose) =
+            pose_tool::captured_grip(&fitted.fit, item, contact, current.item_scale, personal);
+        // A gun keeps the current grip's aim: the mimed wrist is not the
+        // controller-holding one, so only its roll about the barrel, where
+        // the hand sits and the fingers are taken. The item stays put on the
+        // bench; the glove turns to hold it so.
+        // How far the hand's own aim was turned away (its fingers were shaped
+        // for that aim), logged so a capture swung far off shows.
+        let mut discarded_deg = None;
+        let grip = match tool.muzzle {
+            Some(muzzle) => {
+                let barrel = pose_tool::firing_direction(current, muzzle.axis);
+                let swing = pose_tool::firing_direction(&grip, muzzle.axis).angle(barrel);
+                discarded_deg = Some(cgmath::Deg::from(swing).0);
+                let kept = pose_tool::aimed(grip, muzzle.axis, barrel);
+                hand_pose =
+                    pose_tool::hand_for_item(item, &kept.clone().rescaled(personal), contact);
+                kept
+            }
+            None => grip,
+        };
         println!(
-            "SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=true staged=true model={} hand={}",
+            "SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=true staged=true model={} hand={} aim_kept_swing_deg={}",
             held.model,
-            ["left", "right"][tool.hand]
+            ["left", "right"][tool.hand],
+            discarded_deg.map_or("none".to_owned(), |deg| format!("{deg:.1}"))
         );
         // The metric the mapping is tuned against: glove vs tracked
         // fingertips, and how much larger the real hand is than the glove.
@@ -1862,6 +1962,9 @@ fn support_mode(
     }) {
         return Err("one-handed".to_owned());
     }
+    if tool.test_hold.is_some() {
+        return Err("end test hold first".to_owned());
+    }
     if tool.staged.is_some() {
         return Err("save or discard first".to_owned());
     }
@@ -1884,6 +1987,9 @@ fn pose_hand_switch<'a>(
     }
     if tool.support {
         return Err("posing the support grip".to_owned());
+    }
+    if tool.test_hold.is_some() {
+        return Err("end test hold first".to_owned());
     }
     if tool.staged.is_some() {
         return Err("save or discard first".to_owned());
@@ -2540,7 +2646,7 @@ impl PlayerInteraction for VrInteraction {
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
                 "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm_in_world()), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal),
-                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"mode": if tool.support { "support" } else { "primary" }, "posing": (["left", "right"][tool.posing()]), "staged": tool.staged.is_some(), "saved": tool.saved, "last_save_error": tool.last_save_error, "tip_error_mm": tool.tip_error_mm, "hand_size_ratio": tool.hand_size_ratio, "capture_failure": tool.capture_failure, "panel": tool.panel_diagnostics()}))}))
+                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"mode": if tool.support { "support" } else { "primary" }, "posing": (["left", "right"][tool.posing()]), "staged": tool.staged.is_some(), "saved": tool.saved, "last_save_error": tool.last_save_error, "tip_error_mm": tool.tip_error_mm, "hand_size_ratio": tool.hand_size_ratio, "capture_failure": tool.capture_failure, "test_hold": tool.test_hold.map(|hold| serde_json::json!({"tracked": hold.tracked})), "aim_error_deg": tool.aim.map(|aim| aim.error_deg()), "panel": tool.panel_diagnostics()}))}))
         }).collect())
     }
 
@@ -2845,8 +2951,10 @@ impl PlayerInteraction for VrInteraction {
         {
             return;
         }
+        // Saving is on the panel: the lower button is test hold's, which
+        // the hand on that controller toggles without looking.
         match button {
-            crate::hand_buttons::HandButton::Lower => self.save_staged(),
+            crate::hand_buttons::HandButton::Lower => self.toggle_test_hold(),
             crate::hand_buttons::HandButton::Upper => self.discard_staged(),
         }
     }
@@ -2945,6 +3053,7 @@ impl PlayerInteraction for VrInteraction {
             crate::util::tag_render_source(&mut objs, crate::util::render_source::PLAYER_HANDS);
             drop(glove_slot);
             objs.extend(pose_tool::render_panel(tool, asset_cache));
+            objs.extend(pose_tool::render_aim(tool));
             return objs;
         }
         let mut objs = Vec::new();
@@ -3766,6 +3875,133 @@ mod tests {
         let authored = before / crate::world_scale::WorldScale::active().personal();
         let scale = saved.lookup("wrench_h", "right").unwrap().item_scale;
         assert!((scale - authored * 1.5).abs() < 1e-5, "{scale}");
+    }
+
+    /// Test hold on a gun (the fixture's item given the shotgun's model):
+    /// the posing controller holds it where play would, a lost controller
+    /// leaves it be, Align aim fires it down the controller, and leaving
+    /// the workbench mid-hold still saves.
+    #[test]
+    fn test_hold_holds_a_gun_as_play_does_and_align_aims_it_down_the_controller() {
+        use cgmath::{Deg, Rotation3};
+        let (mut world, entity, _physics, mut interaction, mut input) = wrench_support_fixture();
+        world.add_component(entity, dark::properties::PropModelName("sg_h".to_owned()));
+        let barrel = vec3(-1.0, 0.0, 0.0);
+        let skewed = Quaternion::from_angle_y(Deg(28.0)) * Quaternion::from_angle_y(Deg(-90.0));
+        let grip = |interaction: &VrInteraction| {
+            interaction.fitted_grips[1]
+                .as_ref()
+                .unwrap()
+                .resolved
+                .clone()
+                .unwrap()
+        };
+        interaction.fitted_grips[1]
+            .as_mut()
+            .unwrap()
+            .resolved
+            .as_mut()
+            .unwrap()
+            .rotation = skewed;
+        let dir = crate::test_support::TempDir::new("pose-test-hold");
+        let path = dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
+        interaction.toggle_grip_pose_tool();
+        interaction.pose_tool.as_mut().unwrap().overrides_path = path.clone();
+        input.head.rotation = identity();
+        let origin = vec3(0.0, 0.0, 0.0);
+        let step = |interaction: &mut VrInteraction, input: &InputContext| {
+            interaction.update_pose_tool(&world, input, origin, identity(), 0.0, 1.0 / 60.0);
+        };
+        step(&mut interaction, &input);
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        assert!(tool.muzzle.is_some(), "a gun");
+        assert!(tool.placed);
+        let bench = tool.item_placed.unwrap();
+
+        // Nothing staged: the lower button does nothing.
+        interaction.pose_tool_button(Handedness::Left, crate::hand_buttons::HandButton::Lower);
+        assert!(interaction.pose_tool.as_ref().unwrap().test_hold.is_none());
+        let personal = crate::world_scale::WorldScale::active().personal();
+        interaction.stage_grip(grip(&interaction).rescaled(1.0 / personal));
+        // The posing hand's own button is not the tool's.
+        interaction.pose_tool_button(Handedness::Right, crate::hand_buttons::HandButton::Lower);
+        assert!(interaction.pose_tool.as_ref().unwrap().test_hold.is_none());
+        interaction.pose_tool_button(Handedness::Left, crate::hand_buttons::HandButton::Lower);
+        assert!(interaction.pose_tool.as_ref().unwrap().test_hold.is_some());
+
+        // Picked up: held as `fit_held_items` holds it for this controller.
+        input.right_hand.position = vec3(0.2, 1.1, -0.3);
+        input.right_hand.rotation = Quaternion::from_angle_x(Deg(-20.0));
+        step(&mut interaction, &input);
+        let controller = GripPose {
+            position: hand_world_position(origin, identity(), input.right_hand.position),
+            rotation: input.right_hand.rotation,
+        };
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        let expected = pose_tool::item_pose(controller, &grip(&interaction), vec3(0.0, 0.0, 0.0));
+        let placed = tool.item_placed.unwrap();
+        assert!((placed.position - expected.position).magnitude() < 1e-5);
+        assert!((placed.rotation - expected.rotation).magnitude() < 1e-5);
+        let off = Deg::from(
+            pose_tool::firing_direction(&grip(&interaction), barrel)
+                .angle(pose_tool::CONTROLLER_AIM),
+        )
+        .0;
+        let reported = tool.aim.unwrap().error_deg();
+        assert!(
+            (reported - off).abs() < 1e-3 && off > 27.0,
+            "{reported} vs {off}"
+        );
+        assert_eq!(
+            pose_hand_switch(tool, interaction.fitted_grips[1].as_ref(), None, false),
+            Err("end test hold first".to_owned())
+        );
+        assert_eq!(
+            support_mode(
+                tool,
+                interaction.fitted_grips[1].as_ref(),
+                &interaction.support_profiles
+            ),
+            Err("end test hold first".to_owned())
+        );
+
+        // Set down (the zero quaternion): it stays where it was held.
+        input.right_hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        step(&mut interaction, &input);
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        assert_eq!(tool.item_placed.unwrap().position, placed.position);
+        assert!(tool.aim.is_none());
+        assert_eq!(
+            tool.panel_view().status.text(),
+            "Pick up the Right controller"
+        );
+
+        // Align aim: fires down the controller, roll kept; the bench item
+        // stays put for when test hold ends.
+        interaction.align_aim(vec3(0.0, 0.0, 0.0));
+        let aligned = grip(&interaction);
+        let error = Deg::from(
+            pose_tool::firing_direction(&aligned, barrel).angle(pose_tool::CONTROLLER_AIM),
+        )
+        .0;
+        assert!(error < 1e-3, "{error}");
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        let back = pose_tool::item_pose(tool.hand_pose, &aligned, vec3(0.0, 0.0, 0.0));
+        assert!((back.position - bench.position).magnitude() < 1e-5);
+        input.right_hand.rotation = Quaternion::from_angle_x(Deg(-20.0));
+        step(&mut interaction, &input);
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        assert!(tool.aim.unwrap().error_deg() < 1e-3);
+
+        // Leaving mid-hold saves the aligned grip.
+        interaction.toggle_grip_pose_tool();
+        assert!(!interaction.pose_workbench_open());
+        let saved = crate::vr_grip::GripOverrides::load(&path).expect("saved on exit");
+        let saved = saved.grips.lookup("wrench_h", "right").unwrap();
+        let error =
+            Deg::from(pose_tool::firing_direction(saved, barrel).angle(pose_tool::CONTROLLER_AIM))
+                .0;
+        assert!(error < 1e-3, "{error}");
     }
 
     #[test]

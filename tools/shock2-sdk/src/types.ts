@@ -1460,6 +1460,12 @@ export interface HandGrip {
     capture_failure: string | null;
     /** A save succeeded and nothing was staged since. */
     saved: boolean;
+    /** Test hold: the posing hand's controller holds the item as play
+     * would; `tracked` false leaves it where that controller was last seen. */
+    test_hold: { tracked: boolean } | null;
+    /** While test-holding a gun with its controller tracked: degrees between
+     * where it fires and where the controller aims. */
+    aim_error_deg: number | null;
     /** The workbench's control panel: its status line, why "Pose: <other
      * hand>" is disabled (null when enabled), the pointer on it in canvas
      * pixels, and where it and each enabled button are (world space). */
@@ -1468,6 +1474,9 @@ export interface HandGrip {
       switch_disabled: string | null;
       /** Why the Primary/Support mode button is disabled (null when enabled). */
       support_disabled: string | null;
+      /** Why Test hold cannot start, and why Align aim is disabled. */
+      test_hold_disabled: string | null;
+      align_disabled: string | null;
       hover: { x: number; y: number } | null;
       panel: {
         center: ResolvedGrip["offset"];
@@ -1475,7 +1484,7 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "SwitchHand" | "SupportMode" | "ResetView" | "Exit";
+          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "SwitchHand" | "SupportMode" | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;
