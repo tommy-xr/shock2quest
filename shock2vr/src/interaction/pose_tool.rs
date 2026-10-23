@@ -66,13 +66,10 @@ const HEAD_LIGHT_AT_METRE: f32 = 0.6;
 /// the controller, not a pointing finger), and runs this far when it misses.
 const BEAM_CLEARANCE: f32 = 0.04;
 const BEAM_MISS_LENGTH: f32 = 1.0;
-/// A test-held gun's aim lines: their length and halo/core radii, and the
-/// firing line's (orange) and controller aim line's (cyan) halo/core colours.
-const AIM_LINE_LENGTH: f32 = 1.0;
+/// A gun's aim lines' halo/core radii (their length and colours are
+/// `weapon_muzzle`'s, shared with dark_explorer).
 const AIM_LINE_HALO: f32 = 0.004;
 const AIM_LINE_CORE: f32 = 0.0012;
-const FIRING_LINE: [Vector3<f32>; 2] = [Vector3::new(1.0, 0.45, 0.1), Vector3::new(1.0, 0.8, 0.5)];
-const AIM_LINE: [Vector3<f32>; 2] = [Vector3::new(0.1, 0.7, 1.0), Vector3::new(0.6, 0.9, 1.0)];
 
 /// Whether a hand's controller is held, so aims the panel ray. The runtime
 /// must track it; the posing hand's is set down once that hand is tracked.
@@ -217,10 +214,11 @@ pub(super) struct GripPoseTool {
     /// The item's pump travel as frozen on the bench (scaled model space,
     /// zero for no pump): play puts the support palm at its anchor plus this.
     pub pump_travel: Vector3<f32>,
-    /// Whether a gun's aim is shown, and while it is, where the gun fires
-    /// and where its controller aims (unturned bench, or test-held with the
-    /// controller tracked): on the bench, the glove's grip frame is where
-    /// the controller would be.
+    /// Whether a gun's aim is shown (off hides its lines and readouts, test
+    /// hold's too), and while it is, where the gun fires and where its
+    /// controller aims (unturned bench, or test-held with the controller
+    /// tracked): on the bench, the glove's grip frame is where the
+    /// controller would be.
     pub show_aim: bool,
     pub aim: Option<AimLines>,
     /// How the bench is turned for viewing about `pivot`, and while the
@@ -1184,14 +1182,22 @@ pub(super) fn render_aim(tool: &GripPoseTool) -> Vec<SceneObject> {
     };
     let turn = tool.turn_matrix();
     let mut lines: Vec<SceneObject> = [
-        (aim.muzzle, aim.firing, FIRING_LINE),
-        (aim.controller, aim.aim, AIM_LINE),
+        (
+            aim.muzzle,
+            aim.firing,
+            crate::weapon_muzzle::FIRING_LINE_COLORS,
+        ),
+        (
+            aim.controller,
+            aim.aim,
+            crate::weapon_muzzle::AIM_LINE_COLORS,
+        ),
     ]
     .into_iter()
     .flat_map(|(start, direction, [halo, core])| {
         engine::scene::laser_material::beam(
             start,
-            direction * world(AIM_LINE_LENGTH),
+            direction * world(crate::weapon_muzzle::AIM_LINE_METRES),
             (world(AIM_LINE_HALO), halo),
             (world(AIM_LINE_CORE), core),
             0.0,
