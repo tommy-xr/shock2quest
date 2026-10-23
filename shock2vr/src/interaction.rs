@@ -1270,15 +1270,17 @@ impl VrInteraction {
         let mut glove_slot = self.glove_renderer.borrow_mut();
         let capture = match glove_slot.as_mut().and_then(|renderer| renderer.as_mut()) {
             Some(renderer) => {
-                tool.tip_error_mm = tool.tracked[tool.hand]
-                    .and_then(|joints| pose_tool::tip_error_mm(renderer, &joints, handedness));
+                let live = tool.tracked[tool.hand]
+                    .and_then(|joints| pose_tool::tracked_glove(renderer, &joints, handedness));
+                tool.tip_error_mm = live.as_ref().map(|glove| glove.tip_error_mm());
+                tool.hand_size_ratio = live.as_ref().map(|glove| glove.fit.size_ratio);
                 // The free controller buzzes while the live glove goes through
                 // the item, harder the deeper, unless contacts are hidden.
-                let deepest = tool.tracked[tool.hand]
+                let deepest = live
                     .filter(|_| tool.contact_view != pose_tool::ContactView::Off)
-                    .and_then(|joints| pose_tool::tracked_glove(renderer, &joints, handedness))
                     .map_or(0.0, |glove| {
                         glove
+                            .fit
                             .joints
                             .iter()
                             .filter_map(|&joint| tool.penetration(joint))
@@ -1288,17 +1290,16 @@ impl VrInteraction {
                     self.pose_tool_pulses.push((free, pulse));
                 }
                 capture.map(|joints| {
-                    let error = pose_tool::tip_error_mm(renderer, &joints, handedness);
-                    let fitted = pose_tool::tracked_glove(renderer, &joints, handedness)
-                        .map(|glove| glove.joints);
-                    (joints, renderer.open_joints(handedness), error, fitted)
+                    let fitted = pose_tool::tracked_glove(renderer, &joints, handedness);
+                    (joints, fitted)
                 })
             }
             None => None,
         };
         drop(glove_slot);
-        if let Some((joints, glove, error, fitted)) = capture {
-            if self.capture_grip(world, joints, glove, error) {
+        if let Some((joints, fitted)) = capture {
+            if self.capture_grip(world, fitted.as_ref()) {
+                let fitted = fitted.map(|glove| glove.fit.joints);
                 self.log_capture_joints(&joints, fitted.as_ref(), player_pos, player_rotation);
             }
         }
@@ -1498,13 +1499,7 @@ impl VrInteraction {
     /// Stage the queued tracked-hand capture as the held item's grip: apply it
     /// now as a preview, unsaved, and re-seat the held hand so the item does
     /// not move. Whether it staged.
-    fn capture_grip(
-        &mut self,
-        world: &World,
-        joints: crate::hand_capture::HandJoints,
-        glove: crate::hand_capture::HandJoints,
-        tip_error_mm: Option<[f32; 5]>,
-    ) -> bool {
+    fn capture_grip(&mut self, world: &World, fitted: Option<&pose_tool::TrackedGlove>) -> bool {
         let Some(tool) = self.pose_tool.as_mut() else {
             return false;
         };
@@ -1514,34 +1509,32 @@ impl VrInteraction {
         let Some(current) = held.resolved.as_ref() else {
             return false;
         };
-        let handedness = [Handedness::Left, Handedness::Right][tool.hand];
-        let contact = grip_contact(world, held.entity);
-        let item = pose_tool::item_pose(tool.hand_pose, current, contact);
-        let Some((grip, hand_pose)) = pose_tool::captured_grip(
-            &joints,
-            &glove,
-            handedness,
-            item,
-            contact,
-            current.item_scale,
-            crate::world_scale::WorldScale::active().personal(),
-        ) else {
+        let Some(fitted) = fitted else {
             println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=false reason=degenerate_joints");
             tool.capture_failure = Some("degenerate_joints".to_owned());
             return false;
         };
+        let contact = grip_contact(world, held.entity);
+        let item = pose_tool::item_pose(tool.hand_pose, current, contact);
+        let (grip, hand_pose) = pose_tool::captured_grip(
+            &fitted.fit,
+            item,
+            contact,
+            current.item_scale,
+            crate::world_scale::WorldScale::active().personal(),
+        );
         println!(
             "SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=true staged=true model={} hand={}",
             held.model,
             ["left", "right"][tool.hand]
         );
-        // The metric the mapping is tuned against: glove vs tracked fingertips.
-        if let Some(errors) = tip_error_mm {
-            println!(
-                "SHOCK2QUEST_VR_GRIP_POSE_TOOL tip_error_mm=[{}]",
-                errors.map(|e| format!("{e:.1}")).join(",")
-            );
-        }
+        // The metric the mapping is tuned against: glove vs tracked
+        // fingertips, and how much larger the real hand is than the glove.
+        println!(
+            "SHOCK2QUEST_VR_GRIP_POSE_TOOL tip_error_mm=[{}] hand_size_ratio={:.3}",
+            fitted.tip_error_mm().map(|e| format!("{e:.1}")).join(","),
+            fitted.fit.size_ratio
+        );
         let Some(entry) = self.stage_grip(grip) else {
             return false;
         };
@@ -2378,7 +2371,7 @@ impl PlayerInteraction for VrInteraction {
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
                 "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm_in_world()), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal),
-                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"staged": tool.staged.is_some(), "saved": tool.saved, "last_save_error": tool.last_save_error, "tip_error_mm": tool.tip_error_mm, "capture_failure": tool.capture_failure, "contact_view": tool.contact_view.name(), "panel": tool.panel_diagnostics()}))}))
+                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"staged": tool.staged.is_some(), "saved": tool.saved, "last_save_error": tool.last_save_error, "tip_error_mm": tool.tip_error_mm, "hand_size_ratio": tool.hand_size_ratio, "capture_failure": tool.capture_failure, "contact_view": tool.contact_view.name(), "panel": tool.panel_diagnostics()}))}))
         }).collect())
     }
 

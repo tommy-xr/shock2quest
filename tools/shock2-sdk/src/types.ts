@@ -1444,7 +1444,8 @@ export interface HandGrip {
   /** The grip pose tool posing this hand: an unsaved capture is applied
    * live (`staged`) until saved; a failed save stays staged.
    * `tip_error_mm`: glove vs tracked fingertip distance (thumb..little) for
-   * the tracked posing hand; `capture_failure`: why the last capture request
+   * the tracked posing hand, and `hand_size_ratio` that hand's size over the
+   * glove's (wrist to middle tip); `capture_failure`: why the last capture request
    * captured nothing (`no_joints`, `window_short`, `jitter max_mm=<x>`,
    * `degenerate_joints`); `contact_view`: which contact spheres and joint
    * markers are drawn - touching/through spheres with wrist and fingertip
@@ -1454,6 +1455,7 @@ export interface HandGrip {
     staged: boolean;
     last_save_error: string | null;
     tip_error_mm: number[] | null;
+    hand_size_ratio: number | null;
     capture_failure: string | null;
     contact_view: "contacts" | "full" | "off";
     /** A save succeeded and nothing was staged since. */

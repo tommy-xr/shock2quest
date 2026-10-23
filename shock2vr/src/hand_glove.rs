@@ -102,6 +102,8 @@ pub struct GloveRenderer {
     point: Pose,
     wrist_frames: Option<[Matrix4<f32>; 2]>,
     open_joints: [Option<crate::hand_capture::HandJoints>; 2],
+    /// Carries pose-number bone turns onto the glove model (`HandPoseRetarget::delta_basis`).
+    delta_basis: cgmath::Matrix3<f32>,
     materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
     lit_materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
 }
@@ -126,7 +128,7 @@ impl GloveRenderer {
         if !model.has_skeleton() {
             return None;
         }
-        let model = model.as_ref().clone();
+        let mut model = model.as_ref().clone();
 
         let texture = load_glove_texture(asset_cache);
 
@@ -167,6 +169,7 @@ impl GloveRenderer {
         let materials = make_materials(1.0);
         let lit_materials = make_materials(0.0);
         let retarget = HandPoseRetarget::for_right_glove(model.skeleton());
+        let delta_basis = retarget.delta_basis(&mut model);
 
         Some(Self {
             model,
@@ -178,6 +181,7 @@ impl GloveRenderer {
             lit_materials,
             wrist_frames: None,
             open_joints: [None, None],
+            delta_basis,
         })
     }
 
@@ -200,14 +204,7 @@ impl GloveRenderer {
         pose: &Pose,
         handedness: Handedness,
     ) -> crate::hand_capture::HandJoints {
-        let transform = crate::vr_grip::glove_to_hand(handedness);
-        self.retarget.apply(pose, &mut self.model);
-        std::array::from_fn(|joint| {
-            let node = self.model.skeleton().node_index_for_joint(joint).unwrap();
-            (transform * self.model.get_global_transform(node).unwrap())
-                .w
-                .truncate()
-        })
+        skin_joints(&mut self.model, &self.retarget, pose, handedness)
     }
 
     /// The joints of a glove drawn fully in `shape` (as `render_hand` draws
@@ -236,6 +233,14 @@ impl GloveRenderer {
         self.open_joints[slot]
             .unwrap()
             .map(|joint| joint * personal)
+    }
+
+    /// The open glove at drawn size, to fit a tracked hand with.
+    pub(crate) fn rig(&mut self, handedness: Handedness) -> crate::hand_capture::GloveRig {
+        crate::hand_capture::GloveRig {
+            open: self.open_joints(handedness),
+            basis: rig_basis(self.delta_basis, handedness),
+        }
     }
 
     /// Sample the renderer's actual retargeted finger arcs once for fitting.
@@ -481,9 +486,113 @@ pub fn load_glove_texture(
         .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>)
 }
 
+/// The glove model's 26 skin joints posed with `pose`, in calibrated hand
+/// space at authored size.
+fn skin_joints(
+    model: &mut GlbModel,
+    retarget: &HandPoseRetarget,
+    pose: &Pose,
+    handedness: Handedness,
+) -> crate::hand_capture::HandJoints {
+    let transform = crate::vr_grip::glove_to_hand(handedness);
+    retarget.apply(pose, model);
+    std::array::from_fn(|joint| {
+        let node = model.skeleton().node_index_for_joint(joint).unwrap();
+        (transform * model.get_global_transform(node).unwrap())
+            .w
+            .truncate()
+    })
+}
+
+/// A rig's `basis` for the glove drawn as `handedness`: the model's delta
+/// basis carried into calibrated hand space, mirror included.
+fn rig_basis(delta_basis: cgmath::Matrix3<f32>, handedness: Handedness) -> cgmath::Matrix3<f32> {
+    let m = crate::vr_grip::glove_to_hand(handedness) / GLOVE_SCALE;
+    cgmath::Matrix3::from_cols(m.x.truncate(), m.y.truncate(), m.z.truncate()) * delta_basis
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hand_capture::{GloveRig, fit_hand};
+
+    /// The glove model and its retarget, without an asset cache.
+    fn glove() -> (GlbModel, HandPoseRetarget) {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/vr_glove_model.glb");
+        let bytes = std::fs::read(path).expect("read vr_glove_model.glb");
+        let skeleton = dark::importers::skeleton_from_glb_bytes(&bytes).unwrap();
+        let origin = cgmath::Point3::new(0.0, 0.0, 0.0);
+        let model = GlbModel::new(Vec::new(), collision::Aabb3::new(origin, origin), skeleton);
+        let retarget = HandPoseRetarget::for_right_glove(model.skeleton());
+        (model, retarget)
+    }
+
+    /// `GloveRenderer::rig` at authored size, without an asset cache.
+    fn rig(model: &mut GlbModel, retarget: &HandPoseRetarget, hand: Handedness) -> GloveRig {
+        GloveRig {
+            open: skin_joints(model, retarget, &hand_pose::open_right_hand(), hand),
+            basis: rig_basis(retarget.delta_basis(model), hand),
+        }
+    }
+
+    /// Hands fitted with the real glove: the pose data's grips at about the
+    /// glove's size (real hands, in proportions a little unlike the glove's)
+    /// reach every tip a finger of the glove's length can, and the joints the
+    /// fit reports are the ones the glove draws with its bones.
+    #[test]
+    fn the_glove_reaches_real_proportioned_hands_and_draws_what_it_fit() {
+        use crate::hand_capture::tests::{assert_reached, assert_within_limits, grips, tracked};
+        use cgmath::{InnerSpace, Rotation};
+        let (mut model, retarget) = glove();
+        let reached = 0.003 / crate::METERS_PER_WORLD_UNIT;
+        for hand in [Handedness::Right, Handedness::Left] {
+            let rig = rig(&mut model, &retarget, hand);
+            // The pose data's hand is larger than the glove as drawn.
+            let open = tracked(&hand_pose::open_right_hand(), hand)
+                .map(|p| p / crate::METERS_PER_WORLD_UNIT);
+            let size = fit_hand(&open, &rig).unwrap().size_ratio;
+            // Its fist's little finger curls tighter than the glove's can.
+            for (name, pose) in grips().into_iter().filter(|(name, _)| *name != "fist") {
+                for factor in [0.95, 1.0, 1.05] {
+                    let joints = tracked(&pose, hand).map(|p| p / crate::METERS_PER_WORLD_UNIT);
+                    let joints = joints.map(|p| joints[1] + (p - joints[1]) * (factor / size));
+                    let fit = fit_hand(&joints, &rig).unwrap();
+                    assert_within_limits(&fit);
+                    let name = format!("{hand:?} {name} x{factor}");
+                    assert_reached(&fit, &joints, &rig.open, reached, &name);
+                    let pose = Pose::from_finger_bones(&fit.bones);
+                    let drawn = skin_joints(&mut model, &retarget, &pose, hand)
+                        .map(|p| fit.position + fit.rotation.rotate_vector(p));
+                    for (joint, (a, b)) in drawn.iter().zip(&fit.joints).enumerate() {
+                        let off = (a - b).magnitude() * crate::METERS_PER_WORLD_UNIT * 1000.0;
+                        assert!(off < 0.1, "{name} joint {joint}: {off} mm");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The hands the grip pose tool's e2e test tracks (flat, built ones):
+    /// thumb to middle land on them; ring and little are longer than the
+    /// glove's and come as near as straight fingers can.
+    #[test]
+    fn the_glove_reaches_the_built_hands() {
+        let (mut model, retarget) = glove();
+        let reached = 0.003 / crate::METERS_PER_WORLD_UNIT;
+        for hand in [Handedness::Right, Handedness::Left] {
+            let rig = rig(&mut model, &retarget, hand);
+            for (name, joints) in crate::hand_capture::tests::foreign_hands() {
+                let joints = joints.map(|p| hand.mirror_point(p) / crate::METERS_PER_WORLD_UNIT);
+                let fit = fit_hand(&joints, &rig).unwrap();
+                crate::hand_capture::tests::assert_reached(&fit, &joints, &rig.open, reached, name);
+                let errors = &fit.tip_errors[..3];
+                assert!(
+                    errors.iter().all(|e| *e < reached),
+                    "{hand:?} {name}: {errors:?}"
+                );
+            }
+        }
+    }
 
     /// Guards the two constants against drifting apart: the scale exists to put
     /// the authored glove at a real hand's length once the world's true scale
