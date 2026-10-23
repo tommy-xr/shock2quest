@@ -306,7 +306,9 @@ Grip poses saved on the headset live in `<data root>/vr-grip-overrides.json`
 load. Bring them into the repo with `cargo dvr grips pull`, then
 `cargo dx merge-grips vr-grip-overrides.json` (each pose replaces the entry the
 game would have used), and `cargo dvr grips clear` so they stop shadowing
-later asset edits.
+later asset edits. To pose with a tracked hand while the other holds a
+controller, run `cargo dvr features set multimodal on` (Quest multimodal; off by
+default).
 
 Developer parameters such as belt height/distance are **session-only whole-belt
 fit controls**. They do not replace asset authoring when the request is to
