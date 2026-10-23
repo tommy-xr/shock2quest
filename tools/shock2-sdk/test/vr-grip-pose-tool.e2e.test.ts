@@ -1026,8 +1026,7 @@ type Bones = ResolvedGrip["rotation"][];
 function assertSameBones(actual: Bones | null | undefined, expected: Bones, label: string): void {
   assert.equal(actual?.length, expected.length, label);
   actual!.forEach((q, i) => {
-    const e = expected[i]!;
-    const d = Math.abs(dot4([q.v.x, q.v.y, q.v.z, q.s], [e.v.x, e.v.y, e.v.z, e.s]));
+    const d = Math.abs(dot4(quat(q), quat(expected[i]!)));
     assert.ok(d > 1 - 1e-5, `${label}: bone ${i} off (dot ${d})`);
   });
 }
@@ -1071,7 +1070,7 @@ test(
       assert.equal((await tool()).staged, true, `rest staged (${(await tool()).capture_failure})`);
       const rest = (await rightGrip()).grip!;
       assert.ok(fingers(rest).bones, "the rest capture is bones");
-      assert.equal((await tool()).has_trigger_pose, false, "curl trigger poses do not carry over");
+      assert.equal((await tool()).has_trigger_pose, false, "no pulled pose yet");
 
       // Trigger slot: the index hooked; only the fingers change.
       await aimAtButton(game, "left", "Slot", unit);
@@ -1089,9 +1088,7 @@ test(
       assert.equal(posed.item_scale, rest.item_scale);
       assertSameBones(fingers(posed).bones, fingers(rest).bones!, "rest fingers kept");
       const pulled = fingers(posed).trigger_bones!;
-      const moved = pulled.some((q, i) => Math.abs(dot4([q.v.x, q.v.y, q.v.z, q.s], [
-        fingers(rest).bones![i]!.v.x, fingers(rest).bones![i]!.v.y, fingers(rest).bones![i]!.v.z, fingers(rest).bones![i]!.s,
-      ])) < 0.99);
+      const moved = pulled.some((q, i) => Math.abs(dot4(quat(q), quat(fingers(rest).bones![i]!))) < 0.99);
       assert.ok(moved, "the pulled fingers differ from the rest");
 
       // Save writes both; leaving, dropping and re-grabbing loads them.
