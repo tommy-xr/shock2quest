@@ -1,7 +1,8 @@
 //! Deterministic pickup fitting against visible triangles. All outputs are
 //! hand-local; tracked motion never re-runs the search or changes item scale.
 use cgmath::{
-    EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3, Vector3, vec3,
+    EuclideanSpace, InnerSpace, Matrix4, One, Point3, Quaternion, Rotation, Rotation3, Vector3,
+    vec3,
 };
 use rapier3d::{
     na,
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     hand_pose::{FingerAmounts, FingerBones, HandShape, Pose, fist_right_hand, open_right_hand},
     vr_config::Handedness,
+    vr_support::GripPose,
 };
 
 pub const CURL_STEPS: usize = 24;
@@ -44,9 +46,16 @@ pub struct ResolvedGrip {
     #[serde(default = "default_item_scale")]
     pub item_scale: f32,
     pub pose_family: String,
-    /// Item origin and rotation in tracked-hand space (world units).
+    /// Item origin and rotation in the glove's frame (world units): how the
+    /// hand sits on the item.
     pub offset: Vector3<f32>,
     pub rotation: Quaternion<f32>,
+    /// The glove's turn off the tracked controller, about the hand origin:
+    /// a gun's aim correction (`weapon_muzzle::aim_turn`). Play puts the
+    /// glove at controller · this and the item at controller · this ·
+    /// (`offset`, `rotation`).
+    #[serde(default = "Quaternion::one", skip_serializing_if = "One::is_one")]
+    pub hand_rotation: Quaternion<f32>,
     #[serde(flatten)]
     pub fingers: FingerPose,
     /// Contact samples in item-local space; null means no contact was found.
@@ -60,6 +69,23 @@ fn default_item_scale() -> f32 {
 }
 
 impl ResolvedGrip {
+    /// The glove a controller at `controller` draws: turned by `hand_rotation`
+    /// about the hand origin. An untracked (zero) rotation stays untracked.
+    pub fn glove_pose(&self, controller: GripPose) -> GripPose {
+        GripPose {
+            position: controller.position,
+            rotation: controller.rotation * self.hand_rotation,
+        }
+    }
+
+    /// `glove_pose` inverted: the controller that draws the glove at `glove`.
+    pub fn controller_pose(&self, glove: GripPose) -> GripPose {
+        GripPose {
+            position: glove.position,
+            rotation: glove.rotation * self.hand_rotation.conjugate(),
+        }
+    }
+
     /// Keep authored grip files in baseline units; scale only the runtime copy.
     pub(crate) fn for_world_scale(self) -> Self {
         self.rescaled(crate::world_scale::WorldScale::active().personal())
@@ -99,6 +125,7 @@ impl ResolvedGrip {
             && self.item_scale > 0.0
             && self.item_scale <= 10.0
             && is_unit_quaternion(self.rotation)
+            && is_unit_quaternion(self.hand_rotation)
             && self.fingers.is_valid()
             && self
                 .anchor
@@ -107,7 +134,7 @@ impl ResolvedGrip {
                 .all(|c| c.is_finite())
     }
 
-    /// Bounds of the visible fitted item in controller-local space, for capture framing.
+    /// Bounds of the visible fitted item in the glove's frame, for capture framing.
     pub fn item_bounds(&self, triangles: &[[Point3<f32>; 3]]) -> Option<[[f32; 3]; 2]> {
         use collision::{Aabb, Aabb3};
         let points = triangles.iter().flatten().map(|p| {
@@ -129,17 +156,25 @@ impl ResolvedGrip {
     /// the item in the other hand's frame. `mirror` takes this hand's item
     /// frame to the other's (`hand_model_mirror`). With grip `G` and hand
     /// reflection `X`, the other hand's is `X·G·mirror⁻¹`: a rotation, since
-    /// both reflections flip handedness. Fingers are kept; the glove mirrors
-    /// them. `None` if `mirror` is no reflection.
+    /// both reflections flip handedness. The glove turn is reflected alike,
+    /// `X·C·X⁻¹`. Fingers are kept; the glove mirrors them. `None` if
+    /// `mirror` is no reflection.
     pub fn mirrored(&self, mirror: Matrix4<f32>) -> Option<ResolvedGrip> {
         use cgmath::{Matrix3, SquareMatrix, Transform};
         let hand = Handedness::Left.mirror();
         let back = mirror.invert()?;
         let linear =
             |m: Matrix4<f32>| Matrix3::from_cols(m.x.truncate(), m.y.truncate(), m.z.truncate());
-        let turned = linear(hand) * Matrix3::from(self.rotation) * linear(back);
-        let rotation = Quaternion::from(turned).normalize();
-        let proper = (0..3).all(|c| (Matrix3::from(rotation)[c] - turned[c]).magnitude() < 1e-4);
+        // A rotation from a matrix that should be one, if it is.
+        let proper = |turned: Matrix3<f32>| {
+            let rotation = Quaternion::from(turned).normalize();
+            (0..3)
+                .all(|c| (Matrix3::from(rotation)[c] - turned[c]).magnitude() < 1e-4)
+                .then_some(rotation)
+        };
+        let rotation = proper(linear(hand) * Matrix3::from(self.rotation) * linear(back))?;
+        let hand_rotation =
+            proper(linear(hand) * Matrix3::from(self.hand_rotation) * linear(hand.invert()?))?;
         let item = |p: [f32; 3]| mirror.transform_point(Point3::from(p)).into();
         let grip = ResolvedGrip {
             // The item origin moves by the reflection's own translation.
@@ -150,11 +185,12 @@ impl ResolvedGrip {
                         .rotate_vector(back.w.truncate() * self.item_scale),
             ),
             rotation,
+            hand_rotation,
             contacts: self.contacts.map(|contact| contact.map(item)),
             anchor: item(self.anchor),
             ..self.clone()
         };
-        (proper && grip.is_valid()).then_some(grip)
+        grip.is_valid().then_some(grip)
     }
 }
 
@@ -855,6 +891,7 @@ impl GripSurface {
             pose_family: "broad".to_owned(),
             offset,
             rotation,
+            hand_rotation: Quaternion::one(),
             fingers: FingerPose::curls(curls),
             contacts,
             anchor: [0.0; 3],
@@ -1959,6 +1996,61 @@ mod tests {
             (fires(&left, left_barrel).angle(aim).0 - fires(&right, barrel).angle(aim).0).abs()
                 < 1e-5
         );
+    }
+
+    /// A gun aligned by turning its glove, mirrored, still fires down its own
+    /// controller: the glove turn mirrors with the grip and stays a rotation.
+    #[test]
+    fn a_mirrored_glove_turn_keeps_a_gun_aligned() {
+        use cgmath::{Matrix3, SquareMatrix, Transform};
+        let mirror = crate::vr_config::gun_model_frame("sg_h", Handedness::Left);
+        let barrel = vec3(-1.0, 0.0, 0.0);
+        let right = turned_grip();
+        let right = ResolvedGrip {
+            hand_rotation: crate::weapon_muzzle::aim_turn(right.rotation, barrel, 1.0),
+            ..right
+        };
+        let error = |grip: &ResolvedGrip, barrel| {
+            crate::weapon_muzzle::aim_error_deg(grip.hand_rotation * grip.rotation, barrel)
+        };
+        assert!(error(&right, barrel) < 1e-3);
+        let left = right.mirrored(mirror).unwrap();
+        assert!((Matrix3::from(left.hand_rotation).determinant() - 1.0).abs() < 1e-4);
+        let left_barrel = mirror.transform_vector(barrel);
+        assert!(
+            error(&left, left_barrel) < 1e-3,
+            "{}",
+            error(&left, left_barrel)
+        );
+        // In the controller's frame, the item is the mirror of the right's.
+        let in_controller = |grip: &ResolvedGrip, q| grip.hand_rotation * held_point(grip, q);
+        let q = vec3(0.3, -0.2, 0.5);
+        assert_close(
+            in_controller(&left, mirror.transform_point(Point3::from_vec(q)).to_vec()),
+            Handedness::Left.mirror_point(in_controller(&right, q)),
+        );
+    }
+
+    /// The glove turn is saved only when there is one, so every existing
+    /// grip file decodes and re-encodes unchanged, and a turned one round-trips.
+    #[test]
+    fn a_glove_turn_round_trips_and_is_absent_when_none() {
+        let grip = turned_grip();
+        let plain = serde_json::to_value(&grip).unwrap();
+        assert!(plain.get("hand_rotation").is_none(), "{plain}");
+        let decoded: ResolvedGrip = serde_json::from_value(plain).unwrap();
+        assert!(decoded.hand_rotation.is_one());
+        let turned = ResolvedGrip {
+            hand_rotation: Quaternion::from_angle_x(cgmath::Deg(12.0)),
+            ..grip
+        };
+        let json = serde_json::to_string(&turned).unwrap();
+        assert_eq!(serde_json::from_str::<ResolvedGrip>(&json).unwrap(), turned);
+        let mut skewed = serde_json::to_value(&turned).unwrap();
+        skewed["hand_rotation"] =
+            serde_json::to_value(Quaternion::new(2.0_f32, 0.0, 0.0, 0.0)).unwrap();
+        let skewed: ResolvedGrip = serde_json::from_value(skewed).unwrap();
+        assert!(!skewed.is_valid(), "a non-unit glove turn is rejected");
     }
 
     #[test]
