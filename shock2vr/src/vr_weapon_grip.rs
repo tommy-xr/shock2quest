@@ -47,11 +47,15 @@ pub fn model_frame(
         .as_ref()
         .and_then(|joints| vr_config::MeleePosedArm::from_joints(joints))
     {
-        Matrix4::from_translation(vr_config::melee_contact_offset_scaled(arm, 1.0))
-            * vr_config::melee_wield_pose_correction_scaled(arm, 1.0, hand)
+        melee_frame(arm, hand)
     } else {
         vr_config::gun_model_frame(name, hand)
     }
+}
+
+fn melee_frame(arm: vr_config::MeleePosedArm, hand: Handedness) -> Matrix4<f32> {
+    Matrix4::from_translation(vr_config::melee_contact_offset_scaled(arm, 1.0))
+        * vr_config::melee_wield_pose_correction_scaled(arm, 1.0, hand)
 }
 
 /// Reflection between the actual rendered weapon frames, shared by support
@@ -172,4 +176,40 @@ pub fn resolve(
         }
     }
     best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cgmath::InnerSpace;
+
+    /// merge-grips mirrors melee by name; play mirrors by the asset's posed
+    /// arm. They agree for any arm: the contact point lies on the hand's
+    /// mirror plane by construction.
+    #[test]
+    fn the_named_melee_mirror_is_the_posed_arm_mirror_for_any_arm() {
+        let arms = [
+            ([0.0, -0.3, 0.1], [0.0, 0.0, 0.0], [0.02, 0.4, -0.05]),
+            ([0.3, 0.1, -0.2], [0.05, 0.02, 0.01], [-0.2, 0.3, 0.25]),
+            ([-0.1, -0.25, 0.35], [0.1, -0.1, 0.2], [0.4, 0.05, -0.1]),
+        ]
+        .map(|(elbow, fist, weapon)| vr_config::MeleePosedArm {
+            elbow: elbow.into(),
+            fist: fist.into(),
+            weapon: weapon.into(),
+        });
+        for name in ["wrench_h", "rapier_h", "shard_h", "psword_h"] {
+            let named = named_model_mirror(name).unwrap();
+            for arm in arms {
+                let posed = melee_frame(arm, Handedness::Left)
+                    * melee_frame(arm, Handedness::Right).invert().unwrap();
+                for (a, b) in [posed.x, posed.y, posed.z, posed.w]
+                    .iter()
+                    .zip([named.x, named.y, named.z, named.w])
+                {
+                    assert!((a - b).magnitude() < 1e-4, "{name} {arm:?}: {posed:?}");
+                }
+            }
+        }
+    }
 }
