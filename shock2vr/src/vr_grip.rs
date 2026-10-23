@@ -293,6 +293,20 @@ impl FingerPose {
         }
     }
 
+    /// Curls estimated from a bone pose (`bones_to_curls`); curls are unchanged.
+    pub fn to_curls(&self) -> FingerPose {
+        match self {
+            FingerPose::Curls { .. } => self.clone(),
+            FingerPose::Bones {
+                bones,
+                trigger_bones,
+            } => FingerPose::Curls {
+                curls: bones_to_curls(bones),
+                trigger_curls: trigger_bones.as_ref().map(bones_to_curls),
+            },
+        }
+    }
+
     /// The rest pose as bones (curls converted exactly).
     pub fn rest_bones(&self) -> FingerBones {
         match self {
@@ -347,6 +361,58 @@ fn curls_to_bones(curls: [f32; 5]) -> FingerBones {
     open_right_hand()
         .blend_per_finger(&fist_right_hand(), &finger_amounts(curls))
         .finger_bones()
+}
+
+/// `FingerBones` indices per finger, thumb first (SteamVR bones 2..=25).
+const FINGER_BONES: [std::ops::Range<usize>; 5] = [0..4, 4..9, 9..14, 14..19, 19..24];
+
+/// Inverse of `curls_to_bones`: per finger, the curl whose open -> fist blend
+/// is nearest `bones`. Exact for bones made from curls, a best fit otherwise.
+fn bones_to_curls(bones: &FingerBones) -> [f32; 5] {
+    let open = open_right_hand().finger_bones();
+    let fist = fist_right_hand().finger_bones();
+    std::array::from_fn(|finger| {
+        // This finger's rotation error at `curl`, blended as `blend_per_finger`
+        // does (cgmath's slerp takes the shortest arc itself).
+        let error = |curl: f32| -> f32 {
+            FINGER_BONES[finger]
+                .clone()
+                .map(|i| rotation_error(open[i].slerp(fist[i], curl), bones[i]))
+                .sum()
+        };
+        let min = if finger == 0 { MIN_THUMB_CURL } else { 0.0 };
+        minimize(error, min, 1.0)
+    })
+}
+
+/// Monotone in the angle between two rotations; precise near zero, unlike acos.
+fn rotation_error(a: Quaternion<f32>, b: Quaternion<f32>) -> f32 {
+    let b = if a.dot(b) < 0.0 { -b } else { b };
+    (a - b).magnitude().atan2((a + b).magnitude())
+}
+
+/// Minimum of `f` over `min..=max`: a coarse scan finds the basin (the error
+/// need not be unimodal off the blend arc), golden-section search refines it.
+fn minimize(f: impl Fn(f32) -> f32, min: f32, max: f32) -> f32 {
+    const SAMPLES: usize = 40;
+    let step = (max - min) / SAMPLES as f32;
+    let (best, _) = (0..=SAMPLES)
+        .map(|i| min + i as f32 * step)
+        .map(|x| (x, f(x)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .unwrap();
+    let (mut lo, mut hi) = ((best - step).max(min), (best + step).min(max));
+    let ratio = (5f32.sqrt() - 1.0) / 2.0;
+    for _ in 0..32 {
+        let a = hi - ratio * (hi - lo);
+        let b = lo + ratio * (hi - lo);
+        if f(a) < f(b) {
+            hi = b;
+        } else {
+            lo = a;
+        }
+    }
+    (lo + hi) / 2.0
 }
 
 fn blended_bones(rest: &FingerBones, pressed: Option<&FingerBones>, trigger: f32) -> FingerBones {
@@ -1516,6 +1582,70 @@ mod tests {
         let index = 6 - 2;
         assert!(mid[index + 1].dot(drawn(&bones, 0.0)[index + 1]).abs() < 1.0 - 1e-4);
         assert_eq!(bones.to_bones(), bones);
+    }
+
+    #[test]
+    fn bones_made_from_curls_convert_back_to_those_curls() {
+        let rests = [
+            [0.0; 5],
+            [1.0; 5],
+            [MIN_THUMB_CURL, 0.0, 0.0, 0.0, 0.0],
+            [-0.5, 1.0, 1.0, 1.0, 1.0],
+            [0.2, 0.4, 0.6, 0.8, 1.0],
+            [0.65, 0.25, 0.7, 0.35, 0.9],
+        ];
+        let close = |a: [f32; 5], b: [f32; 5]| {
+            assert!(
+                a.iter().zip(&b).all(|(a, b)| (a - b).abs() < 1e-3),
+                "{a:?} vs {b:?}"
+            );
+        };
+        for rest in rests {
+            for pressed in [None, Some([1.0, 0.9, 0.5, 0.1, 0.0])] {
+                let pose = FingerPose::Curls {
+                    curls: rest,
+                    trigger_curls: pressed,
+                };
+                let FingerPose::Curls {
+                    curls,
+                    trigger_curls,
+                } = pose.to_bones().to_curls()
+                else {
+                    panic!("expected curls");
+                };
+                close(curls, rest);
+                assert_eq!(trigger_curls.is_some(), pressed.is_some());
+                if let (Some(a), Some(b)) = (trigger_curls, pressed) {
+                    close(a, b);
+                }
+            }
+        }
+        assert_eq!(
+            FingerPose::curls([0.3; 5]).to_curls(),
+            FingerPose::curls([0.3; 5])
+        );
+    }
+
+    #[test]
+    fn a_tracked_hand_converts_to_valid_curls() {
+        use crate::hand_capture::{
+            fit_hand,
+            tests::{openxr_right_hand, pose_rig},
+        };
+        let estimate = |index_curl| {
+            let bones = fit_hand(&openxr_right_hand(index_curl), &pose_rig(Handedness::Right))
+                .unwrap()
+                .bones;
+            let pose = FingerPose::Bones {
+                bones,
+                trigger_bones: Some(bones),
+            }
+            .to_curls();
+            assert!(pose.is_valid(), "{pose:?}");
+            *pose.rest_curls().unwrap()
+        };
+        // Curling the tracked index curls the estimated one.
+        assert!(estimate(0.8)[1] > estimate(0.0)[1] + 0.2);
     }
 
     #[test]
