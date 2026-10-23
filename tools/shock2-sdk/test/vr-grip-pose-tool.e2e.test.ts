@@ -1031,7 +1031,7 @@ function assertSameBones(actual: Bones | null | undefined, expected: Bones, labe
     assert.ok(d > 1 - 1e-5, `${label}: bone ${i} off (dot ${d})`);
   });
 }
-const fingers = (grip: ResolvedGrip) => grip.fingers as { bones?: Bones; trigger_bones?: Bones };
+const fingers = (grip: ResolvedGrip) => grip as { bones?: Bones; trigger_bones?: Bones };
 
 test(
   "grip pose tool: the trigger slot snapshots the pulled fingers, which play blends to with the trigger",
