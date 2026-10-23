@@ -1427,7 +1427,9 @@ export interface HandGrip {
   hand: "left" | "right";
   entity_id: number;
   model: string;
-  source: "bake" | "prepared" | "missing_or_invalid";
+  /** `mirrored`: the other hand's grip, mirrored (a glove weapon posed on
+   * the headset for one hand only). */
+  source: "bake" | "prepared" | "mirrored" | "missing_or_invalid";
   solve_ms: number;
   surface_hash: string;
   kinematics_hash: string;
