@@ -14,7 +14,7 @@ use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, vec3};
 
 use crate::{
     input_context::InputContext,
-    physics::{PhysicsWorld, PlayerHandle},
+    physics::{ClimbGrip, ClimbGripKind, PhysicsWorld, PlayerHandle},
     vr_climb::HandClimb,
 };
 
@@ -146,6 +146,11 @@ pub struct ReleasePreview {
     /// The aimed surface point behind the current gaze verdict.
     pub gaze_candidate: Option<Vector3<f32>>,
     pub gaze_rejection: Option<GazeRejection>,
+    /// Which held floor the next held-floor search leads with.
+    held_turn: bool,
+    /// The held-floor search ran out of settles before finding a landing:
+    /// one may still exist, so the vault does not stand in for it yet.
+    held_search_incomplete: bool,
 }
 
 impl ReleasePreview {
@@ -160,26 +165,7 @@ impl ReleasePreview {
     pub fn safe(&self) -> bool {
         self.outcome.is_some_and(|outcome| outcome.safe)
     }
-
-    /// An automatic ledge vault onto `grip_point` would take the body somewhere
-    /// other than the assisted landing on show: the release owns the exit.
-    /// A vault onto the shown deck is the same exit and keeps working.
-    pub fn blocks_vault(&self, grip_point: Vector3<f32>) -> bool {
-        self.assisted().is_some_and(|landing| {
-            let across = vec3(
-                landing.center.x - grip_point.x,
-                0.0,
-                landing.center.z - grip_point.z,
-            );
-            across.magnitude() > VAULT_SAME_EXIT_RADIUS
-                || (landing.floor_y - grip_point.y).abs() > GAZE_SNAP_MAX_STEP * 2.0
-        })
-    }
 }
-
-/// A vault's landing is an inset of up to 0.8 past the held lip; within this
-/// of the lip, the shown landing is that same deck.
-const VAULT_SAME_EXIT_RADIUS: f32 = 1.2;
 
 /// The gaze rays for a head looking along `forward`, centre first.
 /// Empty for a degenerate direction.
@@ -261,9 +247,11 @@ pub fn resolve(
         - crate::physics::player_center_above_floor(
             player.is_crouched() && !player.is_hanging_crouched(),
         );
-    // Only a ladder exit is assisted (through its grace grabs and deck
-    // transfers): an ordinary ledge pull keeps its vault.
+    // Only a ladder exit (a ladder or its grace holds) is assisted: an
+    // ordinary ledge pull keeps its vault.
     let exits_a_ladder = climb.on_ladder_departure();
+    let held_turn = !previous.held_turn;
+    let mut held_search_incomplete = false;
     // The same tracking a release needs to commit: never show an assisted
     // landing the release would then refuse.
     let tracked = input
@@ -288,14 +276,34 @@ pub fn resolve(
             (exits_a_ladder && tracked)
                 .then(|| {
                     let anchor_hand = climb.anchor();
-                    climb
+                    let floors: Vec<_> = climb
                         .grips()
                         .filter(|(hand, _)| Some(*hand) == anchor_hand)
                         .chain(climb.grips().filter(|(hand, _)| Some(*hand) != anchor_hand))
-                        .map(|(_, anchor)| anchor)
-                        .find_map(|anchor| {
-                            physics.held_floor_landing(player, &anchor.grip, previous.assisted())
+                        .map(|(_, anchor)| anchor.grip)
+                        .collect();
+                    // A landing found before is kept while it is still valid
+                    // on a held floor, with no settle.
+                    let kept = previous.assisted().and_then(|previous| {
+                        floors.iter().find_map(|grip| {
+                            physics.held_floor_landing(player, grip, Some(previous), &mut 0)
                         })
+                    });
+                    kept.or_else(|| {
+                        // Else a bounded search (settles across both floors),
+                        // leading with the other floor each frame: one that
+                        // never settles cannot starve the other.
+                        let mut settles = HELD_FLOOR_SETTLES;
+                        let mut order = floors.clone();
+                        if held_turn {
+                            order.reverse();
+                        }
+                        let found = order.iter().find_map(|grip| {
+                            physics.held_floor_landing(player, grip, None, &mut settles)
+                        });
+                        held_search_incomplete = found.is_none() && settles == 0;
+                        found
+                    })
                 })
                 .flatten()
         });
@@ -315,6 +323,8 @@ pub fn resolve(
     };
     ReleasePreview {
         outcome,
+        held_turn,
+        held_search_incomplete,
         gaze_candidate: gaze.as_ref().and_then(|gaze| gaze.candidate),
         gaze_rejection: match gaze {
             Some(gaze) => gaze.landing.err(),
@@ -322,6 +332,10 @@ pub fn resolve(
         },
     }
 }
+
+/// Landing settles (see `PhysicsWorld::held_floor_landing`) a frame may spend
+/// on held floors: enough for both insets of one floor.
+const HELD_FLOOR_SETTLES: usize = 2;
 
 /// Seconds an exit teleport takes to fade to black, and back in after moving.
 pub const EXIT_FADE_OUT: f32 = 0.1;
@@ -374,6 +388,27 @@ impl ExitTeleport {
 
     pub fn done(&self) -> bool {
         self.moved && self.alpha() <= 0.0
+    }
+}
+
+/// The hold a pull-up vault may go over: an ordinary ledge, or - only while
+/// no assisted landing shows, after a complete search, so there is one
+/// destination at a time - a grace hold on a floor (a ladder top whose held
+/// floor offers no landing).
+pub fn vault_hold(grip: ClimbGrip, preview: &ReleasePreview) -> Option<ClimbGrip> {
+    match grip.kind {
+        ClimbGripKind::Ledge => Some(grip),
+        ClimbGripKind::Surface
+            if crate::physics::is_walkable_normal(grip.normal.y)
+                && preview.assisted().is_none()
+                && !preview.held_search_incomplete =>
+        {
+            Some(ClimbGrip {
+                kind: ClimbGripKind::Ledge,
+                ..grip
+            })
+        }
+        _ => None,
     }
 }
 
@@ -506,6 +541,43 @@ mod tests {
     }
 
     #[test]
+    fn a_grace_floor_vaults_only_while_no_assisted_landing_shows() {
+        let grip = |kind, normal_y: f32| ClimbGrip {
+            kind,
+            entity_id: None,
+            point: vec3(0.0, 6.0, 0.0),
+            normal: vec3((1.0 - normal_y * normal_y).sqrt(), normal_y, 0.0),
+        };
+        let none = ReleasePreview::default();
+        let shown = ReleasePreview {
+            outcome: Some(ReleaseOutcome::new(
+                ReleaseMode::Assisted,
+                landing(-1.0, 6.0, 0.0),
+                5.0,
+                1.3,
+            )),
+            ..Default::default()
+        };
+        // An ordinary ledge always may.
+        assert!(vault_hold(grip(ClimbGripKind::Ledge, 1.0), &shown).is_some());
+        // A grace floor only as a fallback, and as a ledge.
+        assert!(vault_hold(grip(ClimbGripKind::Surface, 1.0), &shown).is_none());
+        assert_eq!(
+            vault_hold(grip(ClimbGripKind::Surface, 1.0), &none).map(|g| g.kind),
+            Some(ClimbGripKind::Ledge)
+        );
+        // Not while a search that ran out of settles may still find one.
+        let incomplete = ReleasePreview {
+            held_search_incomplete: true,
+            ..Default::default()
+        };
+        assert!(vault_hold(grip(ClimbGripKind::Surface, 1.0), &incomplete).is_none());
+        // Never a wall or a ladder.
+        assert!(vault_hold(grip(ClimbGripKind::Surface, 0.0), &none).is_none());
+        assert!(vault_hold(grip(ClimbGripKind::Ladder, 1.0), &none).is_none());
+    }
+
+    #[test]
     fn safety_is_the_drop_against_the_threshold() {
         let feet = 5.0;
         let safe = ReleaseOutcome::new(ReleaseMode::Natural, landing(0.0, 4.0, 0.0), feet, 1.3);
@@ -519,21 +591,5 @@ mod tests {
             !ReleasePreview::default().safe(),
             "no prediction is not safe"
         );
-    }
-
-    #[test]
-    fn a_shown_assisted_exit_blocks_only_a_vault_somewhere_else() {
-        let lip = vec3(-7.0, 6.0, 0.0);
-        let preview = |mode, landing| ReleasePreview {
-            outcome: Some(ReleaseOutcome::new(mode, landing, 5.0, 1.3)),
-            ..Default::default()
-        };
-        // The deck past the held lip: same exit, the vault keeps working.
-        assert!(!preview(ReleaseMode::Assisted, landing(-7.6, 6.0, 0.0)).blocks_vault(lip));
-        // A side platform: the vault must not take over before release.
-        assert!(preview(ReleaseMode::Assisted, landing(-6.0, 4.0, 2.0)).blocks_vault(lip));
-        // A natural preview never blocks an ordinary vault.
-        assert!(!preview(ReleaseMode::Natural, landing(-6.0, 0.0, 0.0)).blocks_vault(lip));
-        assert!(!ReleasePreview::default().blocks_vault(lip));
     }
 }

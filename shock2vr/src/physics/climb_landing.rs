@@ -296,6 +296,7 @@ impl PhysicsWorld {
         player: &PlayerHandle,
         grip: &ClimbGrip,
         previous: Option<Landing>,
+        settles: &mut usize,
     ) -> Option<Landing> {
         // A ladder's top face is no floor; a wall is no floor.
         if grip.kind == ClimbGripKind::Ladder || !is_walkable_normal(grip.normal.y) {
@@ -355,18 +356,25 @@ impl PhysicsWorld {
             }
         }
         let standing = !player.tracking_is_crouched();
-        // One support settle at most: the nearest inset that passes the rest.
-        let landing = planes.iter().find_map(|plane| {
+        // The nearest inset the body fits and settles on, level first. A
+        // settle is costly: `settles` caps them per frame, and a found landing
+        // is reused.
+        planes.iter().find_map(|plane| {
             HELD_FLOOR_INSETS.iter().find_map(|inset| {
                 let at = held + direction * *inset;
                 let (floor, normal) = floor_at(*plane, at.x, at.z)?;
                 let landing = Self::landing_on(floor, normal, standing);
-                (connected(*plane, &landing) && self.assisted_route(player, start, landing).is_ok())
+                if *settles == 0
+                    || !connected(*plane, &landing)
+                    || self.assisted_route(player, start, landing).is_err()
+                {
+                    return None;
+                }
+                *settles -= 1;
+                self.landing_is_supported(player, landing)
                     .then_some(landing)
             })
-        })?;
-        self.landing_is_supported(player, landing)
-            .then_some(landing)
+        })
     }
 
     /// Where letting go now lands: straight down, or along the arc of
@@ -656,7 +664,7 @@ mod tests {
             ..ledge(vec3(1.1, 6.0, 0.0))
         };
         let landing = world
-            .held_floor_landing(&player, &deck, None)
+            .held_floor_landing(&player, &deck, None, &mut 2)
             .expect("the held deck");
         assert!((landing.floor_y - 6.0).abs() < 0.01, "{landing:?}");
         assert!(landing.center.x > 1.1 + 0.3, "past the hand: {landing:?}");
@@ -671,14 +679,14 @@ mod tests {
             entity_id: EntityId::from_inner(102),
             ..ledge(vec3(0.75, 6.0, 0.0))
         };
-        assert_eq!(world.held_floor_landing(&player, &sill, None), None);
+        assert_eq!(world.held_floor_landing(&player, &sill, None, &mut 2), None);
         let wall = ClimbGrip {
             kind: ClimbGripKind::Surface,
             normal: vec3(-1.0, 0.0, 0.0),
             ..ledge(vec3(1.0, 5.0, 0.0))
         };
         let (world, player) = fixture(&[]);
-        assert_eq!(world.held_floor_landing(&player, &wall, None), None);
+        assert_eq!(world.held_floor_landing(&player, &wall, None, &mut 2), None);
     }
 
     #[test]
@@ -696,7 +704,7 @@ mod tests {
             ..ledge(vec3(1.05, 6.0, 0.0))
         };
         let landing = world
-            .held_floor_landing(&player, &edge, None)
+            .held_floor_landing(&player, &edge, None, &mut 2)
             .expect("the level deck");
         assert!((landing.floor_y - 6.0).abs() < 0.01, "{landing:?}");
     }
@@ -732,7 +740,7 @@ mod tests {
             ),
             ..ledge(vec3(1.02, 6.0, 0.0))
         };
-        assert_eq!(world.held_floor_landing(&player, &edge, None), None);
+        assert_eq!(world.held_floor_landing(&player, &edge, None, &mut 2), None);
     }
 
     #[test]
@@ -763,7 +771,7 @@ mod tests {
             ..ledge(hold)
         };
         let landing = world
-            .held_floor_landing(&player, &grip, None)
+            .held_floor_landing(&player, &grip, None, &mut 2)
             .expect("up the ramp");
         assert!(landing.floor_y > hold.y + 0.1, "{landing:?}");
         assert!(world.plan_assisted_release(landing, &mut player));
@@ -781,14 +789,17 @@ mod tests {
             entity_id: EntityId::from_inner(102),
             ..ledge(vec3(0.75, 6.0, 0.0))
         };
-        assert_eq!(world.held_floor_landing(&player, &sill, None), None);
+        assert_eq!(world.held_floor_landing(&player, &sill, None, &mut 2), None);
         // A ladder's top face is not a floor the hand holds.
         let (world, player) = fixture(&[(vec3(3.0, 5.0, 0.0), vec3(4.0, 2.0, 4.0))]);
         let ladder_top = ClimbGrip {
             kind: ClimbGripKind::Ladder,
             ..ledge(vec3(0.75, 6.0, 0.0))
         };
-        assert_eq!(world.held_floor_landing(&player, &ladder_top, None), None);
+        assert_eq!(
+            world.held_floor_landing(&player, &ladder_top, None, &mut 2),
+            None
+        );
     }
 
     #[test]
@@ -808,7 +819,7 @@ mod tests {
             .surface_grip_at(vec3(1.1, 6.03, 0.0), vec3(0.0, 6.2, 0.0))
             .expect("the deck top");
         assert_eq!(grip.kind, ClimbGripKind::Surface);
-        let landing = world.held_floor_landing(&player, &grip, None);
+        let landing = world.held_floor_landing(&player, &grip, None, &mut 2);
         assert!(
             landing.is_some_and(|l| (l.floor_y - 6.0).abs() < 0.01),
             "{landing:?}"

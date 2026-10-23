@@ -2919,9 +2919,10 @@ pub enum ClimbGripKind {
     /// A walkable top surface above the player's feet: the mantle-emulation
     /// hold. Any solid, non-climbable geometry can offer one.
     Ledge,
-    /// Any static terrain face (wall, floor, underside) taken as a bounded
-    /// grace grab near a ladder hold (see [`PhysicsWorld::surface_grip_at`]).
-    /// Never a vault or hanging-crouch hold.
+    /// A bounded grace grab off a ladder: any static terrain face near the
+    /// other hold (wall, floor, underside; see [`PhysicsWorld::surface_grip_at`]),
+    /// or any floor a hand reaches, as a ledge would be. Never a vault or
+    /// hanging-crouch hold.
     Surface,
 }
 

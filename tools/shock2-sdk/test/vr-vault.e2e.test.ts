@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer, otherHand, vrClimbLadder, vrGrab, vrPull, vrTopOut, vrVault } from "../src/index.js";
+import { GameServer, otherHand, vrClimbLadder, vrGrab, vrPull, vrReleaseOnto, vrTopOut, vrVault } from "../src/index.js";
 import type { Hand, Vec3 } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { ledgeLadderHold, vrHandLocalDelta } from "./helpers/vr-climb.js";
@@ -78,7 +78,9 @@ test(
 
     // The block top is above a standing arm's reach; its lip is not. Haul
     // down until the head clears the lip, which vaults and lets go.
-    const { heights, landed } = await vrTopOut(game, "right", MANTLE_LIP);
+    // Not reached from a ladder, it is an ordinary ledge, which vaults.
+    assert.equal((await vrGrab(game, "right", MANTLE_LIP)).kind, "ledge");
+    const { heights, landed } = await vrVault(game, "right");
 
     const climb = (await game.info()).player.climb;
     assert.equal(climb.vaulting, false);
@@ -144,13 +146,13 @@ for (const [station, z, top] of [["ledge", LEDGE_Z, LEDGE_TOP], ["stacked-rung",
 for (const transferHeight of [4.9, 5.1]) {
 for (const twoDeckHands of [false, true]) {
 test(
-  `debug_ladder (VR): ${twoDeckHands ? "two deck hands" : "a deck grab"} at body height ${transferHeight} vaults off the ladder`,
+  `debug_ladder (VR): ${twoDeckHands ? "two deck hands" : "a deck grab"} at body height ${transferHeight} lands off the ladder on release`,
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await launchVr();
     const ladderHand = await climbLedgeLadderTo(game, transferHeight);
 
-    // Reach onto the deck: the grip waits for a pull.
+    // Reach onto the deck: off a ladder it is a grace hold, which never vaults.
     let deckHand = otherHand(ladderHand);
     await vrGrab(game, deckHand, DECK_LIP);
     const held = (await game.info()).player.climb;
@@ -158,8 +160,8 @@ test(
     assert.equal(held.vaulting, false, "resting the hand on the deck is not a vault");
     assert.equal(
       held.grips.find((grip) => grip.hand === deckHand)?.kind,
-      "ledge",
-      "the block's top surface is a ledge hold",
+      "surface",
+      "the block's top, taken off the ladder, is a grace hold",
     );
 
     if (twoDeckHands) {
@@ -172,7 +174,8 @@ test(
       const atSecondGrip = (await game.info()).player;
       const both = atSecondGrip.climb;
       assert.equal(both.grips.length, 2);
-      assert.ok(both.grips.every((grip) => grip.kind === "ledge"));
+      assert.ok(both.grips.every((grip) => grip.kind === "surface"));
+      assert.deepEqual(both.grips.map((grip) => grip.grace).sort(), [1, 2], "the two floor grace grabs");
       await game.input.set(`${deckHand}_hand.squeeze`, 0);
       await game.step({ frames: 30 });
       const supported = (await game.info()).player;
@@ -183,9 +186,11 @@ test(
       deckHand = ladderHand;
     }
 
-    // Pull on whichever deck hand holds on.
-    const { heights } = await vrVault(game, deckHand);
-    await assertLandedOnLedge(game, heights, "ledge vault");
+    // Pulling never vaults off a grace hold; letting go lands on the deck.
+    await vrPull(game, deckHand, [0, -1.2, 0], 40);
+    assert.equal((await game.info()).player.climb.vaulting, false, "no vault off a grace hold");
+    const { heights } = await vrReleaseOnto(game);
+    await assertLandedOnLedge(game, heights, "deck release");
   },
 );
 

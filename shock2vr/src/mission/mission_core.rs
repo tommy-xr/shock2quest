@@ -5547,36 +5547,18 @@ impl MissionCore {
             // body to the scripted top-out and let go of everything. A route
             // the planner cannot find is simply not taken - the holds stay and
             // the player keeps pulling.
-            // An assisted exit on show owns the body until release: a vault
-            // somewhere else must not take over first. A vault onto that same
-            // exit goes to the landing on show or not at all (the holds stay),
-            // so there is one destination.
-            if let Some(grip) = self
-                .hand_vault_target(input_context.head.position)
-                .filter(|grip| !self.climb_release.blocks_vault(grip.point))
-            {
-                let shown = self
-                    .climb_release
-                    .outcome
-                    .filter(|outcome| outcome.mode == crate::climb_release::ReleaseMode::Assisted);
-                let vaulted = match shown {
-                    Some(outcome) => self.commit_assisted_exit(outcome),
-                    None => self
-                        .physics
-                        .plan_hand_top_out(grip, &mut self.player_handle),
-                };
-                if vaulted {
+            if let Some(grip) = self.hand_vault_target(input_context.head.position) {
+                if self
+                    .physics
+                    .plan_hand_top_out(grip, &mut self.player_handle)
+                {
                     vault_hold = self
                         .interaction
                         .hand_climb()
                         .and_then(|climb| climb.anchor())
                         .map(|hand| (hand, grip.into()));
                     self.interaction.release_climb_grips();
-                    // A vault committed as a teleport waits held in place.
-                    hand_climb.translation = self
-                        .climb_exit_teleport
-                        .is_some()
-                        .then(|| vec3(0.0, 0.0, 0.0));
+                    hand_climb.translation = None;
                 }
             }
             // Letting go of the last hold throws the body with the momentum of
@@ -19739,6 +19721,7 @@ impl MissionCore {
     /// moment of grabbing does not disqualify the new hold.
     fn hand_vault_target(&self, head_local: Vector3<f32>) -> Option<crate::physics::ClimbGrip> {
         let anchor = self.interaction.hand_climb()?.anchor_grip()?;
+        let grip = crate::climb_release::vault_hold(anchor.grip, &self.climb_release)?;
         let center = self
             .physics
             .get_player_next_translation(&self.player_handle);
@@ -19754,11 +19737,11 @@ impl MissionCore {
         crate::vr_climb::vault_ready(
             center.y + head_local.y,
             traveled.y.max(inward),
-            anchor.grip.point.y,
-            anchor.grip.kind,
-            crate::physics::is_walkable_normal(anchor.grip.normal.y),
+            grip.point.y,
+            grip.kind,
+            crate::physics::is_walkable_normal(grip.normal.y),
         )
-        .then_some(anchor.grip)
+        .then_some(grip)
     }
 
     /// Both VR hands for the player trail: each controller's world point (the
