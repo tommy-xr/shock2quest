@@ -161,7 +161,7 @@ enum Commands {
         /// collapses basenames, or a namespace-qualified name like "iface/log.pcx"
         name: String,
     },
-    /// Merge headset grip overrides (`dark_vr_tool grips pull`) into assets/
+    /// Merge headset grip and support overrides (`dark_vr_tool grips pull`) into assets/
     MergeGrips {
         /// Pulled vr-grip-overrides.json
         overrides: std::path::PathBuf,

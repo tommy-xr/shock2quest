@@ -8,7 +8,7 @@ use super::{ContactView, world};
 use crate::ui::{HAlign, PanelPlacement, Rect, UiCanvas, VAlign, WorldPanel};
 use crate::vr_config::Handedness;
 
-pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 300.0 };
+pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 340.0 };
 /// Physical panel width; its height keeps the canvas aspect.
 const PANEL_WIDTH: f32 = 0.3;
 /// Where the panel hangs from the eye: nearer and lower than the bench, and
@@ -36,10 +36,11 @@ const STATUS: Rect = Rect::new(10.0, 32.0, 380.0, 34.0);
 const SAVE: Rect = Rect::new(10.0, 74.0, 186.0, 44.0);
 const DISCARD: Rect = Rect::new(204.0, 74.0, 186.0, 44.0);
 const POSE_HAND: Rect = Rect::new(10.0, 124.0, 186.0, 44.0);
-const CONTACTS: Rect = Rect::new(204.0, 124.0, 186.0, 44.0);
-const RESET_VIEW: Rect = Rect::new(10.0, 174.0, 186.0, 34.0);
-const EXIT: Rect = Rect::new(204.0, 174.0, 186.0, 34.0);
-const LEGEND: Rect = Rect::new(10.0, 216.0, 380.0, 80.0);
+const SUPPORT_MODE: Rect = Rect::new(204.0, 124.0, 186.0, 44.0);
+const CONTACTS: Rect = Rect::new(10.0, 174.0, 186.0, 34.0);
+const RESET_VIEW: Rect = Rect::new(204.0, 174.0, 186.0, 34.0);
+const EXIT: Rect = Rect::new(10.0, 214.0, 380.0, 32.0);
+const LEGEND: Rect = Rect::new(10.0, 254.0, 380.0, 80.0);
 
 /// What a panel button does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +48,7 @@ pub(in crate::interaction) enum PanelEvent {
     Save,
     Discard,
     SwitchHand,
+    SupportMode,
     Contacts,
     ResetView,
     Exit,
@@ -91,6 +93,7 @@ impl Status {
                 "no_joints" => "No hand tracked".to_owned(),
                 "window_short" => "Hold still...".to_owned(),
                 "degenerate_joints" => "Tracking glitch, try again".to_owned(),
+                "invalid_support_pose" => "Pose not usable, try again".to_owned(),
                 jitter => jitter.strip_prefix("jitter max_mm=").map_or_else(
                     || jitter.to_owned(),
                     |mm| format!("Hold still (moved {mm} mm)"),
@@ -121,6 +124,9 @@ pub(in crate::interaction) struct PanelView {
     pub contact_view: ContactView,
     /// Whether the other hand can be posed instead, or why not.
     pub switch: Result<(), String>,
+    /// Posing the support grip, and whether the item offers one, or why not.
+    pub support: bool,
+    pub support_mode: Result<(), String>,
     /// A snapshot awaits Save or Discard.
     pub staged: bool,
     /// The free hand is tracked with no controller in it: it taps the
@@ -145,7 +151,11 @@ fn other(hand: Handedness) -> Handedness {
 /// How the free hand works the tool. With its controller: the buttons as
 /// printed on it (X/Y on the left, A/B on the right). Tracked with no
 /// controller in it: fingertip taps and pinches.
-pub(in crate::interaction) fn legend(free: Handedness, fingertip: bool) -> Vec<String> {
+pub(in crate::interaction) fn legend(
+    free: Handedness,
+    fingertip: bool,
+    support: bool,
+) -> Vec<String> {
     if fingertip {
         return vec![
             "Tap buttons with your fingertip".to_owned(),
@@ -159,7 +169,12 @@ pub(in crate::interaction) fn legend(free: Handedness, fingertip: bool) -> Vec<S
     vec![
         format!("{} controller   Trigger: snapshot", hand_name(free)),
         format!("{lower}: save    {upper}: discard"),
-        "Stick up/down: item scale    Squeeze: turn".to_owned(),
+        // A support pose leaves the item's scale to the grip.
+        if support {
+            "Squeeze: turn".to_owned()
+        } else {
+            "Stick up/down: item scale    Squeeze: turn".to_owned()
+        },
         "Stick click: contacts".to_owned(),
     ]
 }
@@ -176,7 +191,15 @@ pub(in crate::interaction) fn emit(
     canvas.fill(Rect::new(0.0, 0.0, CANVAS.x, CANVAS.y), BACKGROUND);
     canvas.text_fit(
         TITLE,
-        &format!("Grip pose: {} hand", hand_name(view.posing)),
+        &format!(
+            "{}: {} hand",
+            if view.support {
+                "Support grip"
+            } else {
+                "Grip pose"
+            },
+            hand_name(view.posing)
+        ),
         FONT,
         16.0,
         HAlign::Left,
@@ -210,6 +233,17 @@ pub(in crate::interaction) fn emit(
             format!("Pose: {}", hand_name(other(view.posing))),
             PanelEvent::SwitchHand,
             view.switch.clone(),
+        ),
+        (
+            SUPPORT_MODE,
+            if view.support {
+                "Grip: Support"
+            } else {
+                "Grip: Primary"
+            }
+            .to_owned(),
+            PanelEvent::SupportMode,
+            view.support_mode.clone(),
         ),
         (
             CONTACTS,
@@ -252,7 +286,7 @@ pub(in crate::interaction) fn emit(
             }
         }
     }
-    let lines = legend(other(view.posing), view.fingertip);
+    let lines = legend(other(view.posing), view.fingertip, view.support);
     // Spaced for the controller legend, which is the longest.
     let line_height = LEGEND.h / 4.0;
     for (i, line) in lines.iter().enumerate() {
@@ -471,6 +505,8 @@ mod tests {
             status,
             contact_view: ContactView::Contacts,
             switch: Ok(()),
+            support: false,
+            support_mode: Err("one-handed".to_owned()),
             staged: false,
             fingertip: false,
         }
@@ -478,7 +514,7 @@ mod tests {
 
     #[test]
     fn a_tracked_free_hand_is_told_to_tap_not_shown_controller_buttons() {
-        let lines = legend(Handedness::Left, true);
+        let lines = legend(Handedness::Left, true, false);
         assert_eq!(lines[0], "Tap buttons with your fingertip");
         let all = lines.join(" ");
         assert!(
@@ -535,13 +571,13 @@ mod tests {
 
     #[test]
     fn the_legend_names_the_free_controllers_own_buttons() {
-        let left = legend(Handedness::Left, false).join(" ");
+        let left = legend(Handedness::Left, false, false).join(" ");
         assert!(
             left.contains("X: save") && left.contains("Y: discard"),
             "{left}"
         );
         assert!(left.contains("Squeeze: turn"), "{left}");
-        let right = legend(Handedness::Right, false).join(" ");
+        let right = legend(Handedness::Right, false, false).join(" ");
         assert!(
             right.contains("A: save") && right.contains("B: discard"),
             "{right}"
@@ -554,6 +590,26 @@ mod tests {
         // Posing the right hand frees the left controller.
         let (canvas, _) = emit(&view(Status::Ready), None);
         assert!(texts(&canvas).iter().any(|t| t.contains("X: save")));
+    }
+
+    #[test]
+    fn the_support_button_is_offered_only_for_two_handed_items() {
+        let (canvas, targets) = emit(&view(Status::Ready), None);
+        assert!(texts(&canvas).contains(&"one-handed".to_owned()));
+        assert_eq!(event_at(&targets, SUPPORT_MODE.center()), None);
+        let mut support = view(Status::Ready);
+        support.support = true;
+        support.posing = Handedness::Left;
+        support.support_mode = Ok(());
+        let (canvas, targets) = emit(&support, None);
+        let texts = texts(&canvas);
+        assert!(texts.contains(&"Support grip: Left hand".to_owned()));
+        assert!(texts.contains(&"Grip: Support".to_owned()));
+        assert!(!texts.iter().any(|t| t.contains("item scale")), "{texts:?}");
+        assert_eq!(
+            event_at(&targets, SUPPORT_MODE.center()),
+            Some(PanelEvent::SupportMode)
+        );
     }
 
     #[test]

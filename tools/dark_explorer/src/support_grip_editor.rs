@@ -3,16 +3,43 @@ use crate::grip_editor::{CurlPoseEditor, default_library_path, persist_json, twe
 use eframe::egui;
 use shock2vr::{
     Handedness,
-    vr_support::{SupportProfile, SupportRegion},
+    vr_grip::FingerPose,
+    vr_support::{SupportPose, SupportProfile, SupportRegion},
 };
 use std::{collections::BTreeMap, path::PathBuf};
 
-struct SupportDocument {
+pub(crate) struct SupportDocument {
     profiles: BTreeMap<String, SupportProfile>,
     saved: BTreeMap<String, SupportProfile>,
-    path: PathBuf,
+    pub(crate) path: PathBuf,
     saved_bytes: Vec<u8>,
 }
+
+/// The support resource at `path` with headset support poses (an overrides
+/// file's `support`) put over its profiles, unsaved; `None` if that changes
+/// nothing. Region, motion and radii stay authored.
+pub(crate) fn merged_support(
+    path: PathBuf,
+    support: &BTreeMap<String, SupportPose>,
+) -> Result<Option<SupportDocument>, String> {
+    if support.is_empty() {
+        return Ok(None);
+    }
+    let mut doc = SupportDocument::load(path)?;
+    for (model, pose) in support {
+        let profile = doc
+            .profiles
+            .get_mut(model)
+            .ok_or_else(|| format!("No authored support profile for {model}"))?;
+        let posed = profile.with_pose(pose);
+        if !posed.is_valid() {
+            return Err(format!("Invalid support pose for {model}"));
+        }
+        *profile = posed;
+    }
+    Ok(doc.dirty().then_some(doc))
+}
+
 impl SupportDocument {
     fn load(path: PathBuf) -> Result<Self, String> {
         let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
@@ -38,7 +65,7 @@ impl SupportDocument {
             self.profiles.remove(model);
         }
     }
-    fn save(&mut self) -> Result<(), String> {
+    pub(crate) fn save(&mut self) -> Result<(), String> {
         if !self.dirty() {
             return Ok(());
         }
@@ -145,11 +172,7 @@ impl SupportEditor {
                 region.start[i] + (region.end[i] - region.start[i]) * self.region_preview
             });
         }
-        profile.curls = shock2vr::vr_grip::blended_curls(
-            profile.curls,
-            profile.trigger_curls,
-            self.curl_editor.preview,
-        );
+        profile.fingers = profile.fingers.at(self.curl_editor.preview);
         Some(profile)
     }
 
@@ -223,8 +246,7 @@ impl SupportEditor {
                         region: None,
                         motion: None,
                         rotation_degrees: [0.0; 3],
-                        curls: [0.4; 5],
-                        trigger_curls: None,
+                        fingers: shock2vr::vr_grip::FingerPose::curls([0.4; 5]),
                         grab_radius: 0.07,
                         release_distance: 0.12,
                         max_swing_degrees: 75.0,
@@ -278,12 +300,17 @@ impl SupportEditor {
                             }
                         }
                         columns[2].strong("Support finger curls");
-                        self.curl_editor.show(
-                            &mut columns[2],
-                            &mut profile.curls,
-                            &mut profile.trigger_curls,
-                            "Support trigger preview",
-                        );
+                        match &mut profile.fingers {
+                            FingerPose::Curls { curls, trigger_curls } => self.curl_editor.show(
+                                &mut columns[2],
+                                curls,
+                                trigger_curls,
+                                "Support trigger preview",
+                            ),
+                            FingerPose::Bones { .. } => {
+                                columns[2].small("Bone pose captured in VR; curls do not apply.");
+                            }
+                        }
                     });
                     if profile.region.is_some() {
                         ui.add(egui::Slider::new(&mut self.region_preview, 0.0..=1.0).text("Position along region"));
@@ -348,11 +375,56 @@ mod tests {
         std::fs::write(&path, bytes).unwrap();
         let mut editor = SupportEditor::new(Some(path.clone()));
         editor.curl_editor.preview = 0.5;
-        assert_eq!(editor.preview_profile("atek_h").unwrap().curls, [0.5; 5]);
-        assert_eq!(editor.profile("atek_h").unwrap().curls, [0.2; 5]);
+        assert_eq!(
+            editor.preview_profile("atek_h").unwrap().fingers,
+            FingerPose::curls([0.5; 5])
+        );
+        assert_eq!(
+            editor.profile("atek_h").unwrap().fingers.rest_curls(),
+            Some(&[0.2; 5])
+        );
         assert!(!editor.dirty());
         editor.save().unwrap();
         assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn headset_support_poses_merge_over_the_authored_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("support.json");
+        std::fs::write(
+            &path,
+            include_bytes!("../../../assets/vr-support-grips.json"),
+        )
+        .unwrap();
+        let shipped = SupportDocument::load(path.clone()).unwrap().profiles;
+        let pose = SupportPose {
+            palm_anchor: [-0.5, -0.07, 0.01],
+            rotation_degrees: [5.0, -30.0, 90.0],
+            fingers: FingerPose::curls([0.3; 5]).to_bones(),
+        };
+        let mut support = BTreeMap::new();
+        support.insert("no_such_model".to_owned(), pose.clone());
+        assert!(merged_support(path.clone(), &support).is_err());
+        assert!(
+            merged_support(path.clone(), &BTreeMap::new())
+                .unwrap()
+                .is_none()
+        );
+        support = BTreeMap::from([("fsn_h".to_owned(), pose.clone())]);
+        merged_support(path.clone(), &support)
+            .unwrap()
+            .expect("changed")
+            .save()
+            .unwrap();
+        let merged = SupportDocument::load(path).unwrap().profiles;
+        let fusion = &merged["fsn_h"];
+        assert_eq!(fusion.with_pose(&pose), *fusion);
+        assert_eq!(
+            fusion.region, shipped["fsn_h"].region,
+            "region stays authored"
+        );
+        assert_eq!(merged["sg_h"], shipped["sg_h"]);
     }
 
     #[test]
@@ -378,14 +450,22 @@ mod tests {
             start: [0.0, 0.2, 0.0],
             end: [0.0, 0.4, 0.0],
         });
-        doc.profiles.get_mut("wrench_h").unwrap().trigger_curls = Some([0.7; 5]);
+        doc.profiles.get_mut("wrench_h").unwrap().fingers = FingerPose::Curls {
+            curls: [0.08, 0.375, 0.4, 0.45, 0.6],
+            trigger_curls: Some([0.7; 5]),
+        };
         doc.save().unwrap();
         assert_eq!(
             SupportDocument::load(path.clone()).unwrap().profiles,
             doc.profiles
         );
         let saved = std::fs::read(&path).unwrap();
-        doc.profiles.get_mut("wrench_h").unwrap().curls[0] = 0.7;
+        doc.profiles
+            .get_mut("wrench_h")
+            .unwrap()
+            .fingers
+            .rest_curls_mut()
+            .unwrap()[0] = 0.7;
         std::fs::write(&path, b"external edit").unwrap();
         assert!(doc.save().is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"external edit");
@@ -395,7 +475,12 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"external edit");
         assert_ne!(std::fs::read(&copy).unwrap(), saved);
         let before = std::fs::read(&copy).unwrap();
-        doc.profiles.get_mut("wrench_h").unwrap().curls[1] = 2.0;
+        doc.profiles
+            .get_mut("wrench_h")
+            .unwrap()
+            .fingers
+            .rest_curls_mut()
+            .unwrap()[1] = 2.0;
         assert!(doc.save().is_err());
         assert_eq!(std::fs::read(&copy).unwrap(), before);
     }
