@@ -4,7 +4,9 @@
 //! controller trigger (or its tracked pinch) stages that pose live, its lower
 //! button test-holds it (the posing hand's controller holds the item as play
 //! would) and its upper button discards it, and its squeeze turns the bench
-//! to examine it. A gun's capture keeps the previous grip's aim.
+//! to examine it, or in test hold carries the item to nudge the grip (the
+//! item is held where it is let go). A gun's capture keeps the previous
+//! grip's aim.
 //! A panel beside the bench (`panel`) shows the state, saves, and repeats
 //! the controls. Its slot button picks which pose a snapshot sets: the rest
 //! grip, or the fingers with the trigger pulled (`Slot`).
@@ -257,12 +259,44 @@ pub(super) struct GripPoseTool {
 
 /// Test hold's controller: its last tracked world pose (`None` until first
 /// tracked; the item stays on the bench till then), whether it is tracked
-/// this frame, and its trigger, which poses the fingers as in play.
+/// this frame, and its trigger, which poses the fingers as in play. While
+/// the free controller's squeeze carries the item, `nudge`.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct TestHold {
     pub controller: Option<GripPose>,
     pub tracked: bool,
     pub trigger: f32,
+    pub nudge: Option<Nudge>,
+}
+
+/// The free controller carrying a test-held item: the item keeps `grab`
+/// (its pose in that controller's frame) as `controller` moves, while the
+/// glove stays on the holding controller.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Nudge {
+    grab: GripPose,
+    controller: GripPose,
+}
+
+impl Nudge {
+    fn new(controller: GripPose, item: GripPose) -> Self {
+        let to_controller = controller.rotation.invert();
+        Self {
+            grab: GripPose {
+                position: to_controller.rotate_vector(item.position - controller.position),
+                rotation: to_controller * item.rotation,
+            },
+            controller,
+        }
+    }
+
+    /// The item's world pose (contact offset included, as `item_pose`).
+    pub fn item(&self) -> GripPose {
+        GripPose {
+            position: self.controller.point(self.grab.position),
+            rotation: (self.controller.rotation * self.grab.rotation).normalize(),
+        }
+    }
 }
 
 impl TestHold {
@@ -532,6 +566,9 @@ impl GripPoseTool {
         self.pinch_lost = true;
         self.squeezed = true;
         self.turning = None;
+        if let Some(hold) = self.test_hold.as_mut() {
+            hold.nudge = None;
+        }
         self.stick_armed = false;
         self.poke = Default::default();
         // Frames from before the pause are not part of a steady window now.
@@ -710,6 +747,39 @@ impl GripPoseTool {
             }
         }
         self.squeezed = squeeze;
+    }
+
+    /// Test hold's nudge: from the leading edge of the free controller's
+    /// squeeze (`controller`, its world pose, `None` while it aims no ray)
+    /// the item, at `item` as held now, keeps its pose relative to that
+    /// controller. Returns where the item is as the squeeze lets go, for the
+    /// grip to hold it there. Losing either controller drops the nudge
+    /// unstaged, and the squeeze is disarmed until let go in hand.
+    pub fn nudge_with(
+        &mut self,
+        controller: Option<GripPose>,
+        item: GripPose,
+        squeeze: bool,
+    ) -> Option<GripPose> {
+        let hold = self.test_hold.as_mut()?;
+        let Some(now) = controller.filter(|_| hold.tracked) else {
+            hold.nudge = None;
+            self.squeezed = true;
+            return None;
+        };
+        if let Some(nudge) = hold.nudge.as_mut() {
+            nudge.controller = now;
+        }
+        let released = if squeeze {
+            if hold.nudge.is_none() && !self.squeezed {
+                hold.nudge = Some(Nudge::new(now, item));
+            }
+            None
+        } else {
+            hold.nudge.take().map(|nudge| nudge.item())
+        };
+        self.squeezed = squeeze;
+        released
     }
 
     /// The free controller's thumbstick y for scaling: zero out of hand, and
@@ -1283,6 +1353,27 @@ pub(super) fn hand_for_item(
     }
 }
 
+/// `grip` placing the item at `item` for a glove at `hand` (`item_pose`
+/// solved for the offset and rotation); its scale, glove turn and fingers
+/// are kept.
+pub(super) fn grip_for_item(
+    hand: GripPose,
+    item: GripPose,
+    grip: ResolvedGrip,
+    contact: Vector3<f32>,
+) -> ResolvedGrip {
+    let to_hand = hand.rotation.invert();
+    // The item in the frame that draws the glove.
+    let origin = to_hand.rotate_vector(item.position - hand.position);
+    let rotation = (to_hand * item.rotation).normalize();
+    ResolvedGrip {
+        // The item origin, less the per-item contact placement adds.
+        offset: origin - rotation.rotate_vector(contact * grip.item_scale),
+        rotation,
+        ..grip
+    }
+}
+
 /// The grip that holds the item (`item`, drawn at `item_scale` about
 /// `contact`) where the glove fitted over a tracked hand (`fit`) holds it,
 /// and the hand pose that draws that glove. The grip is in authored units
@@ -1296,16 +1387,15 @@ pub(super) fn captured_grip(
     item_scale: f32,
     personal: f32,
 ) -> (ResolvedGrip, GripPose) {
-    let to_hand = fit.rotation.invert();
-    // The item in the frame that draws the glove.
-    let origin = to_hand.rotate_vector(item.position - fit.position);
-    let rotation = (to_hand * item.rotation).normalize();
+    let hand = GripPose {
+        position: fit.position,
+        rotation: fit.rotation,
+    };
     let grip = ResolvedGrip {
         item_scale,
         pose_family: "captured".into(),
-        // The item origin, less the per-item contact placement adds.
-        offset: origin - rotation.rotate_vector(contact * item_scale),
-        rotation,
+        offset: Vector3::new(0.0, 0.0, 0.0),
+        rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
         hand_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
         fingers: crate::vr_grip::FingerPose::Bones {
             bones: fit.bones,
@@ -1316,11 +1406,8 @@ pub(super) fn captured_grip(
         score: 0.0,
     };
     (
-        grip.rescaled(1.0 / personal),
-        GripPose {
-            position: fit.position,
-            rotation: fit.rotation,
-        },
+        grip_for_item(hand, item, grip, contact).rescaled(1.0 / personal),
+        hand,
     )
 }
 
@@ -1997,6 +2084,109 @@ mod tests {
         assert!((moved.truncate() - pivot).magnitude() < 1e-5);
         tool.reset_view();
         assert!(turned_by(tool.turn, identity));
+    }
+
+    fn close(a: GripPose, b: GripPose) -> bool {
+        (a.position - b.position).magnitude() < 1e-5 && same_rotation(a.rotation, b.rotation)
+    }
+
+    /// In test hold a fresh squeeze carries the item rigidly with the free
+    /// controller and, let go, reports where it was left; a squeeze held as
+    /// test hold starts waits to be let go.
+    #[test]
+    fn a_fresh_squeeze_in_test_hold_carries_the_item_with_the_controller() {
+        let mut tool = posing_tool();
+        tool.staged = Some(staged());
+        assert!(tool.toggle_test_hold());
+        let holder = GripPose {
+            position: vec3(0.2, 1.0, -0.3),
+            rotation: Quaternion::from_angle_x(Deg(-20.0)),
+        };
+        tool.test_hold.as_mut().unwrap().follow(Some(holder), 0.0);
+        let item = GripPose {
+            position: vec3(0.25, 1.05, -0.45),
+            rotation: Quaternion::from_angle_y(Deg(-90.0)),
+        };
+        let free = GripPose {
+            position: vec3(-0.2, 1.0, -0.3),
+            rotation: Quaternion::from_angle_z(Deg(15.0)),
+        };
+        // Held through test hold's start: nothing.
+        assert!(tool.nudge_with(Some(free), item, true).is_none());
+        assert!(tool.test_hold.unwrap().nudge.is_none());
+        assert!(tool.nudge_with(Some(free), item, false).is_none());
+        // A fresh squeeze grabs it where it is.
+        assert!(tool.nudge_with(Some(free), item, true).is_none());
+        let nudge = tool.test_hold.unwrap().nudge.expect("grabbed");
+        assert!(close(nudge.item(), item));
+        // Moved and turned about its own position: the item goes with it.
+        let turn = Quaternion::from_angle_y(Deg(25.0)) * Quaternion::from_angle_x(Deg(10.0));
+        let shift = vec3(0.03, -0.02, 0.05);
+        let moved = GripPose {
+            position: free.position + shift,
+            rotation: turn * free.rotation,
+        };
+        assert!(tool.nudge_with(Some(moved), item, true).is_none());
+        let expected = GripPose {
+            position: free.position + shift + turn.rotate_vector(item.position - free.position),
+            rotation: turn * item.rotation,
+        };
+        assert!(close(
+            tool.test_hold.unwrap().nudge.unwrap().item(),
+            expected
+        ));
+        // Let go: where it was left, and the nudge ends.
+        let released = tool.nudge_with(Some(moved), item, false).expect("released");
+        assert!(close(released, expected));
+        assert!(tool.test_hold.unwrap().nudge.is_none());
+    }
+
+    /// Losing either controller mid-nudge drops it with nothing to stage,
+    /// and the squeeze must be let go in hand before it grabs again.
+    #[test]
+    fn losing_a_controller_mid_nudge_drops_it_unstaged() {
+        let item = GripPose {
+            position: vec3(0.0, 1.0, -0.4),
+            rotation: Quaternion::from_angle_y(Deg(0.0)),
+        };
+        let free = GripPose {
+            position: vec3(-0.2, 1.0, -0.3),
+            rotation: Quaternion::from_angle_z(Deg(15.0)),
+        };
+        for lose_holder in [false, true] {
+            let mut tool = posing_tool();
+            tool.staged = Some(staged());
+            assert!(tool.toggle_test_hold());
+            let hold = |tool: &mut GripPoseTool, tracked: bool| {
+                let pose = GripPose {
+                    position: vec3(0.2, 1.0, -0.3),
+                    rotation: Quaternion::from_angle_x(Deg(-20.0)),
+                };
+                tool.test_hold
+                    .as_mut()
+                    .unwrap()
+                    .follow(tracked.then_some(pose), 0.0);
+            };
+            hold(&mut tool, true);
+            tool.nudge_with(Some(free), item, false);
+            tool.nudge_with(Some(free), item, true);
+            assert!(tool.test_hold.unwrap().nudge.is_some());
+            let lost = if lose_holder {
+                hold(&mut tool, false);
+                tool.nudge_with(Some(free), item, true)
+            } else {
+                tool.nudge_with(None, item, true)
+            };
+            assert!(lost.is_none(), "nothing to stage");
+            assert!(tool.test_hold.unwrap().nudge.is_none());
+            // Back in hand still squeezed, then let go: no release, no grab.
+            hold(&mut tool, true);
+            assert!(tool.nudge_with(Some(free), item, true).is_none());
+            assert!(tool.test_hold.unwrap().nudge.is_none());
+            assert!(tool.nudge_with(Some(free), item, false).is_none());
+            tool.nudge_with(Some(free), item, true);
+            assert!(tool.test_hold.unwrap().nudge.is_some(), "a fresh squeeze");
+        }
     }
 
     #[test]
