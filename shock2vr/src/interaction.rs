@@ -130,6 +130,10 @@ pub trait PlayerInteraction {
     /// (see [`crate::vr_climb::HandClimb::release_all`]).
     fn release_climb_grips(&mut self) {}
 
+    /// A climb exit owns the body: take no hold, but keep tracking squeezes
+    /// (see [`crate::vr_climb::HandClimb::track_squeezes_only`]).
+    fn suspend_hand_climb(&mut self, _input: &InputContext) {}
+
     /// Whether letting go of every hold now lands safely, for the held gloves
     /// (see [`crate::climb_release`]).
     fn set_climb_release_safe(&mut self, _safe: bool) {}
@@ -1784,6 +1788,13 @@ impl PlayerInteraction for VrInteraction {
     fn release_climb_grips(&mut self) {
         self.hand_climb.release_all();
         self.climb_members = [None; 2];
+    }
+
+    fn suspend_hand_climb(&mut self, input: &InputContext) {
+        self.hand_climb.track_squeezes_only([
+            input.left_hand.squeeze_value,
+            input.right_hand.squeeze_value,
+        ]);
     }
 
     fn set_climb_release_safe(&mut self, safe: bool) {

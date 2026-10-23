@@ -368,6 +368,16 @@ impl HandClimb {
         }
     }
 
+    /// While something else owns the body (a climb exit's fade), take no hold
+    /// but keep tracking the squeezes, so one held through it is no fresh
+    /// press afterwards.
+    pub fn track_squeezes_only(&mut self, squeezes: [f32; 2]) {
+        for (index, squeeze) in squeezes.into_iter().enumerate() {
+            self.was_squeezing[index] = squeeze > crate::ui::VR_TRIGGER_THRESHOLD;
+            self.armed[index] = false;
+        }
+    }
+
     /// The throw opening the anchor hand now would give, from its pull so far.
     pub fn predicted_release_velocity(&self, step_dt: f32) -> Option<Vector3<f32>> {
         release_velocity(&self.recent_anchor_travel, step_dt)
@@ -1381,6 +1391,32 @@ mod tests {
         assert_eq!(handoff.launch, None);
         assert!(!handoff.released, "a handoff is not a release");
         assert_eq!(climb.anchor(), Some(Handedness::Right));
+    }
+
+    #[test]
+    fn a_squeeze_held_through_a_suspension_is_no_fresh_press() {
+        let mut climb = HandClimb::default();
+        let rung = vec3(0.0, 1.0, -1.0);
+        let step = |climb: &mut HandClimb, squeeze: f32| {
+            climb.update(
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                DT,
+                [no_hand(), hand(rung, squeeze)],
+                |p, _| Some(ladder_grip(p)),
+                |_| true,
+            )
+        };
+        step(&mut climb, 1.0);
+        step(&mut climb, 0.0);
+        assert_eq!(climb.grips().count(), 0);
+        // Squeezed while an exit owns the body, and still squeezed after.
+        climb.track_squeezes_only([0.0, 1.0]);
+        step(&mut climb, 1.0);
+        assert_eq!(climb.grips().count(), 0, "a held squeeze is no fresh press");
+        step(&mut climb, 0.0);
+        step(&mut climb, 1.0);
+        assert_eq!(climb.grips().count(), 1, "a fresh press grabs");
     }
 
     #[test]

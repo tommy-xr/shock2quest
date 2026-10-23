@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer, otherHand, quatMultiply, quatRotate, viewRight, vrClimbLadder, vrGrab, vrVault } from "../src/index.js";
+import { GameServer, otherHand, quatMultiply, quatRotate, viewRight, vrClimbLadder, vrGrab, vrPull } from "../src/index.js";
 import type { ClimbRelease, Hand, Vec3 } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
@@ -246,7 +246,119 @@ test(
     await game.step({ frames: 3 });
     const shown = await release(game);
     assert.equal(shown.mode, "assisted", JSON.stringify(shown));
-    const { landed } = await vrVault(game, free);
+    // Pull until the vault commits (a teleport by default), then let it land.
+    await vrPull(game, free, [0, -1.2, 0], 40, (p) => p.climb.release.gliding_to !== null);
+    assert.deepEqual((await release(game)).gliding_to, shown.landing, "the vault commits the shown landing");
+    await game.input.set(`${free}_hand.squeeze`, 0);
+    await game.step({ frames: 60 });
+    assertArrived((await game.info()).player.position, shown.landing!);
+  },
+);
+
+test(
+  "debug_ladder (VR): an assisted exit fades to black, teleports onto the footprint, and fades back in with no re-grab",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+    const { anchor } = await climbAt(game, SIDE_Z, 5.3);
+    const shown = await (await aimer(game))([-6.3, PLATFORM_Y, SIDE_Z + 2.0]);
+    assert.equal(shown.mode, "assisted", JSON.stringify(shown));
+    const landing = shown.landing!;
+    const hang = (await game.info()).player.position;
+
+    await game.input.set(`${anchor}_hand.squeeze`, 0);
+    await game.step({ frames: 1 });
+    let { player } = await game.info();
+    assert.deepEqual(player.climb.release.gliding_to, landing);
+    assert.ok(player.climb.release.exit_fade > 0, "fading out");
+    assert.ok(horizontal(player.position, hang) < 0.01, "held in place until black");
+    assert.equal(player.climb.vaulting, false, "no glide");
+
+    // Close the hand still on the rung: no hold while the fade runs.
+    await game.input.set(`${anchor}_hand.squeeze`, 1);
+    let moved = -1;
+    for (let frame = 0; frame < 40; frame += 1) {
+      await game.step({ frames: 1 });
+      ({ player } = await game.info());
+      assert.equal(player.climb.grips.length, 0, `no re-grab during the fade (frame ${frame})`);
+      if (moved < 0 && horizontal(player.position, hang) > 0.1) {
+        moved = frame;
+        assert.ok(horizontal(player.position, landing) < 0.01, `teleported onto the footprint: ${player.position}`);
+        assert.ok(Math.abs(player.position[1] - landing[1]) < 0.05, `${player.position}`);
+        assert.ok(player.climb.release.exit_fade > 0.9, "moved at black");
+      }
+      if (moved >= 0 && player.climb.release.exit_fade === 0) break;
+    }
+    assert.ok(moved >= 0 && moved < 8, `moved in one step after ~0.1 s (frame ${moved})`);
+    assert.equal(player.climb.release.exit_fade, 0, "faded back in");
+    assertArrived(player.position, landing);
+  },
+);
+
+test(
+  "debug_ladder (VR): a stick and a squeeze held through the exit fade neither walk nor grab",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+    const { anchor } = await climbAt(game, SIDE_Z, 5.3);
+    const shown = await (await aimer(game))([-6.3, PLATFORM_Y, SIDE_Z + 2.0]);
+    assert.equal(shown.mode, "assisted", JSON.stringify(shown));
+    // Walking forward the whole time; the hand closes again right after release.
+    await game.input.set("left_hand.thumbstick", [0, 1]);
+    await game.input.set(`${anchor}_hand.squeeze`, 0);
+    await game.step({ frames: 1 });
+    await game.input.set(`${anchor}_hand.squeeze`, 1);
+    let { player } = await game.info();
+    for (let frame = 0; frame < 30 && (frame < 3 || player.climb.release.exit_fade > 0); frame += 1) {
+      await game.step({ frames: 1 });
+      ({ player } = await game.info());
+      assert.equal(player.climb.grips.length, 0, `no hold during the fade (frame ${frame})`);
+    }
+    assert.equal(player.climb.release.exit_fade, 0, "faded in");
+    assert.ok(horizontal(player.position, shown.landing!) < 0.01, `still on the footprint: ${player.position}`);
+    await game.input.set("left_hand.thumbstick", [0, 0]);
+    // The squeeze held through the fade is no fresh press.
+    await game.step({ frames: 10 });
+    assert.equal((await game.info()).player.climb.grips.length, 0, "no grab after the fade");
+  },
+);
+
+test(
+  "debug_ladder (VR): a teleport elsewhere during the exit fade cancels the exit",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+    const { anchor } = await climbAt(game, SIDE_Z, 5.3);
+    const shown = await (await aimer(game))([-6.3, PLATFORM_Y, SIDE_Z + 2.0]);
+    assert.equal(shown.mode, "assisted", JSON.stringify(shown));
+    await game.input.set(`${anchor}_hand.squeeze`, 0);
+    await game.step({ frames: 2 });
+    assert.ok((await release(game)).exit_fade > 0, "fading out");
+    // Below the ladder: from here the old landing would still be reachable.
+    await teleportVerified(game, { x: -6.48, y: 1.5, z: SIDE_Z });
+    await game.step({ frames: 30 });
+    const { player } = await game.info();
+    assert.ok(horizontal(player.position, [-6.48, 0, SIDE_Z]) < 0.1, `stayed where sent: ${player.position}`);
+    assert.ok(player.position[1] < 2, `on the floor: ${player.position}`);
+    assert.equal(player.climb.release.exit_fade, 0);
+  },
+);
+
+test(
+  "debug_ladder (VR): climb_exit_motion=glide keeps the collision-checked glide",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+    await game.devParams.set("climb_exit_motion", 1);
+    const { anchor } = await climbAt(game, SIDE_Z, 5.3);
+    const shown = await (await aimer(game))([-6.3, PLATFORM_Y, SIDE_Z + 2.0]);
+    assert.equal(shown.mode, "assisted", JSON.stringify(shown));
+    await game.input.set(`${anchor}_hand.squeeze`, 0);
+    await game.step({ frames: 1 });
+    const { player } = await game.info();
+    assert.equal(player.climb.vaulting, true, "gliding");
+    assert.equal(player.climb.release.exit_fade, 0, "no fade");
+    const { landed } = await letGoAndSettle(game, anchor);
     assertArrived(landed, shown.landing!);
   },
 );

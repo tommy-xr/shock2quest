@@ -323,6 +323,60 @@ pub fn resolve(
     }
 }
 
+/// Seconds an exit teleport takes to fade to black, and back in after moving.
+pub const EXIT_FADE_OUT: f32 = 0.1;
+pub const EXIT_FADE_IN: f32 = 0.15;
+
+/// A committed assisted release taken as a teleport: fade to black, move the
+/// body once at black, fade back in. The hands take no hold until it ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExitTeleport {
+    pub outcome: ReleaseOutcome,
+    elapsed: f32,
+    moved: bool,
+}
+
+impl ExitTeleport {
+    pub fn new(outcome: ReleaseOutcome) -> Self {
+        Self {
+            outcome,
+            elapsed: 0.0,
+            moved: false,
+        }
+    }
+
+    /// Advance by `dt`; `true` exactly once, when the view is black and the
+    /// body should move. That frame renders fully black whatever `dt` was;
+    /// the fade-in starts on the next.
+    pub fn advance(&mut self, dt: f32) -> bool {
+        self.elapsed += dt;
+        let move_now = !self.moved && self.elapsed >= EXIT_FADE_OUT - 1e-4;
+        if move_now {
+            self.moved = true;
+            self.elapsed = EXIT_FADE_OUT;
+        }
+        move_now
+    }
+
+    /// Whether the body has been moved (the view is fading back in).
+    pub fn moved(&self) -> bool {
+        self.moved
+    }
+
+    /// Black cover opacity, 0..=1.
+    pub fn alpha(&self) -> f32 {
+        if !self.moved {
+            (self.elapsed / EXIT_FADE_OUT).clamp(0.0, 1.0)
+        } else {
+            (1.0 - (self.elapsed - EXIT_FADE_OUT) / EXIT_FADE_IN).clamp(0.0, 1.0)
+        }
+    }
+
+    pub fn done(&self) -> bool {
+        self.moved && self.alpha() <= 0.0
+    }
+}
+
 /// How long a fresh hold flashes cyan before showing the release's colour.
 pub const HOLD_PULSE_SECONDS: f32 = 0.25;
 
@@ -417,6 +471,38 @@ mod tests {
         assert_eq!(held_glove_light(0.0, true), HandLight::ClimbHeld);
         assert_eq!(held_glove_light(0.3, true), HandLight::Green);
         assert_eq!(held_glove_light(0.3, false), HandLight::Red);
+    }
+
+    #[test]
+    fn an_exit_teleport_fades_out_moves_once_at_black_then_fades_in() {
+        let outcome = ReleaseOutcome::new(ReleaseMode::Assisted, landing(0.0, 4.0, 0.0), 5.0, 1.3);
+        let mut exit = ExitTeleport::new(outcome);
+        assert_eq!(exit.alpha(), 0.0);
+        let dt = 1.0 / 60.0;
+        let mut moves = 0;
+        let mut frames = 0;
+        let mut peak = 0.0f32;
+        while !exit.done() {
+            if exit.advance(dt) {
+                moves += 1;
+                assert!(exit.alpha() > 0.99, "moves at black, not {}", exit.alpha());
+            }
+            peak = peak.max(exit.alpha());
+            frames += 1;
+            assert!(frames < 60, "ends within a second");
+        }
+        assert_eq!(moves, 1);
+        assert!(peak > 0.99);
+        // About 0.1 s out and 0.15 s in.
+        assert!((14..=17).contains(&frames), "{frames}");
+        assert_eq!(exit.alpha(), 0.0);
+
+        // A long or uneven frame still moves under full black.
+        for dt in [0.3, 1.0 / 72.0] {
+            let mut exit = ExitTeleport::new(outcome);
+            while !exit.advance(dt) {}
+            assert_eq!(exit.alpha(), 1.0, "black on the move frame at dt {dt}");
+        }
     }
 
     #[test]

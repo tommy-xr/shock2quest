@@ -468,18 +468,61 @@ impl PhysicsWorld {
     /// body's current pose and start it. `false` leaves the body untouched;
     /// the release is then an ordinary one.
     pub fn plan_assisted_release(&mut self, landing: Landing, player: &mut PlayerHandle) -> bool {
-        if player.top_out.is_some() {
-            return false;
-        }
-        let start = vec_to_nvec(self.get_player_next_translation(player));
-        let Ok(route) = self.assisted_route(player, start, landing) else {
+        let Some(route) = self.assisted_release_route(landing, player) else {
             return false;
         };
-        if !self.landing_is_supported(player, landing) {
-            return false;
-        }
         self.start_hand_route(route, player);
         true
+    }
+
+    /// The glide a release would commit to `landing` from the body's current
+    /// pose, revalidated in full (route and support); `None` when invalid or
+    /// a scripted move already owns the body.
+    fn assisted_release_route(
+        &self,
+        landing: Landing,
+        player: &PlayerHandle,
+    ) -> Option<ClimbTopOut> {
+        if player.top_out.is_some() {
+            return None;
+        }
+        let start = vec_to_nvec(self.get_player_next_translation(player));
+        let route = self.assisted_route(player, start, landing).ok()?;
+        self.landing_is_supported(player, landing).then_some(route)
+    }
+
+    /// Whether a release could commit to `landing` now (see
+    /// [`Self::assisted_release_route`]).
+    pub(crate) fn assisted_release_is_valid(
+        &self,
+        landing: Landing,
+        player: &PlayerHandle,
+    ) -> bool {
+        self.assisted_release_route(landing, player).is_some()
+    }
+
+    /// Commit an assisted release as a teleport: revalidate the glide to
+    /// `landing` exactly as [`Self::plan_assisted_release`] does, then put the
+    /// body in one step where that glide ends, in the stance it would land in.
+    /// That is above a landing lower than the start, so the rest is an
+    /// ordinary fall that keeps its risk - unless the drop is `safe` anyway,
+    /// when the body goes straight onto the landing. Returns where the body
+    /// went; `None` leaves it untouched.
+    pub fn teleport_assisted_release(
+        &mut self,
+        landing: Landing,
+        safe: bool,
+        player: &mut PlayerHandle,
+    ) -> Option<Vector3<f32>> {
+        let route = self.assisted_release_route(landing, player)?;
+        let end = if safe {
+            landing.center
+        } else {
+            nvec_to_cgmath(route.waypoints[3])
+        };
+        player.is_crouched = !route.stand_on_completion;
+        self.set_player_translation(end, player);
+        Some(end)
     }
 }
 
@@ -830,6 +873,71 @@ mod tests {
                 "{at:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_teleport_puts_the_body_on_the_landing_in_one_step_or_above_a_long_drop() {
+        // (aim, floor, safe drop): level, a long drop, and a lower one taken as safe.
+        for (aimed, floor, safe) in [
+            (vec3(2.0, 4.0, 0.0), 4.0, true),
+            (vec3(-1.5, 0.0, 0.0), 0.0, false),
+            (vec3(-1.5, 0.0, 0.0), 0.0, true),
+        ] {
+            let (mut world, mut player) = fixture(&[]);
+            let landing = aim(&world, &player, aimed, None).landing.expect("valid");
+            let at = world
+                .teleport_assisted_release(landing, safe, &mut player)
+                .expect("teleported");
+            assert_eq!(world.get_player_translation(&player), at);
+            assert!(!player.is_topping_out());
+            assert!(
+                (vec3(at.x, 0.0, at.z) - vec3(landing.center.x, 0.0, landing.center.z)).magnitude()
+                    < 1e-4
+            );
+            if safe {
+                assert!((at.y - landing.center.y).abs() < 1e-4, "on it: {at:?}");
+            } else {
+                assert!(at.y > landing.center.y + 1.0, "above it, to fall: {at:?}");
+            }
+            for _ in 0..120 {
+                world.update(vec3(0.0, 0.0, 0.0), &mut player);
+            }
+            let rest = world.get_player_translation(&player);
+            assert!(
+                (rest.y - (floor + player_center_above_floor(false))).abs() < 0.1,
+                "{rest:?}"
+            );
+            assert!(
+                (vec3(rest.x, 0.0, rest.z) - vec3(landing.center.x, 0.0, landing.center.z))
+                    .magnitude()
+                    < 0.05
+            );
+        }
+    }
+
+    #[test]
+    fn a_teleport_to_a_newly_obstructed_landing_is_refused() {
+        let (mut world, mut player) = fixture(&[]);
+        let landing = aim(&world, &player, vec3(2.0, 4.0, 0.0), None)
+            .landing
+            .unwrap();
+        world.add_kinematic(
+            EntityId::from_inner(999).unwrap(),
+            vec3(landing.center.x, 5.0, 0.0),
+            identity(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.4, 1.0, 0.4),
+            CollisionGroup::entity(),
+            false,
+        );
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let hang = vec3(0.0, 4.0 + FEET_ABOVE_CENTER, 0.0);
+        world.set_player_translation(hang, &mut player);
+        assert_eq!(
+            world.teleport_assisted_release(landing, true, &mut player),
+            None
+        );
+        assert_eq!(world.get_player_translation(&player), hang);
     }
 
     #[test]

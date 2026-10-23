@@ -920,8 +920,10 @@ export interface ClimbRelease {
     | null;
   /** The aimed surface point behind the gaze verdict. */
   gaze_candidate: Vec3 | null;
-  /** The landing a committed assisted release is gliding to. */
+  /** The landing a committed assisted release is moving to (glide or teleport). */
   gliding_to: Vec3 | null;
+  /** Opacity of a teleporting exit's black fade, 0..1 (0 when none runs). */
+  exit_fade: number;
 }
 
 /** One audio log the player has collected, keyed by its per-deck identity. */

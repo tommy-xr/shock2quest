@@ -462,8 +462,10 @@ pub struct DebugClimbRelease {
     pub rejection: Option<&'static str>,
     /// The aimed surface point behind the gaze verdict.
     pub gaze_candidate: Option<[f32; 3]>,
-    /// The landing a committed assisted release is gliding to.
+    /// The landing a committed assisted release is moving to.
     pub gliding_to: Option<[f32; 3]>,
+    /// Opacity of a teleporting exit's black fade (0 when none runs).
+    pub exit_fade: f32,
 }
 
 /// Raycast mask for collision group filtering

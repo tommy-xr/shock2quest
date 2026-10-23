@@ -3393,8 +3393,10 @@ pub struct MissionCore {
     /// Where letting go of every climbing hold would land: resolved after each
     /// movement frame, shown and committed until the next (see `climb_release`).
     climb_release: crate::climb_release::ReleasePreview,
-    /// The assisted landing a committed release is gliding to.
+    /// The assisted landing a committed release is moving to.
     climb_release_glide: Option<crate::climb_release::ReleaseOutcome>,
+    /// A committed assisted exit taken as a fade-and-teleport, while it runs.
+    climb_exit_teleport: Option<crate::climb_release::ExitTeleport>,
     /// The view's yaw (radians about +Y; 0 faces -Z), for the footprint.
     climb_release_yaw: f32,
     landing_marker: crate::climb_marker::LandingMarker,
@@ -4445,6 +4447,7 @@ impl MissionCore {
             button_jump_held: false,
             climb_release: Default::default(),
             climb_release_glide: None,
+            climb_exit_teleport: None,
             climb_release_yaw: 0.0,
             landing_marker: Default::default(),
             use_mode_shortcut: None,
@@ -4546,6 +4549,8 @@ impl MissionCore {
         if !self.player_is_alive() {
             return Vec::new();
         }
+        // A dead body is not carried onto a climb exit's landing.
+        self.climb_exit_teleport = None;
 
         if let Ok(mut status) = self
             .world
@@ -5366,33 +5371,38 @@ impl MissionCore {
             self.personal_card.hand == Some(0),
             self.personal_card.hand == Some(1),
         ]);
-        let hand_climb = (!tick.elapsed.is_zero() && !self.player_handle.is_topping_out())
-            .then(|| {
-                let pawn_pos = self
-                    .physics
-                    .get_player_next_translation(&self.player_handle);
-                self.interaction
-                    .update_hand_climb(&crate::interaction::ClimbContext {
-                        physics: &self.physics,
-                        world: &self.world,
-                        input: input_context,
-                        pawn_pos,
-                        pawn_rotation: new_rotation,
-                        // Measured from the STANDING capsule while balling up
-                        // on a hold: that swap raises the collider's feet
-                        // without the body moving, and a ledge must not stop
-                        // being a ledge just because the player tucked their
-                        // knees under it.
-                        feet_y: pawn_pos.y
-                            - crate::physics::player_center_above_floor(
-                                self.player_handle.is_crouched()
-                                    && !self.player_handle.is_hanging_crouched(),
-                            ),
-                        step_dt: self.physics.player_step_dt(),
-                        grounded: self.player_handle.is_grounded(),
-                    })
-            })
-            .unwrap_or_default();
+        if !tick.elapsed.is_zero() && self.climb_exit_teleport.is_some() {
+            self.interaction.suspend_hand_climb(input_context);
+        }
+        let hand_climb = (!tick.elapsed.is_zero()
+            && !self.player_handle.is_topping_out()
+            && self.climb_exit_teleport.is_none())
+        .then(|| {
+            let pawn_pos = self
+                .physics
+                .get_player_next_translation(&self.player_handle);
+            self.interaction
+                .update_hand_climb(&crate::interaction::ClimbContext {
+                    physics: &self.physics,
+                    world: &self.world,
+                    input: input_context,
+                    pawn_pos,
+                    pawn_rotation: new_rotation,
+                    // Measured from the STANDING capsule while balling up
+                    // on a hold: that swap raises the collider's feet
+                    // without the body moving, and a ledge must not stop
+                    // being a ledge just because the player tucked their
+                    // knees under it.
+                    feet_y: pawn_pos.y
+                        - crate::physics::player_center_above_floor(
+                            self.player_handle.is_crouched()
+                                && !self.player_handle.is_hanging_crouched(),
+                        ),
+                    step_dt: self.physics.player_step_dt(),
+                    grounded: self.player_handle.is_grounded(),
+                })
+        })
+        .unwrap_or_default();
 
         // A frozen AI keeps its physical body and gravity, but cannot coast
         // on the previous animation's horizontal root-motion velocity.
@@ -5458,17 +5468,44 @@ impl MissionCore {
                 .climb_release
                 .outcome
                 .filter(|outcome| outcome.mode == crate::climb_release::ReleaseMode::Assisted);
+            let mut hand_climb = hand_climb;
             let assisted_release = shown.is_some_and(|outcome| {
                 hand_climb.released
                     && input_context
                         .pose_tracking
                         .is_none_or(|tracking| tracking.head && tracking.hands == [true; 2])
-                    && self
-                        .physics
-                        .plan_assisted_release(outcome.landing, &mut self.player_handle)
+                    && self.commit_assisted_exit(outcome)
             });
-            if assisted_release {
-                self.climb_release_glide = shown;
+            // A teleport exit: the body waits, held in place, until the view
+            // is black, then moves once; the hands take no hold until the
+            // fade is over. A landing gone invalid by then drops the body.
+            if let Some(exit) = self.climb_exit_teleport.as_mut() {
+                if exit.advance(tick.elapsed.as_secs_f32()) {
+                    let outcome = exit.outcome;
+                    if self
+                        .physics
+                        .teleport_assisted_release(
+                            outcome.landing,
+                            outcome.safe,
+                            &mut self.player_handle,
+                        )
+                        .is_some()
+                    {
+                        self.player_footsteps.reset();
+                    } else {
+                        // Refused: the body drops from here, so stop showing
+                        // a landing it will not reach.
+                        self.climb_release_glide = None;
+                    }
+                }
+                if exit.done() {
+                    self.climb_exit_teleport = None;
+                }
+            }
+            // The body waits, held in place, until it moves; through the
+            // fade-in after, gravity runs but the stick does not walk (below).
+            if self.climb_exit_teleport.is_some_and(|exit| !exit.moved()) {
+                hand_climb.translation = Some(vec3(0.0, 0.0, 0.0));
             }
             // Apply the crouch request before moving: swaps the capsule size
             // feet-planted; standing up is refused without headroom (the
@@ -5510,7 +5547,6 @@ impl MissionCore {
             // body to the scripted top-out and let go of everything. A route
             // the planner cannot find is simply not taken - the holds stay and
             // the player keeps pulling.
-            let mut hand_climb = hand_climb;
             // An assisted exit on show owns the body until release: a vault
             // somewhere else must not take over first. A vault onto that same
             // exit goes to the landing on show or not at all (the holds stay),
@@ -5524,15 +5560,7 @@ impl MissionCore {
                     .outcome
                     .filter(|outcome| outcome.mode == crate::climb_release::ReleaseMode::Assisted);
                 let vaulted = match shown {
-                    Some(outcome) => {
-                        let planned = self
-                            .physics
-                            .plan_assisted_release(outcome.landing, &mut self.player_handle);
-                        if planned {
-                            self.climb_release_glide = shown;
-                        }
-                        planned
-                    }
+                    Some(outcome) => self.commit_assisted_exit(outcome),
                     None => self
                         .physics
                         .plan_hand_top_out(grip, &mut self.player_handle),
@@ -5544,7 +5572,11 @@ impl MissionCore {
                         .and_then(|climb| climb.anchor())
                         .map(|hand| (hand, grip.into()));
                     self.interaction.release_climb_grips();
-                    hand_climb.translation = None;
+                    // A vault committed as a teleport waits held in place.
+                    hand_climb.translation = self
+                        .climb_exit_teleport
+                        .is_some()
+                        .then(|| vec3(0.0, 0.0, 0.0));
                 }
             }
             // Letting go of the last hold throws the body with the momentum of
@@ -5561,14 +5593,20 @@ impl MissionCore {
                 || std::mem::take(&mut self.button_jump)
                 || self.button_jump_held;
             let (medium, water_current) = self.player_water_state(jump);
+            // No walking or jumping until a climb exit's fade is over.
+            let exit_fading = self.climb_exit_teleport.is_some();
             let request = match hand_climb.translation {
                 Some(translation) => crate::physics::PlayerMoveRequest::HandClimb { translation },
                 None => crate::physics::PlayerMoveRequest::Walk {
-                    movement: forward
-                        + new_rotation.rotate_vector(roomscale_movement)
-                        + cgmath::vec3(0.0, up_value, 0.0),
+                    movement: if exit_fading {
+                        vec3(0.0, 0.0, 0.0)
+                    } else {
+                        forward
+                            + new_rotation.rotate_vector(roomscale_movement)
+                            + cgmath::vec3(0.0, up_value, 0.0)
+                    },
                     facing,
-                    jump_pressed: jump,
+                    jump_pressed: jump && !exit_fading,
                     // Push-to-climb is the FLAT climb input; VR's hands are
                     // its own (see `vr_climb`).
                     push_to_climb: game_options.presentation_mode == crate::PresentationMode::Flat,
@@ -5627,7 +5665,7 @@ impl MissionCore {
             // A committed landing stays shown through the glide and any fall
             // that ends it, until the body lands or takes a new hold. A glide
             // turned back by an obstruction ends away from it: clear at once.
-            if !self.player_handle.is_topping_out() {
+            if !self.player_handle.is_topping_out() && self.climb_exit_teleport.is_none() {
                 let body = self.physics.get_player_translation(&self.player_handle);
                 if self.climb_release_glide.is_some_and(|glide| {
                     let off = glide.landing.center - body;
@@ -15604,6 +15642,7 @@ impl MissionCore {
                 } => {
                     self.physics
                         .set_player_translation(position, &mut self.player_handle);
+                    self.climb_exit_teleport = None;
                     // Scripted teleports, level load and quickload all land
                     // here, and none of them ran a movement frame: forget the
                     // stride and the fall in progress so the arrival is silent
@@ -18015,16 +18054,20 @@ impl MissionCore {
 
         // WhiteOut is a view transition, so it covers the world, viewmodel,
         // HUD, and flat UI and is rendered once per eye in VR.
-        if self.screen_fade_alpha > 0.0 {
-            let mut fade = SceneObject::screen_space_color_quad(
-                vec2(0.0, 0.0),
-                screen_size,
-                cgmath::vec4(1.0, 1.0, 1.0, self.screen_fade_alpha),
-            );
-            // A final system layer covers scene UI in both hosts. Its depth is
-            // cleared once by the renderer at the explicit group boundary.
-            fade.set_render_layer(RenderLayer::SystemOverlay);
-            ret.push(fade);
+        // So does the black fade of a teleporting climb exit.
+        let exit_fade = self.climb_exit_teleport.map_or(0.0, |exit| exit.alpha());
+        for (rgb, alpha) in [(1.0, self.screen_fade_alpha), (0.0, exit_fade)] {
+            if alpha > 0.0 {
+                let mut fade = SceneObject::screen_space_color_quad(
+                    vec2(0.0, 0.0),
+                    screen_size,
+                    cgmath::vec4(rgb, rgb, rgb, alpha),
+                );
+                // A final system layer covers scene UI in both hosts. Its depth
+                // is cleared once by the renderer at the explicit group boundary.
+                fade.set_render_layer(RenderLayer::SystemOverlay);
+                ret.push(fade);
+            }
         }
 
         ret
@@ -19667,6 +19710,28 @@ impl MissionCore {
         } else {
             (PlayerMedium::Air, cgmath::vec3(0.0, 0.0, 0.0))
         }
+    }
+
+    /// Commit an assisted exit to `outcome`'s landing, revalidated from the
+    /// body's current pose: a fade-and-teleport (the default) or the glide
+    /// (`climb_exit_motion`). `false` leaves the body to an ordinary release.
+    fn commit_assisted_exit(&mut self, outcome: crate::climb_release::ReleaseOutcome) -> bool {
+        let committed = if crate::dev_params::get_bool(crate::dev_params::CLIMB_EXIT_MOTION) {
+            self.physics
+                .plan_assisted_release(outcome.landing, &mut self.player_handle)
+        } else if self
+            .physics
+            .assisted_release_is_valid(outcome.landing, &self.player_handle)
+        {
+            self.climb_exit_teleport = Some(crate::climb_release::ExitTeleport::new(outcome));
+            true
+        } else {
+            false
+        };
+        if committed {
+            self.climb_release_glide = Some(outcome);
+        }
+        committed
     }
 
     /// The actual held surface, after a deliberate upward or inward pull.
@@ -22450,6 +22515,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     gliding_to: self
                         .climb_release_glide
                         .map(|outcome| xyz(outcome.landing.center)),
+                    exit_fade: self.climb_exit_teleport.map_or(0.0, |exit| exit.alpha()),
                 }
             },
         })
@@ -22538,6 +22604,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         // Apply the teleportation using the same logic as Effect::SetPlayerPosition
         self.physics
             .set_player_translation(position, &mut self.player_handle);
+        // A relocation cancels a climb exit in progress, or it would move the
+        // body back to its landing.
+        self.climb_exit_teleport = None;
         self.player_footsteps.reset();
 
         // Keep PlayerInfo.pos consistent with the body immediately. It otherwise
