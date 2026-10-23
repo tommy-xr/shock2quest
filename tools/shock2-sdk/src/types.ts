@@ -1469,8 +1469,10 @@ export interface HandGrip {
     /** A save succeeded and nothing was staged since. */
     saved: boolean;
     /** Test hold: the posing hand's controller holds the item as play
-     * would; `tracked` false leaves it where that controller was last seen. */
-    test_hold: { tracked: boolean } | null;
+     * would; `tracked` false leaves it where that controller was last seen.
+     * `nudging`: the free controller's squeeze is carrying the item; let go,
+     * the grip that holds it there is staged. */
+    test_hold: { tracked: boolean; nudging: boolean } | null;
     /** While a gun's aim is shown (on the bench from where its glove puts
      * the controller, or test-held with its controller tracked): degrees
      * between where it fires and where the controller aims. */
