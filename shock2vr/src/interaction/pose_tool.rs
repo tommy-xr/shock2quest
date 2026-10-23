@@ -12,9 +12,7 @@ use std::path::{Path, PathBuf};
 
 use std::rc::Rc;
 
-use cgmath::{
-    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad, Rotation, Rotation3, Vector3,
-};
+use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Rad, Rotation, Rotation3, Vector3};
 use shipyard::EntityId;
 
 use engine::scene::{SceneObject, light::LightArray};
@@ -23,7 +21,7 @@ use crate::hand_capture::{HandFit, HandJoints};
 use crate::hand_glove::{GloveRenderer, HandLight};
 use crate::hand_pose::{HandShape, Pose};
 use crate::vr_config::Handedness;
-use crate::vr_grip::{BakedGripEntry, GripOverrides, GripSurface, ResolvedGrip};
+use crate::vr_grip::{BakedGripEntry, GripOverrides, ResolvedGrip};
 use crate::vr_support::{GripPose, SupportPose};
 
 // Distances below are physical (metres): tracked hands, the glove and the
@@ -44,16 +42,6 @@ const SCALE_RATE: f32 = 0.7;
 const SCALE_DEAD_ZONE: f32 = 0.2;
 /// The grip editor's authored item scale range.
 const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.1..=3.0;
-/// A glove joint this close to the item's surface touches it.
-const TOUCH_DISTANCE: f32 = 0.01;
-/// An open (not watertight) surface has no inside, only a back side: a joint
-/// this far behind its nearest face counts as through it. Most item models
-/// are open solids (the mug), where that is their inside; behind a lone
-/// sheet (a card, a double-sided tile) it reads red falsely.
-const OPEN_PENETRATION: f32 = 0.003;
-/// Contact spheres on each glove joint, and markers on each raw tracked joint.
-const CONTACT_RADIUS: f32 = 0.008;
-const MARKER_RADIUS: f32 = 0.004;
 /// How far beside the item each extra view of it sits.
 const VIEW_SPACING: f32 = 0.35;
 /// Where the workbench holds the item relative to the eye: ahead along the
@@ -106,10 +94,8 @@ pub(super) struct GripPoseTool {
     pub staged: Option<super::StagedGrip>,
     pub last_save_error: Option<String>,
     pub overrides_path: PathBuf,
-    /// The held item's model frame (where its grip surface lies) and scale,
-    /// and that surface, for the fingertip contacts and the extra views.
+    /// The held item's model frame and scale, for the extra views.
     pub item: Option<(GripPose, f32)>,
-    pub surface: Option<GripSurface>,
     /// The item's world pose on the workbench (contact offset included).
     pub item_placed: Option<GripPose>,
     /// Where the player stood when the workbench was placed: the extra
@@ -131,8 +117,6 @@ pub(super) struct GripPoseTool {
     pub hand_size_ratio: Option<f32>,
     /// Why the last capture request captured nothing, until one succeeds.
     pub capture_failure: Option<String>,
-    /// Which contact spheres and tracked-joint markers are drawn.
-    pub contact_view: ContactView,
     /// A save succeeded and nothing was staged since.
     pub saved: bool,
     /// The control panel, placed with the bench, and this frame's pointing
@@ -168,7 +152,6 @@ pub(super) struct GripPoseTool {
     pinching: bool,
     /// The free hand was lost since last seen open.
     pinch_lost: bool,
-    clicked: bool,
 }
 
 impl GripPoseTool {
@@ -197,7 +180,6 @@ impl GripPoseTool {
             last_save_error: None,
             overrides_path,
             item: None,
-            surface: None,
             item_placed: None,
             viewer: hand_pose.position,
             gaze: Quaternion::new(1.0, 0.0, 0.0, 0.0),
@@ -206,7 +188,6 @@ impl GripPoseTool {
             tip_error_mm: None,
             hand_size_ratio: None,
             capture_failure: None,
-            contact_view: ContactView::Contacts,
             saved: false,
             panel: None,
             pointer: Default::default(),
@@ -222,31 +203,12 @@ impl GripPoseTool {
             squeezed: true,
             stick_armed: false,
             recent: VecDeque::new(),
-            // Entered "already pressed": a trigger, pinch or click held as
-            // the workbench opens must be let go before it acts.
+            // Entered "already pressed": a trigger or pinch held as the
+            // workbench opens must be let go before it acts.
             requested: true,
             pinching: false,
             pinch_lost: false,
-            clicked: true,
         }
-    }
-
-    /// The leading edge of the free controller's thumbstick click steps the
-    /// contact spheres and joint markers to the next `ContactView`. Out of
-    /// hand it is disarmed, as if held, until let go in hand.
-    pub fn cycle_contact_view(&mut self, click: bool, in_hand: bool) {
-        if !in_hand {
-            self.clicked = true;
-            return;
-        }
-        if click && !self.clicked {
-            self.step_contact_view();
-        }
-        self.clicked = click;
-    }
-
-    pub fn step_contact_view(&mut self) {
-        self.contact_view = self.contact_view.next();
     }
 
     /// Move the posing hand, and so its item, from `item_position` onto the
@@ -275,7 +237,6 @@ impl GripPoseTool {
     pub fn retarget(&mut self, hand: usize, hand_pose: GripPose) {
         self.hand = hand;
         self.hand_pose = hand_pose;
-        self.surface = None;
         self.restart_posing();
     }
 
@@ -323,7 +284,6 @@ impl GripPoseTool {
         self.triggers = [panel::TriggerArbiter::new(); 2];
         self.requested = true;
         self.pinch_lost = true;
-        self.clicked = true;
         self.squeezed = true;
         self.turning = None;
         self.stick_armed = false;
@@ -445,7 +405,6 @@ impl GripPoseTool {
                 self.last_save_error.as_deref(),
                 self.capture_failure.as_deref(),
             ),
-            contact_view: self.contact_view,
             switch: self.switch.clone(),
             support: self.support,
             support_mode: self.support_mode.clone(),
@@ -501,7 +460,7 @@ impl GripPoseTool {
             .map_or(self.hand_pose.position, |(item, _)| item.position)
     }
 
-    /// Draws the bench (item, posed gloves, their spheres) as turned. The
+    /// Draws the bench (item and posed gloves) as turned. The
     /// tool works in the unturned bench, so captures stay relative to the
     /// item.
     pub fn turn_matrix(&self) -> Matrix4<f32> {
@@ -653,119 +612,6 @@ impl GripPoseTool {
             around(Quaternion::from_axis_angle(up, Deg(90.0)), up * spacing),
         ])
     }
-
-    /// How a world-space glove joint meets the held item's surface.
-    pub fn contact(&self, point: Vector3<f32>) -> Contact {
-        self.contact_depth(point).0
-    }
-
-    /// How deep (metres) a world-space glove joint is through the item, when
-    /// it is (`Contact::Penetrating`).
-    pub fn penetration(&self, point: Vector3<f32>) -> Option<f32> {
-        match self.contact_depth(point) {
-            (Contact::Penetrating, depth) => Some(depth),
-            _ => None,
-        }
-    }
-
-    /// The contact, and the joint's distance from the item's surface (metres).
-    fn contact_depth(&self, point: Vector3<f32>) -> (Contact, f32) {
-        let (Some((item, scale)), Some(surface)) = (self.item, &self.surface) else {
-            return (Contact::Free, f32::INFINITY);
-        };
-        let local = item.rotation.invert().rotate_vector(point - item.position) / scale;
-        let (distance, behind) = surface.project(Point3::from_vec(local));
-        let distance = distance * scale;
-        let contact = if behind && (surface.is_closed() || distance > world(OPEN_PENETRATION)) {
-            Contact::Penetrating
-        } else if distance < world(TOUCH_DISTANCE) {
-            Contact::Touching
-        } else {
-            Contact::Free
-        };
-        (
-            contact,
-            distance * crate::world_scale::meters_per_world_unit(),
-        )
-    }
-}
-
-/// A glove joint against the held item: clear of it, within
-/// `TOUCH_DISTANCE` of its surface, or through it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Contact {
-    Free,
-    Touching,
-    Penetrating,
-}
-
-impl Contact {
-    /// White, green, red; dimmer on the posed (saved or staged) glove, so
-    /// it reads apart from the live one.
-    fn color(self, posed: bool) -> Vector3<f32> {
-        let color = match self {
-            Contact::Free => Vector3::new(0.9, 0.9, 0.9),
-            Contact::Touching => Vector3::new(0.2, 1.0, 0.3),
-            Contact::Penetrating => Vector3::new(1.0, 0.15, 0.1),
-        };
-        if posed { color * 0.45 } else { color }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Contact::Free => "contact sphere free",
-            Contact::Touching => "contact sphere touching",
-            Contact::Penetrating => "contact sphere penetrating",
-        }
-    }
-}
-
-/// What the contact spheres and tracked-joint markers show; the free
-/// controller's thumbstick click steps through them in this order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ContactView {
-    /// Only spheres touching or through the item, and markers on the
-    /// wrist and fingertips.
-    Contacts,
-    /// A sphere and a marker on every joint.
-    Full,
-    Off,
-}
-
-impl ContactView {
-    fn next(self) -> Self {
-        match self {
-            ContactView::Contacts => ContactView::Full,
-            ContactView::Full => ContactView::Off,
-            ContactView::Off => ContactView::Contacts,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            ContactView::Contacts => "contacts",
-            ContactView::Full => "full",
-            ContactView::Off => "off",
-        }
-    }
-
-    /// Whether a sphere in this contact is drawn.
-    fn shows(self, contact: Contact) -> bool {
-        match self {
-            ContactView::Contacts => contact != Contact::Free,
-            ContactView::Full => true,
-            ContactView::Off => false,
-        }
-    }
-
-    /// Whether the tracked joint at this OpenXR index gets a marker.
-    fn marks(self, joint: usize) -> bool {
-        match self {
-            ContactView::Contacts => joint == 1 || crate::hand_capture::TIPS.contains(&joint),
-            ContactView::Full => true,
-            ContactView::Off => false,
-        }
-    }
 }
 
 /// Why a capture request found no steady window to average.
@@ -878,48 +724,6 @@ pub(super) fn tracked_glove(
     })
 }
 
-fn ball(center: Vector3<f32>, radius: f32, color: Vector3<f32>, name: &str) -> SceneObject {
-    let mut ball = SceneObject::new(
-        engine::scene::color_material::create(color),
-        Box::new(engine::scene::sphere::Sphere),
-    );
-    ball.set_transform(Matrix4::from_translation(center) * Matrix4::from_scale(radius));
-    // Drawn over the item and gloves: a joint through the item, or hidden
-    // behind it, must still show.
-    ball.set_render_layer(engine::scene::RenderLayer::SceneOverlay);
-    ball.set_debug_tag(Some(Rc::new(engine::scene::SceneObjectDebugTag {
-        name: Some(name.to_owned()),
-        ..Default::default()
-    })));
-    ball
-}
-
-/// A sphere on each world-space glove joint the view shows, coloured by its
-/// contact; dimmer on the posed glove.
-fn contact_spheres<'a>(
-    tool: &'a GripPoseTool,
-    joints: &'a HandJoints,
-    posed: bool,
-) -> impl Iterator<Item = SceneObject> + 'a {
-    // Hidden spheres skip the surface queries too.
-    let joints = if tool.contact_view == ContactView::Off {
-        &[][..]
-    } else {
-        &joints[..]
-    };
-    joints.iter().filter_map(move |&joint| {
-        let contact = tool.contact(joint);
-        tool.contact_view.shows(contact).then(|| {
-            ball(
-                joint,
-                world(CONTACT_RADIUS),
-                contact.color(posed),
-                contact.name(),
-            )
-        })
-    })
-}
-
 /// A saved or staged glove, gripping, named so `/v1/scene` tells it apart
 /// from the live gloves.
 fn named_glove(
@@ -957,10 +761,8 @@ fn named_glove(
 /// as an open glove, and the posing gloves again in every extra view. While
 /// the posing hand is tracked its live glove replaces the saved grip's, which
 /// would only be in its way; a staged grip always shows, as the preview.
-/// Both posing gloves carry the contact spheres the view shows, and the
-/// posing hand's raw tracked joints its markers. In support mode the posed
-/// glove is `support` (its saved or staged pose) and the grip hand's glove
-/// is drawn frozen at its grip.
+/// In support mode the posed glove is `support` (its saved or staged pose)
+/// and the grip hand's glove is drawn frozen at its grip.
 pub(super) fn render(
     tool: &GripPoseTool,
     renderer: &mut GloveRenderer,
@@ -997,15 +799,6 @@ pub(super) fn render(
         }
         posing_tracked = true;
         posed.extend(drawn);
-        posed.extend(contact_spheres(tool, &glove.fit.joints, false));
-        let cyan = Vector3::new(0.1, 0.9, 1.0);
-        posed.extend(
-            joints
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| tool.contact_view.marks(*i))
-                .map(|(_, &joint)| ball(joint, world(MARKER_RADIUS), cyan, "tracked joint")),
-        );
     }
     let held = grip.map(|grip| (tool.hand_pose, grip.fingers.hand_shape_at(0.0)));
     let (posed_glove, frozen) = if tool.support {
@@ -1023,10 +816,6 @@ pub(super) fn render(
             format!("{hand:?} grip glove"),
             lights.clone(),
         ));
-        let joints = renderer
-            .shape_joints(&shape, hand)
-            .map(|joint| pose.point(joint));
-        posed.extend(contact_spheres(tool, &joints, true));
     }
     // In support mode the grip hand's glove stays at its grip: the support
     // pose is relative to it.
@@ -1217,7 +1006,7 @@ mod tests {
     use super::*;
     use crate::hand_capture::HAND_JOINT_COUNT;
     use crate::vr_grip::FingerPose;
-    use cgmath::{Deg, Quaternion, Rotation3, vec3};
+    use cgmath::{Deg, EuclideanSpace, Point3, Quaternion, Rotation3, vec3};
 
     fn hand_with_tips(gap: f32) -> HandJoints {
         let mut joints = [vec3(0.0, 0.0, 0.0); HAND_JOINT_COUNT];
@@ -1252,7 +1041,7 @@ mod tests {
         use crate::ui::test_support::{hand_aimed_at, hand_aimed_away, test_panel};
         let mut tool = posing_tool();
         tool.panel = Some(test_panel());
-        let contacts = cgmath::vec2(103.0, 191.0);
+        let reset_view = cgmath::vec2(103.0, 191.0);
         let mut input = InputContext::default();
         // The posing (right) controller set down, resting on its trigger.
         input.right_hand = Hand {
@@ -1260,12 +1049,12 @@ mod tests {
             trigger_value: 1.0,
             ..Hand::default()
         };
-        input.left_hand = hand_aimed_at(panel::CANVAS, contacts, 0.0);
+        input.left_hand = hand_aimed_at(panel::CANVAS, reset_view, 0.0);
         assert_eq!(tool.point(&input), (None, false));
         input.left_hand.trigger_value = 1.0;
         assert_eq!(
             tool.point(&input),
-            (Some(panel::PanelEvent::Contacts), false),
+            (Some(panel::PanelEvent::ResetView), false),
             "the free trigger clicks where its ray is"
         );
         input.left_hand = hand_aimed_away(0.0);
@@ -1610,12 +1399,6 @@ mod tests {
         tool.point(&input);
         input.left_hand.trigger_value = 1.0;
         assert_eq!(tool.point(&input), (None, true), "a fresh press in hand");
-        // Out of hand, its other controls disarm too.
-        tool.cycle_contact_view(false, true);
-        let view = tool.contact_view;
-        tool.cycle_contact_view(true, false);
-        tool.cycle_contact_view(true, true);
-        assert_eq!(tool.contact_view, view, "a click held from out of hand");
     }
 
     #[test]
@@ -1683,12 +1466,12 @@ mod tests {
         use crate::input_context::InputContext;
         use crate::ui::test_support::{hand_aimed_away, test_panel};
         let panel = test_panel();
-        let contacts =
+        let reset_view =
             crate::ui::canvas_to_panel_world(panel::CANVAS, &panel, cgmath::vec2(103.0, 191.0));
-        // The free (left) index tip pushed from in front to through Contacts.
+        // The free (left) index tip pushed from in front to through Reset view.
         let tip_at = |depth: f32| {
             let mut joints = [vec3(0.0, 0.0, 0.0); HAND_JOINT_COUNT];
-            joints[crate::hand_capture::TIPS[1]] = contacts + panel.normal() * world(depth);
+            joints[crate::hand_capture::TIPS[1]] = reset_view + panel.normal() * world(depth);
             Some(joints)
         };
         for (holding, presses) in [(true, false), (false, true)] {
@@ -1705,7 +1488,7 @@ mod tests {
             input.left_hand.joints = tip_at(-0.015);
             let (event, _) = tool.point(&input);
             assert_eq!(
-                event == Some(panel::PanelEvent::Contacts),
+                event == Some(panel::PanelEvent::ResetView),
                 presses,
                 "holding the controller: {holding}"
             );
@@ -1814,72 +1597,16 @@ mod tests {
     }
 
     #[test]
-    fn joints_are_free_touching_or_through_a_closed_scaled_item() {
-        let item = vec3(0.0, 5.0, 0.0);
-        let mut tool = tool_with_item(item, item + vec3(0.0, 0.0, 4.0));
-        assert_eq!(tool.contact(item), Contact::Free, "no surface yet");
-        tool.surface = Some(crate::vr_grip::tests::closed_cube());
-        // The 10 cm cube at scale 2: its top face is 0.1 above the item.
-        let top = item + vec3(0.0, 0.1, 0.0);
-        let up = vec3(0.0, 1.0, 0.0);
-        assert_eq!(
-            tool.contact(top + up * world(TOUCH_DISTANCE) * 2.0),
-            Contact::Free
-        );
-        assert_eq!(
-            tool.contact(top + up * world(TOUCH_DISTANCE) * 0.5),
-            Contact::Touching
-        );
-        // Inside a closed mesh is through it, however shallow or deep.
-        assert_eq!(tool.contact(top - up * 0.001), Contact::Penetrating);
-        assert_eq!(tool.contact(item), Contact::Penetrating);
-    }
-
-    #[test]
-    fn an_open_surface_is_penetrated_only_well_behind_its_face() {
-        let p = |x: f32, z: f32| Point3::new(x, 0.0, z);
-        // A wide square in the model's y = 0 plane, facing +Y.
-        let plane = [
-            [p(-1.0, -1.0), p(-1.0, 1.0), p(1.0, 1.0)],
-            [p(-1.0, -1.0), p(1.0, 1.0), p(1.0, -1.0)],
-        ];
-        let item = vec3(0.0, 5.0, 0.0);
-        let mut tool = tool_with_item(item, item + vec3(0.0, 0.0, 4.0));
-        tool.surface = GripSurface::new(&plane);
-        assert!(!tool.surface.as_ref().unwrap().is_closed());
-        let up = vec3(0.0, 1.0, 0.0);
-        assert_eq!(
-            tool.contact(item + up * world(TOUCH_DISTANCE) * 0.5),
-            Contact::Touching
-        );
-        assert_eq!(
-            tool.contact(item - up * world(OPEN_PENETRATION) * 0.5),
-            Contact::Touching
-        );
-        assert_eq!(
-            tool.contact(item - up * world(OPEN_PENETRATION) * 2.0),
-            Contact::Penetrating
-        );
-        // Deep behind it, as inside an open solid, is still through it.
-        assert_eq!(
-            tool.contact(item - up * world(TOUCH_DISTANCE) * 2.0),
-            Contact::Penetrating
-        );
-    }
-
-    #[test]
     fn a_controller_untracked_as_the_workbench_opens_still_poses() {
         // An untracked controller reports the zero quaternion.
         let untracked = GripPose {
             position: vec3(0.0, 5.0, 0.0),
             rotation: Quaternion::new(0.0, 0.0, 0.0, 0.0),
         };
-        let mut tool = GripPoseTool::new(1, EntityId::dead(), untracked, PathBuf::new());
+        let tool = GripPoseTool::new(1, EntityId::dead(), untracked, PathBuf::new());
         assert!((tool.hand_pose.rotation.magnitude() - 1.0).abs() < 1e-6);
-        tool.item = Some((item_pose(tool.hand_pose, &grip(), vec3(0.0, 0.0, 0.0)), 0.8));
-        tool.surface = Some(crate::vr_grip::tests::closed_cube());
-        let item = tool.item.unwrap().0.position;
-        assert_eq!(tool.contact(item), Contact::Penetrating);
+        let item = item_pose(tool.hand_pose, &grip(), vec3(0.0, 0.0, 0.0));
+        assert!(item.is_tracked(), "a finite item pose");
     }
 
     #[test]
@@ -1915,44 +1642,6 @@ mod tests {
         tool.observe([None, posing(0.0)], true, FRAME);
         assert!(tool.capture.is_some());
         assert_eq!(tool.capture_failure, None, "a capture clears it");
-    }
-
-    #[test]
-    fn a_thumbstick_click_cycles_contacts_full_off_once_per_press() {
-        let mut tool = posing_tool();
-        assert_eq!(tool.contact_view, ContactView::Contacts, "the default");
-        tool.cycle_contact_view(true, true);
-        assert_eq!(
-            tool.contact_view,
-            ContactView::Contacts,
-            "held as the workbench opened"
-        );
-        let click = |tool: &mut GripPoseTool| {
-            tool.cycle_contact_view(false, true);
-            tool.cycle_contact_view(true, true);
-            tool.cycle_contact_view(true, true);
-            tool.contact_view
-        };
-        assert_eq!(click(&mut tool), ContactView::Full);
-        assert_eq!(click(&mut tool), ContactView::Off);
-        assert_eq!(click(&mut tool), ContactView::Contacts);
-    }
-
-    #[test]
-    fn by_default_only_contacts_and_the_wrist_and_fingertips_show() {
-        let view = ContactView::Contacts;
-        assert!(!view.shows(Contact::Free));
-        assert!(view.shows(Contact::Touching) && view.shows(Contact::Penetrating));
-        let marked: Vec<_> = (0..26).filter(|&j| view.marks(j)).collect();
-        assert_eq!(marked, [1, 5, 10, 15, 20, 25]);
-        assert!(ContactView::Full.shows(Contact::Free) && ContactView::Full.marks(0));
-        assert!(!ContactView::Off.shows(Contact::Penetrating) && !ContactView::Off.marks(5));
-        // The posed glove's spheres are a dimmer shade of the live one's.
-        let (live, posed) = (
-            Contact::Touching.color(false),
-            Contact::Touching.color(true),
-        );
-        assert!(posed.magnitude() < live.magnitude() * 0.6);
     }
 
     #[test]

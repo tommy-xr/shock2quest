@@ -1090,18 +1090,19 @@ fn main() {
         )
         .current_state;
 
-        // The right stick click, read always: the grip pose workbench uses it.
-        let right_click_state = xr_try!(
-            "record_action",
-            record_action.state(&session, xr::Path::NULL)
-        );
-        // The workbench owns both stick clicks while it is open: they show
-        // and hide its contact spheres, and must not latch a crouch or start
-        // a recording underneath it.
+        // The grip pose workbench freezes the mission: a stick click under it
+        // must not latch a crouch or start a recording it would not see.
         let workbench = game.pose_workbench_open();
-        let record_state = (shock2vr::dev_params::get_bool(shock2vr::dev_params::INPUT_RECORDING)
-            && !workbench)
-            .then_some(right_click_state);
+        let record_state = if shock2vr::dev_params::get_bool(shock2vr::dev_params::INPUT_RECORDING)
+            && !workbench
+        {
+            Some(xr_try!(
+                "record_action",
+                record_action.state(&session, xr::Path::NULL)
+            ))
+        } else {
+            None
+        };
         // Only edge-detect while the action is live: with the session merely
         // VISIBLE (system overlay up), current_state reads false even though
         // the button may still be physically held, and treating that as a
@@ -1299,16 +1300,12 @@ fn main() {
         input_context.right_hand.squeeze_value = right_squeeze_value;
         input_context.right_hand.thumbstick =
             vec2(right_thumbstick_value.x, right_thumbstick_value.y);
-        input_context.right_hand.thumbstick_click =
-            right_click_state.is_active && right_click_state.current_state;
 
         input_context.left_hand.rotation = left_hand_rotation;
         input_context.left_hand.position = left_hand_position;
         input_context.left_hand.trigger_value = left_trigger_value;
         input_context.left_hand.squeeze_value = left_squeeze_value;
         input_context.left_hand.thumbstick = vec2(left_thumbstick_value.x, left_thumbstick_value.y);
-        input_context.left_hand.thumbstick_click =
-            crouch_state.is_active && crouch_state.current_state;
         // Joints only when every one is tracked: a partly valid hand would
         // capture as a broken pose, and positions inferred after tracking
         // loss are guesses.

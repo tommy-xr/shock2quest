@@ -330,7 +330,6 @@ pub struct GripSurface {
     min: Vector3<f32>,
     max: Vector3<f32>,
     closed: bool,
-    inward: bool,
 }
 
 impl GripSurface {
@@ -401,30 +400,7 @@ impl GripSurface {
             min,
             max,
             closed,
-            // Only a closed mesh's volume says which way it is wound.
-            inward: closed && volume < 0.0,
         })
-    }
-
-    /// Distance from a model-space point to the nearest surface, and whether
-    /// the point lies behind that surface: inside a closed mesh, or on an open
-    /// one behind its nearest face (a side test, not a solid one).
-    pub fn project(&self, point: Point3<f32>) -> (f32, bool) {
-        // parry panics projecting a non-finite point: no face is nearest.
-        if ![point.x, point.y, point.z].into_iter().all(f32::is_finite) {
-            return (f32::INFINITY, false);
-        }
-        let p = na::Point3::new(point.x, point.y, point.z);
-        let projection = self.mesh.project_local_point_and_get_feature(&p).0;
-        // A closed mesh wound inward (negative volume) flips the side test.
-        (
-            (p - projection.point).norm(),
-            projection.is_inside != self.inward,
-        )
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.closed
     }
 
     /// Bounded candidate search. Face rays select actual visible surfaces,
@@ -983,7 +959,7 @@ impl GripHints {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use cgmath::{One, point3};
 
@@ -1162,31 +1138,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn surface_projection_measures_to_the_nearest_face_inside_or_out() {
-        let surface = closed_cube();
-        let (distance, behind) = surface.project(point3(0.0, 0.0, 0.075));
-        assert!((distance - 0.025).abs() < 1e-5 && !behind);
-        // Deep inside is far from every face, not touching, but behind them.
-        let (distance, behind) = surface.project(point3(0.0, 0.0, 0.0));
-        assert!((distance - 0.05).abs() < 1e-5 && behind);
-        // The same cube wound inward still knows its inside.
-        let flipped = GripSurface::new(&cube_triangles(true)).unwrap();
-        assert!(flipped.project(point3(0.0, 0.0, 0.0)).1);
-        assert!(!flipped.project(point3(0.0, 0.0, 0.075)).1);
-        // An open plane facing +Z: behind it is below it.
-        assert!(plane(0.0).project(point3(0.0, 0.0, -0.01)).1);
-        assert!(!plane(0.0).project(point3(0.0, 0.0, 0.01)).1);
-    }
-
-    #[test]
-    fn a_non_finite_point_is_nowhere_near_the_surface() {
-        let surface = closed_cube();
-        for p in [point3(f32::NAN, 0.0, 0.0), point3(0.0, f32::INFINITY, 0.0)] {
-            assert_eq!(surface.project(p), (f32::INFINITY, false));
-        }
-    }
-
-    #[test]
     fn device_overrides_win_lookup_and_bad_files_are_ignored() {
         let grip = plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
         let entry = |scale| BakedGripEntry {
@@ -1357,27 +1308,19 @@ pub(crate) mod tests {
         library.version = 2;
         assert!(library.lookup("mug", "right").is_none());
     }
-    /// A 10 cm cube's faces, wound outward unless `inward`.
-    fn cube_triangles(inward: bool) -> Vec<[Point3<f32>; 3]> {
+    fn closed_cube() -> GripSurface {
         let (vertices, indices) =
             rapier3d::prelude::Cuboid::new(na::Vector3::repeat(0.05)).to_trimesh();
-        indices
+        let triangles = indices
             .iter()
             .map(|indices| {
-                let mut triangle = indices.map(|i| {
+                indices.map(|i| {
                     let p = vertices[i as usize];
                     point3(p.x, p.y, p.z)
-                });
-                if inward {
-                    triangle.swap(1, 2);
-                }
-                triangle
+                })
             })
-            .collect()
-    }
-
-    pub(crate) fn closed_cube() -> GripSurface {
-        let surface = GripSurface::new(&cube_triangles(false)).unwrap();
+            .collect::<Vec<_>>();
+        let surface = GripSurface::new(&triangles).unwrap();
         assert!(surface.closed);
         surface
     }
