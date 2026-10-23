@@ -22,6 +22,7 @@ use engine::assets::asset_cache::AssetCache;
 use shock2vr::{
     GloveRenderer, Handedness,
     vr_grip::{GripKinematics, GripSurface, ResolvedGrip, surface_fingerprint},
+    weapon_muzzle::{AimLines, MuzzleFallback},
 };
 
 use crate::ui::quiet_catch;
@@ -53,10 +54,13 @@ pub enum PreviewScene {
     Holster(shock2vr::vr_holster::HolsterPose),
     /// Authored VR weapon reference, retaining its integrated hand.
     VrReference,
+    /// A grip, with its support profile and, to draw its aim, its gun's
+    /// muzzle as held in that hand.
     Grip(
         Handedness,
         ResolvedGrip,
         Option<shock2vr::vr_support::SupportProfile>,
+        Option<MuzzleFallback>,
     ),
     /// The `.bin` model animated by a motion clip (`<name>_.mc`).
     Clip(String),
@@ -518,7 +522,7 @@ impl ModelPreview {
             PreviewScene::VrReference => Ok(Box::new(GripPreviewScene(
                 engine::scene::Scene::from_objects(model.clone_scene_objects()),
             ))),
-            PreviewScene::Grip(hand, grip, support) => quiet_catch(|| {
+            PreviewScene::Grip(hand, grip, support, muzzle) => quiet_catch(|| {
                 let model_mirror = self
                     .grip_model_mirror(key)
                     .map_err(|_| "Weapon mirror unavailable")?;
@@ -560,6 +564,9 @@ impl ModelPreview {
                     shock2vr::HandLight::Off,
                     None,
                 ));
+                if let Some(muzzle) = muzzle {
+                    objects.extend(aim_overlay(&grip_aim(grip, *muzzle)));
+                }
                 let mut support_points = Vec::new();
                 if let Some(support) = support {
                     if support.region.is_some() {
@@ -752,6 +759,14 @@ impl ModelPreview {
         }
         shock2vr::vr_weapon_grip::model_mirror(&mut self.asset_cache, key)
             .ok_or_else(|| "Weapon mirror unavailable".into())
+    }
+
+    /// A gun's muzzle as play sets it when held in `hand`; `None` for
+    /// anything without a barrel, or whose model fails to load.
+    pub fn grip_muzzle(&mut self, key: &str, hand: Handedness) -> Option<MuzzleFallback> {
+        quiet_catch(|| shock2vr::weapon_muzzle::held_muzzle(&mut self.asset_cache, key, hand))
+            .ok()
+            .flatten()
     }
 
     /// Shared game geometry and rig samples for validation and explicit auto-fit.
@@ -1233,6 +1248,46 @@ fn support_region_overlay(
         color_material::create(vec3(0.1, 0.9, 0.8)),
         Box::new(lines_mesh::create(vertices)),
     )
+}
+
+/// A grip's aim in the grip preview, whose origin is the controller's grip
+/// frame (where the glove is drawn): `AimLines` exactly as play computes it.
+pub(crate) fn grip_aim(grip: &ResolvedGrip, muzzle: MuzzleFallback) -> AimLines {
+    use shock2vr::vr_support::GripPose;
+    AimLines::new(
+        GripPose {
+            position: grip.offset,
+            rotation: grip.rotation,
+        },
+        grip.item_scale,
+        muzzle,
+        GripPose {
+            position: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::one(),
+        },
+    )
+}
+
+/// The aim lines a metre long, coloured as on the VR workbench: the firing
+/// line (orange) from the muzzle and the controller's aim (cyan).
+fn aim_overlay(aim: &AimLines) -> [engine::scene::SceneObject; 2] {
+    use engine::scene::{SceneObject, VertexPosition, color_material, lines_mesh};
+    let length = 1.0 / shock2vr::METERS_PER_WORLD_UNIT;
+    [
+        (aim.muzzle, aim.firing, vec3(1.0, 0.45, 0.1)),
+        (aim.controller, aim.aim, vec3(0.1, 0.7, 1.0)),
+    ]
+    .map(|(start, direction, color)| {
+        SceneObject::new(
+            color_material::create(color),
+            Box::new(lines_mesh::create(vec![
+                VertexPosition { position: start },
+                VertexPosition {
+                    position: start + direction * length,
+                },
+            ])),
+        )
+    })
 }
 
 // Authoring must see weapon grip saves made earlier in this editor session.
