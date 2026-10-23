@@ -31,9 +31,13 @@ test(
     const item = await holdDebugMug(game);
     const grip = (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
     assert.equal(grip.entity_id, item.id, "the mug is held");
-    assert.equal(grip.grip?.item_scale, 0.5);
+    // Reported and drawn at the world scale, as shipped grips are: the
+    // override's authored size, kept physically.
+    const worldScale = (await game.devParams.list()).params.find((p) => p.key === "world_scale")!.value as number;
+    const itemScale = 0.5 / worldScale;
+    assert.ok(Math.abs(grip.grip!.item_scale - itemScale) < 1e-5, `${grip.grip?.item_scale} vs ${itemScale}`);
     for (const draw of (await game.scene.objects({ entityId: item.id })).objects) {
-      for (const scale of draw.scale) assert.ok(Math.abs(scale - 0.5) < 1e-5, "held mug renders at the override's scale");
+      for (const scale of draw.scale) assert.ok(Math.abs(scale - itemScale) < 1e-5, "held mug renders at the override's scale");
     }
   },
 );

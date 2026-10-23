@@ -22,39 +22,51 @@ use crate::vr_config::Handedness;
 use crate::vr_grip::{BakedGripEntry, GripLibrary, GripSurface, ResolvedGrip};
 use crate::vr_support::GripPose;
 
+// Distances below are physical (metres): tracked hands, the glove and the
+// held item keep their real size at any world scale. `world` converts.
+
 /// Thumb and index tips closer than this start a pinch, and farther than the
-/// release distance end it, so tracking noise at the edge does not re-fire it
-/// (world units).
-const PINCH_PRESS: f32 = 0.02 / crate::METERS_PER_WORLD_UNIT;
-const PINCH_RELEASE: f32 = 0.03 / crate::METERS_PER_WORLD_UNIT;
+/// release distance end it, so tracking noise at the edge does not re-fire it.
+const PINCH_PRESS: f32 = 0.02;
+const PINCH_RELEASE: f32 = 0.03;
 /// Seconds of steady posing-hand tracking averaged into a capture.
 const STEADY_SECONDS: f32 = 0.3;
-/// Every joint stays this close to its window mean to count as steady
-/// (world units). Quest 3 hands held still stray up to ~13 mm.
-const STEADY_DISTANCE: f32 = 0.015 / crate::METERS_PER_WORLD_UNIT;
+/// Every joint stays this close to its window mean to count as steady.
+/// Quest 3 hands held still stray up to ~13 mm.
+const STEADY_DISTANCE: f32 = 0.015;
 /// Natural-log item scale change per second at full thumbstick.
 const SCALE_RATE: f32 = 0.7;
-/// The grip editor's item scale range.
+/// The grip editor's authored item scale range.
 const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.1..=3.0;
-/// A glove joint this close to the item's surface touches it (world units).
-const TOUCH_DISTANCE: f32 = 0.01 / crate::METERS_PER_WORLD_UNIT;
+/// A glove joint this close to the item's surface touches it.
+const TOUCH_DISTANCE: f32 = 0.01;
 /// An open (not watertight) surface has no inside, only a back side: a joint
-/// this far behind its nearest face counts as through it (world units). Most
-/// item models are open solids (the mug), where that is their inside; behind
-/// a lone sheet (a card, a double-sided tile) it reads red falsely.
-const OPEN_PENETRATION: f32 = 0.003 / crate::METERS_PER_WORLD_UNIT;
+/// this far behind its nearest face counts as through it. Most item models
+/// are open solids (the mug), where that is their inside; behind a lone
+/// sheet (a card, a double-sided tile) it reads red falsely.
+const OPEN_PENETRATION: f32 = 0.003;
 /// Contact spheres on each glove joint, and markers on each raw tracked joint.
-const CONTACT_RADIUS: f32 = 0.008 / crate::METERS_PER_WORLD_UNIT;
-const MARKER_RADIUS: f32 = 0.004 / crate::METERS_PER_WORLD_UNIT;
-/// How far beside the item each extra view of it sits (world units).
-const VIEW_SPACING: f32 = 0.35 / crate::METERS_PER_WORLD_UNIT;
+const CONTACT_RADIUS: f32 = 0.008;
+const MARKER_RADIUS: f32 = 0.004;
+/// How far beside the item each extra view of it sits.
+const VIEW_SPACING: f32 = 0.35;
 /// Where the workbench holds the item relative to the eye: ahead along the
 /// head's yaw, down to chest height, and aside toward the posing hand.
-const BENCH_AHEAD: f32 = 0.45 / crate::METERS_PER_WORLD_UNIT;
-const BENCH_DROP: f32 = 0.3 / crate::METERS_PER_WORLD_UNIT;
-const BENCH_ASIDE: f32 = 0.1 / crate::METERS_PER_WORLD_UNIT;
-/// The workbench room's width, centred on where the player stood (world units).
-const ROOM_SIZE: f32 = 12.0 / crate::METERS_PER_WORLD_UNIT;
+const BENCH_AHEAD: f32 = 0.45;
+const BENCH_DROP: f32 = 0.3;
+const BENCH_ASIDE: f32 = 0.1;
+/// The workbench room's width, centred on where the player stood.
+const ROOM_SIZE: f32 = 12.0;
+
+/// A physical distance in world units at the active world scale.
+fn world(metres: f32) -> f32 {
+    metres / crate::world_scale::meters_per_world_unit()
+}
+
+/// A world-unit distance in millimetres at the active world scale.
+fn millimetres(world_units: f32) -> f32 {
+    world_units * crate::world_scale::meters_per_world_unit() * 1000.0
+}
 
 pub(super) struct GripPoseTool {
     /// The posing hand (0 left, 1 right) and the item it holds.
@@ -187,9 +199,10 @@ impl GripPoseTool {
     /// player's real floor inside a solid backdrop.
     pub fn environment(&self) -> Vec<SceneObject> {
         let below = Vector3::new(self.viewer.x, self.floor_y, self.viewer.z);
-        let thickness = 0.02 / crate::METERS_PER_WORLD_UNIT;
+        let thickness = world(0.02);
+        let room_size = world(ROOM_SIZE);
         // Inset from the walls, so its edges do not fight them for depth.
-        let floor_size = ROOM_SIZE - 2.0 * thickness;
+        let floor_size = room_size - 2.0 * thickness;
         let floor = crate::scenes::debug_common::shaded_cube_object(
             Vector3::new(0.32, 0.33, 0.35),
             below - Vector3::unit_y() * (thickness / 2.0),
@@ -198,7 +211,7 @@ impl GripPoseTool {
         let mut backdrop = crate::scenes::debug_common::cube_object(
             Vector3::new(0.1, 0.11, 0.13),
             below,
-            Vector3::new(ROOM_SIZE, ROOM_SIZE, ROOM_SIZE),
+            Vector3::new(room_size, room_size, room_size),
         );
         // Seen from inside, so no face is culled.
         backdrop.set_backface_culling(None);
@@ -252,13 +265,15 @@ impl GripPoseTool {
         self.tracked = tracked;
     }
 
-    /// Thumbstick y grows or shrinks the item while its controller is held.
+    /// Thumbstick y grows or shrinks the item (`item_scale` as drawn) while
+    /// its controller is held.
     pub fn scale(item_scale: f32, thumbstick_y: f32, dt: f32) -> f32 {
         if thumbstick_y.abs() < 0.2 {
             return item_scale;
         }
+        let personal = crate::world_scale::WorldScale::active().personal();
         (item_scale * (thumbstick_y * SCALE_RATE * dt).exp())
-            .clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end())
+            .clamp(SCALE_RANGE.start() * personal, SCALE_RANGE.end() * personal)
     }
 
     /// Transforms that redraw the item and its gloves beside it, turned to
@@ -269,24 +284,16 @@ impl GripPoseTool {
         let up = Vector3::unit_y();
         let toward = crate::scripts::ai::ai_util::normalized_horizontal(self.viewer - item)?;
         let side = up.cross(toward);
+        let spacing = world(VIEW_SPACING);
         let around = |rotation: Quaternion<f32>, offset: Vector3<f32>| {
             Matrix4::from_translation(item + offset)
                 * Matrix4::from(rotation)
                 * Matrix4::from_translation(-item)
         };
         Some([
-            around(
-                Quaternion::from_axis_angle(up, Deg(180.0)),
-                side * VIEW_SPACING,
-            ),
-            around(
-                Quaternion::between_vectors(up, toward),
-                -side * VIEW_SPACING,
-            ),
-            around(
-                Quaternion::from_axis_angle(up, Deg(90.0)),
-                up * VIEW_SPACING,
-            ),
+            around(Quaternion::from_axis_angle(up, Deg(180.0)), side * spacing),
+            around(Quaternion::between_vectors(up, toward), -side * spacing),
+            around(Quaternion::from_axis_angle(up, Deg(90.0)), up * spacing),
         ])
     }
 
@@ -298,9 +305,9 @@ impl GripPoseTool {
         let local = item.rotation.invert().rotate_vector(point - item.position) / scale;
         let (distance, behind) = surface.project(Point3::from_vec(local));
         let distance = distance * scale;
-        if behind && (surface.is_closed() || distance > OPEN_PENETRATION) {
+        if behind && (surface.is_closed() || distance > world(OPEN_PENETRATION)) {
             Contact::Penetrating
-        } else if distance < TOUCH_DISTANCE {
+        } else if distance < world(TOUCH_DISTANCE) {
             Contact::Touching
         } else {
             Contact::Free
@@ -418,8 +425,9 @@ fn bench_spot(
 ) -> Vector3<f32> {
     let forward = crate::ui::PanelPlacement::from_head(head_position, head_rotation).forward;
     let right = forward.cross(Vector3::unit_y());
-    let aside = if hand == 0 { -BENCH_ASIDE } else { BENCH_ASIDE };
-    head_position + forward * BENCH_AHEAD + right * aside - Vector3::unit_y() * BENCH_DROP
+    let aside = world(if hand == 0 { -BENCH_ASIDE } else { BENCH_ASIDE });
+    head_position + forward * world(BENCH_AHEAD) + right * aside
+        - Vector3::unit_y() * world(BENCH_DROP)
 }
 
 /// Whether a hand pinches, given whether it did last frame; an untracked
@@ -429,7 +437,7 @@ fn pinching(was: bool, joints: Option<&HandJoints>) -> bool {
         return false;
     };
     let gap = (joints[5] - joints[10]).magnitude();
-    gap < if was { PINCH_RELEASE } else { PINCH_PRESS }
+    gap < world(if was { PINCH_RELEASE } else { PINCH_PRESS })
 }
 
 fn window_seconds(frames: &VecDeque<(HandJoints, f32)>) -> f32 {
@@ -460,9 +468,9 @@ fn steady_mean(frames: &VecDeque<(HandJoints, f32)>) -> Result<HandJoints, Unste
         .iter()
         .flat_map(|(frame, _)| frame.iter().zip(&mean).map(|(p, m)| (p - m).magnitude()))
         .fold(0.0, f32::max);
-    if max > STEADY_DISTANCE {
+    if max > world(STEADY_DISTANCE) {
         return Err(Unsteady::Jitter {
-            max_mm: max * crate::METERS_PER_WORLD_UNIT * 1000.0,
+            max_mm: millimetres(max),
         });
     }
     Ok(mean)
@@ -508,7 +516,7 @@ pub(super) fn tip_error_mm(
     let bones = crate::hand_capture::capture_finger_bones(joints, handedness)?;
     let posed = renderer.posed_joints(&Pose::from_finger_bones(&bones), handedness);
     let errors = crate::hand_capture::tip_errors(joints, &open, &posed)?;
-    Some(errors.map(|e| e * crate::METERS_PER_WORLD_UNIT * 1000.0))
+    Some(errors.map(millimetres))
 }
 
 fn ball(center: Vector3<f32>, radius: f32, color: Vector3<f32>, name: &str) -> SceneObject {
@@ -542,9 +550,14 @@ fn contact_spheres<'a>(
     };
     joints.iter().filter_map(move |&joint| {
         let contact = tool.contact(joint);
-        tool.contact_view
-            .shows(contact)
-            .then(|| ball(joint, CONTACT_RADIUS, contact.color(posed), contact.name()))
+        tool.contact_view.shows(contact).then(|| {
+            ball(
+                joint,
+                world(CONTACT_RADIUS),
+                contact.color(posed),
+                contact.name(),
+            )
+        })
     })
 }
 
@@ -597,7 +610,7 @@ pub(super) fn render(
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| tool.contact_view.marks(*i))
-                .map(|(_, &joint)| ball(joint, MARKER_RADIUS, cyan, "tracked joint")),
+                .map(|(_, &joint)| ball(joint, world(MARKER_RADIUS), cyan, "tracked joint")),
         );
     }
     if let Some(grip) = grip.filter(|_| tool.staged.is_some() || !posing_tracked) {
@@ -673,6 +686,48 @@ pub(super) fn item_pose(hand: GripPose, grip: &ResolvedGrip, contact: Vector3<f3
     }
 }
 
+/// The grip that holds the item (`item`, drawn at `item_scale` about
+/// `contact`) where the tracked hand `joints` holds it, and the hand pose that
+/// draws the glove over that hand. `glove` is the open glove's joints as
+/// drawn. The grip is in authored units (`personal` being the world scale's
+/// `WorldScale::personal`), as the library and overrides store grips, so it
+/// holds the item alike at any world scale.
+pub(super) fn captured_grip(
+    joints: &HandJoints,
+    glove: &HandJoints,
+    handedness: Handedness,
+    item: GripPose,
+    contact: Vector3<f32>,
+    item_scale: f32,
+    personal: f32,
+) -> Option<(ResolvedGrip, GripPose)> {
+    let bones = crate::hand_capture::capture_finger_bones(joints, handedness)?;
+    let (origin, rotation) =
+        crate::hand_capture::grip_transform(joints, glove, item.position, item.rotation)?;
+    let (position, hand_rotation) = crate::hand_capture::hand_pose(joints, glove)?;
+    let grip = ResolvedGrip {
+        item_scale,
+        pose_family: "captured".into(),
+        // The item origin, less the per-item contact placement adds.
+        offset: origin - rotation.rotate_vector(contact * item_scale),
+        rotation,
+        fingers: crate::vr_grip::FingerPose::Bones {
+            bones,
+            trigger_bones: None,
+        },
+        contacts: [None; 5],
+        anchor: [0.0; 3],
+        score: 0.0,
+    };
+    Some((
+        grip.rescaled(1.0 / personal),
+        GripPose {
+            position,
+            rotation: hand_rotation,
+        },
+    ))
+}
+
 /// Write `entry` into the overrides file, replacing its model and hand. A
 /// file that exists but cannot be read is left alone rather than replaced.
 pub(super) fn save_override(path: &Path, entry: &BakedGripEntry) -> std::io::Result<()> {
@@ -743,6 +798,74 @@ mod tests {
         }
     }
 
+    /// A right hand as tracking reports one, in metres.
+    fn real_hand() -> HandJoints {
+        crate::hand_capture::tests::openxr_right_hand(0.0)
+    }
+
+    /// A grip captured at world scale `captured` and held at `resolved`, in
+    /// metres: the item origin from each glove joint, the item's size per
+    /// model unit and its rotation; and the grip as saved.
+    fn held_at(
+        captured: f32,
+        resolved: f32,
+    ) -> (Vec<Vector3<f32>>, f32, Quaternion<f32>, ResolvedGrip) {
+        // The glove in authored units: smaller than the hand, set off in
+        // its controller frame.
+        let glove =
+            real_hand().map(|p| vec3(0.01, -0.02, 0.03) + p * 0.9 / crate::METERS_PER_WORLD_UNIT);
+        let contact = vec3(0.0, 0.1, 0.0);
+        let unit = crate::METERS_PER_WORLD_UNIT * captured;
+        let item = GripPose {
+            position: vec3(0.02, -0.04, -0.08) / unit,
+            rotation: Quaternion::from_angle_x(Deg(20.0)),
+        };
+        let (saved, _) = captured_grip(
+            &real_hand().map(|p| p / unit),
+            &glove.map(|p| p / captured),
+            Handedness::Right,
+            item,
+            contact,
+            0.8 / captured,
+            1.0 / captured,
+        )
+        .unwrap();
+        let unit = crate::METERS_PER_WORLD_UNIT * resolved;
+        let grip = saved.clone().rescaled(1.0 / resolved);
+        let hand = GripPose {
+            position: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        };
+        let item = item_pose(hand, &grip, contact);
+        let from_glove = glove
+            .iter()
+            .map(|joint| (item.position - joint / resolved) * unit)
+            .collect();
+        (from_glove, grip.item_scale * unit, item.rotation, saved)
+    }
+
+    #[test]
+    fn a_capture_holds_the_item_alike_at_every_world_scale() {
+        let (baseline, size, rotation, saved) = held_at(1.0, 1.0);
+        for (captured, resolved) in [(0.85, 1.0), (1.0, 0.85), (0.85, 0.85), (0.6, 1.3)] {
+            let (from_glove, s, r, grip) = held_at(captured, resolved);
+            for (a, b) in from_glove.iter().zip(&baseline) {
+                assert!(
+                    (a - b).magnitude() < 1e-5,
+                    "{captured}->{resolved}: {a:?} vs {b:?}"
+                );
+            }
+            assert!(
+                (s - size).abs() < 1e-6,
+                "{captured}->{resolved}: size {s} vs {size}"
+            );
+            assert!(r.dot(rotation).abs() > 1.0 - 1e-6);
+            // Saved in authored units: the same file at any scale.
+            assert!((grip.item_scale - 0.8).abs() < 1e-6, "{}", grip.item_scale);
+            assert!((grip.offset - saved.offset).magnitude() < 1e-5);
+        }
+    }
+
     const FRAME: f32 = 1.0 / 60.0;
     /// 18 frame intervals at 60 Hz span the window.
     const STEADY_FRAMES: usize = 19;
@@ -750,7 +873,7 @@ mod tests {
     #[test]
     fn a_trigger_edge_captures_the_mean_of_a_steady_window() {
         let mut tool = posing_tool();
-        let wobble = STEADY_DISTANCE * 0.8;
+        let wobble = world(STEADY_DISTANCE) * 0.8;
         hold(
             &mut tool,
             (0..STEADY_FRAMES - 1).map(|i| if i % 2 == 0 { wobble } else { -wobble }),
@@ -800,7 +923,7 @@ mod tests {
     fn a_real_hand_held_still_captures_despite_tracking_jitter() {
         // Quest 3 hands held still strayed up to ~13 mm from their mean.
         let mut tool = posing_tool();
-        let wobble = 0.0133 / crate::METERS_PER_WORLD_UNIT;
+        let wobble = world(0.0133);
         hold(
             &mut tool,
             (0..STEADY_FRAMES - 1).map(|i| if i % 2 == 0 { wobble } else { -wobble }),
@@ -814,7 +937,7 @@ mod tests {
     fn a_jittering_hand_does_not_capture() {
         let mut tool = posing_tool();
         hold(&mut tool, [0.0; STEADY_FRAMES - 1], FRAME);
-        tool.observe([None, posing(STEADY_DISTANCE * 2.0)], true, FRAME);
+        tool.observe([None, posing(world(STEADY_DISTANCE) * 2.0)], true, FRAME);
         assert!(tool.capture.is_none());
     }
 
@@ -886,7 +1009,7 @@ mod tests {
         };
         // Each view moves the item aside, by the same spacing.
         for view in [back, top, profile] {
-            assert!(((at(view, item) - item).magnitude() - VIEW_SPACING).abs() < 1e-4);
+            assert!(((at(view, item) - item).magnitude() - world(VIEW_SPACING)).abs() < 1e-4);
         }
         // The far side faces the viewer, and the top tips toward them.
         let back_center = at(back, item);
@@ -894,7 +1017,7 @@ mod tests {
         let top_center = at(top, item);
         let up = vec3(0.0, 1.0, 0.0);
         assert!((at(top, item + up) - (top_center + toward)).magnitude() < 1e-4);
-        assert!((at(profile, item) - (item + up * VIEW_SPACING)).magnitude() < 1e-4);
+        assert!((at(profile, item) - (item + up * world(VIEW_SPACING))).magnitude() < 1e-4);
         // Straight above the item there is no direction to face.
         assert!(tool_with_item(item, item + up).views().is_none());
     }
@@ -907,12 +1030,15 @@ mod tests {
         let right = bench_spot(eye, head, 1);
         let ahead = vec3(1.0, 0.0, 0.0);
         let offset = right - eye;
-        assert!((offset.dot(ahead) - BENCH_AHEAD).abs() < 1e-4, "{offset:?}");
-        assert!((offset.y + BENCH_DROP).abs() < 1e-4);
+        assert!(
+            (offset.dot(ahead) - world(BENCH_AHEAD)).abs() < 1e-4,
+            "{offset:?}"
+        );
+        assert!((offset.y + world(BENCH_DROP)).abs() < 1e-4);
         // The viewer's right is +Z when facing +X.
-        assert!((offset.z - BENCH_ASIDE).abs() < 1e-4);
+        assert!((offset.z - world(BENCH_ASIDE)).abs() < 1e-4);
         let left = bench_spot(eye, head, 0);
-        assert!(((left - eye).z + BENCH_ASIDE).abs() < 1e-4);
+        assert!(((left - eye).z + world(BENCH_ASIDE)).abs() < 1e-4);
         // An untracked (zero) head still gets a defined bench.
         let untracked = bench_spot(eye, Quaternion::new(0.0, 0.0, 0.0, 0.0), 1);
         assert!(untracked.x.is_finite() && untracked.y.is_finite() && untracked.z.is_finite());
@@ -964,9 +1090,12 @@ mod tests {
         // The 10 cm cube at scale 2: its top face is 0.1 above the item.
         let top = item + vec3(0.0, 0.1, 0.0);
         let up = vec3(0.0, 1.0, 0.0);
-        assert_eq!(tool.contact(top + up * TOUCH_DISTANCE * 2.0), Contact::Free);
         assert_eq!(
-            tool.contact(top + up * TOUCH_DISTANCE * 0.5),
+            tool.contact(top + up * world(TOUCH_DISTANCE) * 2.0),
+            Contact::Free
+        );
+        assert_eq!(
+            tool.contact(top + up * world(TOUCH_DISTANCE) * 0.5),
             Contact::Touching
         );
         // Inside a closed mesh is through it, however shallow or deep.
@@ -988,20 +1117,20 @@ mod tests {
         assert!(!tool.surface.as_ref().unwrap().is_closed());
         let up = vec3(0.0, 1.0, 0.0);
         assert_eq!(
-            tool.contact(item + up * TOUCH_DISTANCE * 0.5),
+            tool.contact(item + up * world(TOUCH_DISTANCE) * 0.5),
             Contact::Touching
         );
         assert_eq!(
-            tool.contact(item - up * OPEN_PENETRATION * 0.5),
+            tool.contact(item - up * world(OPEN_PENETRATION) * 0.5),
             Contact::Touching
         );
         assert_eq!(
-            tool.contact(item - up * OPEN_PENETRATION * 2.0),
+            tool.contact(item - up * world(OPEN_PENETRATION) * 2.0),
             Contact::Penetrating
         );
         // Deep behind it, as inside an open solid, is still through it.
         assert_eq!(
-            tool.contact(item - up * TOUCH_DISTANCE * 2.0),
+            tool.contact(item - up * world(TOUCH_DISTANCE) * 2.0),
             Contact::Penetrating
         );
     }
@@ -1023,7 +1152,7 @@ mod tests {
 
     #[test]
     fn a_pinch_starts_under_two_centimetres_and_ends_over_three() {
-        let gap = |metres: f32| hand_with_tips(metres / crate::METERS_PER_WORLD_UNIT);
+        let gap = |metres: f32| hand_with_tips(world(metres));
         assert!(!pinching(false, Some(&gap(0.025))));
         assert!(pinching(false, Some(&gap(0.015))));
         assert!(pinching(true, Some(&gap(0.025))), "held through the band");
@@ -1043,9 +1172,9 @@ mod tests {
         press(&mut tool, posing(0.0));
         assert_eq!(tool.capture_failure.as_deref(), Some("window_short"));
         hold(&mut tool, [0.0; STEADY_FRAMES - 2], FRAME);
-        tool.observe([None, posing(STEADY_DISTANCE * 2.0)], true, FRAME);
+        tool.observe([None, posing(world(STEADY_DISTANCE) * 2.0)], true, FRAME);
         // One frame 2 x 5 mm out pulls the 19-frame mean 1/19 of the way.
-        let expected = STEADY_DISTANCE * 2.0 * 18.0 / 19.0 * crate::METERS_PER_WORLD_UNIT * 1000.0;
+        let expected = STEADY_DISTANCE * 2.0 * 18.0 / 19.0 * 1000.0;
         assert_eq!(
             tool.capture_failure.as_deref(),
             Some(format!("jitter max_mm={expected:.1}").as_str())
