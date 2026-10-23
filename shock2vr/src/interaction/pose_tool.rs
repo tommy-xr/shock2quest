@@ -152,8 +152,9 @@ pub(super) struct GripPoseTool {
     pub hand_pose: GripPose,
     /// Whether the workbench has been placed in front of the player.
     pub placed: bool,
-    /// World-space joints of each tracked hand this frame, drawn as gloves.
-    pub tracked: [Option<HandJoints>; 2],
+    /// Each tracked hand's glove, fitted once this frame (world space; the
+    /// posing hand's in the unturned bench), drawn live.
+    pub gloves: [Option<TrackedGlove>; 2],
     /// Averaged posing-hand joints awaiting capture.
     pub capture: Option<HandJoints>,
     /// A capture shown live but not yet saved.
@@ -311,7 +312,7 @@ impl GripPoseTool {
             holder: hand,
             hand_pose,
             placed: false,
-            tracked: [None, None],
+            gloves: [None, None],
             capture: None,
             staged: None,
             last_save_error: None,
@@ -854,7 +855,6 @@ impl GripPoseTool {
             }
         }
         self.requested = requested;
-        self.tracked = tracked;
     }
 
     /// Thumbstick y grows or shrinks the item (`item_scale` as drawn) while
@@ -1055,11 +1055,8 @@ pub(super) fn render(
     let mut objs = Vec::new();
     let mut posed = Vec::new();
     let mut posing_tracked = false;
-    for (index, joints) in tool.tracked.iter().enumerate() {
-        let Some(joints) = joints else { continue };
-        let Some(glove) = tracked_glove(renderer, joints, handedness(index)) else {
-            continue;
-        };
+    for (index, glove) in tool.gloves.iter().enumerate() {
+        let Some(glove) = glove else { continue };
         let drawn = renderer.render_hand(
             glove.fit.position,
             glove.fit.rotation,
@@ -1068,7 +1065,7 @@ pub(super) fn render(
             0.0,
             false,
             None,
-            Some((HandShape::Pose(glove.pose), 1.0)),
+            Some((HandShape::Pose(glove.pose.clone()), 1.0)),
             HandLight::Off,
             lights.clone(),
         );
