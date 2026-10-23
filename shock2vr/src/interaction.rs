@@ -1591,8 +1591,8 @@ impl VrInteraction {
         };
         // The mission refits from the library as it resumes: the saved grip
         // (unsaved scale changes are discarded too), with its collider sized.
-        self.fitted_grips[tool.hand] = None;
-        self.fitted_grips[tool.holder] = None;
+        // Both hands: a save can also change the other hand's mirrored grip.
+        self.fitted_grips = [None, None];
         for hand in [&mut self.left_hand, &mut self.right_hand] {
             *hand = if hand.get_held_entity().is_some() {
                 hand.suspend_maintenance()
@@ -2029,6 +2029,12 @@ fn pose_hand_switch(
     held: Option<&HeldGrip>,
     library: Option<&crate::vr_grip::GripLibrary>,
 ) -> Result<crate::vr_grip::ResolvedGrip, String> {
+    // The bench can only show a glove weapon to the other hand mirrored.
+    if held.is_some_and(|held| {
+        crate::vr_weapon_grip::supports_model(&held.model) && held.model_mirror.is_none()
+    }) {
+        return Err("hold it in that hand".to_owned());
+    }
     if tool.support {
         return Err("posing the support grip".to_owned());
     }
@@ -2038,11 +2044,14 @@ fn pose_hand_switch(
     if tool.staged.is_some() {
         return Err("save or discard first".to_owned());
     }
-    let other = [Handedness::Left, Handedness::Right][1 - tool.hand];
+    let other = 1 - tool.hand;
     held.zip(library)
-        .and_then(|(held, library)| library.lookup_for(&held.model, other, held.model_mirror))
+        .and_then(|(held, library)| {
+            let hand = [Handedness::Left, Handedness::Right][other];
+            library.lookup_for(&held.model, hand, held.model_mirror)
+        })
         .map(|(grip, _)| grip)
-        .ok_or_else(|| format!("no {} grip to start from", ["left", "right"][1 - tool.hand]))
+        .ok_or_else(|| format!("no {} grip to start from", ["left", "right"][other]))
 }
 
 /// The posed hand's item frame from its holder's, when the grip hand is not
@@ -3834,6 +3843,18 @@ mod tests {
         );
     }
 
+    /// A right-hand save also changes a left-held twin's mirrored grip, so
+    /// leaving refits both hands.
+    #[test]
+    fn leaving_the_workbench_refits_the_other_hands_item_too() {
+        let dir = crate::test_support::TempDir::new("pose-exit-refit");
+        let mut interaction = staged_workbench(dir.path().join("o.json"));
+        interaction.fitted_grips[0] = interaction.fitted_grips[1].clone();
+        interaction.toggle_grip_pose_tool();
+        assert!(!interaction.pose_workbench_open());
+        assert!(interaction.fitted_grips.iter().all(Option::is_none));
+    }
+
     /// Device crash: the posing hand's controller lies on the table, which
     /// Quest reports as the zero quaternion. Leaving the workbench must not
     /// place the still-held item with it (NaN -> parry broad-phase panic).
@@ -4255,15 +4276,30 @@ mod tests {
             pose_hand_switch(&tool, Some(&held), Some(&library)),
             Ok(posed_right.mirrored(Handedness::Left.mirror()).unwrap())
         );
-        // An item drawn alike in both hands keeps its own hand's grip.
+        // A glove weapon the bench cannot mirror stays in its holder's hand.
         let unmirrored = HeldGrip {
             model_mirror: None,
             ..held.clone()
         };
         assert_eq!(
             pose_hand_switch(&tool, Some(&unmirrored), Some(&library)),
+            Err("hold it in that hand".to_owned())
+        );
+        // An item drawn alike in both hands keeps its own hand's grip.
+        let prop = HeldGrip {
+            model: "mug".into(),
+            ..unmirrored.clone()
+        };
+        for entry in &mut library.entries {
+            entry.model = "mug".into();
+        }
+        assert_eq!(
+            pose_hand_switch(&tool, Some(&prop), Some(&library)),
             Ok(shipped_left)
         );
+        for entry in &mut library.entries {
+            entry.model = "wrench_h".into();
+        }
         // A left pose of its own wins.
         let posed_left = grip(vec3(0.0, 0.0, 0.07), -10.0);
         library.prepend(crate::vr_grip::GripLibrary {

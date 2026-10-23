@@ -282,7 +282,7 @@ fn transfer_grip(
     if let Some(model_mirror) = mirror {
         grip = grip
             .mirrored(model_mirror)
-            .ok_or("Invalid model reflection")?;
+            .ok_or("Invalid model reflection or grip")?;
     }
     grip.contacts = [None; 5];
     grip.score = 0.0;
