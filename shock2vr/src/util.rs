@@ -375,7 +375,7 @@ pub mod render_source {
     pub const DEBUG_OVERLAY: &str = "debug_overlay";
     /// VR status lines and banners; hidden with flat HUD while a menu owns input.
     pub const GAMEPLAY_HUD: &str = "gameplay_hud";
-    /// The grip pose workbench's scene: its held item and plain room. Its
+    /// The grip pose workbench's scene: its held item and floor grid. Its
     /// hands are [`PLAYER_HANDS`].
     pub const GRIP_WORKBENCH: &str = "grip_workbench";
     /// The grip pose workbench's control panel.
