@@ -1,7 +1,7 @@
 //! Local authoring of prepared grips. The preview and runtime share geometry,
 //! glove poses, transforms, and pose validation.
 use crate::model_preview::{ModelPreview, PreviewScene};
-use cgmath::{Deg, Euler, InnerSpace, Matrix3, Matrix4, Quaternion, Rad, SquareMatrix, Transform};
+use cgmath::{Deg, Euler, InnerSpace, Matrix4, Quaternion, Rad};
 use eframe::egui;
 use shock2vr::{
     Handedness,
@@ -280,25 +280,9 @@ fn transfer_grip(
 ) -> Result<(), String> {
     let mut grip = source.clone();
     if let Some(model_mirror) = mirror {
-        // The glove reflects across hand X. Guns and posed melee geometry use
-        // their own model reflection, including the melee contact-origin offset.
-        let scale = Matrix4::from_scale(grip.item_scale);
-        let pose = Handedness::Left.mirror()
-            * Matrix4::from_translation(grip.offset)
-            * Matrix4::from(grip.rotation)
-            * scale
-            * model_mirror.invert().ok_or("Invalid model reflection")?
-            * Matrix4::from_scale(1.0 / grip.item_scale);
-        grip.offset = pose.w.truncate();
-        grip.rotation = Quaternion::from(Matrix3::from_cols(
-            pose.x.truncate(),
-            pose.y.truncate(),
-            pose.z.truncate(),
-        ))
-        .normalize();
-        grip.anchor = model_mirror
-            .transform_point(cgmath::Point3::from(grip.anchor))
-            .into();
+        grip = grip
+            .mirrored(model_mirror)
+            .ok_or("Invalid model reflection")?;
     }
     grip.contacts = [None; 5];
     grip.score = 0.0;
@@ -1295,6 +1279,7 @@ pub(crate) fn tweak_slider(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::Transform;
     #[test]
     fn overrides_replace_the_entry_the_runtime_picks_or_join_pickups() {
         let (_dir, doc) = document();
