@@ -43,6 +43,8 @@ test(
     const mugPosition = async () =>
       (await game.entities.list()).entities.find((e) => e.id === mug.id)!.position;
     const held = await mugPosition();
+    const mugDraws = async () => (await game.scene.objects({ entityId: mug.id })).objects.length;
+    const drawnOnce = await mugDraws();
 
     await game.input.trigger("ToggleGripPoseTool");
     await game.step({ frames: 2 });
@@ -56,6 +58,7 @@ test(
     let grip = (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
     assert.equal(grip.entity_id, mug.id, "the posing hand keeps the mug");
     assert.ok(distance(await mugPosition(), held) < 1e-3, "the mug stays where it was held");
+    assert.equal(await mugDraws(), drawnOnce * 4, "the mug is drawn again in three extra views");
 
     // Form the grip with the tracked right hand, then pinch the left.
     await game.input.setMany({

@@ -18930,6 +18930,28 @@ impl MissionCore {
             self.use_mode,
             object_lights.as_ref(),
         ));
+        // The grip pose tool's extra views of the held item, beside its gloves.
+        if let Some((entity, views)) = self.interaction.pose_tool_views() {
+            let item: Vec<SceneObject> = scene
+                .iter()
+                .filter(|object| {
+                    // The item's own model, not effects tagged with it (a
+                    // laser sight turned about the item would cross the view).
+                    object.debug_tag().is_some_and(|tag| {
+                        tag.entity_id == Some(entity.inner())
+                            && tag.source.as_deref() == Some("entity")
+                    })
+                })
+                .cloned()
+                .collect();
+            for view in views {
+                for object in &item {
+                    let mut copy = object.clone();
+                    copy.set_transform(view * object.get_transform());
+                    scene.push(copy);
+                }
+            }
+        }
 
         if options.presentation_mode == crate::PresentationMode::Vr {
             // The card rides the belt, so like the belt it needs the cyber interface.

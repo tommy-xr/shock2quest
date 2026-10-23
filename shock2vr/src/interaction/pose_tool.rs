@@ -5,11 +5,13 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
-use cgmath::{InnerSpace, Rotation, Vector3};
+use cgmath::{
+    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3, Vector3,
+};
 use shipyard::EntityId;
 
 use crate::hand_capture::HandJoints;
-use crate::vr_grip::{BakedGripEntry, GripLibrary, ResolvedGrip};
+use crate::vr_grip::{BakedGripEntry, GripLibrary, GripSurface, ResolvedGrip};
 use crate::vr_support::GripPose;
 
 /// Thumb and index tips closer than this pinch (world units).
@@ -20,6 +22,10 @@ const CAPTURE_FRAMES: usize = 10;
 const SCALE_RATE: f32 = 0.7;
 /// The grip editor's item scale range.
 const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.1..=3.0;
+/// A glove fingertip this close to the item's surface touches it (world units).
+const TOUCH_DISTANCE: f32 = 0.01 / crate::METERS_PER_WORLD_UNIT;
+/// How far beside the item each extra view of it sits (world units).
+const VIEW_SPACING: f32 = 0.35 / crate::METERS_PER_WORLD_UNIT;
 
 pub(super) struct GripPoseTool {
     /// The posing hand (0 left, 1 right) and the item it holds.
@@ -32,6 +38,12 @@ pub(super) struct GripPoseTool {
     /// Averaged posing-hand joints awaiting capture.
     pub capture: Option<HandJoints>,
     pub overrides_path: PathBuf,
+    /// The held item's model frame (where its grip surface lies) and scale,
+    /// and that surface, for the fingertip contacts and the extra views.
+    pub item: Option<(GripPose, f32)>,
+    pub surface: Option<GripSurface>,
+    /// The player, whom the extra views face.
+    pub viewer: Vector3<f32>,
     recent: VecDeque<HandJoints>,
     pinched: bool,
 }
@@ -50,6 +62,9 @@ impl GripPoseTool {
             tracked: [None, None],
             capture: None,
             overrides_path,
+            item: None,
+            surface: None,
+            viewer: hand_pose.position,
             recent: VecDeque::new(),
             pinched: false,
         }
@@ -89,6 +104,46 @@ impl GripPoseTool {
     /// the saved grip to compare the live hand against.
     pub fn hides_controller_glove(&self, hand: usize) -> bool {
         hand != self.hand && self.tracked[hand].is_some()
+    }
+
+    /// Transforms that redraw the item and its gloves beside it, turned to
+    /// show the viewer its far side, its top and its profile.
+    pub fn views(&self) -> Option<[Matrix4<f32>; 3]> {
+        let (item, _) = self.item?;
+        let item = item.position;
+        let up = Vector3::unit_y();
+        let toward = crate::scripts::ai::ai_util::normalized_horizontal(self.viewer - item)?;
+        let side = up.cross(toward);
+        let around = |rotation: Quaternion<f32>, offset: Vector3<f32>| {
+            Matrix4::from_translation(item + offset)
+                * Matrix4::from(rotation)
+                * Matrix4::from_translation(-item)
+        };
+        Some([
+            around(
+                Quaternion::from_axis_angle(up, Deg(180.0)),
+                side * VIEW_SPACING,
+            ),
+            around(
+                Quaternion::between_vectors(up, toward),
+                -side * VIEW_SPACING,
+            ),
+            around(
+                Quaternion::from_axis_angle(up, Deg(90.0)),
+                up * VIEW_SPACING,
+            ),
+        ])
+    }
+
+    /// Which of a glove's world-space fingertips touch the held item.
+    pub fn touching(&self, tips: [Vector3<f32>; 5]) -> [bool; 5] {
+        let (Some((item, scale)), Some(surface)) = (self.item, &self.surface) else {
+            return [false; 5];
+        };
+        tips.map(|tip| {
+            let local = item.rotation.invert().rotate_vector(tip - item.position) / scale;
+            surface.distance(Point3::from_vec(local)) * scale < TOUCH_DISTANCE
+        })
     }
 }
 
@@ -193,6 +248,72 @@ mod tests {
         assert!(
             tool.capture.is_none(),
             "losing the posing hand restarts its window"
+        );
+    }
+
+    fn tool_with_item(position: Vector3<f32>, viewer: Vector3<f32>) -> GripPoseTool {
+        let mut tool = GripPoseTool::new(
+            1,
+            EntityId::dead(),
+            GripPose {
+                position,
+                rotation: Quaternion::from_angle_y(Deg(0.0)),
+            },
+            PathBuf::new(),
+        );
+        tool.item = Some((
+            GripPose {
+                position,
+                rotation: Quaternion::from_angle_y(Deg(90.0)),
+            },
+            2.0,
+        ));
+        tool.viewer = viewer;
+        tool
+    }
+
+    #[test]
+    fn views_sit_beside_the_item_turned_toward_the_viewer() {
+        use cgmath::Transform;
+        let item = vec3(1.0, 2.0, 3.0);
+        let tool = tool_with_item(item, item + vec3(0.0, -1.0, 4.0));
+        let [back, top, profile] = tool.views().unwrap();
+        let toward = vec3(0.0, 0.0, 1.0);
+        let at = |view: Matrix4<f32>, p: Vector3<f32>| {
+            view.transform_point(Point3::from_vec(p)).to_vec()
+        };
+        // Each view moves the item aside, by the same spacing.
+        for view in [back, top, profile] {
+            assert!(((at(view, item) - item).magnitude() - VIEW_SPACING).abs() < 1e-4);
+        }
+        // The far side faces the viewer, and the top tips toward them.
+        let back_center = at(back, item);
+        assert!((at(back, item - toward) - (back_center + toward)).magnitude() < 1e-4);
+        let top_center = at(top, item);
+        let up = vec3(0.0, 1.0, 0.0);
+        assert!((at(top, item + up) - (top_center + toward)).magnitude() < 1e-4);
+        assert!((at(profile, item) - (item + up * VIEW_SPACING)).magnitude() < 1e-4);
+        // Straight above the item there is no direction to face.
+        assert!(tool_with_item(item, item + up).views().is_none());
+    }
+
+    #[test]
+    fn fingertips_touch_within_a_centimetre_of_the_scaled_surface() {
+        let p = |x: f32, y: f32, z: f32| Point3::new(x, y, z);
+        // A wide square in the model's y = 0 plane.
+        let plane = [
+            [p(-1.0, 0.0, -1.0), p(1.0, 0.0, -1.0), p(1.0, 0.0, 1.0)],
+            [p(-1.0, 0.0, -1.0), p(1.0, 0.0, 1.0), p(-1.0, 0.0, 1.0)],
+        ];
+        let item = vec3(0.0, 5.0, 0.0);
+        let mut tool = tool_with_item(item, item + vec3(0.0, 0.0, 4.0));
+        assert_eq!(tool.touching([item; 5]), [false; 5], "no surface yet");
+        tool.surface = GripSurface::new(&plane);
+        let near = item + vec3(0.0, TOUCH_DISTANCE * 0.5, 0.0);
+        let far = item + vec3(0.0, TOUCH_DISTANCE * 2.0, 0.0);
+        assert_eq!(
+            tool.touching([near, far, near, far, near]),
+            [true, false, true, false, true]
         );
     }
 

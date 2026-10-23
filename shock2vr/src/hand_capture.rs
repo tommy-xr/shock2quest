@@ -22,7 +22,8 @@ pub type HandJoints = [Vector3<f32>; HAND_JOINT_COUNT];
 /// Metacarpal bases (index..little): rigid relative to the wrist, unlike the
 /// knuckles, which move as the palm cups.
 const METACARPALS: [usize; 4] = [6, 11, 16, 21];
-const TIPS: [usize; 5] = [5, 10, 15, 20, 25];
+/// Fingertip joints, thumb to little.
+pub(crate) const TIPS: [usize; 5] = [5, 10, 15, 20, 25];
 
 fn parent(bone: usize) -> usize {
     match bone {
