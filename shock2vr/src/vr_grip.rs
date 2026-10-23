@@ -1665,19 +1665,7 @@ mod tests {
         let library: GripLibrary =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         for entry in library.entries.iter().filter(|e| e.hand == "right") {
-            // `vr_weapon_grip::model_mirror` without the assets: a gun
-            // reflects across its barrel plane, a melee rig across the hand's
-            // (its contact point lies on that plane).
-            let mirror = if crate::vr_weapon_grip::is_melee(&entry.model) {
-                Handedness::Left.mirror()
-            } else {
-                crate::vr_config::gun_model_frame(&entry.model, Handedness::Left)
-                    * cgmath::SquareMatrix::invert(&crate::vr_config::gun_model_frame(
-                        &entry.model,
-                        Handedness::Right,
-                    ))
-                    .unwrap()
-            };
+            let mirror = crate::vr_weapon_grip::named_model_mirror(&entry.model).unwrap();
             let mirrored = entry.grip.mirrored(mirror).unwrap();
             let left = library.lookup(&entry.model, "left").unwrap();
             assert!(
