@@ -2,9 +2,11 @@
 //! mission and shows, over a grid floor of its own, the held item with its saved
 //! grip's glove floating in front of the player. A tracked hand forms the grip around it; the other hand's
 //! controller trigger (or its tracked pinch) stages that pose live, its lower
-//! button saves it as a headset override and its upper button discards it,
-//! and its squeeze turns the bench to examine it.
-//! A panel beside the bench (`panel`) shows the state and repeats the controls.
+//! button test-holds it (the posing hand's controller holds the item as play
+//! would) and its upper button discards it, and its squeeze turns the bench
+//! to examine it. A gun's capture keeps the previous grip's aim.
+//! A panel beside the bench (`panel`) shows the state, saves, and repeats
+//! the controls.
 pub(super) mod panel;
 
 use std::collections::VecDeque;
@@ -62,6 +64,13 @@ const HEAD_LIGHT_AT_METRE: f32 = 0.6;
 /// the controller, not a pointing finger), and runs this far when it misses.
 const BEAM_CLEARANCE: f32 = 0.04;
 const BEAM_MISS_LENGTH: f32 = 1.0;
+/// A test-held gun's aim lines: their length and halo/core radii, and the
+/// firing line's (orange) and controller aim line's (cyan) halo/core colours.
+const AIM_LINE_LENGTH: f32 = 1.0;
+const AIM_LINE_HALO: f32 = 0.004;
+const AIM_LINE_CORE: f32 = 0.0012;
+const FIRING_LINE: [Vector3<f32>; 2] = [Vector3::new(1.0, 0.45, 0.1), Vector3::new(1.0, 0.8, 0.5)];
+const AIM_LINE: [Vector3<f32>; 2] = [Vector3::new(0.1, 0.7, 1.0), Vector3::new(0.6, 0.9, 1.0)];
 
 /// Whether a hand's controller is held, so aims the panel ray. The runtime
 /// must track it; the posing hand's is set down once that hand is tracked.
@@ -146,6 +155,14 @@ pub(super) struct GripPoseTool {
     pub support_mode: Result<(), String>,
     /// The free hand is tracked, so it works the panel by fingertip.
     fingertip: bool,
+    /// Test hold: the posing hand's controller holds the item as play does.
+    pub test_hold: Option<TestHold>,
+    /// The held item's muzzle (model space) if gameplay knows its barrel:
+    /// captures keep its aim, and Align aim sets it.
+    pub muzzle: Option<crate::weapon_muzzle::MuzzleFallback>,
+    /// While test-holding a gun with its controller tracked, where it fires
+    /// and where the controller aims.
+    pub aim: Option<AimLines>,
     /// How the bench is turned for viewing about `pivot`, and while the
     /// free controller's squeeze turns it, that controller's rotation and
     /// the turn as the squeeze began.
@@ -161,6 +178,57 @@ pub(super) struct GripPoseTool {
     pinching: bool,
     /// The free hand was lost since last seen open.
     pinch_lost: bool,
+}
+
+/// Test hold's controller: its last tracked world pose (`None` until first
+/// tracked; the item stays on the bench till then) and whether it is
+/// tracked this frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct TestHold {
+    pub controller: Option<GripPose>,
+    pub tracked: bool,
+}
+
+impl TestHold {
+    /// Follow this frame's controller pose; an untracked one (`None`) leaves
+    /// the item where it was, as play does.
+    pub fn follow(&mut self, controller: Option<GripPose>) {
+        self.tracked = controller.is_some();
+        self.controller = controller.or(self.controller);
+    }
+}
+
+/// A test-held gun's aim, world space: its muzzle and the way it fires, and
+/// the controller's position and the way it aims.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AimLines {
+    pub muzzle: Vector3<f32>,
+    pub firing: Vector3<f32>,
+    pub controller: Vector3<f32>,
+    pub aim: Vector3<f32>,
+}
+
+impl AimLines {
+    /// For the item's model drawn at `model` and `scale`, held by
+    /// `controller`.
+    pub fn new(
+        model: GripPose,
+        scale: f32,
+        muzzle: crate::weapon_muzzle::MuzzleFallback,
+        controller: GripPose,
+    ) -> Self {
+        use cgmath::EuclideanSpace;
+        Self {
+            muzzle: model.point(muzzle.point.to_vec() * scale),
+            firing: model.rotation.rotate_vector(muzzle.axis).normalize(),
+            controller: controller.position,
+            aim: controller.rotation.rotate_vector(CONTROLLER_AIM),
+        }
+    }
+
+    pub fn error_deg(&self) -> f32 {
+        Deg::from(self.firing.angle(self.aim)).0
+    }
 }
 
 impl GripPoseTool {
@@ -208,6 +276,9 @@ impl GripPoseTool {
             support: false,
             support_mode: Err("one-handed".to_owned()),
             fingertip: false,
+            test_hold: None,
+            muzzle: None,
+            aim: None,
             turn: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             turning: None,
             squeezed: true,
@@ -265,6 +336,56 @@ impl GripPoseTool {
         } else {
             self.hand
         }
+    }
+
+    /// Whether test hold can start, or why not: it holds a snapshot, of the
+    /// primary grip only (a support pose needs the gun in the other hand).
+    pub fn test_hold_entry(&self) -> Result<(), String> {
+        if self.support {
+            Err("primary grip only".to_owned())
+        } else if self.staged.is_none() {
+            Err("snapshot first".to_owned())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Whether Align aim can act, or why not: on a test-held gun.
+    pub fn align_entry(&self) -> Result<(), String> {
+        if self.test_hold.is_none() {
+            Err("test hold first".to_owned())
+        } else if self.muzzle.is_none() {
+            Err("no barrel".to_owned())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Start test hold (if `test_hold_entry` allows) or end it; whether it
+    /// changed. Either way whatever is held acts only once let go.
+    pub fn toggle_test_hold(&mut self) -> bool {
+        if self.test_hold.take().is_none() {
+            if self.test_hold_entry().is_err() {
+                return false;
+            }
+            self.test_hold = Some(TestHold::default());
+        }
+        self.aim = None;
+        self.rearm();
+        true
+    }
+
+    /// Where the posing glove holds the item: on the bench, or in test hold
+    /// at its controller once tracked.
+    pub fn holding(&self) -> GripPose {
+        self.test_hold
+            .and_then(|hold| hold.controller)
+            .unwrap_or(self.hand_pose)
+    }
+
+    /// The item is at its controller, off the (turnable) bench.
+    fn off_bench(&self) -> bool {
+        self.test_hold.is_some_and(|hold| hold.controller.is_some())
     }
 
     /// A different hand is posed: what was tracked, averaged or pressed for
@@ -398,6 +519,9 @@ impl GripPoseTool {
             "status": view.status.text(),
             "switch_disabled": view.switch.err(),
             "support_disabled": view.support_mode.err(),
+            // Ending a test hold is always allowed.
+            "test_hold_disabled": view.test_hold_entry.err().filter(|_| !view.test_hold),
+            "align_disabled": view.align.err(),
             "hover": self.hover,
             "panel": placed,
             // The bench's view turn about its pivot (world space).
@@ -407,14 +531,25 @@ impl GripPoseTool {
 
     /// What the panel shows.
     pub fn panel_view(&self) -> panel::PanelView {
+        let posing = [Handedness::Left, Handedness::Right][self.posing()];
+        let hold = self.test_hold.map(|hold| panel::Hold {
+            controller: posing,
+            tracked: hold.tracked,
+            aim_error_deg: self.aim.map(|aim| aim.error_deg()),
+            saved: self.saved,
+        });
         panel::PanelView {
-            posing: [Handedness::Left, Handedness::Right][self.posing()],
+            posing,
             status: panel::Status::derive(
                 self.staged.is_some(),
                 self.saved,
                 self.last_save_error.as_deref(),
                 self.capture_failure.as_deref(),
+                hold,
             ),
+            test_hold: self.test_hold.is_some(),
+            test_hold_entry: self.test_hold_entry(),
+            align: self.align_entry(),
             switch: self.switch.clone(),
             support: self.support,
             support_mode: self.support_mode.clone(),
@@ -472,8 +607,11 @@ impl GripPoseTool {
 
     /// Draws the bench (item and posed gloves) as turned. The
     /// tool works in the unturned bench, so captures stay relative to the
-    /// item.
+    /// item. A test-held item is where its controller is, unturned.
     pub fn turn_matrix(&self) -> Matrix4<f32> {
+        if self.off_bench() {
+            return Matrix4::from_scale(1.0);
+        }
         let pivot = self.pivot();
         Matrix4::from_translation(pivot)
             * Matrix4::from(self.turn)
@@ -603,7 +741,8 @@ impl GripPoseTool {
             Some(joints) => self.pinching = pinching(self.pinching, Some(joints)),
         }
         let requested = trigger || self.pinching;
-        if requested && !self.requested {
+        // Test hold snapshots nothing: the posing hand is round its controller.
+        if requested && !self.requested && self.test_hold.is_none() {
             match steady_mean(&self.recent) {
                 Ok(mean) => {
                     self.capture = Some(mean);
@@ -631,8 +770,12 @@ impl GripPoseTool {
     }
 
     /// Transforms that redraw the item and its gloves beside it, turned to
-    /// show the viewer its far side, its top and its profile.
+    /// show the viewer its far side, its top and its profile. None for a
+    /// test-held item, which the player turns in hand.
     pub fn views(&self) -> Option<[Matrix4<f32>; 3]> {
+        if self.off_bench() {
+            return None;
+        }
         let (item, _) = self.item?;
         let item = item.position;
         let up = Vector3::unit_y();
@@ -838,7 +981,7 @@ pub(super) fn render(
         posing_tracked = true;
         posed.extend(drawn);
     }
-    let held = grip.map(|grip| (tool.hand_pose, grip.fingers.hand_shape_at(0.0)));
+    let held = grip.map(|grip| (tool.holding(), grip.fingers.hand_shape_at(0.0)));
     let (posed_glove, frozen) = if tool.support {
         (support, held)
     } else {
@@ -947,12 +1090,85 @@ pub(super) fn render_panel(
     objects
 }
 
+/// A test-held gun's two aim lines (`AimLines`): where it fires, from its
+/// muzzle, and where its controller aims, from the controller.
+pub(super) fn render_aim(tool: &GripPoseTool) -> Vec<SceneObject> {
+    let Some(aim) = tool.aim else {
+        return Vec::new();
+    };
+    let mut lines: Vec<SceneObject> = [
+        (aim.muzzle, aim.firing, FIRING_LINE),
+        (aim.controller, aim.aim, AIM_LINE),
+    ]
+    .into_iter()
+    .flat_map(|(start, direction, [halo, core])| {
+        engine::scene::laser_material::beam(
+            start,
+            direction * world(AIM_LINE_LENGTH),
+            (world(AIM_LINE_HALO), halo),
+            (world(AIM_LINE_CORE), core),
+            0.0,
+        )
+    })
+    .collect();
+    crate::util::tag_render_source(&mut lines, crate::util::render_source::GRIP_WORKBENCH_AIM);
+    lines
+}
+
 /// Where a grip puts its item for a hand pose (as `fit_held_items` places it).
 pub(super) fn item_pose(hand: GripPose, grip: &ResolvedGrip, contact: Vector3<f32>) -> GripPose {
     let offset = grip.offset + grip.rotation.rotate_vector(contact * grip.item_scale);
     GripPose {
         position: hand.point(offset),
         rotation: hand.rotation * grip.rotation,
+    }
+}
+
+/// The hand pose that puts the item at `item` with `grip` (`item_pose`
+/// inverted).
+pub(super) fn hand_for_item(
+    item: GripPose,
+    grip: &ResolvedGrip,
+    contact: Vector3<f32>,
+) -> GripPose {
+    let rotation = item.rotation * grip.rotation.invert();
+    let offset = grip.offset + grip.rotation.rotate_vector(contact * grip.item_scale);
+    GripPose {
+        position: item.position - rotation.rotate_vector(offset),
+        rotation,
+    }
+}
+
+/// The controller's aim in its own frame: play's hand ray, and the way a gun
+/// held with an aligned grip fires.
+pub(super) const CONTROLLER_AIM: Vector3<f32> = Vector3 {
+    x: 0.0,
+    y: 0.0,
+    z: -1.0,
+};
+
+/// Which way `grip`'s item fires in hand space, given its barrel (item
+/// space, `weapon_muzzle`'s axis).
+pub(super) fn firing_direction(grip: &ResolvedGrip, barrel: Vector3<f32>) -> Vector3<f32> {
+    grip.rotation.rotate_vector(barrel).normalize()
+}
+
+/// `grip` turned about the hand's origin so its item fires along `target`
+/// (hand space). The turn is the shortest one, which has no twist about the
+/// firing direction: the item's roll about its barrel is kept, as are where
+/// on the item the hand sits, its fingers and the item's scale.
+pub(super) fn aimed(
+    grip: ResolvedGrip,
+    barrel: Vector3<f32>,
+    target: Vector3<f32>,
+) -> ResolvedGrip {
+    let turn = Quaternion::from_arc(firing_direction(&grip, barrel), target.normalize(), None);
+    // The item's origin (offset plus its contact term) turns about the hand;
+    // the contact term turns with the rotation, so only the offset is left.
+    ResolvedGrip {
+        offset: turn.rotate_vector(grip.offset),
+        rotation: (turn * grip.rotation).normalize(),
+        ..grip
     }
 }
 
@@ -1073,13 +1289,161 @@ mod tests {
         GripPoseTool::new(1, EntityId::dead(), pose, PathBuf::new())
     }
 
+    /// A held gun's barrel, item space (`weapon_muzzle`'s -X for `sg_h`).
+    const BARREL: cgmath::Vector3<f32> = cgmath::Vector3 {
+        x: -1.0,
+        y: 0.0,
+        z: 0.0,
+    };
+
+    fn same_rotation(a: Quaternion<f32>, b: Quaternion<f32>) -> bool {
+        a.normalize().dot(b.normalize()).abs() > 1.0 - 1e-6
+    }
+
+    /// Where the hand's origin is in the item's frame (no contact offset).
+    fn hand_on_item(grip: &ResolvedGrip) -> cgmath::Vector3<f32> {
+        grip.rotation.invert().rotate_vector(-grip.offset)
+    }
+
+    #[test]
+    fn a_capture_keeps_the_previous_grips_aim_and_takes_its_roll_position_and_fingers() {
+        let previous = grip();
+        let barrel = firing_direction(&previous, BARREL);
+        // The mimed hand: rolled 30 degrees about the barrel, then swung 28
+        // degrees off it (about an axis across the barrel), as a wrist held
+        // without the controller is.
+        let roll = Quaternion::from_axis_angle(barrel, Deg(30.0));
+        let across = barrel.cross(Vector3::unit_y()).normalize();
+        let swing = Quaternion::from_axis_angle(across, Deg(28.0));
+        let captured = ResolvedGrip {
+            offset: vec3(-0.05, 0.02, 0.07),
+            rotation: swing * roll * previous.rotation,
+            fingers: FingerPose::curls([0.9; 5]),
+            ..grip()
+        };
+        assert!(
+            firing_direction(&captured, BARREL).angle(barrel) > Deg(27.0).into(),
+            "the capture aims off the previous grip"
+        );
+        let kept = aimed(captured.clone(), BARREL, barrel);
+        let error = Deg::from(firing_direction(&kept, BARREL).angle(barrel)).0;
+        assert!(
+            error < 1e-3,
+            "fires as the previous grip did: {error} deg off"
+        );
+        assert!(
+            same_rotation(kept.rotation, roll * previous.rotation),
+            "with the capture's roll about the barrel"
+        );
+        assert!(
+            (hand_on_item(&kept) - hand_on_item(&captured)).magnitude() < 1e-5,
+            "the hand sits where it was captured on the item"
+        );
+        assert_eq!(kept.fingers, captured.fingers);
+        assert_eq!(kept.item_scale, captured.item_scale);
+    }
+
+    #[test]
+    fn aligning_aims_the_barrel_down_the_controller() {
+        let skewed = ResolvedGrip {
+            rotation: Quaternion::from_angle_y(Deg(28.2)) * Quaternion::from_angle_x(Deg(2.4)),
+            ..grip()
+        };
+        let aligned = aimed(skewed.clone(), BARREL, CONTROLLER_AIM);
+        let error = Deg::from(firing_direction(&aligned, BARREL).angle(CONTROLLER_AIM)).0;
+        assert!(error < 1e-3, "{error} deg off the controller");
+        assert!((hand_on_item(&aligned) - hand_on_item(&skewed)).magnitude() < 1e-5);
+    }
+
+    #[test]
+    fn the_hand_that_holds_an_item_puts_it_back_there() {
+        let grip = grip();
+        let item = GripPose {
+            position: vec3(1.0, 2.0, 3.0),
+            rotation: Quaternion::from_angle_x(Deg(40.0)),
+        };
+        let contact = vec3(0.01, 0.02, -0.03);
+        let placed = item_pose(hand_for_item(item, &grip, contact), &grip, contact);
+        assert!((placed.position - item.position).magnitude() < 1e-5);
+        assert!(same_rotation(placed.rotation, item.rotation));
+    }
+
+    fn staged() -> crate::interaction::StagedGrip {
+        crate::interaction::StagedGrip::Grip {
+            entry: entry("right", 1.0),
+            previous: None,
+            hand_pose: posing_tool().hand_pose,
+        }
+    }
+
+    #[test]
+    fn test_hold_starts_only_on_a_primary_snapshot_and_snapshots_nothing() {
+        let mut tool = posing_tool();
+        assert!(!tool.toggle_test_hold(), "nothing staged");
+        assert_eq!(tool.test_hold_entry(), Err("snapshot first".to_owned()));
+        tool.staged = Some(staged());
+        tool.support = true;
+        assert!(!tool.toggle_test_hold());
+        assert_eq!(tool.test_hold_entry(), Err("primary grip only".to_owned()));
+        tool.support = false;
+        assert!(tool.toggle_test_hold());
+        assert_eq!(tool.align_entry(), Err("no barrel".to_owned()));
+        // A steady posing hand and a fresh trigger press capture nothing.
+        hold(&mut tool, std::iter::repeat_n(0.0, STEADY_FRAMES), FRAME);
+        tool.observe([None, posing(0.0)], false, FRAME);
+        tool.observe([None, posing(0.0)], true, FRAME);
+        assert!(tool.capture.is_none());
+        // Ending it needs nothing staged; a trigger held through it waits
+        // to be let go.
+        tool.staged = None;
+        assert!(tool.toggle_test_hold());
+        assert!(tool.test_hold.is_none());
+        for _ in 0..STEADY_FRAMES * 2 {
+            tool.observe([None, posing(0.0)], true, FRAME);
+        }
+        assert!(tool.capture.is_none(), "held through the switch");
+        tool.observe([None, posing(0.0)], false, FRAME);
+        tool.observe([None, posing(0.0)], true, FRAME);
+        assert!(tool.capture.is_some(), "a fresh press captures again");
+    }
+
+    #[test]
+    fn a_test_held_item_leaves_the_bench_once_its_controller_is_tracked() {
+        let mut tool = posing_tool();
+        tool.staged = Some(staged());
+        tool.turn = Quaternion::from_angle_y(Deg(90.0));
+        tool.item = Some((tool.hand_pose, 1.0));
+        tool.viewer = vec3(0.0, 0.0, 5.0);
+        assert!(tool.toggle_test_hold());
+        assert_eq!(
+            tool.holding().position,
+            tool.hand_pose.position,
+            "on the bench until tracked"
+        );
+        assert!(tool.views().is_some());
+        let controller = GripPose {
+            position: vec3(1.0, 2.0, 3.0),
+            rotation: Quaternion::from_angle_x(Deg(10.0)),
+        };
+        tool.test_hold.as_mut().unwrap().follow(Some(controller));
+        assert_eq!(tool.holding().position, controller.position);
+        assert_eq!(tool.turn_matrix(), Matrix4::from_scale(1.0), "unturned");
+        assert!(tool.views().is_none());
+        // Lost: it stays where the controller last was.
+        tool.test_hold.as_mut().unwrap().follow(None);
+        assert!(!tool.test_hold.unwrap().tracked);
+        assert_eq!(tool.holding().position, controller.position);
+        let status = tool.panel_view().status.text();
+        assert_eq!(status, "Pick up the Right controller");
+    }
+
     #[test]
     fn each_trigger_press_is_decided_by_its_own_ray() {
         use crate::input_context::{Hand, InputContext};
         use crate::ui::test_support::{hand_aimed_at, hand_aimed_away, test_panel};
         let mut tool = posing_tool();
         tool.panel = Some(test_panel());
-        let reset_view = cgmath::vec2(103.0, 191.0);
+        let reset_view = cgmath::vec2(103.0, 241.0);
         let mut input = InputContext::default();
         // The posing (right) controller set down, resting on its trigger.
         input.right_hand = Hand {
@@ -1108,7 +1472,7 @@ mod tests {
         let mut tool = posing_tool();
         tool.panel = Some(test_panel());
         let mut input = InputContext::default();
-        input.left_hand = hand_aimed_at(panel::CANVAS, cgmath::vec2(103.0, 191.0), 0.0);
+        input.left_hand = hand_aimed_at(panel::CANVAS, cgmath::vec2(103.0, 241.0), 0.0);
         tool.point(&input);
         // The pause menu over the workbench takes this press (its Resume).
         tool.rearm();
@@ -1505,7 +1869,7 @@ mod tests {
         use crate::ui::test_support::{hand_aimed_away, test_panel};
         let panel = test_panel();
         let reset_view =
-            crate::ui::canvas_to_panel_world(panel::CANVAS, &panel, cgmath::vec2(103.0, 191.0));
+            crate::ui::canvas_to_panel_world(panel::CANVAS, &panel, cgmath::vec2(103.0, 241.0));
         // The free (left) index tip pushed from in front to through Reset view.
         let tip_at = |depth: f32| {
             let mut joints = [vec3(0.0, 0.0, 0.0); HAND_JOINT_COUNT];
