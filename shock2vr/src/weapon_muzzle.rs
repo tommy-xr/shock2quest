@@ -201,6 +201,37 @@ pub fn aim_error_deg(rotation: Quaternion<f32>, barrel: Vector3<f32>) -> f32 {
     Deg::from(Rad(sin.atan2(cos))).0
 }
 
+/// The glove turn (`ResolvedGrip::hand_rotation`) that takes an item held
+/// with `rotation` (its grip's, in the glove's frame) `amount` (0..=1) of
+/// the way to firing along the controller's aim: the shortest arc, so no
+/// twist about the barrel. At 1 the turned grip's `aim_error_deg` is 0; at 0
+/// it is exactly no turn.
+pub fn aim_turn(rotation: Quaternion<f32>, barrel: Vector3<f32>, amount: f32) -> Quaternion<f32> {
+    let none = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+    if amount.is_nan() || amount <= 0.0 {
+        return none;
+    }
+    let firing = rotation.rotate_vector(barrel).normalize();
+    let full = Quaternion::from_arc(firing, CONTROLLER_AIM, None);
+    none.slerp(full, amount.min(1.0)).normalize()
+}
+
+/// How far along `aim_turn`'s arc a glove turn is (0..=1): its angle over
+/// the full turn's. 0 for a grip that already fires straight.
+pub fn aim_turn_amount(
+    rotation: Quaternion<f32>,
+    barrel: Vector3<f32>,
+    hand_rotation: Quaternion<f32>,
+) -> f32 {
+    let full = aim_error_deg(rotation, barrel);
+    let turned = Deg::from(Rad(2.0 * hand_rotation.normalize().s.abs().min(1.0).acos())).0;
+    if full < 1e-3 {
+        0.0
+    } else {
+        (turned / full).clamp(0.0, 1.0)
+    }
+}
+
 /// How the grip tools draw `AimLines`: a metre long, the firing line orange
 /// and the controller's aim cyan (halo, core colours).
 pub const AIM_LINE_METRES: f32 = 1.0;
