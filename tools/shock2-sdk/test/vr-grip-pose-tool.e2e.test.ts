@@ -6,6 +6,7 @@ import { attachSupportHand, findRepoRoot, GameServer, setHandWorldPose } from ".
 import type { Quat, ResolvedGrip, Vec3 } from "../src/types.js";
 import { isolatedDataRoot } from "./helpers/isolated-data-root.js";
 import { muzzleFrameOf } from "./helpers/weapon.js";
+import { pauseEntry, vrClickCanvasPoint } from "./helpers/frontend-menu.js";
 import {
   add, aimVrHandAt, cross, holdDebugMug, normalize, quatConjugate, quatFromTo, quatMultiply, quatRotate, scale, sub,
 } from "./helpers/vr-hand.js";
@@ -548,6 +549,48 @@ test(
     assert.equal(right.entity_id, mug.id);
     assert.deepEqual(right.grip, rightBefore, "the right hand's grip is unchanged");
     assert.ok(!grips.some((g) => g.hand === "left"), "the left hand holds nothing");
+  },
+);
+
+test(
+  "grip pose tool: quitting from the pause menu saves a staged capture",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    // Held where the player starts: the pause panel helper assumes an
+    // unmoved pawn.
+    await using game = await GameServer.launch({ mission: "debug_minimal", debugFlags: ["--vr"] });
+    const path = join(data.root, "vr-grip-overrides.json");
+    await game.step({ frames: 10 });
+    await game.input.set("right_hand.squeeze", 1);
+    await game.player.spawnItem("Wrench", { hand: "right" });
+    await game.step({ frames: 5 });
+    const unit = await metresPerWorldUnit(game);
+    await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 2 });
+    const hand = (await game.input.state()).right_hand.position;
+    await game.input.setMany({
+      "right_hand.squeeze": 0,
+      "right_hand.position": [hand[0] + 1, hand[1] - 0.5, hand[2]],
+      "right_hand.joints": trackedHand(hand, unit),
+    });
+    await game.step({ frames: 30 });
+    await aimAway(game, "left");
+    await click(game, "left");
+    assert.equal((await workbench(game)).tool.staged, true);
+    assert.ok(!existsSync(path));
+
+    await game.input.set("right_hand.joints", null);
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 10 });
+    assert.equal((await game.info()).paused, true);
+    await vrClickCanvasPoint(game, pauseEntry(4));
+    await game.step({ frames: 10 });
+    assert.equal((await game.info()).mission, "main_menu", "quit");
+    const saved = JSON.parse(readFileSync(path, "utf8")) as { entries: { model: string; hand: string }[] };
+    assert.deepEqual(saved.entries.map((e) => [e.model, e.hand]), [["wrench_h", "right"]]);
   },
 );
 
