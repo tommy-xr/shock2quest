@@ -2643,7 +2643,9 @@ impl PlayerInteraction for VrInteraction {
                         rotation,
                     })
                 }
-                None => Some(grip.glove_pose(poses[index])).filter(|pose| pose.is_tracked()),
+                // Unturned, the tracked pose already is the glove's.
+                None => Some(grip.glove_pose(poses[index]))
+                    .filter(|pose| !grip.hand_rotation.is_one() && pose.is_tracked()),
             };
         }
         self.synchronize_slide(world);
