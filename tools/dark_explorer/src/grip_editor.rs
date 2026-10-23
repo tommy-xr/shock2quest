@@ -30,12 +30,51 @@ pub(crate) struct CurlPoseEditor {
     pub preview: f32,
 }
 impl CurlPoseEditor {
-    pub fn show(
+    /// The finger mode and its curls. A VR snapshot shows its estimated curls
+    /// read-only until converted to curls.
+    pub fn show_fingers(
+        &mut self,
+        ui: &mut egui::Ui,
+        fingers: &mut FingerPose,
+        preview_label: &str,
+    ) {
+        if let FingerPose::Bones { .. } = fingers {
+            ui.label("Mode: VR snapshot");
+            if ui
+                .button("Convert fingers to curls")
+                .on_hover_text("Replace the captured bones with these estimated curls")
+                .clicked()
+            {
+                *fingers = fingers.to_curls();
+            }
+        } else {
+            ui.label("Mode: Curls");
+        }
+        match fingers {
+            FingerPose::Curls {
+                curls,
+                trigger_curls,
+            } => self.show(ui, curls, trigger_curls, preview_label, true),
+            FingerPose::Bones {
+                bones,
+                trigger_bones,
+            } => {
+                let estimate = shock2vr::vr_grip::bones_to_curls;
+                let (mut rest, mut pressed) =
+                    (estimate(bones), trigger_bones.as_ref().map(estimate));
+                self.show(ui, &mut rest, &mut pressed, preview_label, false);
+            }
+        }
+    }
+
+    /// Rest/pressed curl sliders; `live: false` shows them disabled.
+    fn show(
         &mut self,
         ui: &mut egui::Ui,
         rest: &mut [f32; 5],
         pressed: &mut Option<[f32; 5]>,
         preview_label: &str,
+        live: bool,
     ) {
         ui.horizontal_wrapped(|ui| {
             if ui
@@ -51,7 +90,7 @@ impl CurlPoseEditor {
                 self.preview = 1.0;
             }
         });
-        if self.pressed {
+        if self.pressed && live {
             if pressed.is_none() {
                 ui.small("Pressed uses Rest until customized.");
                 if ui.button("Customize pressed pose").clicked() {
@@ -61,7 +100,7 @@ impl CurlPoseEditor {
                 *pressed = None;
             }
         }
-        let editable = !self.pressed || pressed.is_some();
+        let editable = live && (!self.pressed || pressed.is_some());
         let curls = if self.pressed {
             pressed.as_mut().unwrap_or(rest)
         } else {
@@ -1201,25 +1240,11 @@ impl GripEditor {
                     *last = entry.grip.rotation;
                 }
                 columns[2].strong("Finger curls");
-                match &mut entry.grip.fingers {
-                    FingerPose::Curls {
-                        curls,
-                        trigger_curls,
-                    } => self.curl_editor.show(
-                        &mut columns[2],
-                        curls,
-                        trigger_curls,
-                        "Primary trigger preview",
-                    ),
-                    FingerPose::Bones { trigger_bones, .. } => {
-                        columns[2].small("Bone pose captured in VR; curls do not apply.");
-                        if trigger_bones.is_some() {
-                            columns[2].label("Primary trigger preview");
-                            columns[2]
-                                .add(egui::Slider::new(&mut self.curl_editor.preview, 0.0..=1.0));
-                        }
-                    }
-                }
+                self.curl_editor.show_fingers(
+                    &mut columns[2],
+                    &mut entry.grip.fingers,
+                    "Primary trigger preview",
+                );
             });
             ui.horizontal(|ui| {
                 ui.label("Rotation nudge step");
@@ -1332,9 +1357,90 @@ pub(crate) fn tweak_slider(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use cgmath::Transform;
+
+    /// Draws `show` headlessly and clicks the button labelled `label`;
+    /// returns the texts drawn by the frame after the click.
+    pub(crate) fn click_button(label: &str, mut show: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+        fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
+            fn visit(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+                match shape {
+                    egui::Shape::Text(text) => out.push((
+                        text.galley.text().to_owned(),
+                        text.galley.rect.translate(text.pos.to_vec2()),
+                    )),
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| visit(s, out)),
+                    _ => {}
+                }
+            }
+            let mut out = Vec::new();
+            shapes.iter().for_each(|s| visit(&s.shape, &mut out));
+            out
+        }
+        let ctx = egui::Context::default();
+        let mut frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            texts(&ctx.run_ui(input, |ui| show(ui)).shapes)
+        };
+        let at = frame(Vec::new())
+            .into_iter()
+            .find(|(text, _)| text == label)
+            .unwrap_or_else(|| panic!("{label} not drawn"))
+            .1
+            .center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(at), button(true)]);
+        frame(vec![button(false)]);
+        frame(Vec::new())
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect()
+    }
+
+    #[test]
+    fn converting_a_vr_snapshot_keeps_its_placement_and_saves_curls() {
+        let (_dir, mut doc) = document();
+        let grip = &mut doc.library.entries[0].grip;
+        grip.fingers = FingerPose::Curls {
+            curls: [-0.5, 0.3, 0.6, 0.8, 1.0],
+            trigger_curls: Some([0.2, 1.0, 0.6, 0.8, 1.0]),
+        }
+        .to_bones();
+        let snapshot = grip.clone();
+        let mut editor = CurlPoseEditor::default();
+        let drawn = click_button("Convert fingers to curls", |ui| {
+            editor.show_fingers(ui, &mut doc.library.entries[0].grip.fingers, "Preview")
+        });
+        assert!(drawn.iter().any(|t| t == "Mode: Curls"), "{drawn:?}");
+        let converted = doc.library.entries[0].grip.clone();
+        assert_eq!(converted.fingers, snapshot.fingers.to_curls());
+        assert_eq!(
+            ResolvedGrip {
+                fingers: snapshot.fingers.clone(),
+                ..converted.clone()
+            },
+            snapshot,
+            "only the fingers change"
+        );
+        doc.save().unwrap();
+        let restored = GripDocument::load(doc.path.clone()).unwrap();
+        assert_eq!(restored.library.entries[0].grip, converted);
+    }
+
     #[test]
     fn overrides_replace_the_entry_the_runtime_picks_or_join_pickups() {
         let (_dir, doc) = document();
