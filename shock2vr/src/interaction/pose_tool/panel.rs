@@ -41,7 +41,8 @@ const POSE_HAND: Rect = Rect::new(10.0, 174.0, 186.0, 44.0);
 const SUPPORT_MODE: Rect = Rect::new(204.0, 174.0, 186.0, 44.0);
 const SLOT: Rect = Rect::new(10.0, 224.0, 186.0, 44.0);
 pub(in crate::interaction) const RESET_VIEW: Rect = Rect::new(204.0, 224.0, 186.0, 44.0);
-const EXIT: Rect = Rect::new(10.0, 274.0, 380.0, 32.0);
+const SHOW_AIM: Rect = Rect::new(10.0, 274.0, 186.0, 32.0);
+const EXIT: Rect = Rect::new(204.0, 274.0, 186.0, 32.0);
 const LEGEND: Rect = Rect::new(10.0, 314.0, 380.0, 80.0);
 /// A test-held gun aiming within this many degrees of its controller reads
 /// as aligned.
@@ -54,6 +55,7 @@ pub(in crate::interaction) enum PanelEvent {
     Discard,
     TestHold,
     AlignAim,
+    ShowAim,
     SwitchHand,
     SupportMode,
     Slot,
@@ -185,9 +187,25 @@ pub(in crate::interaction) struct PanelView {
     pub test_hold_entry: Result<(), String>,
     /// Whether Align aim can act, or why not.
     pub align: Result<(), String>,
+    /// Whether the aim toggle can act or why not, whether it is on, and
+    /// the aim error of the lines drawn this frame.
+    pub aim: Result<(), String>,
+    pub show_aim: bool,
+    pub aim_error_deg: Option<f32>,
     /// The free hand is tracked with no controller in it: it taps the
     /// buttons and pinches to snapshot.
     pub fingertip: bool,
+}
+
+/// The aim toggle's label: off, or on with the drawn lines' error (none
+/// while a test-held controller is put down). The bitmap fonts carry no
+/// degree sign.
+fn aim_label(show: bool, error_deg: Option<f32>) -> String {
+    match (show, error_deg) {
+        (false, _) => "Aim: Off".to_owned(),
+        (true, None) => "Aim: On".to_owned(),
+        (true, Some(deg)) => format!("Aim: {deg:.1} deg"),
+    }
 }
 
 fn hand_name(hand: Handedness) -> &'static str {
@@ -343,9 +361,19 @@ pub(in crate::interaction) fn emit(
             PanelEvent::ResetView,
             Ok(()),
         ),
+        (
+            SHOW_AIM,
+            aim_label(view.show_aim, view.aim_error_deg),
+            PanelEvent::ShowAim,
+            view.aim.clone(),
+        ),
         (EXIT, "Exit".to_owned(), PanelEvent::Exit, Ok(())),
     ];
-    for (rect, label, event, enabled) in buttons {
+    // Only a gun has an aim to show: the toggle is hidden for anything else.
+    let shown = buttons
+        .into_iter()
+        .filter(|(_, _, event, enabled)| *event != PanelEvent::ShowAim || enabled.is_ok());
+    for (rect, label, event, enabled) in shown {
         let color = match &enabled {
             Err(_) => BUTTON_DISABLED,
             Ok(()) if hover.is_some_and(|p| rect.contains(p)) => BUTTON_HOVER,
@@ -605,7 +633,29 @@ mod tests {
             test_hold: false,
             test_hold_entry: Err("snapshot first".to_owned()),
             align: Err("test hold first".to_owned()),
+            aim: Err("no barrel".to_owned()),
+            show_aim: true,
+            aim_error_deg: None,
         }
+    }
+
+    #[test]
+    fn the_aim_toggle_shows_only_for_a_gun_with_its_readout() {
+        let label = |view: &PanelView| {
+            let (canvas, targets) = emit(view, None);
+            let shown = targets.iter().any(|(_, e)| *e == PanelEvent::ShowAim);
+            let text = texts(&canvas).into_iter().find(|t| t.starts_with("Aim:"));
+            (shown, text)
+        };
+        assert_eq!(label(&view(Status::Ready)), (false, None), "no barrel");
+        let mut gun = view(Status::Ready);
+        gun.aim = Ok(());
+        gun.aim_error_deg = Some(3.24);
+        assert_eq!(label(&gun), (true, Some("Aim: 3.2 deg".to_owned())));
+        gun.aim_error_deg = None;
+        assert_eq!(label(&gun), (true, Some("Aim: On".to_owned())));
+        gun.show_aim = false;
+        assert_eq!(label(&gun), (true, Some("Aim: Off".to_owned())));
     }
 
     #[test]
