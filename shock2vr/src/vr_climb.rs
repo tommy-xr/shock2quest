@@ -195,6 +195,10 @@ pub struct HandClimb {
     /// was a reach for the item, not a grace grab: it refunds.
     fresh: [bool; 2],
     was_grounded: bool,
+    /// The holds held now trace back to a ladder grab: through grace grabs,
+    /// deck transfers and any ledges after, until every hand lets go. Feet
+    /// brushing a lip while the hands still hold do not end it.
+    ladder_departure: bool,
 }
 
 impl HandClimb {
@@ -297,6 +301,7 @@ impl HandClimb {
             };
             if grip.kind == ClimbGripKind::Ladder {
                 self.grace_used = 0;
+                self.ladder_departure = true;
             } else if grace > 0 {
                 self.grace_used = grace;
             }
@@ -354,6 +359,7 @@ impl HandClimb {
         });
         if self.grips.iter().all(Option::is_none) {
             self.grace_used = 0;
+            self.ladder_departure = false;
         }
         ClimbFrame {
             translation,
@@ -401,6 +407,15 @@ impl HandClimb {
             return None;
         }
         probe(point, GripProbe::Surface).map(|grip| (grip, grace))
+    }
+
+    /// Whether a ladder is held, or the holds held now trace back to a ladder
+    /// grab (see the field).
+    pub fn on_ladder_departure(&self) -> bool {
+        self.ladder_departure
+            || self
+                .grips()
+                .any(|(_, anchor)| anchor.grip.kind == ClimbGripKind::Ladder)
     }
 
     /// Grace grabs still available to this departure (see [`GRACE_GRABS`]).
@@ -460,6 +475,7 @@ impl HandClimb {
         self.grips = [None, None];
         self.armed = [false, false];
         self.grace_used = 0;
+        self.ladder_departure = false;
         self.anchor = None;
         self.recent_anchor_travel.clear();
         self.last_anchor_local = None;
@@ -1714,6 +1730,58 @@ mod tests {
         exhaust(&mut climb);
         climb.release_all();
         assert_eq!(climb.grace_remaining(), 2);
+    }
+
+    #[test]
+    fn a_ladder_departure_lasts_through_handoffs_until_landing_or_letting_go() {
+        let depart = |climb: &mut HandClimb| {
+            grace_step(climb, 0, (RUNG, SQUEEZE), (WALL[0], OPEN));
+            grace_step(climb, 0, (RUNG, SQUEEZE), (WALL[0], SQUEEZE));
+            // Off the ladder, on the surface alone: still the same departure.
+            grace_step(climb, 0, (RUNG, OPEN), (WALL[0], SQUEEZE));
+            assert!(climb.on_ladder_departure());
+        };
+        let mut climb = HandClimb::default();
+        assert!(!climb.on_ladder_departure());
+        depart(&mut climb);
+        climb.set_grounded(true);
+        climb.set_grounded(false);
+        assert!(
+            climb.on_ladder_departure(),
+            "feet touching down while the hands hold do not end it"
+        );
+
+        let mut climb = HandClimb::default();
+        depart(&mut climb);
+        grace_step(&mut climb, 0, (WALL[1], OPEN), (WALL[0], OPEN));
+        assert!(
+            !climb.on_ladder_departure(),
+            "letting go of everything ends it"
+        );
+
+        let mut climb = HandClimb::default();
+        depart(&mut climb);
+        climb.release_all();
+        assert!(!climb.on_ladder_departure(), "a vault ends it");
+
+        // An ordinary ledge climb never started from a ladder.
+        let mut climb = HandClimb::default();
+        let ledge = |p: Vector3<f32>, _| {
+            Some(ClimbGrip {
+                kind: ClimbGripKind::Ledge,
+                ..ladder_grip(p)
+            })
+        };
+        climb.update(
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            DT,
+            [no_hand(), hand(vec3(0.0, 1.5, -0.5), SQUEEZE)],
+            ledge,
+            |_| true,
+        );
+        assert_eq!(climb.grips().count(), 1);
+        assert!(!climb.on_ladder_departure());
     }
 
     #[test]
