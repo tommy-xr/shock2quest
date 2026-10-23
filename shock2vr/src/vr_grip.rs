@@ -930,6 +930,25 @@ impl GripLibrary {
             }
         }
     }
+
+    /// Make `entry` the only headset entry for its model and hand, as a save
+    /// leaves the overrides file.
+    pub fn replace_headset(&mut self, entry: BakedGripEntry) {
+        let mut index = 0;
+        while index < self.headset {
+            let e = &self.entries[index];
+            if e.model == entry.model && e.hand == entry.hand {
+                self.entries.remove(index);
+                self.headset -= 1;
+            } else {
+                index += 1;
+            }
+        }
+        self.prepend(GripLibrary {
+            entries: vec![entry],
+            ..Default::default()
+        });
+    }
 }
 
 /// Poses saved on the headset by the in-VR pose tool, under the data root.
@@ -961,6 +980,16 @@ pub struct GripOverrides {
     pub grips: GripLibrary,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub support: std::collections::BTreeMap<String, crate::vr_support::SupportPose>,
+    /// Entries and support poses this build cannot read, verbatim: a save
+    /// writes them back, as they may be another build's work.
+    #[serde(skip)]
+    pub unread: UnreadOverrides,
+}
+
+#[derive(Clone, Default)]
+pub struct UnreadOverrides {
+    pub entries: Vec<serde_json::Value>,
+    pub support: serde_json::Map<String, serde_json::Value>,
 }
 
 impl GripOverrides {
@@ -969,25 +998,109 @@ impl GripOverrides {
     pub fn load(path: &std::path::Path) -> Option<GripOverrides> {
         let text = std::fs::read_to_string(path).ok()?;
         let path = path.display();
-        match serde_json::from_str::<GripOverrides>(&text) {
-            Ok(overrides) if overrides.grips.version == 1 => {
+        match Self::parse(&text) {
+            Ok(overrides) => {
                 let entries = overrides.grips.entries.len();
                 let support = overrides.support.len();
+                let unread = overrides.unread.entries.len() + overrides.unread.support.len();
                 println!(
-                    "SHOCK2QUEST_VR_GRIP_OVERRIDES path={path} entries={entries} support={support}"
+                    "SHOCK2QUEST_VR_GRIP_OVERRIDES path={path} entries={entries} support={support} unread={unread}"
                 );
                 Some(overrides)
-            }
-            Ok(overrides) => {
-                let version = overrides.grips.version;
-                println!("SHOCK2QUEST_VR_GRIP_OVERRIDES path={path} ignored=version_{version}");
-                None
             }
             Err(error) => {
                 println!("SHOCK2QUEST_VR_GRIP_OVERRIDES path={path} ignored=\"{error}\"");
                 None
             }
         }
+    }
+
+    /// Read a version 1 overrides file entry by entry: an entry or support
+    /// pose that does not decode is logged and kept in `unread`. Only text
+    /// that is not such a file at all fails.
+    pub fn parse(text: &str) -> Result<GripOverrides, String> {
+        use serde_json::Value;
+        let mut value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let object = value.as_object_mut().ok_or("not an object")?;
+        let entries = match object.insert("entries".to_owned(), Value::Array(Vec::new())) {
+            Some(Value::Array(entries)) => entries,
+            None => Vec::new(),
+            Some(_) => return Err("entries is not a list".to_owned()),
+        };
+        let support = match object.remove("support") {
+            Some(Value::Object(support)) => support,
+            None => serde_json::Map::new(),
+            Some(_) => return Err("support is not an object".to_owned()),
+        };
+        let mut overrides: GripOverrides =
+            serde_json::from_value(value).map_err(|e| e.to_string())?;
+        if overrides.grips.version != 1 {
+            return Err(format!("version_{}", overrides.grips.version));
+        }
+        for entry in entries {
+            match serde_json::from_value(entry.clone()) {
+                Ok(entry) => overrides.grips.entries.push(entry),
+                Err(error) => {
+                    println!("SHOCK2QUEST_VR_GRIP_OVERRIDES unread_entry=\"{error}\"");
+                    overrides.unread.entries.push(entry);
+                }
+            }
+        }
+        for (model, pose) in support {
+            match serde_json::from_value(pose.clone()) {
+                Ok(pose) => {
+                    overrides.support.insert(model, pose);
+                }
+                Err(error) => {
+                    println!(
+                        "SHOCK2QUEST_VR_GRIP_OVERRIDES unread_support={model} error=\"{error}\""
+                    );
+                    overrides.unread.support.insert(model, pose);
+                }
+            }
+        }
+        Ok(overrides)
+    }
+
+    /// Replace `model`/`hand`'s grip: the readable entry and any unread one.
+    pub fn replace_grip(&mut self, entry: BakedGripEntry) {
+        let (model, hand) = (entry.model.as_str(), entry.hand.as_str());
+        self.unread
+            .entries
+            .retain(|raw| raw["model"] != model || raw["hand"] != hand);
+        let entries = &mut self.grips.entries;
+        entries.retain(|e| e.model != model || e.hand != hand);
+        entries.push(entry);
+    }
+
+    /// The file's JSON, `unread` written back after the readable entries (a
+    /// readable support pose wins its model's key).
+    pub fn to_json(&self) -> serde_json::Result<Vec<u8>> {
+        use serde_json::Value;
+        let mut value = serde_json::to_value(self)?;
+        let object = value
+            .as_object_mut()
+            .expect("a struct serializes as an object");
+        if let Some(Value::Array(entries)) = object.get_mut("entries") {
+            entries.extend(self.unread.entries.iter().cloned());
+        }
+        let unread_support: serde_json::Map<_, _> = self
+            .unread
+            .support
+            .iter()
+            .filter(|(model, _)| !self.support.contains_key(*model))
+            .map(|(model, pose)| (model.clone(), pose.clone()))
+            .collect();
+        if !unread_support.is_empty()
+            && let Value::Object(support) = object
+                .entry("support")
+                .or_insert_with(|| Value::Object(serde_json::Map::new()))
+        {
+            support.extend(unread_support);
+        }
+        let mut bytes = serde_json::to_vec_pretty(&value)?;
+        bytes.push(b'\n');
+        Ok(bytes)
     }
 }
 
@@ -1308,6 +1421,68 @@ mod tests {
         );
         library.prepend(loaded.grips);
         assert_eq!(library.lookup("mug", "left").unwrap().item_scale, 0.5);
+    }
+
+    /// One entry this build cannot read (a hand edit, or a newer build's)
+    /// loses only itself, and is written back as it was.
+    #[test]
+    fn an_unreadable_override_entry_is_kept_aside_not_fatal() {
+        let grip = plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
+        let entry = |model: &str| BakedGripEntry {
+            authored: true,
+            model: model.into(),
+            hand: "left".into(),
+            surface_hash: String::new(),
+            kinematics_hash: String::new(),
+            hints_hash: String::new(),
+            grip: grip.clone(),
+        };
+        let pose = crate::vr_support::SupportPose {
+            palm_anchor: [0.1, 0.0, 0.0],
+            rotation_degrees: [0.0; 3],
+            fingers: FingerPose::curls([0.5; 5]),
+        };
+        let bad_entry = serde_json::json!({"model": "sg_h", "hand": "left", "grip": 7});
+        let bad_pose = serde_json::json!({"palm_anchor": "here"});
+        let mut file = serde_json::to_value(GripOverrides {
+            grips: GripLibrary {
+                entries: vec![entry("mug")],
+                ..Default::default()
+            },
+            support: [("sg_h".to_owned(), pose.clone())].into(),
+            ..Default::default()
+        })
+        .unwrap();
+        file["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(bad_entry.clone());
+        file["support"]["wrench_h"] = bad_pose.clone();
+        let dir = crate::test_support::TempDir::new("grip-overrides-unread");
+        let path = dir.path().join(GRIP_OVERRIDES_FILE);
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+
+        let mut loaded = GripOverrides::load(&path).expect("the readable rest loads");
+        assert_eq!(loaded.grips.entries.len(), 1);
+        assert_eq!(loaded.support, [("sg_h".to_owned(), pose)].into());
+
+        // Written back verbatim; a new readable pose for the same key wins.
+        loaded.grips.entries.push(entry("cup"));
+        let written: serde_json::Value =
+            serde_json::from_slice(&loaded.to_json().unwrap()).unwrap();
+        assert_eq!(written["entries"].as_array().unwrap().len(), 3);
+        assert_eq!(written["entries"][2], bad_entry);
+        assert_eq!(written["support"]["wrench_h"], bad_pose);
+        loaded
+            .support
+            .insert("wrench_h".to_owned(), loaded.support["sg_h"].clone());
+        let written: serde_json::Value =
+            serde_json::from_slice(&loaded.to_json().unwrap()).unwrap();
+        assert_eq!(written["support"]["wrench_h"], written["support"]["sg_h"]);
+        assert!(
+            GripOverrides::parse("[1]").is_err(),
+            "not an overrides file"
+        );
     }
 
     /// Bone rotations equal up to quaternion sign.

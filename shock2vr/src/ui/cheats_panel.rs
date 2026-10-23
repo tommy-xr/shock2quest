@@ -196,9 +196,9 @@ pub static CHEATS: &[Cheat] = &[
     },
     Cheat {
         // Resume, set the posing controller down and form the grip; the
-        // other controller's trigger (or a pinch) previews it, A/X saves,
-        // B/Y discards; its thumbstick scales the item for the next capture.
-        // Pick this again to finish.
+        // other controller's trigger (or a pinch) previews it, the panel's
+        // Save keeps it, A/X test-holds, B/Y discards; its thumbstick scales
+        // the item. Pick this again to finish.
         label: "Pose held item (hand tracking)",
         action: CheatAction::GripPoseTool,
     },

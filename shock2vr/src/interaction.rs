@@ -177,8 +177,9 @@ pub trait PlayerInteraction {
         None
     }
 
-    /// A face button pressed on the open workbench: its control hand saves
-    /// (lower) or discards (upper) the staged capture.
+    /// A face button pressed on the open workbench: its control hand toggles
+    /// test hold (lower) or discards the staged capture (upper). Save is on
+    /// the panel.
     fn pose_tool_button(&mut self, _hand: Handedness, _button: crate::hand_buttons::HandButton) {}
 
     /// A frame the open workbench is skipped (the pause menu is over it).
@@ -1179,9 +1180,14 @@ impl VrInteraction {
         floor_y: f32,
         dt: f32,
     ) {
+        let pump_travel = self.pose_tool.as_ref().and_then(|tool| {
+            let (_, travel) = self.pump_motion(world, tool.hand)?;
+            Some(travel * crate::vr_shotgun_pump::state(world, tool.entity).fraction)
+        });
         let Some(tool) = self.pose_tool.as_mut() else {
             return;
         };
+        tool.pump_travel = pump_travel.unwrap_or(Vector3::new(0.0, 0.0, 0.0));
         let holding = [&self.left_hand, &self.right_hand][tool.holder].get_held_entity();
         if holding != Some(tool.entity) {
             println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=false reason=item_released");
@@ -1331,16 +1337,28 @@ impl VrInteraction {
         let mut glove_slot = self.glove_renderer.borrow_mut();
         let capture = match glove_slot.as_mut().and_then(|renderer| renderer.as_mut()) {
             Some(renderer) => {
-                let live = tool.tracked[posing]
-                    .and_then(|joints| pose_tool::tracked_glove(renderer, &joints, handedness));
-                tool.tip_error_mm = live.as_ref().map(|glove| glove.tip_error_mm());
-                tool.hand_size_ratio = live.as_ref().map(|glove| glove.fit.size_ratio);
+                // Fitted once here, and drawn from these by `render`.
+                tool.gloves = std::array::from_fn(|i| {
+                    tracked[i].and_then(|joints| {
+                        pose_tool::tracked_glove(
+                            renderer,
+                            &joints,
+                            [Handedness::Left, Handedness::Right][i],
+                        )
+                    })
+                });
+                let live = tool.gloves[posing].as_ref();
+                tool.tip_error_mm = live.map(|glove| glove.tip_error_mm());
+                tool.hand_size_ratio = live.map(|glove| glove.fit.size_ratio);
                 capture.map(|joints| {
                     let fitted = pose_tool::tracked_glove(renderer, &joints, handedness);
                     (joints, fitted)
                 })
             }
-            None => None,
+            None => {
+                tool.gloves = [None, None];
+                None
+            }
         };
         drop(glove_slot);
         if let Some((joints, fitted)) = capture {
@@ -1810,14 +1828,10 @@ impl VrInteraction {
                         grip.item_scale / crate::world_scale::WorldScale::active().personal();
                 }
                 pose_tool::save_override(&tool.overrides_path, entry).map(|()| {
-                    // Keep the in-memory entry in step with the file (its scale).
-                    if let Some(kept) = self.grip_library.as_mut().and_then(|library| {
-                        library
-                            .entries
-                            .iter_mut()
-                            .find(|e| e.model == entry.model && e.hand == entry.hand)
-                    }) {
-                        *kept = entry.clone();
+                    // Keep the in-memory library in step with the file: one
+                    // headset entry per model and hand, at the saved scale.
+                    if let Some(library) = self.grip_library.as_mut() {
+                        library.replace_headset(entry.clone());
                     }
                     format!("model={} hand={}", entry.model, entry.hand)
                 })
@@ -1905,10 +1919,16 @@ impl VrInteraction {
             return false;
         };
         // A failed fit, or a pose its profile rejects as invalid.
+        // Measured from the pump's closed position, as play anchors it.
+        let model = pose_tool::item_pose(tool.hand_pose, grip, Vector3::new(0.0, 0.0, 0.0));
+        let model = GripPose {
+            position: model.point(tool.pump_travel),
+            ..model
+        };
         let posed = glove.ok_or("degenerate_joints").and_then(|(glove, bones)| {
             let pose = SupportProfile::captured_pose(
                 [Handedness::Left, Handedness::Right][tool.hand],
-                pose_tool::item_pose(tool.hand_pose, grip, Vector3::new(0.0, 0.0, 0.0)),
+                model,
                 grip,
                 &rig[tool.posing()],
                 mirror,
@@ -1991,7 +2011,8 @@ impl VrInteraction {
             pose_tool::item_pose(tool.hand_pose, grip, Vector3::new(0.0, 0.0, 0.0)),
             grip,
             &rig[tool.posing()],
-            profile.anchor_in_frame(primary, held.model_mirror?) * grip.item_scale,
+            profile.anchor_in_frame(primary, held.model_mirror?) * grip.item_scale
+                + tool.pump_travel,
         );
         Some((pose, profile.fingers.hand_shape_at(0.0)))
     }
@@ -3817,6 +3838,34 @@ mod tests {
         interaction
     }
 
+    /// Each save replaces the hand's headset entry rather than piling up.
+    #[test]
+    fn saving_again_keeps_one_headset_entry_per_model_and_hand() {
+        let dir = crate::test_support::TempDir::new("pose-resave");
+        let mut interaction = staged_workbench(dir.path().join("o.json"));
+        interaction.save_staged();
+        for _ in 0..3 {
+            let grip = interaction.fitted_grips[1]
+                .as_ref()
+                .unwrap()
+                .resolved
+                .clone()
+                .unwrap();
+            interaction.stage_grip(grip).unwrap();
+            interaction.save_staged();
+        }
+        let library = interaction.grip_library.as_ref().unwrap();
+        assert_eq!(library.headset, 1);
+        let ours = |e: &&crate::vr_grip::BakedGripEntry| e.model == "wrench_h" && e.hand == "right";
+        assert_eq!(
+            library.entries[..library.headset]
+                .iter()
+                .filter(ours)
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn exiting_the_workbench_saves_a_staged_pose_and_clicks_the_free_controller() {
         let dir = crate::test_support::TempDir::new("pose-exit-save");
@@ -4235,6 +4284,59 @@ mod tests {
         interaction.discard_staged();
         assert_eq!(interaction.support_profiles["wrench_h"], posed);
         assert!(interaction.pose_tool.as_ref().unwrap().staged.is_none());
+    }
+
+    /// A support capture with the pump part-racked: play adds the travel to
+    /// the saved anchor, so the capture must take it off.
+    #[test]
+    fn a_support_capture_with_the_pump_racked_holds_where_captured_in_play() {
+        use cgmath::Rotation3;
+        let dir = crate::test_support::TempDir::new("pose-support-pump");
+        let mut interaction = staged_workbench(dir.path().join("o.json"));
+        // A fixed (pump-style) support grip: no sliding region.
+        interaction
+            .support_profiles
+            .get_mut("wrench_h")
+            .unwrap()
+            .region = None;
+        let tool = interaction.pose_tool.as_mut().unwrap();
+        tool.staged = None;
+        tool.support_mode = Ok(());
+        tool.pump_travel = vec3(0.0, 0.0, 0.04);
+        interaction.toggle_support_mode();
+        let glove = GripPose {
+            position: vec3(0.03, 1.25, -0.02),
+            rotation: Quaternion::from_angle_z(cgmath::Deg(80.0)),
+        };
+        let crate::vr_grip::FingerPose::Bones { bones, .. } =
+            crate::vr_grip::FingerPose::curls([0.8; 5]).to_bones()
+        else {
+            unreachable!()
+        };
+        assert!(interaction.capture_support(Some((glove, bones))));
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        let (drawn, _) = interaction.pose_tool_support_glove(tool).unwrap();
+        assert!((drawn.position - glove.position).magnitude() < 1e-4);
+
+        // Play: anchor plus the pump's travel (`support_candidate`).
+        let held = interaction.fitted_grips[1].as_ref().unwrap();
+        let grip = held.resolved.as_ref().unwrap();
+        let profile = &interaction.support_profiles["wrench_h"];
+        let played = profile.glove_pose(
+            Handedness::Right,
+            pose_tool::item_pose(tool.hand_pose, grip, vec3(0.0, 0.0, 0.0)),
+            grip,
+            &interaction.grip_kinematics.as_ref().unwrap()[0],
+            profile.anchor_in_frame(Handedness::Right, held.model_mirror.unwrap())
+                * grip.item_scale
+                + tool.pump_travel,
+        );
+        assert!(
+            (played.position - glove.position).magnitude() < 1e-4,
+            "{:?} vs {:?}",
+            played.position,
+            glove.position
+        );
     }
 
     #[test]

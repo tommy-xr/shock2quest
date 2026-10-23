@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { attachSupportHand, findRepoRoot, GameServer, setHandWorldPose } from "../src/index.js";
 import type { Quat, ResolvedGrip, Vec3 } from "../src/types.js";
 import { isolatedDataRoot } from "./helpers/isolated-data-root.js";
 import { muzzleFrameOf } from "./helpers/weapon.js";
+import { pauseEntry, vrClickCanvasPoint } from "./helpers/frontend-menu.js";
 import {
   add, aimVrHandAt, cross, holdDebugMug, normalize, quatConjugate, quatFromTo, quatMultiply, quatRotate, scale, sub,
 } from "./helpers/vr-hand.js";
@@ -104,6 +105,23 @@ test(
     const spot = add(add(eye, scale(ahead, 0.45 / unit)), add(scale(right, 0.1 / unit), [0, -0.3 / unit, 0]));
     const bench = draws[0]!.position;
     assert.ok(distance(bench, spot) < 0.02 / unit, `bench ${bench} vs ${spot}`);
+    // The panel, from the same eye: 0.33 m ahead, 0.47 m down, 0.24 m to the
+    // free (left) side, tilted to face the eye with no roll; a 0.3 m wide
+    // 400x400 canvas. Button centres from their canvas rects, independent
+    // of the code that reports them.
+    const panel = (await workbench(game)).tool.panel.panel!;
+    const panelCenter = add(eye, add(scale(ahead, 0.33 / unit), add(scale(right, -0.24 / unit), [0, -0.47 / unit, 0])));
+    assert.ok(distance(xyz(panel.center), panelCenter) < 0.005 / unit, `panel ${xyz(panel.center)} vs ${panelCenter}`);
+    const facing = normalize(sub(eye, panelCenter));
+    const panelUp = normalize(sub([0, 1, 0], scale(facing, facing[1])));
+    const panelRight = cross(scale(facing, -1), panelUp);
+    const onPanel = ([x, y]: [number, number]) =>
+      add(panelCenter, add(scale(panelRight, (x / 400 - 0.5) * 0.3 / unit), scale(panelUp, (0.5 - y / 400) * 0.3 / unit)));
+    for (const [event, canvasCenter] of [["Exit", [200, 290]], ["ResetView", [297, 246]]] as const) {
+      const button = xyz(panel.buttons.find((b) => b.event === event)!.center);
+      const expected = onPanel([...canvasCenter]);
+      assert.ok(distance(button, expected) < 0.005 / unit, `${event} ${button} vs ${expected}`);
+    }
     // The workbench is a scene of its own: none of the mission is drawn (its
     // world, labels, HUD), only the mug, the hands, a floor grid and the
     // control panel. Nothing fills the background, which passthrough shows on
@@ -548,6 +566,92 @@ test(
     assert.equal(right.entity_id, mug.id);
     assert.deepEqual(right.grip, rightBefore, "the right hand's grip is unchanged");
     assert.ok(!grips.some((g) => g.hand === "left"), "the left hand holds nothing");
+  },
+);
+
+test(
+  "grip pose tool: quitting from the pause menu saves a staged capture",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    // Held where the player starts: the pause panel helper assumes an
+    // unmoved pawn.
+    await using game = await GameServer.launch({ mission: "debug_minimal", debugFlags: ["--vr"] });
+    const path = join(data.root, "vr-grip-overrides.json");
+    await game.step({ frames: 10 });
+    await game.input.set("right_hand.squeeze", 1);
+    await game.player.spawnItem("Wrench", { hand: "right" });
+    await game.step({ frames: 5 });
+    const unit = await metresPerWorldUnit(game);
+    await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 2 });
+    const hand = (await game.input.state()).right_hand.position;
+    await game.input.setMany({
+      "right_hand.squeeze": 0,
+      "right_hand.position": [hand[0] + 1, hand[1] - 0.5, hand[2]],
+      "right_hand.joints": trackedHand(hand, unit),
+    });
+    await game.step({ frames: 30 });
+    await aimAway(game, "left");
+    await click(game, "left");
+    assert.equal((await workbench(game)).tool.staged, true);
+    assert.ok(!existsSync(path));
+
+    await game.input.set("right_hand.joints", null);
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 10 });
+    assert.equal((await game.info()).paused, true);
+    // An unreadable overrides file fails the save: the capture, and the
+    // mission, stay.
+    writeFileSync(path, "{ hand edited, oops");
+    await vrClickCanvasPoint(game, pauseEntry(4));
+    await game.step({ frames: 10 });
+    assert.equal((await game.info()).mission, "debug_minimal", "quit refused");
+    const tool = (await workbench(game)).tool;
+    assert.equal(tool.staged, true);
+    assert.ok(tool.last_save_error, "the save error shows");
+
+    unlinkSync(path);
+    await vrClickCanvasPoint(game, pauseEntry(4));
+    await game.step({ frames: 10 });
+    assert.equal((await game.info()).mission, "main_menu", "quit");
+    const saved = JSON.parse(readFileSync(path, "utf8")) as { entries: { model: string; hand: string }[] };
+    assert.deepEqual(saved.entries.map((e) => [e.model, e.hand]), [["wrench_h", "right"]]);
+  },
+);
+
+test(
+  "grip pose tool: the bench item is drawn though its frozen mission spot is culled",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using _data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    await game.input.set("right_hand.squeeze", 1);
+    const wrench = await game.player.spawnItem("Wrench", { hand: "right" });
+    await game.step({ frames: 5 });
+    const held = (await game.info()).player.hand_grips.find((g) => g.hand === "right");
+    assert.equal(held?.entity_id, wrench.entity_id, "the right hand holds the wrench");
+    await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 2 });
+    const benchDraws = async () =>
+      (await game.scene.objects({ entityId: wrench.entity_id })).objects.filter((o) => o.source === "grip_workbench");
+    assert.ok((await benchDraws()).length > 0, "on the bench");
+
+    // The player moves far away: the wrench, frozen where it was held, is
+    // in a cell the mission no longer sees. The bench still shows it.
+    const log = (await game.entities.list({ filter: "Audio Log", limit: 80 })).entities
+      .find((e) => e.template_id === 1608)!;
+    const [x, y, z] = (await game.entities.detail(log.id)).position;
+    await game.player.teleport({ x, y: y + 0.5, z });
+    await game.step({ frames: 5 });
+    const pos = await game.player.position();
+    assert.ok(Math.hypot(pos.x - x, pos.z - z) < 3, "teleported");
+    assert.ok((await benchDraws()).length > 0, "still on the bench");
   },
 );
 

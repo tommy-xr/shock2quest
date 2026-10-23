@@ -1308,8 +1308,12 @@ fn main() {
         input_context.left_hand.thumbstick = vec2(left_thumbstick_value.x, left_thumbstick_value.y);
         // Joints only when every one is tracked: a partly valid hand would
         // capture as a broken pose, and positions inferred after tracking
-        // loss are guesses.
+        // loss are guesses. Only the workbench reads them, so they are not
+        // located (nor recorded) while it is closed.
         let [left_joints, right_joints] = hand_trackers.each_ref().map(|tracker| {
+            if !workbench {
+                return None;
+            }
             let locations = stage
                 .locate_hand_joints(tracker.as_ref()?, xr_frame_state.predicted_display_time)
                 .ok()??;

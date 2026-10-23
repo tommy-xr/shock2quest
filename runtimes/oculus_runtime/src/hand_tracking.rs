@@ -6,15 +6,15 @@ use openxr as xr;
 use xr::sys::Handle;
 
 /// Hand tracking plus, when the runtime offers them, optical-only joints and
-/// simultaneous hands and controllers.
+/// simultaneous hands and controllers. Not detached controllers: nothing
+/// binds their paths, and the tool relies on a set-down controller reading
+/// as untracked on its hand's path.
 pub fn enable_extensions(available: &xr::ExtensionSet, enabled: &mut xr::ExtensionSet) {
     enabled.ext_hand_tracking = available.ext_hand_tracking;
     enabled.ext_hand_tracking_data_source =
         available.ext_hand_tracking && available.ext_hand_tracking_data_source;
     enabled.meta_simultaneous_hands_and_controllers =
         available.ext_hand_tracking && available.meta_simultaneous_hands_and_controllers;
-    enabled.meta_detached_controllers =
-        enabled.meta_simultaneous_hands_and_controllers && available.meta_detached_controllers;
 }
 
 /// One tracker per hand, or none without runtime support. With the data
