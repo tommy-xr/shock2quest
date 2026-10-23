@@ -69,13 +69,18 @@ impl SupportDocument {
         if !self.dirty() {
             return Ok(());
         }
+        self.check_unchanged()?;
+        self.write(self.path.clone(), false)
+    }
+    /// Save refuses a file edited on disk since it was loaded or saved.
+    pub(crate) fn check_unchanged(&self) -> Result<(), String> {
         if std::fs::read(&self.path).map_err(|e| e.to_string())? != self.saved_bytes {
             return Err(
                 "Support resource changed on disk. Save As a new file to preserve your draft."
                     .into(),
             );
         }
-        self.write(self.path.clone(), false)
+        Ok(())
     }
     fn write(&mut self, path: PathBuf, new_file: bool) -> Result<(), String> {
         if self.profiles.values().any(|p| !p.is_valid()) {

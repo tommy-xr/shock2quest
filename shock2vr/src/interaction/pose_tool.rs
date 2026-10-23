@@ -1337,16 +1337,13 @@ pub(super) fn save_support_override(
 /// cannot be read is left alone rather than replaced.
 fn edit_overrides(path: &Path, edit: impl FnOnce(&mut GripOverrides)) -> std::io::Result<()> {
     let mut overrides = match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str::<GripOverrides>(&text)
-            .ok()
-            .filter(|overrides| overrides.grips.version == 1)
-            .ok_or_else(|| std::io::Error::other("unreadable overrides file"))?,
+        Ok(text) => GripOverrides::parse(&text)
+            .map_err(|_| std::io::Error::other("unreadable overrides file"))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => GripOverrides::default(),
         Err(error) => return Err(error),
     };
     edit(&mut overrides);
-    let mut bytes = serde_json::to_vec_pretty(&overrides)?;
-    bytes.push(b'\n');
+    let bytes = overrides.to_json()?;
     // Write then rename, so an interrupted save never leaves a torn file.
     let staged = path.with_extension("json.tmp");
     std::fs::write(&staged, bytes)?;
@@ -2333,5 +2330,24 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "{ hand edited, oops"
         );
+    }
+
+    /// One unreadable entry neither blocks a save nor is lost by it.
+    #[test]
+    fn saving_keeps_an_entry_this_build_cannot_read() {
+        let dir = crate::test_support::TempDir::new("pose-tool-unread");
+        let path = dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
+        save_override(&path, &entry("right", 0.8)).unwrap();
+        let mut file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let unread = serde_json::json!({"model": "sg_h", "hand": "left", "grip": "newer"});
+        file["entries"].as_array_mut().unwrap().push(unread.clone());
+        std::fs::write(&path, file.to_string()).unwrap();
+        save_override(&path, &entry("left", 0.8)).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["entries"].as_array().unwrap().len(), 3);
+        assert!(saved["entries"].as_array().unwrap().contains(&unread));
+        assert_eq!(GripOverrides::load(&path).unwrap().grips.entries.len(), 2);
     }
 }

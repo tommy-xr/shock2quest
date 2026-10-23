@@ -147,17 +147,26 @@ fn merge_overrides(libraries: &mut [GripLibrary], overrides: GripLibrary) -> Res
 }
 
 pub fn merge_override_file(path: PathBuf) -> Result<(), String> {
-    let support = serde_json::from_slice::<shock2vr::vr_grip::GripOverrides>(
-        &std::fs::read(&path).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?
-    .support;
-    let overrides = GripDocument::load(path)?.library;
-    let count = overrides.entries.len();
     let dir = default_library_path()
         .parent()
         .ok_or("Missing assets directory")?
         .to_owned();
+    merge_override_file_into(path, &dir)
+}
+
+/// Merge the overrides file into the grip and support resources in `dir`.
+fn merge_override_file_into(path: PathBuf, dir: &std::path::Path) -> Result<(), String> {
+    let file = shock2vr::vr_grip::GripOverrides::parse(
+        &std::fs::read_to_string(&path).map_err(|e| e.to_string())?,
+    )?;
+    // A partial merge into the shipped assets would silently drop poses.
+    let unread = file.unread.entries.len() + file.unread.support.len();
+    if unread > 0 {
+        return Err(format!("{unread} overrides this build cannot read"));
+    }
+    validate(&file.grips)?;
+    let (overrides, support) = (file.grips, file.support);
+    let count = overrides.entries.len();
     let mut docs = GRIP_RESOURCES
         .iter()
         .map(|name| GripDocument::load(dir.join(name)))
@@ -165,26 +174,49 @@ pub fn merge_override_file(path: PathBuf) -> Result<(), String> {
     let mut libraries: Vec<_> = docs.iter().map(|doc| doc.library.clone()).collect();
     merge_overrides(&mut libraries, overrides)?;
     // Merged in memory before anything is written, so a bad pose writes
-    // nothing; saved first, as its save also refuses an externally edited file.
-    let support_doc = crate::support_grip_editor::merged_support(
-        default_library_path().with_file_name("vr-support-grips.json"),
-        &support,
-    )?;
+    // nothing.
+    let support_doc =
+        crate::support_grip_editor::merged_support(dir.join("vr-support-grips.json"), &support)?;
+    for (doc, library) in docs.iter_mut().zip(libraries) {
+        doc.library = library;
+    }
+    docs.retain(GripDocument::dirty);
+    // Every save refuses an externally edited file: check them all first.
+    if let Some(doc) = &support_doc {
+        doc.check_unchanged()?;
+    }
+    for doc in &docs {
+        doc.check_unchanged()?;
+    }
     if let Some(mut doc) = support_doc {
         doc.save()?;
         println!("updated {}", doc.path.display());
     }
-    for (doc, library) in docs.iter_mut().zip(libraries) {
-        doc.library = library;
-        if doc.dirty() {
-            doc.save()?;
-            println!("updated {}", doc.path.display());
-        }
+    for doc in &mut docs {
+        doc.save()?;
+        println!("updated {}", doc.path.display());
     }
     println!(
         "merged {count} grip overrides and {} support poses",
         support.len()
     );
+    Ok(())
+}
+
+/// A version 1 library of valid grips, one per model and hand.
+fn validate(library: &GripLibrary) -> Result<(), String> {
+    if library.version != 1 {
+        return Err("Unsupported grip resource version".into());
+    }
+    let mut keys = BTreeSet::new();
+    for e in &library.entries {
+        if !matches!(e.hand.as_str(), "left" | "right")
+            || !e.grip.is_valid()
+            || !keys.insert((e.model.clone(), e.hand.clone()))
+        {
+            return Err("Invalid or duplicate prepared grip entry".into());
+        }
+    }
     Ok(())
 }
 
@@ -207,18 +239,7 @@ impl GripDocument {
         let saved_bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
         let library: GripLibrary =
             serde_json::from_slice(&saved_bytes).map_err(|e| e.to_string())?;
-        if library.version != 1 {
-            return Err("Unsupported grip resource version".into());
-        }
-        let mut keys = BTreeSet::new();
-        for e in &library.entries {
-            if !matches!(e.hand.as_str(), "left" | "right")
-                || !e.grip.is_valid()
-                || !keys.insert((e.model.clone(), e.hand.clone()))
-            {
-                return Err("Invalid or duplicate prepared grip entry".into());
-            }
-        }
+        validate(&library)?;
         Ok(Self {
             saved: library.clone(),
             library,
@@ -232,13 +253,19 @@ impl GripDocument {
     }
 
     pub fn save(&mut self) -> Result<(), String> {
+        self.check_unchanged()?;
+        self.write(self.path.clone(), false)
+    }
+
+    /// Save refuses a file edited on disk since it was loaded or saved.
+    pub fn check_unchanged(&self) -> Result<(), String> {
         if std::fs::read(&self.path).map_err(|e| e.to_string())? != self.saved_bytes {
             return Err(
                 "Resource changed on disk. Use Save As to keep your drafts, or reopen to load it."
                     .into(),
             );
         }
-        self.write(self.path.clone(), false)
+        Ok(())
     }
 
     /// Save As never replaces an existing file, including the current file.
@@ -1362,6 +1389,65 @@ mod tests {
             .find(|e| e.model == entry.model && e.hand == entry.hand)
             .unwrap();
         assert_eq!(merged.grip.fingers, entry.grip.fingers);
+    }
+
+    /// merge-grips writes the grip and support resources, or with an
+    /// override it cannot read, nothing at all.
+    #[test]
+    fn merging_an_overrides_file_writes_all_or_nothing() {
+        let assets = default_library_path().parent().unwrap().to_owned();
+        let dir = tempfile::tempdir().unwrap();
+        let names = GRIP_RESOURCES
+            .iter()
+            .copied()
+            .chain(["vr-support-grips.json"]);
+        for name in names.clone() {
+            std::fs::copy(assets.join(name), dir.path().join(name)).unwrap();
+        }
+        let read_all = || {
+            names
+                .clone()
+                .map(|n| std::fs::read(dir.path().join(n)).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let shipped = read_all();
+        let weapons: GripLibrary =
+            serde_json::from_str(include_str!("../../../assets/vr-weapon-grips.json")).unwrap();
+        let mut entry = weapons.entries[0].clone();
+        let scale = entry.grip.item_scale * 1.1;
+        entry.grip = entry.grip.with_item_scale(scale);
+        let support: BTreeMap<String, shock2vr::vr_support::SupportProfile> =
+            serde_json::from_str(include_str!("../../../assets/vr-support-grips.json")).unwrap();
+        let (model, profile) = support.iter().next().unwrap();
+        let mut overrides = shock2vr::vr_grip::GripOverrides::default();
+        overrides.grips.entries.push(entry);
+        overrides.support.insert(
+            model.clone(),
+            shock2vr::vr_support::SupportPose {
+                palm_anchor: profile.palm_anchor,
+                rotation_degrees: [profile.rotation_degrees[0] + 5.0, 0.0, 0.0],
+                fingers: profile.fingers.clone(),
+            },
+        );
+        let mut file = serde_json::to_value(&overrides).unwrap();
+        file["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"model": "sg_h", "hand": "left"}));
+        let path = dir.path().join("vr-grip-overrides.json");
+        std::fs::write(&path, file.to_string()).unwrap();
+        assert!(merge_override_file_into(path.clone(), dir.path()).is_err());
+        assert_eq!(read_all(), shipped, "nothing written");
+
+        std::fs::write(&path, serde_json::to_vec(&overrides).unwrap()).unwrap();
+        merge_override_file_into(path, dir.path()).unwrap();
+        let merged = read_all();
+        let changed: Vec<_> = names
+            .zip(merged.iter().zip(&shipped))
+            .filter(|(_, (a, b))| a != b)
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(changed, ["vr-weapon-grips.json", "vr-support-grips.json"]);
     }
 
     #[test]
