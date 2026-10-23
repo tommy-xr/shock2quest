@@ -110,8 +110,9 @@ impl Slot {
 }
 
 /// A snapshot's fingers (`captured`) in `slot`, given the grip's `current`
-/// ones. Rest: the new rest pose, keeping a captured trigger pose (a curl
-/// grip's `trigger_curls` are shaped for its curl rest, so they go). Trigger:
+/// ones. Rest: the new rest pose, keeping a captured trigger pose. A curl
+/// grip's `trigger_curls` go: they are a whole-hand pose from the solver, so
+/// pulling the trigger would reshape every captured finger into it. Trigger:
 /// the new trigger pose over the current rest, as bones.
 pub(super) fn slot_fingers(slot: Slot, current: &FingerPose, captured: FingerBones) -> FingerPose {
     match slot {
@@ -243,11 +244,14 @@ pub(super) struct TestHold {
 
 impl TestHold {
     /// Follow this frame's controller pose and trigger; an untracked one
-    /// (`None`) leaves the item where it was, as play does.
+    /// (`None`) leaves the item and fingers as they were, as play does (a
+    /// set-down controller can rest on its trigger).
     pub fn follow(&mut self, controller: Option<GripPose>, trigger: f32) {
         self.tracked = controller.is_some();
+        if controller.is_some() {
+            self.trigger = trigger;
+        }
         self.controller = controller.or(self.controller);
-        self.trigger = trigger;
     }
 }
 
@@ -1534,7 +1538,14 @@ mod tests {
         assert!(tool.toggle_test_hold());
         assert_eq!(tool.slot_entry(), Err("end test hold first".to_owned()));
         assert!(!tool.toggle_slot());
-        tool.test_hold.as_mut().unwrap().follow(None, 0.25);
+        let held = GripPose {
+            position: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::from_angle_y(Deg(0.0)),
+        };
+        tool.test_hold.as_mut().unwrap().follow(Some(held), 0.25);
+        assert_eq!(tool.preview_trigger(), 0.25);
+        // Set down resting on its trigger: the fingers stay as last held.
+        tool.test_hold.as_mut().unwrap().follow(None, 1.0);
         assert_eq!(tool.preview_trigger(), 0.25);
         assert!(tool.toggle_test_hold());
         assert_eq!(tool.slot, Slot::Trigger);

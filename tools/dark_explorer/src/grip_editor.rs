@@ -1331,12 +1331,9 @@ mod tests {
     fn a_headset_trigger_pose_survives_the_merge() {
         let (dir, doc) = document();
         let mut entry = doc.library.entries[0].clone();
-        let FingerPose::Bones { bones, .. } = entry.grip.fingers.to_bones() else {
-            unreachable!()
-        };
         let pressed = FingerPose::curls([0.9; 5]).rest_bones();
         entry.grip.fingers = FingerPose::Bones {
-            bones,
+            bones: entry.grip.fingers.rest_bones(),
             trigger_bones: Some(pressed),
         };
         // As the headset writes it: overrides file, then loaded for the merge.
