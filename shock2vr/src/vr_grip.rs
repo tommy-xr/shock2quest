@@ -930,6 +930,25 @@ impl GripLibrary {
             }
         }
     }
+
+    /// Make `entry` the only headset entry for its model and hand, as a save
+    /// leaves the overrides file.
+    pub fn replace_headset(&mut self, entry: BakedGripEntry) {
+        let mut index = 0;
+        while index < self.headset {
+            let e = &self.entries[index];
+            if e.model == entry.model && e.hand == entry.hand {
+                self.entries.remove(index);
+                self.headset -= 1;
+            } else {
+                index += 1;
+            }
+        }
+        self.prepend(GripLibrary {
+            entries: vec![entry],
+            ..Default::default()
+        });
+    }
 }
 
 /// Poses saved on the headset by the in-VR pose tool, under the data root.

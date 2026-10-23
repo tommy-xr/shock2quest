@@ -1827,14 +1827,10 @@ impl VrInteraction {
                         grip.item_scale / crate::world_scale::WorldScale::active().personal();
                 }
                 pose_tool::save_override(&tool.overrides_path, entry).map(|()| {
-                    // Keep the in-memory entry in step with the file (its scale).
-                    if let Some(kept) = self.grip_library.as_mut().and_then(|library| {
-                        library
-                            .entries
-                            .iter_mut()
-                            .find(|e| e.model == entry.model && e.hand == entry.hand)
-                    }) {
-                        *kept = entry.clone();
+                    // Keep the in-memory library in step with the file: one
+                    // headset entry per model and hand, at the saved scale.
+                    if let Some(library) = self.grip_library.as_mut() {
+                        library.replace_headset(entry.clone());
                     }
                     format!("model={} hand={}", entry.model, entry.hand)
                 })
@@ -3839,6 +3835,34 @@ mod tests {
         });
         interaction.pose_tool = Some(tool);
         interaction
+    }
+
+    /// Each save replaces the hand's headset entry rather than piling up.
+    #[test]
+    fn saving_again_keeps_one_headset_entry_per_model_and_hand() {
+        let dir = crate::test_support::TempDir::new("pose-resave");
+        let mut interaction = staged_workbench(dir.path().join("o.json"));
+        interaction.save_staged();
+        for _ in 0..3 {
+            let grip = interaction.fitted_grips[1]
+                .as_ref()
+                .unwrap()
+                .resolved
+                .clone()
+                .unwrap();
+            interaction.stage_grip(grip).unwrap();
+            interaction.save_staged();
+        }
+        let library = interaction.grip_library.as_ref().unwrap();
+        assert_eq!(library.headset, 1);
+        let ours = |e: &&crate::vr_grip::BakedGripEntry| e.model == "wrench_h" && e.hand == "right";
+        assert_eq!(
+            library.entries[..library.headset]
+                .iter()
+                .filter(ours)
+                .count(),
+            1
+        );
     }
 
     #[test]
