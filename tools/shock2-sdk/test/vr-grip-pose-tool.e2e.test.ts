@@ -105,6 +105,23 @@ test(
     const spot = add(add(eye, scale(ahead, 0.45 / unit)), add(scale(right, 0.1 / unit), [0, -0.3 / unit, 0]));
     const bench = draws[0]!.position;
     assert.ok(distance(bench, spot) < 0.02 / unit, `bench ${bench} vs ${spot}`);
+    // The panel, from the same eye: 0.33 m ahead, 0.47 m down, 0.24 m to the
+    // free (left) side, tilted to face the eye with no roll; a 0.3 m wide
+    // 400x400 canvas. Button centres from their canvas rects, independent
+    // of the code that reports them.
+    const panel = (await workbench(game)).tool.panel.panel!;
+    const panelCenter = add(eye, add(scale(ahead, 0.33 / unit), add(scale(right, -0.24 / unit), [0, -0.47 / unit, 0])));
+    assert.ok(distance(xyz(panel.center), panelCenter) < 0.005 / unit, `panel ${xyz(panel.center)} vs ${panelCenter}`);
+    const facing = normalize(sub(eye, panelCenter));
+    const panelUp = normalize(sub([0, 1, 0], scale(facing, facing[1])));
+    const panelRight = cross(scale(facing, -1), panelUp);
+    const onPanel = ([x, y]: [number, number]) =>
+      add(panelCenter, add(scale(panelRight, (x / 400 - 0.5) * 0.3 / unit), scale(panelUp, (0.5 - y / 400) * 0.3 / unit)));
+    for (const [event, canvasCenter] of [["Exit", [200, 290]], ["ResetView", [297, 246]]] as const) {
+      const button = xyz(panel.buttons.find((b) => b.event === event)!.center);
+      const expected = onPanel([...canvasCenter]);
+      assert.ok(distance(button, expected) < 0.005 / unit, `${event} ${button} vs ${expected}`);
+    }
     // The workbench is a scene of its own: none of the mission is drawn (its
     // world, labels, HUD), only the mug, the hands, a floor grid and the
     // control panel. Nothing fills the background, which passthrough shows on
