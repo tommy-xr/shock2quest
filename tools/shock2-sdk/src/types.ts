@@ -1447,10 +1447,7 @@ export interface HandGrip {
    * the tracked posing hand, and `hand_size_ratio` that hand's size over the
    * glove's (wrist to middle tip); `capture_failure`: why the last capture request
    * captured nothing (`no_joints`, `window_short`, `jitter max_mm=<x>`,
-   * `degenerate_joints`); `contact_view`: which contact spheres and joint
-   * markers are drawn - touching/through spheres with wrist and fingertip
-   * markers, all of them, or none (the free controller's thumbstick click
-   * steps through them). */
+   * `degenerate_joints`). */
   pose_tool?: {
     /** `support`: the other hand (`posing`) is posed as the support grip
      * against this hand's glove, frozen at its grip. */
@@ -1461,7 +1458,6 @@ export interface HandGrip {
     tip_error_mm: number[] | null;
     hand_size_ratio: number | null;
     capture_failure: string | null;
-    contact_view: "contacts" | "full" | "off";
     /** A save succeeded and nothing was staged since. */
     saved: boolean;
     /** The workbench's control panel: its status line, why "Pose: <other
@@ -1479,7 +1475,7 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "SwitchHand" | "SupportMode" | "Contacts" | "ResetView" | "Exit";
+          event: "Save" | "Discard" | "SwitchHand" | "SupportMode" | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;

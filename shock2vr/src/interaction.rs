@@ -185,7 +185,7 @@ pub trait PlayerInteraction {
     fn hold_pose_workbench(&mut self) {}
 
     /// Controller pulses the workbench asked for since the last call (its
-    /// clicks, saves and penetration buzz), for the mission to request.
+    /// clicks and saves), for the mission to request.
     fn take_pose_tool_pulses(&mut self) -> Vec<(Handedness, crate::haptics::HapticPulse)> {
         Vec::new()
     }
@@ -1264,7 +1264,6 @@ impl VrInteraction {
         tracked[posing] = tracked[posing].map(|joints| joints.map(|p| tool.to_bench(p)));
         tracked[1 - posing] = tracked[1 - posing].filter(|_| in_hand.is_none());
         tool.observe(tracked, snapshot, dt);
-        tool.cycle_contact_view(control.thumbstick_click, in_hand.is_some());
         // A support pose leaves the item's scale to its grip.
         let stick = tool.scale_input(control.thumbstick.y, in_hand.is_some() && !tool.support);
         let scaled = pose_tool::GripPoseTool::scale(grip.item_scale, stick, dt);
@@ -1289,21 +1288,6 @@ impl VrInteraction {
                     .and_then(|joints| pose_tool::tracked_glove(renderer, &joints, handedness));
                 tool.tip_error_mm = live.as_ref().map(|glove| glove.tip_error_mm());
                 tool.hand_size_ratio = live.as_ref().map(|glove| glove.fit.size_ratio);
-                // The free controller buzzes while the live glove goes through
-                // the item, harder the deeper, unless contacts are hidden.
-                let deepest = live
-                    .filter(|_| tool.contact_view != pose_tool::ContactView::Off)
-                    .map_or(0.0, |glove| {
-                        glove
-                            .fit
-                            .joints
-                            .iter()
-                            .filter_map(|&joint| tool.penetration(joint))
-                            .fold(0.0, f32::max)
-                    });
-                if let Some(pulse) = crate::haptics::grip_penetration_pulse(deepest) {
-                    self.pose_tool_pulses.push((free, pulse));
-                }
                 capture.map(|joints| {
                     let fitted = pose_tool::tracked_glove(renderer, &joints, handedness);
                     (joints, fitted)
@@ -1343,11 +1327,6 @@ impl VrInteraction {
             pose_tool::panel::PanelEvent::Discard => self.discard_staged(),
             pose_tool::panel::PanelEvent::SwitchHand => self.switch_pose_hand(world, contact),
             pose_tool::panel::PanelEvent::SupportMode => self.toggle_support_mode(),
-            pose_tool::panel::PanelEvent::Contacts => {
-                if let Some(tool) = self.pose_tool.as_mut() {
-                    tool.step_contact_view();
-                }
-            }
             pose_tool::panel::PanelEvent::ResetView => {
                 if let Some(tool) = self.pose_tool.as_mut() {
                     tool.reset_view();
@@ -1469,8 +1448,7 @@ impl VrInteraction {
         println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=false");
     }
 
-    /// Where the posed item is drawn, for the mission, the fingertip contacts
-    /// and the extra views, and its surface (only fitted items keep geometry).
+    /// Where the posed item is drawn, for the mission and the extra views.
     fn place_pose_tool_item(&mut self, contact: Vector3<f32>) {
         let Some(tool) = self.pose_tool.as_mut() else {
             return;
@@ -1481,23 +1459,10 @@ impl VrInteraction {
         if let Some(grip) = held.resolved.as_ref() {
             let item = pose_tool::item_pose(tool.hand_pose, grip, contact);
             tool.item_placed = Some(item);
-            // Grip surfaces are in the model frame, which a contact offset
+            // The views turn about the model origin, which a contact offset
             // does not move.
             let model = pose_tool::item_pose(tool.hand_pose, grip, Vector3::new(0.0, 0.0, 0.0));
             tool.item = Some((model, grip.item_scale));
-        }
-        if tool.surface.is_none() {
-            // Geometry is cached per hand that held the item; a switched-to
-            // hand reads the holder's.
-            tool.surface = [tool.hand, tool.holder]
-                .into_iter()
-                .find_map(|hand| {
-                    let hand_name = ["left", "right"][hand];
-                    self.grip_geometry
-                        .get(&format!("{}:{hand_name}", held.model))?
-                        .as_ref()
-                })
-                .and_then(|geometry| crate::vr_grip::GripSurface::new(&geometry.triangles));
         }
     }
 
@@ -2572,7 +2537,7 @@ impl PlayerInteraction for VrInteraction {
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
                 "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm_in_world()), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal),
-                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"mode": if tool.support { "support" } else { "primary" }, "posing": (["left", "right"][tool.posing()]), "staged": tool.staged.is_some(), "saved": tool.saved, "last_save_error": tool.last_save_error, "tip_error_mm": tool.tip_error_mm, "hand_size_ratio": tool.hand_size_ratio, "capture_failure": tool.capture_failure, "contact_view": tool.contact_view.name(), "panel": tool.panel_diagnostics()}))}))
+                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"mode": if tool.support { "support" } else { "primary" }, "posing": (["left", "right"][tool.posing()]), "staged": tool.staged.is_some(), "saved": tool.saved, "last_save_error": tool.last_save_error, "tip_error_mm": tool.tip_error_mm, "hand_size_ratio": tool.hand_size_ratio, "capture_failure": tool.capture_failure, "panel": tool.panel_diagnostics()}))}))
         }).collect())
     }
 

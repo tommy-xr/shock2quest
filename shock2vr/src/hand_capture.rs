@@ -946,7 +946,6 @@ pub(crate) mod tests {
     fn recordings_yield_their_tracked_hands() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/hand_recordings/synthetic.jsonl");
-        // Its first frame has no `thumbstick_click`, as older recordings do not.
         let frames = recorded_hands(&path).unwrap();
         assert!(!frames.is_empty());
         for [left, right] in &frames {
