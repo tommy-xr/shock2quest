@@ -1586,9 +1586,9 @@ impl VrInteraction {
     /// trigger release, as if the trigger were let go on the workbench.
     fn close_pose_tool(&mut self) {
         self.discard_staged();
-        let Some(tool) = self.pose_tool.take() else {
+        if self.pose_tool.take().is_none() {
             return;
-        };
+        }
         // The mission refits from the library as it resumes: the saved grip
         // (unsaved scale changes are discarded too), with its collider sized.
         // Both hands: a save can also change the other hand's mirrored grip.
