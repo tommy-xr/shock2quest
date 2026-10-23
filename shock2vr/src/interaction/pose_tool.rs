@@ -79,10 +79,11 @@ pub(super) fn controller_in_hand(posing: bool, joints: bool, tracked: bool) -> b
     tracked && !(posing && joints)
 }
 
-/// Which pose of a primary grip a snapshot sets. `Rest` takes the whole
-/// grip (wrist, item placement, fingers); `Trigger` takes only the fingers,
-/// as play poses them with the trigger fully pulled (`trigger_bones`),
-/// leaving the wrist and item where the rest grip holds them.
+/// Which pose of a primary grip a snapshot sets. `Rest` takes the fingers,
+/// and the wrist and item placement too unless the tool keeps the placement
+/// (`keep_placement`); `Trigger` takes only the index finger, as play poses
+/// it with the trigger fully pulled (`trigger_bones`), leaving the rest
+/// where the rest grip holds it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Slot {
     #[default]
@@ -108,23 +109,29 @@ impl Slot {
 }
 
 /// A snapshot's fingers (`captured`) in `slot`, given the grip's `current`
-/// ones. Rest: the new rest pose, keeping a captured trigger pose. A curl
-/// grip's `trigger_curls` go: they are a whole-hand pose from the solver, so
-/// pulling the trigger would reshape every captured finger into it. Trigger:
-/// the new trigger pose over the current rest, as bones.
+/// ones. A trigger pose is the rest pose with only the index pulled, so
+/// pulling the trigger moves nothing else. Rest: the new rest pose, keeping
+/// a captured trigger pose's index. A curl grip's `trigger_curls` go: they
+/// pair with the solver's rest, not the captured one. Trigger: the captured
+/// index over the current rest, as bones.
 pub(super) fn slot_fingers(slot: Slot, current: &FingerPose, captured: FingerBones) -> FingerPose {
     match slot {
         Slot::Rest => FingerPose::Bones {
             bones: captured,
             trigger_bones: match current {
-                FingerPose::Bones { trigger_bones, .. } => *trigger_bones,
+                FingerPose::Bones { trigger_bones, .. } => trigger_bones
+                    .as_ref()
+                    .map(|pulled| crate::vr_grip::with_index(&captured, pulled)),
                 FingerPose::Curls { .. } => None,
             },
         },
-        Slot::Trigger => FingerPose::Bones {
-            bones: current.rest_bones(),
-            trigger_bones: Some(captured),
-        },
+        Slot::Trigger => {
+            let rest = current.rest_bones();
+            FingerPose::Bones {
+                bones: rest,
+                trigger_bones: Some(crate::vr_grip::with_index(&rest, &captured)),
+            }
+        }
     }
 }
 
@@ -204,6 +211,13 @@ pub(super) struct GripPoseTool {
     pub support_mode: Result<(), String>,
     /// Which pose of the primary grip a snapshot sets.
     pub slot: Slot,
+    /// A rest snapshot keeps the grip's placement (item, wrist, glove turn,
+    /// trigger index) and takes only the tracked fingers; off, it also
+    /// places the item where the tracked hand holds it.
+    pub keep_placement: bool,
+    /// How far the grip's trigger pose curls the index from rest toward a
+    /// fist (`FingerPose::trigger_index`), which the Index steps move.
+    pub trigger_index: Option<f32>,
     /// The free hand is tracked, so it works the panel by fingertip.
     fingertip: bool,
     /// Test hold: the posing hand's controller holds the item as play does.
@@ -309,6 +323,8 @@ impl GripPoseTool {
             support: false,
             support_mode: Err("one-handed".to_owned()),
             slot: Slot::Rest,
+            keep_placement: true,
+            trigger_index: None,
             fingertip: false,
             test_hold: None,
             muzzle: None,
@@ -429,6 +445,26 @@ impl GripPoseTool {
             Slot::Rest => Slot::Trigger,
             Slot::Trigger => Slot::Rest,
         };
+        true
+    }
+
+    /// Whether the placement toggle can act, or why not: a support capture
+    /// always places the support hand.
+    pub fn placement_entry(&self) -> Result<(), String> {
+        if self.support {
+            Err("primary grip only".to_owned())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Switch whether a rest snapshot keeps the placement, if
+    /// `placement_entry` allows; whether it changed.
+    pub fn toggle_placement(&mut self) -> bool {
+        if self.placement_entry().is_err() {
+            return false;
+        }
+        self.keep_placement = !self.keep_placement;
         true
     }
 
@@ -604,6 +640,8 @@ impl GripPoseTool {
             "aim_disabled": view.aim.err(),
             "show_aim": self.show_aim,
             "slot_disabled": view.slot_entry.err(),
+            "keep_placement": self.keep_placement,
+            "trigger_index": self.trigger_index,
             "hover": self.hover,
             "panel": placed,
             // The bench's view turn about its pivot (world space).
@@ -641,6 +679,9 @@ impl GripPoseTool {
             support_mode: self.support_mode.clone(),
             slot: self.slot,
             slot_entry: self.slot_entry(),
+            keep_placement: self.keep_placement,
+            placement_entry: self.placement_entry(),
+            trigger_index: self.trigger_index,
             staged: self.staged.is_some(),
             fingertip: self.fingertip,
         }
@@ -1460,47 +1501,54 @@ mod tests {
     }
 
     #[test]
-    fn a_trigger_snapshot_sets_the_pressed_fingers_over_the_rest() {
+    fn a_trigger_snapshot_sets_only_the_pulled_index_over_the_rest() {
         let captured = bones(0.9);
         // A curl rest converts to bones exactly; its curl trigger is replaced.
         let curls = FingerPose::Curls {
             curls: [0.3; 5],
             trigger_curls: Some([0.6; 5]),
         };
-        assert_eq!(
-            slot_fingers(Slot::Trigger, &curls, captured),
-            FingerPose::Bones {
-                bones: bones(0.3),
-                trigger_bones: Some(captured),
-            }
-        );
         // A bone rest is kept as it is.
         let posed = FingerPose::Bones {
             bones: bones(0.2),
             trigger_bones: None,
         };
-        assert_eq!(
-            slot_fingers(Slot::Trigger, &posed, captured),
-            FingerPose::Bones {
-                bones: bones(0.2),
-                trigger_bones: Some(captured),
-            }
-        );
+        for (current, rest) in [(curls, bones(0.3)), (posed, bones(0.2))] {
+            let FingerPose::Bones {
+                bones: kept,
+                trigger_bones: Some(pulled),
+            } = slot_fingers(Slot::Trigger, &current, captured)
+            else {
+                panic!("a bone pose with a trigger pose");
+            };
+            assert_eq!(kept, rest);
+            assert_eq!(
+                pulled,
+                crate::vr_grip::with_index(&rest, &captured),
+                "the tracked index over the other four fingers at rest"
+            );
+        }
     }
 
     #[test]
-    fn a_rest_snapshot_keeps_a_captured_trigger_pose_but_not_curls() {
+    fn a_rest_snapshot_keeps_a_captured_trigger_index_but_not_curls() {
         let captured = bones(0.4);
         let paired = FingerPose::Bones {
             bones: bones(0.2),
             trigger_bones: Some(bones(0.9)),
         };
+        let FingerPose::Bones {
+            bones: rest,
+            trigger_bones: Some(pulled),
+        } = slot_fingers(Slot::Rest, &paired, captured)
+        else {
+            panic!("a bone pose with a trigger pose");
+        };
+        assert_eq!(rest, captured);
         assert_eq!(
-            slot_fingers(Slot::Rest, &paired, captured),
-            FingerPose::Bones {
-                bones: captured,
-                trigger_bones: Some(bones(0.9)),
-            }
+            pulled,
+            crate::vr_grip::with_index(&captured, &bones(0.9)),
+            "pulling moves only the index: the others follow the new rest"
         );
         let curls = FingerPose::Curls {
             curls: [0.3; 5],
@@ -1542,6 +1590,18 @@ mod tests {
         assert_eq!(tool.slot, Slot::Rest);
         assert_eq!(tool.slot_entry(), Err("primary grip only".to_owned()));
         assert!(!tool.toggle_slot());
+    }
+
+    #[test]
+    fn a_rest_snapshot_keeps_the_placement_until_toggled_on_a_primary_grip() {
+        let mut tool = posing_tool();
+        assert!(tool.keep_placement, "fingers only by default");
+        assert!(tool.toggle_placement());
+        assert!(!tool.keep_placement);
+        tool.set_support(true);
+        assert_eq!(tool.placement_entry(), Err("primary grip only".to_owned()));
+        assert!(!tool.toggle_placement());
+        assert!(!tool.keep_placement);
     }
 
     fn staged() -> crate::interaction::StagedGrip {

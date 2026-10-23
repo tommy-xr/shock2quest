@@ -117,7 +117,7 @@ test(
     const panelRight = cross(scale(facing, -1), panelUp);
     const onPanel = ([x, y]: [number, number]) =>
       add(panelCenter, add(scale(panelRight, (x / 400 - 0.5) * 0.3 / unit), scale(panelUp, (0.5 - y / 400) * 0.3 / unit)));
-    for (const [event, canvasCenter] of [["Exit", [297, 290]], ["ResetView", [297, 246]]] as const) {
+    for (const [event, canvasCenter] of [["Exit", [329, 290]], ["ResetView", [200, 290]], ["Placement", [297, 246]]] as const) {
       const button = xyz(panel.buttons.find((b) => b.event === event)!.center);
       const expected = onPanel([...canvasCenter]);
       assert.ok(distance(button, expected) < 0.005 / unit, `${event} ${button} vs ${expected}`);
@@ -281,9 +281,10 @@ test(
     await game.step({ frames: 2 });
     assert.ok((await named("Right grip glove")) > 0, "tracking lost: the saved glove is back");
 
-    // A capture still staged on exit is saved, on disk and in play.
+    // A capture still staged on exit is saved, on disk and in play. Its
+    // fingers differ: a rest snapshot keeps the placement by default.
     const savedText = readFileSync(path, "utf8");
-    await game.input.set("right_hand.joints", trackedHand([hand[0], hand[1] + 0.05, hand[2]], unit));
+    await game.input.set("right_hand.joints", trackedHand([hand[0], hand[1] + 0.05, hand[2]], unit, { pinch: true }));
     await game.step({ frames: 30 });
     await pullTrigger();
     const staged = (await rightGrip()).grip;
@@ -406,14 +407,24 @@ async function aimAway(game: GameServer, hand: "left" | "right"): Promise<void> 
   await game.input.set(`${hand}_hand.rotation`, toLocalRotation(quatFromTo([0, 0, -1], [0, 1, 0])));
 }
 
-/** Click the panel's Save with a controller, then aim it away again so its
+/** Click a panel button with a controller, then aim it away again so its
  * next press snapshots. */
-async function saveOnPanel(game: GameServer, hand: "left" | "right", unit: number): Promise<void> {
-  await aimAtButton(game, hand, "Save", unit);
+async function pressButton(game: GameServer, hand: "left" | "right", event: PanelEvent, unit: number): Promise<void> {
+  await aimAtButton(game, hand, event, unit);
   await game.step({ frames: 1 });
   await click(game, hand);
   await aimAway(game, hand);
   await game.step({ frames: 1 });
+}
+
+const saveOnPanel = (game: GameServer, hand: "left" | "right", unit: number) => pressButton(game, hand, "Save", unit);
+
+/** Rest snapshots keep the grip's placement by default; switch them to
+ * capture it from the tracked hand too. */
+async function capturePlacement(game: GameServer, hand: "left" | "right", unit: number): Promise<void> {
+  assert.equal((await workbench(game)).tool.panel.keep_placement, true, "placement kept by default");
+  await pressButton(game, hand, "Placement", unit);
+  assert.equal((await workbench(game)).tool.panel.keep_placement, false);
 }
 
 /** Open the workbench on the mug held in `holding`, its controller set down
@@ -454,7 +465,7 @@ test(
     assert.ok(panelDraws.length > 0, "the panel is drawn");
     assert.equal((await tool()).panel.status, "Pose, then snapshot");
     // Nothing staged: Save and Discard are disabled.
-    assert.deepEqual((await tool()).panel.panel!.buttons.map((b) => b.event), ["SwitchHand", "Slot", "ResetView", "Exit"]);
+    assert.deepEqual((await tool()).panel.panel!.buttons.map((b) => b.event), ["SwitchHand", "Slot", "Placement", "ResetView", "Exit"]);
     const { v, s } = (await tool()).panel.panel!.rotation;
     const panelUp = (metres: number) => scale(quatRotate([v.x, v.y, v.z, s], [0, 1, 0]), metres);
 
@@ -806,7 +817,7 @@ async function captureRightGrip(game: GameServer, item: number): Promise<Resolve
     "right_hand.joints": handInMetres().map((p) =>
       toLocal(add(bench, scale(add(quatRotate(yaw(28), p), [0.1, -0.05, 0.05]), 1 / unit)))),
   });
-  await aimAway(game, "left");
+  await capturePlacement(game, "left", unit);
   await game.step({ frames: 30 });
   await click(game, "left");
   assert.equal((await workbench(game)).tool.staged, true, "staged");
@@ -1092,6 +1103,7 @@ async function captureAt(worldScale: number): Promise<{ saved: ResolvedGrip; tip
     return quatRotate(quatConjugate(player.rotation), sub(world, player.position));
   });
   await game.input.set("right_hand.joints", joints);
+  await capturePlacement(game, "left", unit);
   await game.step({ frames: 30 });
   const tipError = (await game.info()).player.hand_grips.find((g) => g.hand === "right")!.pose_tool!.tip_error_mm!;
   await game.input.set("left_hand.trigger", 1);
@@ -1213,7 +1225,7 @@ test(
       "right_hand.position": [controller.position[0] + 1, controller.position[1] - 0.5, controller.position[2]],
       "right_hand.joints": handWorld,
     });
-    await aimAway(game, "left");
+    await capturePlacement(game, "left", unit);
     await game.step({ frames: 30 });
     await click(game, "left");
     const captured = (await rightGrip()).grip!;
@@ -1344,7 +1356,10 @@ test(
       assert.equal((await tool()).slot, "rest");
       assert.equal((await tool()).panel.slot_disabled, null);
 
-      // Rest: the tracked right hand round the grip, the controller set down.
+      // Rest: the tracked right hand round the grip, the controller set down;
+      // the snapshot keeps the grip's placement and takes only the fingers.
+      const shipped = (await rightGrip()).grip!;
+      assert.equal((await tool()).panel.keep_placement, true);
       const controller = (await game.input.state()).right_hand;
       const { toLocal } = await workbench(game);
       const bench = (await game.scene.objects({ entityId: gun.id })).objects[0]!.position;
@@ -1361,8 +1376,11 @@ test(
       const rest = (await rightGrip()).grip!;
       assert.ok(fingers(rest).bones, "the rest capture is bones");
       assert.equal((await tool()).has_trigger_pose, false, "no pulled pose yet");
+      assertClose(rest.offset, shipped.offset, 1e-5, "placement kept: offset");
+      assertClose(rest.rotation, shipped.rotation, 1e-6, "placement kept: rotation");
+      assert.deepEqual(rest.hand_rotation, shipped.hand_rotation, "placement kept: glove turn");
 
-      // Trigger slot: the index hooked; only the fingers change.
+      // Trigger slot: the index hooked; only the index changes.
       await aimAtButton(game, "left", "Slot", unit);
       await game.step({ frames: 1 });
       await click(game, "left");
@@ -1377,9 +1395,30 @@ test(
       assertClose(posed.rotation, rest.rotation, 1e-6, "rotation");
       assert.equal(posed.item_scale, rest.item_scale);
       assertSameBones(fingers(posed).bones, fingers(rest).bones!, "rest fingers kept");
-      const pulled = fingers(posed).trigger_bones!;
-      const moved = pulled.some((q, i) => Math.abs(dot4(quat(q), quat(fingers(rest).bones![i]!))) < 0.99);
-      assert.ok(moved, "the pulled fingers differ from the rest");
+      const restBones = fingers(rest).bones!;
+      const indexOnly = (pulled: Bones, label: string) => {
+        assert.ok(pulled.slice(4, 9).some((q, i) => Math.abs(dot4(quat(q), quat(restBones[i + 4]!))) < 0.99),
+          `${label}: the index is pulled`);
+        assertSameBones([...pulled.slice(0, 4), ...pulled.slice(9)], [...restBones.slice(0, 4), ...restBones.slice(9)],
+          `${label}: the other fingers stay at rest`);
+      };
+      indexOnly(fingers(posed).trigger_bones!, "snapshot");
+
+      // The Index steps then set it as the rest index curled toward a fist,
+      // from the snapshot's nearest tenth.
+      const snapped = (await tool()).panel.trigger_index!;
+      // Above two tenths, so two steps down still pull the index.
+      assert.ok(snapped > 0.25 && snapped < 1, `the snapshot reads ${snapped}`);
+      const panelBefore = (await tool()).panel.panel!.buttons.map((b) => b.event);
+      assert.ok(panelBefore.includes("IndexLess") && panelBefore.includes("IndexMore") && !panelBefore.includes("Placement"),
+        `${panelBefore}`);
+      await pressButton(game, "left", "IndexLess", unit);
+      await pressButton(game, "left", "IndexLess", unit);
+      const lower = (Math.ceil(snapped * 10 - 1e-3) - 2) / 10;
+      assert.ok(Math.abs((await tool()).panel.trigger_index! - lower) < 1e-3,
+        `${snapped} two tenths down: ${(await tool()).panel.trigger_index} vs ${lower}`);
+      indexOnly(fingers((await rightGrip()).grip!).trigger_bones!, "stepped");
+      assert.equal((await tool()).staged, true);
 
       // Save writes both; leaving, dropping and re-grabbing loads them.
       await saveOnPanel(game, "left", unit);
