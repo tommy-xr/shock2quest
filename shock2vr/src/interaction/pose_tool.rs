@@ -30,8 +30,8 @@ const PINCH_RELEASE: f32 = 0.03 / crate::METERS_PER_WORLD_UNIT;
 /// Seconds of steady posing-hand tracking averaged into a capture.
 const STEADY_SECONDS: f32 = 0.3;
 /// Every joint stays this close to its window mean to count as steady
-/// (world units).
-const STEADY_DISTANCE: f32 = 0.005 / crate::METERS_PER_WORLD_UNIT;
+/// (world units). Quest 3 hands held still stray up to ~13 mm.
+const STEADY_DISTANCE: f32 = 0.015 / crate::METERS_PER_WORLD_UNIT;
 /// Natural-log item scale change per second at full thumbstick.
 const SCALE_RATE: f32 = 0.7;
 /// The grip editor's item scale range.
@@ -93,8 +93,8 @@ pub(super) struct GripPoseTool {
     pub tip_error_mm: Option<[f32; 5]>,
     /// Why the last capture request captured nothing, until one succeeds.
     pub capture_failure: Option<String>,
-    /// Contact spheres and tracked-joint markers drawn (thumbstick click).
-    pub show_contacts: bool,
+    /// Which contact spheres and tracked-joint markers are drawn.
+    pub contact_view: ContactView,
     /// Recent posing-hand frames, each with the time since the one before
     /// (zero for the oldest), spanning the steady window.
     recent: VecDeque<(HandJoints, f32)>,
@@ -110,6 +110,13 @@ impl GripPoseTool {
         hand_pose: GripPose,
         overrides_path: PathBuf,
     ) -> Self {
+        // A controller untracked as the workbench opens reports the zero
+        // quaternion, which would make every item and glove transform NaN.
+        let hand_pose = GripPose {
+            rotation: crate::util::tracked_rotation(hand_pose.rotation)
+                .unwrap_or(Quaternion::new(1.0, 0.0, 0.0, 0.0)),
+            ..hand_pose
+        };
         Self {
             hand,
             entity,
@@ -128,7 +135,7 @@ impl GripPoseTool {
             controllers: [None, None],
             tip_error_mm: None,
             capture_failure: None,
-            show_contacts: true,
+            contact_view: ContactView::Contacts,
             recent: VecDeque::new(),
             // Entered "already pressed": a trigger, pinch or click held as
             // the workbench opens must be let go before it acts.
@@ -138,11 +145,11 @@ impl GripPoseTool {
         }
     }
 
-    /// The leading edge of the free controller's thumbstick click shows or
-    /// hides the contact spheres and joint markers.
-    pub fn toggle_contacts(&mut self, click: bool) {
+    /// The leading edge of the free controller's thumbstick click steps the
+    /// contact spheres and joint markers to the next `ContactView`.
+    pub fn cycle_contact_view(&mut self, click: bool) {
         if click && !self.clicked {
-            self.show_contacts = !self.show_contacts;
+            self.contact_view = self.contact_view.next();
         }
         self.clicked = click;
     }
@@ -311,13 +318,15 @@ pub(super) enum Contact {
 }
 
 impl Contact {
-    /// White, green, red.
-    fn color(self) -> Vector3<f32> {
-        match self {
+    /// White, green, red; dimmer on the posed (saved or staged) glove, so
+    /// it reads apart from the live one.
+    fn color(self, posed: bool) -> Vector3<f32> {
+        let color = match self {
             Contact::Free => Vector3::new(0.9, 0.9, 0.9),
             Contact::Touching => Vector3::new(0.2, 1.0, 0.3),
             Contact::Penetrating => Vector3::new(1.0, 0.15, 0.1),
-        }
+        };
+        if posed { color * 0.45 } else { color }
     }
 
     fn name(self) -> &'static str {
@@ -325,6 +334,54 @@ impl Contact {
             Contact::Free => "contact sphere free",
             Contact::Touching => "contact sphere touching",
             Contact::Penetrating => "contact sphere penetrating",
+        }
+    }
+}
+
+/// What the contact spheres and tracked-joint markers show; the free
+/// controller's thumbstick click steps through them in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ContactView {
+    /// Only spheres touching or through the item, and markers on the
+    /// wrist and fingertips.
+    Contacts,
+    /// A sphere and a marker on every joint.
+    Full,
+    Off,
+}
+
+impl ContactView {
+    fn next(self) -> Self {
+        match self {
+            ContactView::Contacts => ContactView::Full,
+            ContactView::Full => ContactView::Off,
+            ContactView::Off => ContactView::Contacts,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ContactView::Contacts => "contacts",
+            ContactView::Full => "full",
+            ContactView::Off => "off",
+        }
+    }
+
+    /// Whether a sphere in this contact is drawn.
+    fn shows(self, contact: Contact) -> bool {
+        match self {
+            ContactView::Contacts => contact != Contact::Free,
+            ContactView::Full => true,
+            ContactView::Off => false,
+        }
+    }
+
+    /// Whether the tracked joint at this OpenXR index gets a marker.
+    fn marks(self, joint: usize) -> bool {
+        match self {
+            ContactView::Contacts => joint == 1 || crate::hand_capture::TIPS.contains(&joint),
+            ContactView::Full => true,
+            ContactView::Off => false,
         }
     }
 }
@@ -470,19 +527,34 @@ fn ball(center: Vector3<f32>, radius: f32, color: Vector3<f32>, name: &str) -> S
     ball
 }
 
-/// A sphere on each world-space glove joint, coloured by its contact.
-fn contact_spheres(tool: &GripPoseTool, joints: &HandJoints) -> impl Iterator<Item = SceneObject> {
-    joints.iter().map(|&joint| {
+/// A sphere on each world-space glove joint the view shows, coloured by its
+/// contact; dimmer on the posed glove.
+fn contact_spheres<'a>(
+    tool: &'a GripPoseTool,
+    joints: &'a HandJoints,
+    posed: bool,
+) -> impl Iterator<Item = SceneObject> + 'a {
+    // Hidden spheres skip the surface queries too.
+    let joints = if tool.contact_view == ContactView::Off {
+        &[][..]
+    } else {
+        &joints[..]
+    };
+    joints.iter().filter_map(move |&joint| {
         let contact = tool.contact(joint);
-        ball(joint, CONTACT_RADIUS, contact.color(), contact.name())
+        tool.contact_view
+            .shows(contact)
+            .then(|| ball(joint, CONTACT_RADIUS, contact.color(posed), contact.name()))
     })
 }
 
-/// The workbench's hands, lit by `lights`: the posing hand's glove
-/// frozen on the item at its grip, each tracked hand live, each untracked
-/// controller as an open glove, and the posing gloves again in every extra
-/// view. Unless hidden, both posing gloves carry contact spheres, and the
-/// posing hand's raw tracked joints show as markers beside its glove.
+/// The workbench's hands, lit by `lights`: the posing hand's glove posed on
+/// the item at its grip, each tracked hand live, each untracked controller
+/// as an open glove, and the posing gloves again in every extra view. While
+/// the posing hand is tracked its live glove replaces the saved grip's, which
+/// would only be in its way; a staged grip always shows, as the preview.
+/// Both posing gloves carry the contact spheres the view shows, and the
+/// posing hand's raw tracked joints its markers.
 pub(super) fn render(
     tool: &GripPoseTool,
     renderer: &mut GloveRenderer,
@@ -492,28 +564,7 @@ pub(super) fn render(
     let handedness = |index: usize| [Handedness::Left, Handedness::Right][index];
     let mut objs = Vec::new();
     let mut posed = Vec::new();
-    if let Some(grip) = grip {
-        let pose = tool.hand_pose;
-        let shape = grip.fingers.hand_shape_at(0.0);
-        posed.extend(renderer.render_hand(
-            pose.position,
-            pose.rotation,
-            handedness(tool.hand),
-            0.0,
-            1.0,
-            true,
-            None,
-            Some((shape.clone(), 1.0)),
-            HandLight::Off,
-            lights.clone(),
-        ));
-        if tool.show_contacts {
-            let joints = renderer
-                .shape_joints(&shape, handedness(tool.hand))
-                .map(|joint| pose.point(joint));
-            posed.extend(contact_spheres(tool, &joints));
-        }
-    }
+    let mut posing_tracked = false;
     for (index, joints) in tool.tracked.iter().enumerate() {
         let Some(joints) = joints else { continue };
         let Some(glove) = tracked_glove(renderer, joints, handedness(index)) else {
@@ -537,16 +588,47 @@ pub(super) fn render(
             objs.extend(drawn);
             continue;
         }
+        posing_tracked = true;
         posed.extend(drawn);
-        if tool.show_contacts {
-            posed.extend(contact_spheres(tool, &glove.joints));
-            let cyan = Vector3::new(0.1, 0.9, 1.0);
-            posed.extend(
-                joints
-                    .iter()
-                    .map(|&joint| ball(joint, MARKER_RADIUS, cyan, "tracked joint")),
-            );
+        posed.extend(contact_spheres(tool, &glove.joints, false));
+        let cyan = Vector3::new(0.1, 0.9, 1.0);
+        posed.extend(
+            joints
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| tool.contact_view.marks(*i))
+                .map(|(_, &joint)| ball(joint, MARKER_RADIUS, cyan, "tracked joint")),
+        );
+    }
+    if let Some(grip) = grip.filter(|_| tool.staged.is_some() || !posing_tracked) {
+        let pose = tool.hand_pose;
+        let shape = grip.fingers.hand_shape_at(0.0);
+        let mut glove = renderer.render_hand(
+            pose.position,
+            pose.rotation,
+            handedness(tool.hand),
+            0.0,
+            1.0,
+            true,
+            None,
+            Some((shape.clone(), 1.0)),
+            HandLight::Off,
+            lights.clone(),
+        );
+        // Told apart from the live glove in `/v1/scene`.
+        let name = format!("{:?} grip glove", handedness(tool.hand));
+        for object in &mut glove {
+            let tag = engine::scene::SceneObjectDebugTag {
+                name: Some(name.clone()),
+                ..object.debug_tag().cloned().unwrap_or_default()
+            };
+            object.set_debug_tag(Some(Rc::new(tag)));
         }
+        posed.extend(glove);
+        let joints = renderer
+            .shape_joints(&shape, handedness(tool.hand))
+            .map(|joint| pose.point(joint));
+        posed.extend(contact_spheres(tool, &joints, true));
     }
     for (index, controller) in tool.controllers.iter().enumerate() {
         let Some((pose, trigger, squeeze)) = controller else {
@@ -712,6 +794,20 @@ mod tests {
         hold(&mut fast, [0.0; 36], 1.0 / 120.0);
         fast.observe([None, posing(0.0)], true, 1.0 / 120.0);
         assert_eq!(fast.capture.expect("37 steady frames")[0].x, 0.0);
+    }
+
+    #[test]
+    fn a_real_hand_held_still_captures_despite_tracking_jitter() {
+        // Quest 3 hands held still strayed up to ~13 mm from their mean.
+        let mut tool = posing_tool();
+        let wobble = 0.0133 / crate::METERS_PER_WORLD_UNIT;
+        hold(
+            &mut tool,
+            (0..STEADY_FRAMES - 1).map(|i| if i % 2 == 0 { wobble } else { -wobble }),
+            FRAME,
+        );
+        tool.observe([None, posing(0.0)], true, FRAME);
+        assert!(tool.capture.is_some(), "{:?}", tool.capture_failure);
     }
 
     #[test]
@@ -911,6 +1007,21 @@ mod tests {
     }
 
     #[test]
+    fn a_controller_untracked_as_the_workbench_opens_still_poses() {
+        // An untracked controller reports the zero quaternion.
+        let untracked = GripPose {
+            position: vec3(0.0, 5.0, 0.0),
+            rotation: Quaternion::new(0.0, 0.0, 0.0, 0.0),
+        };
+        let mut tool = GripPoseTool::new(1, EntityId::dead(), untracked, PathBuf::new());
+        assert!((tool.hand_pose.rotation.magnitude() - 1.0).abs() < 1e-6);
+        tool.item = Some((item_pose(tool.hand_pose, &grip(), vec3(0.0, 0.0, 0.0)), 0.8));
+        tool.surface = Some(crate::vr_grip::tests::closed_cube());
+        let item = tool.item.unwrap().0.position;
+        assert_eq!(tool.contact(item), Contact::Penetrating);
+    }
+
+    #[test]
     fn a_pinch_starts_under_two_centimetres_and_ends_over_three() {
         let gap = |metres: f32| hand_with_tips(metres / crate::METERS_PER_WORLD_UNIT);
         assert!(!pinching(false, Some(&gap(0.025))));
@@ -946,17 +1057,41 @@ mod tests {
     }
 
     #[test]
-    fn a_thumbstick_click_toggles_the_contacts_once_per_press() {
+    fn a_thumbstick_click_cycles_contacts_full_off_once_per_press() {
         let mut tool = posing_tool();
-        tool.toggle_contacts(true);
-        assert!(tool.show_contacts, "held as the workbench opened");
-        tool.toggle_contacts(false);
-        tool.toggle_contacts(true);
-        tool.toggle_contacts(true);
-        assert!(!tool.show_contacts);
-        tool.toggle_contacts(false);
-        tool.toggle_contacts(true);
-        assert!(tool.show_contacts);
+        assert_eq!(tool.contact_view, ContactView::Contacts, "the default");
+        tool.cycle_contact_view(true);
+        assert_eq!(
+            tool.contact_view,
+            ContactView::Contacts,
+            "held as the workbench opened"
+        );
+        let click = |tool: &mut GripPoseTool| {
+            tool.cycle_contact_view(false);
+            tool.cycle_contact_view(true);
+            tool.cycle_contact_view(true);
+            tool.contact_view
+        };
+        assert_eq!(click(&mut tool), ContactView::Full);
+        assert_eq!(click(&mut tool), ContactView::Off);
+        assert_eq!(click(&mut tool), ContactView::Contacts);
+    }
+
+    #[test]
+    fn by_default_only_contacts_and_the_wrist_and_fingertips_show() {
+        let view = ContactView::Contacts;
+        assert!(!view.shows(Contact::Free));
+        assert!(view.shows(Contact::Touching) && view.shows(Contact::Penetrating));
+        let marked: Vec<_> = (0..26).filter(|&j| view.marks(j)).collect();
+        assert_eq!(marked, [1, 5, 10, 15, 20, 25]);
+        assert!(ContactView::Full.shows(Contact::Free) && ContactView::Full.marks(0));
+        assert!(!ContactView::Off.shows(Contact::Penetrating) && !ContactView::Off.marks(5));
+        // The posed glove's spheres are a dimmer shade of the live one's.
+        let (live, posed) = (
+            Contact::Touching.color(false),
+            Contact::Touching.color(true),
+        );
+        assert!(posed.magnitude() < live.magnitude() * 0.6);
     }
 
     #[test]
