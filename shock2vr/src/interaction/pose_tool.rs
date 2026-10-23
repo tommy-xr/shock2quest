@@ -212,6 +212,9 @@ pub(super) struct GripPoseTool {
     /// The held item's muzzle (model space) if gameplay knows its barrel:
     /// captures keep its aim, and Align aim sets it.
     pub muzzle: Option<crate::weapon_muzzle::MuzzleFallback>,
+    /// The item's pump travel as frozen on the bench (scaled model space,
+    /// zero for no pump): play puts the support palm at its anchor plus this.
+    pub pump_travel: Vector3<f32>,
     /// While test-holding a gun with its controller tracked, where it fires
     /// and where the controller aims.
     pub aim: Option<AimLines>,
@@ -336,6 +339,7 @@ impl GripPoseTool {
             fingertip: false,
             test_hold: None,
             muzzle: None,
+            pump_travel: Vector3::new(0.0, 0.0, 0.0),
             aim: None,
             turn: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             turning: None,

@@ -1179,9 +1179,14 @@ impl VrInteraction {
         floor_y: f32,
         dt: f32,
     ) {
+        let pump_travel = self.pose_tool.as_ref().and_then(|tool| {
+            let (_, travel) = self.pump_motion(world, tool.hand)?;
+            Some(travel * crate::vr_shotgun_pump::state(world, tool.entity).fraction)
+        });
         let Some(tool) = self.pose_tool.as_mut() else {
             return;
         };
+        tool.pump_travel = pump_travel.unwrap_or(Vector3::new(0.0, 0.0, 0.0));
         let holding = [&self.left_hand, &self.right_hand][tool.holder].get_held_entity();
         if holding != Some(tool.entity) {
             println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=false reason=item_released");
@@ -1905,10 +1910,16 @@ impl VrInteraction {
             return false;
         };
         // A failed fit, or a pose its profile rejects as invalid.
+        // Measured from the pump's closed position, as play anchors it.
+        let model = pose_tool::item_pose(tool.hand_pose, grip, Vector3::new(0.0, 0.0, 0.0));
+        let model = GripPose {
+            position: model.point(tool.pump_travel),
+            ..model
+        };
         let posed = glove.ok_or("degenerate_joints").and_then(|(glove, bones)| {
             let pose = SupportProfile::captured_pose(
                 [Handedness::Left, Handedness::Right][tool.hand],
-                pose_tool::item_pose(tool.hand_pose, grip, Vector3::new(0.0, 0.0, 0.0)),
+                model,
                 grip,
                 &rig[tool.posing()],
                 mirror,
@@ -1991,7 +2002,8 @@ impl VrInteraction {
             pose_tool::item_pose(tool.hand_pose, grip, Vector3::new(0.0, 0.0, 0.0)),
             grip,
             &rig[tool.posing()],
-            profile.anchor_in_frame(primary, held.model_mirror?) * grip.item_scale,
+            profile.anchor_in_frame(primary, held.model_mirror?) * grip.item_scale
+                + tool.pump_travel,
         );
         Some((pose, profile.fingers.hand_shape_at(0.0)))
     }
@@ -4235,6 +4247,59 @@ mod tests {
         interaction.discard_staged();
         assert_eq!(interaction.support_profiles["wrench_h"], posed);
         assert!(interaction.pose_tool.as_ref().unwrap().staged.is_none());
+    }
+
+    /// A support capture with the pump part-racked: play adds the travel to
+    /// the saved anchor, so the capture must take it off.
+    #[test]
+    fn a_support_capture_with_the_pump_racked_holds_where_captured_in_play() {
+        use cgmath::Rotation3;
+        let dir = crate::test_support::TempDir::new("pose-support-pump");
+        let mut interaction = staged_workbench(dir.path().join("o.json"));
+        // A fixed (pump-style) support grip: no sliding region.
+        interaction
+            .support_profiles
+            .get_mut("wrench_h")
+            .unwrap()
+            .region = None;
+        let tool = interaction.pose_tool.as_mut().unwrap();
+        tool.staged = None;
+        tool.support_mode = Ok(());
+        tool.pump_travel = vec3(0.0, 0.0, 0.04);
+        interaction.toggle_support_mode();
+        let glove = GripPose {
+            position: vec3(0.03, 1.25, -0.02),
+            rotation: Quaternion::from_angle_z(cgmath::Deg(80.0)),
+        };
+        let crate::vr_grip::FingerPose::Bones { bones, .. } =
+            crate::vr_grip::FingerPose::curls([0.8; 5]).to_bones()
+        else {
+            unreachable!()
+        };
+        assert!(interaction.capture_support(Some((glove, bones))));
+        let tool = interaction.pose_tool.as_ref().unwrap();
+        let (drawn, _) = interaction.pose_tool_support_glove(tool).unwrap();
+        assert!((drawn.position - glove.position).magnitude() < 1e-4);
+
+        // Play: anchor plus the pump's travel (`support_candidate`).
+        let held = interaction.fitted_grips[1].as_ref().unwrap();
+        let grip = held.resolved.as_ref().unwrap();
+        let profile = &interaction.support_profiles["wrench_h"];
+        let played = profile.glove_pose(
+            Handedness::Right,
+            pose_tool::item_pose(tool.hand_pose, grip, vec3(0.0, 0.0, 0.0)),
+            grip,
+            &interaction.grip_kinematics.as_ref().unwrap()[0],
+            profile.anchor_in_frame(Handedness::Right, held.model_mirror.unwrap())
+                * grip.item_scale
+                + tool.pump_travel,
+        );
+        assert!(
+            (played.position - glove.position).magnitude() < 1e-4,
+            "{:?} vs {:?}",
+            played.position,
+            glove.position
+        );
     }
 
     #[test]
