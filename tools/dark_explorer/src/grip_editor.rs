@@ -110,7 +110,7 @@ fn merge_overrides(libraries: &mut [GripLibrary], overrides: GripLibrary) -> Res
     };
     let mut merges = Vec::new();
     for entry in &overrides.entries {
-        merges.push((entry.clone(), None));
+        merges.push(entry.clone());
         let (other, other_name) = match entry.hand.as_str() {
             "left" => (Handedness::Right, "right"),
             _ => (Handedness::Left, "left"),
@@ -118,33 +118,29 @@ fn merge_overrides(libraries: &mut [GripLibrary], overrides: GripLibrary) -> Res
         if let Some(mirror) = shock2vr::vr_weapon_grip::named_model_mirror(&entry.model)
             .filter(|_| !posed(&entry.model, other_name))
         {
-            let mirror = shock2vr::vr_grip::hand_model_mirror(mirror, other)
-                .ok_or("Invalid model reflection")?;
-            let entry = BakedGripEntry {
+            let grip = shock2vr::vr_grip::hand_model_mirror(mirror, other)
+                .and_then(|mirror| entry.grip.mirrored(mirror))
+                .ok_or("Invalid model reflection or grip")?;
+            merges.push(BakedGripEntry {
                 hand: other_name.to_owned(),
+                grip,
                 ..entry.clone()
-            };
-            merges.push((entry, Some(mirror)));
+            });
         }
     }
-    for (entry, mirror) in merges {
+    for entry in merges {
         let existing = libraries.iter_mut().find_map(|library| {
             library
                 .entries
                 .iter_mut()
                 .find(|e| e.model == entry.model && e.hand == entry.hand)
         });
-        match (existing, mirror) {
-            (Some(target), mirror) => transfer_grip(&entry.grip, target, mirror)?,
-            (None, None) => libraries[0].entries.push(BakedGripEntry {
+        match existing {
+            Some(target) => transfer_grip(&entry.grip, target, None)?,
+            None => libraries[0].entries.push(BakedGripEntry {
                 authored: true,
                 ..entry
             }),
-            (None, Some(mirror)) => {
-                let mut target = entry.clone();
-                transfer_grip(&entry.grip, &mut target, Some(mirror))?;
-                libraries[0].entries.push(target);
-            }
         }
     }
     Ok(())
