@@ -530,7 +530,7 @@ fn skinned_weapon_geometry(
 /// CPU equivalent of vertex skinning, shared by bounds and asset diagnostics.
 pub fn skinned_point(
     vertex: &VertexPositionTextureSkinnedNormal,
-    palette: &[Matrix4<f32>; SKINNING_PALETTE_SIZE],
+    palette: &[Matrix4<f32>],
 ) -> Option<Point3<f32>> {
     let point = vertex.position.extend(1.0);
     let mut skinned = Vector4::new(0.0, 0.0, 0.0, 0.0);

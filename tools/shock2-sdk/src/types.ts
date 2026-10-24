@@ -1516,7 +1516,7 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "AlignLess" | "AlignMore" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "Placement" | "IndexLess" | "IndexMore" | "Tighten" | `Lock(${0 | 1 | 2 | 3 | 4})` | "ResetView" | "Exit";
+          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "AlignLess" | "AlignMore" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "Placement" | "IndexLess" | "IndexMore" | "Unbury" | "Tighten" | `Lock(${0 | 1 | 2 | 3 | 4})` | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;

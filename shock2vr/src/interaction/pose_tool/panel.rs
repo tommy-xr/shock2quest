@@ -51,8 +51,9 @@ const PLACEMENT: Rect = Rect::new(204.0, 224.0, 186.0, 44.0);
 const INDEX_LESS: Rect = Rect::new(204.0, 224.0, 40.0, 44.0);
 const INDEX: Rect = Rect::new(248.0, 224.0, 98.0, 44.0);
 const INDEX_MORE: Rect = Rect::new(350.0, 224.0, 40.0, 44.0);
-/// Closes the slot's fingers onto the item.
-const TIGHTEN: Rect = Rect::new(10.0, 274.0, 380.0, 44.0);
+/// Opens the slot's buried fingers out of the item, and closes them onto it.
+const UNBURY: Rect = Rect::new(10.0, 274.0, 186.0, 44.0);
+const TIGHTEN: Rect = Rect::new(204.0, 274.0, 186.0, 44.0);
 /// A chip per finger (thumb..little) after the row's label, locking it.
 const LOCK_LABEL: Rect = Rect::new(10.0, 324.0, 62.0, 36.0);
 const FINGER_CHIPS: [Rect; 5] = [
@@ -92,6 +93,8 @@ pub(in crate::interaction) enum PanelEvent {
     IndexMore,
     /// Close the slot's fingers onto the item (`GripSurface::tighten`).
     Tighten,
+    /// Open the slot's buried fingers out of the item (`GripSurface::unbury`).
+    Unbury,
     /// Lock or unlock a finger (0 thumb .. 4 little).
     Lock(usize),
     ResetView,
@@ -225,7 +228,7 @@ pub(in crate::interaction) struct PanelView {
     /// and whether the Index steps can move it, or why not.
     pub trigger_index: Option<f32>,
     pub index_steps: Result<(), String>,
-    /// Whether Tighten can act, or why not.
+    /// Whether Tighten and Unbury can act, or why not.
     pub tighten: Result<(), String>,
     /// Which fingers (thumb..little) are locked.
     pub locks: [bool; 5],
@@ -456,14 +459,20 @@ pub(in crate::interaction) fn emit(
             );
         }
     }
+    let fingers = match view.slot {
+        Slot::Rest => "fingers",
+        Slot::Trigger => "index",
+    };
     buttons.extend([
         (
+            UNBURY,
+            format!("Unbury {fingers}"),
+            PanelEvent::Unbury,
+            view.tighten.clone(),
+        ),
+        (
             TIGHTEN,
-            match view.slot {
-                Slot::Rest => "Tighten fingers",
-                Slot::Trigger => "Tighten index",
-            }
-            .to_owned(),
+            format!("Tighten {fingers}"),
             PanelEvent::Tighten,
             view.tighten.clone(),
         ),
@@ -1116,22 +1125,30 @@ mod tests {
     }
 
     #[test]
-    fn tighten_names_what_the_slot_closes_and_says_why_it_cannot() {
+    fn tighten_and_unbury_name_what_the_slot_moves_and_say_why_they_cannot() {
         let rest = view(Status::Ready);
         let (canvas, targets) = emit(&rest, None);
         assert!(texts(&canvas).contains(&"Tighten fingers".to_owned()));
+        assert!(texts(&canvas).contains(&"Unbury fingers".to_owned()));
         assert_eq!(
             event_at(&targets, TIGHTEN.center()),
             Some(PanelEvent::Tighten)
         );
+        assert_eq!(
+            event_at(&targets, UNBURY.center()),
+            Some(PanelEvent::Unbury)
+        );
         let mut trigger = view(Status::Ready);
         trigger.slot = Slot::Trigger;
-        assert!(texts(&emit(&trigger, None).0).contains(&"Tighten index".to_owned()));
+        let canvas = emit(&trigger, None).0;
+        assert!(texts(&canvas).contains(&"Tighten index".to_owned()));
+        assert!(texts(&canvas).contains(&"Unbury index".to_owned()));
         let mut support = view(Status::Ready);
         support.tighten = Err("primary grip only".to_owned());
         let (canvas, targets) = emit(&support, None);
         assert!(texts(&canvas).contains(&"primary grip only".to_owned()));
         assert_eq!(event_at(&targets, TIGHTEN.center()), None);
+        assert_eq!(event_at(&targets, UNBURY.center()), None);
     }
 
     /// A chip per finger toggles its lock, lit while locked; a locked index

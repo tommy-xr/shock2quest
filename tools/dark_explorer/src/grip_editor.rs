@@ -184,47 +184,75 @@ fn trigger_index_slider(ui: &mut egui::Ui, fingers: &mut FingerPose) {
     }
 }
 
-/// "Tighten to surface": close the fingers onto the item from where they
-/// are (`GripSurface::tighten`), keeping the placement: all five at rest,
-/// only the index for the trigger-pressed pose; never a `locked` finger.
-/// `None` until clicked; then what happened, or why it could not.
-fn tighten_button(
+/// "Unbury" and "Tighten to surface": open the fingers buried in the item
+/// out of it (`GripSurface::unbury`), or close the fingers onto it from
+/// where they are (`GripSurface::tighten`), keeping the placement: all five
+/// at rest, only the index for the trigger-pressed pose; never a `locked`
+/// finger. `fit` takes the grip, the pose, the fingers and whether to
+/// unbury, and gives the moved grip and each finger's outcome. `None` until
+/// clicked; then what happened, or why it could not.
+fn surface_buttons(
     ui: &mut egui::Ui,
     grip: &mut ResolvedGrip,
     pressed: bool,
     locked: [bool; 5],
-    tighten: impl FnOnce(&ResolvedGrip, bool, [bool; 5]) -> Result<shock2vr::vr_grip::Tightened, String>,
+    fit: impl FnOnce(
+        &ResolvedGrip,
+        bool,
+        [bool; 5],
+        bool,
+    ) -> Result<(ResolvedGrip, [&'static str; 5]), String>,
 ) -> Option<Result<String, String>> {
     let fingers = shock2vr::vr_grip::tighten_fingers(pressed, locked);
-    let button = ui.add_enabled(
-        fingers.contains(&true),
-        egui::Button::new("Tighten to surface"),
-    );
-    if !button
-        .on_hover_text(if pressed {
-            "Close the pressed index onto the item"
-        } else {
-            "Close each unlocked finger onto the item from where it is"
+    let which = if pressed {
+        "the pressed index"
+    } else {
+        "each unlocked finger"
+    };
+    let clicked = ui
+        .horizontal(|ui| {
+            let mut clicked = None;
+            for (unbury, label, hover) in [
+                (
+                    true,
+                    "Unbury",
+                    format!("Open {which} out of the item where it is buried in it"),
+                ),
+                (
+                    false,
+                    "Tighten to surface",
+                    format!("Close {which} onto the item from where it is"),
+                ),
+            ] {
+                if ui
+                    .add_enabled(fingers.contains(&true), egui::Button::new(label))
+                    .on_hover_text(hover)
+                    .on_disabled_hover_text("Its fingers are locked")
+                    .clicked()
+                {
+                    clicked = Some(unbury);
+                }
+            }
+            clicked
         })
-        .on_disabled_hover_text("Its fingers are locked")
-        .clicked()
-    {
-        return None;
-    }
-    Some(tighten(grip, pressed, fingers).map(|tightened| {
-        // As in VR: nothing moved, nothing changes (contacts included).
-        if tightened.grip.fingers != grip.fingers {
-            grip.fingers = tightened.grip.fingers;
-            grip.contacts = tightened.grip.contacts;
-        }
-        let said: Vec<_> = FINGER_NAMES
-            .into_iter()
-            .zip(tightened.fingers)
-            .filter(|(_, fit)| *fit != shock2vr::vr_grip::FingerFit::Skipped)
-            .map(|(name, fit)| format!("{name} {}", fit.outcome()))
-            .collect();
-        format!("Tightened: {}", said.join(", "))
-    }))
+        .inner?;
+    Some(
+        fit(grip, pressed, fingers, clicked).map(|(moved, outcomes)| {
+            // As in VR: nothing moved, nothing changes (contacts included).
+            if moved.fingers != grip.fingers {
+                grip.fingers = moved.fingers;
+                grip.contacts = moved.contacts;
+            }
+            let said: Vec<_> = FINGER_NAMES
+                .into_iter()
+                .zip(outcomes)
+                .filter(|(_, outcome)| *outcome != "skip")
+                .map(|(name, outcome)| format!("{name} {outcome}"))
+                .collect();
+            let done = if clicked { "Unburied" } else { "Tightened" };
+            format!("{done}: {}", said.join(", "))
+        }),
+    )
 }
 
 pub fn default_library_path() -> PathBuf {
@@ -1313,7 +1341,7 @@ impl GripEditor {
                 ],
             ));
         }
-        let mut tightened = None;
+        let mut fitted = None;
         egui::CollapsingHeader::new("Placement")
             .id_salt("grip_placement")
             .default_open(true)
@@ -1370,28 +1398,28 @@ impl GripEditor {
                         &mut entry.grip.fingers,
                         "Primary trigger preview",
                     );
-                    tightened = tighten_button(
+                    fitted = surface_buttons(
                         ui,
                         &mut entry.grip,
                         self.curl_editor.pressed,
                         self.curl_editor.locks,
-                        |grip, pressed, fingers| {
-                            preview.tighten_grip(&key, hand, grip, pressed, fingers)
+                        |grip, pressed, fingers, unbury| {
+                            preview.fit_fingers(&key, hand, grip, pressed, fingers, unbury)
                         },
                     );
                 });
             });
-        let after_tighten_contacts = entry.grip.contacts;
+        let after_fit_contacts = entry.grip.contacts;
         if before != entry.grip {
             entry.authored = true;
             // Contact diagnostics describe the old solver pose, not this edit.
             entry.grip.contacts = [None; 5];
             entry.grip.score = 0.0;
         }
-        match tightened {
-            // Its contacts describe the tightened fingers.
+        match fitted {
+            // Its contacts describe the fitted fingers.
             Some(Ok(message)) => {
-                entry.grip.contacts = after_tighten_contacts;
+                entry.grip.contacts = after_fit_contacts;
                 self.message = message;
             }
             Some(Err(error)) => self.message = error,
@@ -1783,11 +1811,12 @@ pub(crate) mod tests {
             std::array::from_fn(|finger| {
                 let angle = curls[finger] * std::f32::consts::FRAC_PI_2;
                 let along = vec3(0.0, -angle.sin(), angle.cos());
-                [0.25, 0.5, 0.75, 1.0]
-                    .map(|s| {
+                shock2vr::vr_grip::FingerChain::uniform(
+                    &[0.25, 1.0].map(|s| {
                         vec3(metres(0.02 * finger as f32), 0.0, 0.0) + along * metres(0.08 * s)
-                    })
-                    .to_vec()
+                    }),
+                    shock2vr::vr_grip::FINGER_RADIUS,
+                )
             })
         };
         let p = |x: f32, z: f32| Point3::from_vec(vec3(metres(x), metres(-0.05), metres(z)));
@@ -1800,19 +1829,42 @@ pub(crate) mod tests {
         let grip = &mut doc.library.entries[0].grip;
         grip.fingers = FingerPose::curls([0.0; 5]);
         let before = grip.clone();
-        let tighten = |grip: &mut ResolvedGrip, locked: [bool; 5]| {
+        let click = |button: &str, grip: &mut ResolvedGrip, locked: [bool; 5]| {
             let mut message = None;
-            click_button("Tighten to surface", |ui| {
-                if let Some(said) =
-                    tighten_button(ui, grip, false, locked, |grip, pressed, fingers| {
-                        Ok(surface.tighten(grip, pressed, fingers, rods))
+            click_button(button, |ui| {
+                let fit = |grip: &ResolvedGrip, pressed, fingers, unbury| {
+                    Ok(if unbury {
+                        let out = surface.unbury(grip, pressed, fingers, rods);
+                        (out.grip, out.fingers.map(|fit| fit.outcome()))
+                    } else {
+                        let out = surface.tighten(grip, pressed, fingers, rods);
+                        (out.grip, out.fingers.map(|fit| fit.outcome()))
                     })
-                {
+                };
+                if let Some(said) = surface_buttons(ui, grip, false, locked, fit) {
                     message = Some(said);
                 }
             });
             message.expect("clicked").unwrap()
         };
+        let tighten = |grip: &mut ResolvedGrip, locked| click("Tighten to surface", grip, locked);
+
+        // Unbury opens a finger through the slab out of it, and only that.
+        let mut buried = ResolvedGrip {
+            fingers: FingerPose::curls([0.0, 0.9, 0.9, 0.0, 0.0]),
+            ..before.clone()
+        };
+        let message = click("Unbury", &mut buried, [false, false, true, false, false]);
+        assert_eq!(
+            message,
+            "Unburied: Thumb clear, Index unburied, Ring clear, Pinky clear"
+        );
+        let curls = *buried.fingers.rest_curls().unwrap();
+        assert!(curls[1] < 0.9, "{curls:?}");
+        assert_eq!(
+            [curls[0], curls[2], curls[3], curls[4]],
+            [0.0, 0.9, 0.0, 0.0]
+        );
         // Locked fingers are skipped, the rest close.
         let mut locked = before.clone();
         let message = tighten(&mut locked, [true, false, true, false, false]);

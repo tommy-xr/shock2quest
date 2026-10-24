@@ -141,19 +141,47 @@ pub(super) fn slot_fingers(slot: Slot, current: &FingerPose, captured: FingerBon
     }
 }
 
+/// A grip distance (authored world units) in millimetres for a log, or `-`.
+fn log_mm(world: Option<f32>) -> String {
+    world.map_or("-".to_owned(), |w| {
+        format!("{:.1}", w * crate::METERS_PER_WORLD_UNIT * 1000.0)
+    })
+}
+
 /// Tighten's log fields: what each finger did, and how far it rests off the
-/// item in millimetres (`-` where it touched nothing), e.g.
-/// `fingers=[closed,opened,snug,none,skip] contact_mm=[1.0,1.0,0.4,-,-]`.
+/// item in millimetres (negative: how deep a buried one is; `-` where it
+/// touched nothing), e.g.
+/// `fingers=[closed+wrap,closed,snug,buried,skip] contact_mm=[1.0,1.0,0.4,-3.2,-]`.
 pub(super) fn tighten_log(fits: &[crate::vr_grip::FingerFit; 5]) -> String {
-    let what = fits.map(|fit| fit.outcome());
-    // Grips are tightened in authored units.
+    use crate::vr_grip::FingerFit;
     let mm = fits.map(|fit| match fit {
-        crate::vr_grip::FingerFit::Touching { gap, .. } => {
-            format!("{:.1}", gap * crate::METERS_PER_WORLD_UNIT * 1000.0)
-        }
-        _ => "-".to_owned(),
+        FingerFit::Touching { gap: mm, .. } | FingerFit::Buried { depth: mm } => log_mm(Some(mm)),
+        _ => log_mm(None),
     });
+    let what = fits.map(|fit| fit.outcome());
     format!("fingers=[{}] contact_mm=[{}]", what.join(","), mm.join(","))
+}
+
+/// Unbury's log fields: what each finger did, and how deep through the item
+/// it was and how far off it is now in millimetres (`-` where it was
+/// clear or skipped), e.g.
+/// `fingers=[clear,unburied,buried,skip,skip] before_mm=[-,-12.3,-28.0,-,-] after_mm=[-,1.0,-28.0,-,-]`.
+pub(super) fn unbury_log(fits: &[crate::vr_grip::FingerUnbury; 5]) -> String {
+    use crate::vr_grip::FingerUnbury;
+    let (before, after): (Vec<_>, Vec<_>) = fits
+        .iter()
+        .map(|fit| match *fit {
+            FingerUnbury::Unburied { depth, gap, .. } => (log_mm(Some(depth)), log_mm(Some(gap))),
+            FingerUnbury::Buried { depth } => (log_mm(Some(depth)), log_mm(Some(depth))),
+            _ => (log_mm(None), log_mm(None)),
+        })
+        .unzip();
+    format!(
+        "fingers=[{}] before_mm=[{}] after_mm=[{}]",
+        fits.map(|fit| fit.outcome()).join(","),
+        before.join(","),
+        after.join(",")
+    )
 }
 
 /// A physical distance in world units at the active world scale.
@@ -529,7 +557,7 @@ impl GripPoseTool {
         true
     }
 
-    /// Whether Tighten can act, or why not: on the primary grip, against a
+    /// Whether Tighten (and Unbury) can act, or why not: on the primary grip, against a
     /// known item mesh.
     pub fn tighten_entry(&self) -> Result<(), String> {
         if self.support {
@@ -1891,20 +1919,52 @@ mod tests {
         tool.set_support(true);
         assert_eq!(tool.tighten_entry(), Err("primary grip only".to_owned()));
         use crate::vr_grip::FingerFit;
-        let touch = |amount| FingerFit::Touching {
+        let touch = |amount, wrapped| FingerFit::Touching {
             amount,
             gap: 0.001 / crate::METERS_PER_WORLD_UNIT,
             contact: [0.0; 3],
+            wrapped,
         };
         assert_eq!(
             tighten_log(&[
-                touch(0.3),
-                touch(-0.2),
-                touch(0.0),
+                touch(0.3, false),
+                touch(0.0, false),
+                touch(0.0, true),
                 FingerFit::NoContact,
                 FingerFit::Skipped
             ]),
-            "fingers=[closed,opened,snug,none,skip] contact_mm=[1.0,1.0,1.0,-,-]"
+            "fingers=[closed,snug,snug+wrap,none,skip] contact_mm=[1.0,1.0,1.0,-,-]"
+        );
+        assert_eq!(
+            tighten_log(&[
+                touch(0.3, true),
+                FingerFit::Buried {
+                    depth: -0.004 / crate::METERS_PER_WORLD_UNIT
+                },
+                touch(0.1, false),
+                FingerFit::Buried {
+                    depth: -0.004 / crate::METERS_PER_WORLD_UNIT
+                },
+                FingerFit::Skipped
+            ]),
+            "fingers=[closed+wrap,buried,closed,buried,skip] contact_mm=[1.0,-4.0,1.0,-4.0,-]"
+        );
+        use crate::vr_grip::FingerUnbury;
+        let mm = |mm: f32| mm / 1000.0 / crate::METERS_PER_WORLD_UNIT;
+        assert_eq!(
+            unbury_log(&[
+                FingerUnbury::Clear,
+                FingerUnbury::Unburied {
+                    depth: mm(-12.3),
+                    amount: -0.2,
+                    gap: mm(1.0),
+                    contact: [0.0; 3]
+                },
+                FingerUnbury::Buried { depth: mm(-28.0) },
+                FingerUnbury::Skipped,
+                FingerUnbury::Skipped,
+            ]),
+            "fingers=[clear,unburied,buried,skip,skip] before_mm=[-,-12.3,-28.0,-,-] after_mm=[-,1.0,-28.0,-,-]"
         );
     }
 

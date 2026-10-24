@@ -21,6 +21,7 @@ use engine::{
 use crate::{
     hand_pose::{self, FingerAmounts, HandPoseRetarget, HandShape, Pose},
     vr_config::Handedness,
+    vr_grip::{PHALANX_SAMPLES, Sphere},
 };
 
 const GLOVE_MODEL: &str = "vr_glove_model.glb";
@@ -104,6 +105,8 @@ pub struct GloveRenderer {
     open_joints: [Option<crate::hand_capture::HandJoints>; 2],
     /// Carries pose-number bone turns onto the glove model (`HandPoseRetarget::delta_basis`).
     delta_basis: cgmath::Matrix3<f32>,
+    /// Measured once from the model's skin (`finger_spheres`).
+    spheres: FingerSpheres,
     materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
     lit_materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
 }
@@ -170,6 +173,20 @@ impl GloveRenderer {
         let lit_materials = make_materials(0.0);
         let retarget = HandPoseRetarget::for_right_glove(model.skeleton());
         let delta_basis = retarget.delta_basis(&mut model);
+        let spheres = asset_cache
+            .get_raw_reader(GLOVE_MODEL)
+            .and_then(|reader| {
+                let mut bytes = Vec::new();
+                std::io::copy(&mut *reader.borrow_mut(), &mut bytes).ok()?;
+                dark::importers::skinned_vertices_from_glb_bytes(&bytes)
+            })
+            .map(|vertices| finger_spheres(&mut model, &retarget, &vertices))
+            .unwrap_or_else(|| {
+                tracing::warn!("glove skin unreadable: Tighten uses the auto-fit's finger radius");
+                let open = hand_pose::open_right_hand();
+                let frames = skin_frames(&mut model, &retarget, &open, Handedness::Right);
+                uniform_spheres(&frames, crate::vr_grip::FINGER_RADIUS)
+            });
 
         Some(Self {
             model,
@@ -182,6 +199,7 @@ impl GloveRenderer {
             wrist_frames: None,
             open_joints: [None, None],
             delta_basis,
+            spheres,
         })
     }
 
@@ -253,15 +271,16 @@ impl GloveRenderer {
         }
     }
 
-    /// Each finger's fitting samples with the glove posed by `bones`, as
-    /// `grip_kinematics` samples its arcs: what `GripSurface::tighten` tests.
-    pub fn finger_samples(
+    /// Each finger with the glove posed by `bones`, its phalanges as thick
+    /// as the glove's: what `GripSurface::tighten` tests.
+    pub fn finger_chains(
         &mut self,
         bones: &crate::hand_pose::FingerBones,
         handedness: Handedness,
-    ) -> [Vec<Vector3<f32>>; 5] {
-        let joints = self.authored_joints(&Pose::from_finger_bones(bones), handedness);
-        finger_samples(&joints)
+    ) -> [crate::vr_grip::FingerChain; 5] {
+        let pose = Pose::from_finger_bones(bones);
+        let frames = skin_frames(&mut self.model, &self.retarget, &pose, handedness);
+        finger_chains(&frames, &self.spheres)
     }
 
     /// A readable plate basis measured from this glove's wrist and palm, in
@@ -462,6 +481,219 @@ pub fn load_glove_texture(
         .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>)
 }
 
+/// Each finger's phalanges Tighten tests, thumb first, by the joint at each
+/// one's base (its tip is the next joint): the thumb's from its metacarpal,
+/// which presses a grip as much as its pad does (`vr_grip::FingerChain`).
+const PHALANX_JOINTS: [std::ops::Range<usize>; 5] = [2..5, 7..10, 12..15, 17..20, 22..25];
+
+/// The glove's skin vertices posed with `pose`, in calibrated hand space at
+/// authored size, each with the joint it is weighted most to.
+fn posed_skin(
+    model: &mut GlbModel,
+    retarget: &HandPoseRetarget,
+    vertices: &[engine::scene::VertexPositionTextureSkinnedNormal],
+    pose: &Pose,
+    handedness: Handedness,
+) -> Vec<(Vector3<f32>, usize)> {
+    retarget.apply(pose, model);
+    let skinning = model.get_skinning_matrices();
+    let to_hand = crate::vr_grip::glove_to_hand(handedness);
+    use cgmath::{EuclideanSpace, Transform};
+    vertices
+        .iter()
+        .filter_map(|vertex| {
+            let skinned = dark::importers::skinned_point(vertex, &skinning)?;
+            let heaviest = (0..4)
+                .max_by(|&a, &b| vertex.bone_weights[a].total_cmp(&vertex.bone_weights[b]))
+                .unwrap();
+            Some((
+                to_hand.transform_point(skinned).to_vec(),
+                vertex.bone_indices[heaviest] as usize,
+            ))
+        })
+        .collect()
+}
+
+/// Per finger (thumb first), each phalanx's spheres (`FingerChain`) in the
+/// frame of the joint at its base, so they pose with it.
+type FingerSpheres = [Vec<[Sphere; PHALANX_SAMPLES]>; 5];
+
+/// Each finger's phalanges, its `spheres` posed by the joint `frames`.
+fn finger_chains(
+    frames: &[Matrix4<f32>; crate::hand_capture::HAND_JOINT_COUNT],
+    spheres: &FingerSpheres,
+) -> [crate::vr_grip::FingerChain; 5] {
+    use cgmath::{EuclideanSpace, Transform};
+    std::array::from_fn(|finger| crate::vr_grip::FingerChain {
+        phalanges: spheres[finger]
+            .iter()
+            .zip(PHALANX_JOINTS[finger].clone())
+            .map(|(spheres, joint)| {
+                spheres.map(|sphere| Sphere {
+                    center: frames[joint]
+                        .transform_point(cgmath::Point3::from_vec(sphere.center))
+                        .to_vec(),
+                    radius: sphere.radius,
+                })
+            })
+            .collect(),
+    })
+}
+
+/// `centers` (calibrated hand space, posed by `frames`) back in the frame
+/// of each phalanx's base joint.
+fn phalanx_local(
+    frames: &[Matrix4<f32>; crate::hand_capture::HAND_JOINT_COUNT],
+    joint: usize,
+    spheres: [Sphere; PHALANX_SAMPLES],
+) -> [Sphere; PHALANX_SAMPLES] {
+    use cgmath::{EuclideanSpace, SquareMatrix, Transform};
+    let inverse = frames[joint].invert().expect("joint frames are invertible");
+    spheres.map(|sphere| Sphere {
+        center: inverse
+            .transform_point(cgmath::Point3::from_vec(sphere.center))
+            .to_vec(),
+        radius: sphere.radius,
+    })
+}
+
+/// Spheres `radius` thick along each phalanx's axis, posed by `frames`.
+fn uniform_spheres(
+    frames: &[Matrix4<f32>; crate::hand_capture::HAND_JOINT_COUNT],
+    radius: f32,
+) -> FingerSpheres {
+    PHALANX_JOINTS.map(|range| {
+        range
+            .map(|joint| {
+                let (a, b) = (frames[joint].w.truncate(), frames[joint + 1].w.truncate());
+                let along = crate::vr_grip::FingerChain::uniform(&[a, b], radius).phalanges[0];
+                phalanx_local(frames, joint, along)
+            })
+            .collect()
+    })
+}
+
+/// How the glove's fingers fill out, measured from its skin. At each of a
+/// phalanx's samples, the finger's cross-section toward its pad and its
+/// back (the median distance from the axis to the skin near there, each
+/// way) gives a sphere spanning the two; at the fingertip, a sphere about
+/// the tip joint out to the skin past it. The bones run nearer the back of
+/// a finger than its pad, and the tip joint sits near the end of the
+/// fingertip.
+fn finger_spheres(
+    model: &mut GlbModel,
+    retarget: &HandPoseRetarget,
+    vertices: &[engine::scene::VertexPositionTextureSkinnedNormal],
+) -> FingerSpheres {
+    use cgmath::InnerSpace;
+    let step = 1.0 / (PHALANX_SAMPLES - 1) as f32;
+    let hand = Handedness::Right;
+    let open = hand_pose::open_right_hand();
+    let curling = open.blend(&hand_pose::fist_right_hand(), 0.1);
+    let frames = skin_frames(model, retarget, &open, hand);
+    let joints = frames.map(|frame| frame.w.truncate());
+    let curled = skin_joints(model, retarget, &curling, hand);
+    let skin = posed_skin(model, retarget, vertices, &open, hand);
+    let median = |mut distances: Vec<f32>| {
+        distances.sort_by(f32::total_cmp);
+        distances.get(distances.len() / 2).copied()
+    };
+    PHALANX_JOINTS.map(|range| {
+        // Per phalanx: its base, its axis and the way its tip curls.
+        let phalanges: Vec<_> = range
+            .clone()
+            .map(|joint| {
+                let (base, axis) = (joints[joint], joints[joint + 1] - joints[joint]);
+                let moved = curled[joint + 1] - joints[joint + 1];
+                let curl = moved - axis * (moved.dot(axis) / axis.magnitude2());
+                // A phalanx that does not curl has no pad side: measured all round.
+                let pad = match curl.magnitude() > 1e-6 {
+                    true => curl.normalize(),
+                    false => Vector3::new(0.0, 0.0, 0.0),
+                };
+                (base, axis, pad)
+            })
+            .collect();
+        let tip = phalanges.len() - 1;
+        // Skin distances near each sample, toward the pad and the back.
+        let mut near =
+            vec![[(); PHALANX_SAMPLES].map(|_| (Vec::new(), Vec::new())); phalanges.len()];
+        let mut cap = Vec::new();
+        for (p, _) in skin
+            .iter()
+            .filter(|(_, weighted)| (range.start..=range.end).contains(weighted))
+        {
+            let (k, t, off) = phalanges
+                .iter()
+                .enumerate()
+                .map(|(k, (base, axis, _))| {
+                    let t = (p - base).dot(*axis) / axis.magnitude2();
+                    (k, t, p - (base + axis * t.clamp(0.0, 1.0)))
+                })
+                .min_by(|a, b| a.2.magnitude2().total_cmp(&b.2.magnitude2()))
+                .unwrap();
+            let sample = (t / step).round().clamp(0.0, (PHALANX_SAMPLES - 1) as f32) as usize;
+            // No pad side (a phalanx that does not curl): all of it counts as pad.
+            let pad = phalanges[k].2;
+            let facing = match pad.magnitude2() > 0.0 {
+                true => off.dot(pad) / off.magnitude(),
+                false => 1.0,
+            };
+            if k == tip && t >= 1.0 {
+                cap.push(off.magnitude());
+            } else if !(k == tip && sample == PHALANX_SAMPLES - 1)
+                && (t - sample as f32 * step).abs() <= step * 0.5
+            {
+                match facing {
+                    f if f > 0.5 => near[k][sample].0.push(off.magnitude()),
+                    f if f < -0.5 => near[k][sample].1.push(off.magnitude()),
+                    _ => {}
+                }
+            }
+        }
+        let cap = median(cap).unwrap_or(crate::vr_grip::FINGER_RADIUS);
+        phalanges
+            .iter()
+            .zip(near)
+            .enumerate()
+            .map(|(k, ((base, axis, pad), near))| {
+                let reach = near.map(|(pad, back)| (median(pad), median(back)));
+                // A sample with no skin near it (a knuckle, carried by the
+                // metacarpal) takes its nearest neighbour's.
+                let nearest = |i: usize, side: fn(&(Option<f32>, Option<f32>)) -> Option<f32>| {
+                    (0..PHALANX_SAMPLES)
+                        .filter_map(|other| side(&reach[other]).map(|r| (i.abs_diff(other), r)))
+                        .min_by_key(|(distance, _)| *distance)
+                        .map(|(_, r)| r)
+                };
+                let length = axis.magnitude();
+                let spheres = std::array::from_fn(|i| {
+                    let t = i as f32 * step;
+                    if k == tip && i == PHALANX_SAMPLES - 1 {
+                        return Sphere {
+                            center: base + axis,
+                            radius: cap,
+                        };
+                    }
+                    let toward = nearest(i, |r| r.0).unwrap_or(crate::vr_grip::FINGER_RADIUS);
+                    let away = nearest(i, |r| r.1).unwrap_or(toward);
+                    let radius = (toward + away) * 0.5;
+                    // Nothing reaches past the fingertip.
+                    let radius = match k == tip {
+                        true => radius.min((1.0 - t) * length + cap),
+                        false => radius,
+                    };
+                    Sphere {
+                        center: base + axis * t + pad * ((toward - away) * 0.5),
+                        radius,
+                    }
+                });
+                phalanx_local(&frames, range.start + k, spheres)
+            })
+            .collect()
+    })
+}
+
 /// Points along each finger's joints (half a phalanx apart, thumb first):
 /// the samples grip fitting tests against an item.
 fn finger_samples(joints: &crate::hand_capture::HandJoints) -> [Vec<Vector3<f32>>; 5] {
@@ -482,13 +714,22 @@ fn skin_joints(
     pose: &Pose,
     handedness: Handedness,
 ) -> crate::hand_capture::HandJoints {
+    skin_frames(model, retarget, pose, handedness).map(|frame| frame.w.truncate())
+}
+
+/// The glove model's skin joint frames posed with `pose`, in calibrated
+/// hand space at authored size.
+fn skin_frames(
+    model: &mut GlbModel,
+    retarget: &HandPoseRetarget,
+    pose: &Pose,
+    handedness: Handedness,
+) -> [Matrix4<f32>; crate::hand_capture::HAND_JOINT_COUNT] {
     let transform = crate::vr_grip::glove_to_hand(handedness);
     retarget.apply(pose, model);
     std::array::from_fn(|joint| {
         let node = model.skeleton().node_index_for_joint(joint).unwrap();
-        (transform * model.get_global_transform(node).unwrap())
-            .w
-            .truncate()
+        transform * model.get_global_transform(node).unwrap()
     })
 }
 
@@ -580,6 +821,251 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The glove's skin vertices, read as the game reads its model.
+    fn skin_vertices() -> Vec<engine::scene::VertexPositionTextureSkinnedNormal> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/vr_glove_model.glb");
+        let bytes = std::fs::read(path).expect("read vr_glove_model.glb");
+        dark::importers::skinned_vertices_from_glb_bytes(&bytes).unwrap()
+    }
+
+    fn mm(world: f32) -> f32 {
+        world * crate::METERS_PER_WORLD_UNIT * 1000.0
+    }
+
+    /// Each chain's first phalanx turns with the bone Tighten moves for it
+    /// (`FingerBones` index + the first posed joint).
+    #[test]
+    fn phalanx_joints_match_the_bones_tighten_moves() {
+        for (joints, bone) in PHALANX_JOINTS.iter().zip(crate::vr_grip::PHALANX_BONES) {
+            assert_eq!(joints.start, bone + hand_pose::FIRST_POSED_JOINT);
+        }
+    }
+
+    /// The glove's fingers are thicker than the auto-fit's 7 mm and sit
+    /// toward their pads off the bones; the tips, past the tip joints, are
+    /// thinner.
+    #[test]
+    fn finger_spheres_are_thick_toward_the_pad_and_thin_at_the_tip() {
+        use cgmath::InnerSpace;
+        let (mut model, retarget) = glove();
+        let spheres = finger_spheres(&mut model, &retarget, &skin_vertices());
+        let open = hand_pose::open_right_hand();
+        let frames = skin_frames(&mut model, &retarget, &open, Handedness::Right);
+        for (finger, chain) in finger_chains(&frames, &spheres).iter().enumerate() {
+            let joints = PHALANX_JOINTS[finger]
+                .clone()
+                .map(|j| (frames[j].w, frames[j + 1].w));
+            // Per sphere: its radius, and how far its centre is off the bone.
+            let shape: Vec<Vec<(f32, f32)>> = chain
+                .phalanges
+                .iter()
+                .zip(joints)
+                .map(|(spheres, (a, b))| {
+                    let (a, axis) = (a.truncate(), (b - a).truncate().normalize());
+                    spheres
+                        .iter()
+                        .map(|s| {
+                            let off = s.center - a;
+                            (mm(s.radius), mm((off - axis * off.dot(axis)).magnitude()))
+                        })
+                        .collect()
+                })
+                .collect();
+            println!("finger {finger} (radius, off the bone) mm: {shape:.1?}");
+            let (tip, along) = shape
+                .concat()
+                .split_last()
+                .map(|(t, a)| (*t, a.to_vec()))
+                .unwrap();
+            assert!(
+                along
+                    .iter()
+                    .all(|(r, off)| (6.0..25.0).contains(r) && *off < 6.0),
+                "finger {finger}: {shape:?}"
+            );
+            assert!((1.0..9.0).contains(&tip.0), "finger {finger}: {shape:?}");
+        }
+    }
+
+    /// Tightened against the glove's measured thickness, the drawn glove's
+    /// skin comes to rest `TIGHTEN_CLEARANCE` (1 mm) off the item, give or
+    /// take 2 mm: a block the open fingers curl down onto, a bottle under
+    /// them and a ledge whose edge they wrap. The auto-fit's flat 7 mm misses
+    /// by up to 6.6 mm.
+    #[test]
+    fn tightened_fingers_skin_rests_at_the_clearance() {
+        use crate::vr_grip::{FingerFit, FingerPose, GripSurface, ResolvedGrip};
+        use cgmath::{EuclideanSpace, InnerSpace, One};
+        let hand = Handedness::Right;
+        let (mut model, retarget) = glove();
+        let vertices = skin_vertices();
+        let spheres = finger_spheres(&mut model, &retarget, &vertices);
+        let flat = uniform_spheres(
+            &skin_frames(&mut model, &retarget, &hand_pose::open_right_hand(), hand),
+            crate::vr_grip::FINGER_RADIUS,
+        );
+        let metres = |m: f32| m / crate::METERS_PER_WORLD_UNIT;
+        // The palm's frame, as `grip_kinematics` takes it.
+        let open = hand_pose::open_right_hand();
+        let joints = skin_joints(&mut model, &retarget, &open, hand);
+        let fist = skin_joints(&mut model, &retarget, &hand_pose::fist_right_hand(), hand);
+        let knuckles = (joints[7] + joints[12] + joints[17] + joints[22]) * 0.25;
+        let along = (knuckles - joints[1]).normalize();
+        let mut normal = along.cross(joints[7] - joints[22]).normalize();
+        if normal.dot(fist[15] - knuckles) < 0.0 {
+            normal = -normal;
+        }
+        let across = normal.cross(along);
+        // How far below the knuckles the open fingers' skin reaches, out to
+        // `reach` along them.
+        let fingers = PHALANX_JOINTS[1].start..=PHALANX_JOINTS[4].end;
+        let open_skin = posed_skin(&mut model, &retarget, &vertices, &open, hand);
+        let lowest = |reach: f32| {
+            open_skin
+                .iter()
+                .filter(|(p, joint)| fingers.contains(joint) && (p - knuckles).dot(along) < reach)
+                .map(|(p, _)| (p - knuckles).dot(normal))
+                .fold(f32::NEG_INFINITY, f32::max)
+        };
+        // `vertices` (x along, y across, z the way the fingers curl) at `at`.
+        let placed = |(corners, indices): (Vec<rapier3d::na::Point3<f32>>, Vec<[u32; 3]>),
+                      at: Vector3<f32>| {
+            indices
+                .iter()
+                .map(|t| {
+                    t.map(|i| {
+                        let p = corners[i as usize];
+                        cgmath::Point3::from_vec(at + along * p.x + across * p.y + normal * p.z)
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        // A block 5 mm under the open fingers, its top `depth` down.
+        let depth = lowest(f32::INFINITY) + metres(0.005);
+        let half = rapier3d::na::Vector3::new(metres(0.1), metres(0.1), metres(0.05));
+        let block = placed(
+            rapier3d::prelude::Cuboid::new(half).to_trimesh(),
+            knuckles + along * metres(0.1) + normal * (depth + metres(0.05)),
+        );
+        let off_block = |p: Vector3<f32>| depth - (p - knuckles).dot(normal);
+        // A 6 cm bottle across the fingers' bases, 2 mm under them.
+        let radius = metres(0.03);
+        let axis = knuckles
+            + along * metres(0.025)
+            + normal * (lowest(metres(0.06)) + metres(0.002) + radius);
+        let rod = placed(
+            rapier3d::prelude::Cylinder::new(metres(0.1), radius).to_trimesh(96),
+            axis,
+        );
+        let off_rod = |p: Vector3<f32>| {
+            let v = p - axis;
+            (v - across * v.dot(across)).magnitude() - radius
+        };
+        // A box `half` (along, across, the way the fingers curl) about
+        // `center`, and how far a point is off it.
+        let boxed = |center: Vector3<f32>, half: Vector3<f32>| {
+            let triangles = placed(
+                rapier3d::prelude::Cuboid::new(rapier3d::na::Vector3::new(half.x, half.y, half.z))
+                    .to_trimesh(),
+                center,
+            );
+            let off = move |p: Vector3<f32>| {
+                let v = p - center;
+                let q = Vector3::new(v.dot(along).abs(), v.dot(across).abs(), v.dot(normal).abs())
+                    - half;
+                let outside = Vector3::new(q.x.max(0.0), q.y.max(0.0), q.z.max(0.0)).magnitude();
+                outside + q.x.max(q.y).max(q.z).min(0.0)
+            };
+            (triangles, off)
+        };
+        // A ledge under the fingers' bases, 2 mm down, its edge 4 cm out:
+        // the bases land on it and the rest of each finger wraps its edge.
+        let top = lowest(metres(0.04)) + metres(0.002);
+        let half = Vector3::new(metres(0.04), metres(0.1), metres(0.05));
+        let (ledge, off_ledge) = boxed(knuckles + normal * (top + half.z), half);
+        // A 2.4 cm knob where the thumb's tip swings to half way to a fist.
+        let mut halfway = hand_pose::FingerAmounts::default();
+        halfway.thumb = 0.5;
+        let thumb_tip = skin_joints(
+            &mut model,
+            &retarget,
+            &open.blend_per_finger(&hand_pose::fist_right_hand(), &halfway),
+            hand,
+        )[5];
+        let (knob, off_knob) = boxed(
+            thumb_tip,
+            Vector3::new(metres(0.012), metres(0.012), metres(0.012)),
+        );
+        let grip = ResolvedGrip {
+            item_scale: 1.0,
+            pose_family: "broad".to_owned(),
+            offset: Vector3::new(0.0, 0.0, 0.0),
+            rotation: Quaternion::one(),
+            hand_rotation: Quaternion::one(),
+            fingers: FingerPose::curls([0.0; 5]),
+            contacts: [None; 5],
+            anchor: [0.0; 3],
+            score: 0.0,
+        };
+        // Per finger that touched (thumb..little), how far its skin rests
+        // off `triangles` by `off`, tightened with `spheres`.
+        let mut skin_gaps_mm = |triangles: &[[cgmath::Point3<f32>; 3]],
+                                off: &dyn Fn(Vector3<f32>) -> f32,
+                                spheres: &FingerSpheres| {
+            let surface = GripSurface::new(triangles).unwrap();
+            let out = surface.tighten(&grip, false, [true; 5], |bones| {
+                let pose = Pose::from_finger_bones(bones);
+                finger_chains(&skin_frames(&mut model, &retarget, &pose, hand), spheres)
+            });
+            let pose = Pose::from_finger_bones(&out.grip.fingers.rest_bones());
+            let skin = posed_skin(&mut model, &retarget, &vertices, &pose, hand);
+            std::array::from_fn::<_, 5, _>(|f| {
+                let joints = PHALANX_JOINTS[f].start..=PHALANX_JOINTS[f].end;
+                matches!(out.fingers[f], FingerFit::Touching { .. }).then(|| {
+                    skin.iter()
+                        .filter(|(_, joint)| joints.contains(joint))
+                        .map(|(p, _)| mm(off(*p)))
+                        .fold(f32::INFINITY, f32::min)
+                })
+            })
+        };
+        // A capsule only approximates the skin: each finger within 2 mm of
+        // the clearance, on average within half a millimetre.
+        let within =
+            |gaps: &[Option<f32>; 5]| gaps.iter().flatten().all(|g| (-1.0..3.0).contains(g));
+        let results = [
+            ("block", &block, &off_block as &dyn Fn(Vector3<f32>) -> f32),
+            ("bottle", &rod, &off_rod),
+            ("ledge", &ledge, &off_ledge),
+            ("knob", &knob, &off_knob),
+        ]
+        .map(|(name, triangles, off)| {
+            let measured = skin_gaps_mm(triangles, off, &spheres);
+            let flat = skin_gaps_mm(triangles, off, &flat);
+            println!("{name}: skin off it (mm), thumb..little: measured {measured:.1?}, flat 7 mm {flat:.1?}");
+            (name, measured, flat)
+        });
+        for (name, measured, _) in &results {
+            // Index..ring meet the three under the fingers; the thumb the knob.
+            let meet = if *name == "knob" { 0..1 } else { 1..4 };
+            assert!(
+                measured[meet].iter().all(Option::is_some),
+                "{name}: {measured:?}"
+            );
+            assert!(within(measured), "{name}: {measured:?}");
+        }
+        let gaps: Vec<f32> = results
+            .iter()
+            .flat_map(|(_, measured, _)| measured.iter().flatten().copied())
+            .collect();
+        let mean = gaps.iter().sum::<f32>() / gaps.len() as f32;
+        assert!((0.5..1.5).contains(&mean), "{mean} mm on average");
+        assert!(
+            results.iter().any(|(_, _, flat)| !within(flat)),
+            "the measured radii are what land the skin"
+        );
     }
 
     /// Guards the two constants against drifting apart: the scale exists to put
