@@ -1647,10 +1647,12 @@ impl VrInteraction {
     /// or less curled toward a fist, from the nearest tenth of wherever it is
     /// (a captured index reads as its best fit); staged like any edit.
     fn step_trigger_index(&mut self, more: bool) {
+        // The steps are the primary grip's Trigger slot's (support mode
+        // starts at Rest and cannot switch).
         let Some(tool) = self
             .pose_tool
             .as_ref()
-            .filter(|tool| tool.index_entry().is_ok())
+            .filter(|tool| tool.slot == pose_tool::Slot::Trigger)
         else {
             return;
         };
@@ -1870,21 +1872,15 @@ impl VrInteraction {
     /// Stage `grip` (authored units, like every library and overrides
     /// entry) as the posing hand's entry for its item, ahead of the library.
     /// It replaces a staged entry but keeps the grip from before the first,
-    /// which is what discarding returns to. Logs the outcome with `reason`
-    /// (the edit, e.g. `align amount=0.50`).
+    /// which is what discarding returns to. Logs it with `reason` (the edit,
+    /// e.g. `align amount=0.50`).
     fn stage_grip(
         &mut self,
         grip: crate::vr_grip::ResolvedGrip,
         reason: &str,
     ) -> Option<crate::vr_grip::BakedGripEntry> {
-        let tool = self.pose_tool.as_mut();
-        let held = tool
-            .as_ref()
-            .and_then(|tool| self.fitted_grips[tool.hand].as_ref());
-        let (Some(tool), Some(held)) = (tool, held) else {
-            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL staged=false reason={reason}");
-            return None;
-        };
+        let tool = self.pose_tool.as_mut()?;
+        let held = self.fitted_grips[tool.hand].as_ref()?;
         println!(
             "SHOCK2QUEST_VR_GRIP_POSE_TOOL staged=true reason={reason} model={} hand={}",
             held.model,
@@ -5444,9 +5440,11 @@ mod tests {
         assert!((drawn.rotation - glove.rotation).magnitude() < 1e-5);
     }
 
-    /// A shot in play launches from the item where play places it, so it
-    /// leaves down controller · turn · grip · barrel; mirrored into the left
-    /// hand, an aligned grip still fires down that hand's own controller.
+    /// A shot launches from the held item's transform and framed muzzle, so
+    /// with the item at controller · turn · grip (`item_pose` of
+    /// `glove_pose`) it leaves down controller · turn · grip · barrel;
+    /// mirrored into the left hand, an aligned grip still fires down that
+    /// hand's own controller.
     #[test]
     fn a_shot_leaves_down_the_turned_barrel_in_either_hand() {
         use crate::vr_grip::ResolvedGrip;
@@ -5468,8 +5466,8 @@ mod tests {
             position: vec3(1.0, 2.0, 3.0),
             rotation: Quaternion::from_angle_y(Deg(35.0)) * Quaternion::from_angle_x(Deg(-20.0)),
         };
-        // The direction play's projectile flies with `grip` held in `hand`:
-        // the item placed as `fit_held_items` places it, its muzzle framed as
+        // The direction the projectile flies with `grip` held in `hand`: the
+        // item at `fit_held_items`' expression, its muzzle framed as
         // `ChangeModel` frames a wielded gun's.
         let shot = |grip: &ResolvedGrip, hand: Handedness| {
             let item = pose_tool::item_pose(grip.glove_pose(controller), grip, vec3(0.0, 0.0, 0.0));
