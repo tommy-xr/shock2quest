@@ -669,6 +669,67 @@ mod loot_table_tests {
     }
 }
 
+/// The grip pose workbench's scene, built from the mission's draws of its held
+/// item (`scene`): the item on the workbench instead of in its frozen hand,
+/// again in each extra view, and the workbench's room. Nothing else of the
+/// mission is kept. The item keeps its entity id but is relabelled, and is lit
+/// by the workbench's own lights.
+fn draw_pose_workbench(
+    scene: Vec<SceneObject>,
+    bench: crate::interaction::PoseWorkbench,
+    world: &World,
+) -> Vec<SceneObject> {
+    use cgmath::SquareMatrix;
+    let rigid = |position, rotation| Matrix4::from_translation(position) * Matrix4::from(rotation);
+    // Moved rigidly, so the item keeps the size gameplay draws it at; only a
+    // glove weapon is drawn at its grip's scale, which the bench may change.
+    let Some(from_world) = world
+        .borrow::<View<PropPosition>>()
+        .ok()
+        .and_then(|positions| positions.get(bench.entity).ok().cloned())
+        .and_then(|pose| rigid(pose.position, pose.rotation).invert())
+    else {
+        return bench.environment;
+    };
+    let rescale = world
+        .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+        .ok()
+        .and_then(|weapons| weapons.get(bench.entity).ok().map(|w| w.item_scale))
+        .filter(|scale| *scale > 0.0)
+        .map_or(1.0, |scale| bench.item_scale / scale);
+    let rebase =
+        rigid(bench.item.position, bench.item.rotation) * Matrix4::from_scale(rescale) * from_world;
+    // The item's own model; effects tagged with it (a laser sight) are left
+    // out, rather than left behind at the frozen hand or turned across the
+    // views.
+    let item: Vec<_> = scene
+        .into_iter()
+        .filter(|object| {
+            object.debug_tag().is_some_and(|tag| {
+                tag.entity_id == Some(bench.entity.inner())
+                    && tag.source.as_deref() == Some("entity")
+            })
+        })
+        .collect();
+    let mut objects = bench.environment;
+    let placements =
+        std::iter::once(rebase).chain(bench.views.into_iter().flatten().map(|view| view * rebase));
+    for placement in placements {
+        for object in &item {
+            let mut copy = object.clone();
+            copy.set_transform(placement * object.get_transform());
+            copy.set_lights(bench.lights.clone());
+            let tag = engine::scene::SceneObjectDebugTag {
+                source: Some(crate::util::render_source::GRIP_WORKBENCH.to_owned()),
+                ..object.debug_tag().unwrap().clone()
+            };
+            copy.set_debug_tag(Some(Rc::new(tag)));
+            objects.push(copy);
+        }
+    }
+    objects
+}
+
 /// Move a VR overlay built in the tracked pawn space (the cyber interface, the
 /// `show_position` readout) into world coordinates, and put it in the system-
 /// overlay group. The pawn transform is the same one the runtime builds its
@@ -4921,20 +4982,6 @@ impl MissionCore {
         let mut roomscale_input = input_context.clone();
         roomscale_input.shift_rig(crate::vr_tracking::RoomscaleState::offset(&self.world));
         let input_context = &roomscale_input;
-        // The grip pose tool holds its posing hand still and gripping for
-        // every system reading the hands (holsters and deposits included), so
-        // setting its controller down releases nothing.
-        let (pawn_pos, pawn_rotation) = {
-            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-            (player.pos, player.rotation)
-        };
-        let posed_input = self.interaction.pose_tool_input(
-            input_context,
-            pawn_pos,
-            pawn_rotation,
-            tick.elapsed.as_secs_f32(),
-        );
-        let input_context = posed_input.as_ref().unwrap_or(input_context);
 
         // A dead player's actionable channels are neutral until
         // reconstruction. A scripted control lock is subtler: tracked poses
@@ -12430,11 +12477,6 @@ impl MissionCore {
                 }
 
                 Effect::HandButton { hand, button } => {
-                    // The grip pose tool's control hand saves and discards
-                    // with these, unless the cyber interface took them back.
-                    if !self.use_mode && self.interaction.pose_tool_button(hand, button) {
-                        continue;
-                    }
                     // A face button means whatever the hand that pressed it is
                     // holding says it means - except while the cyber interface
                     // is up, which takes both buttons back on both hands so
@@ -12475,7 +12517,16 @@ impl MissionCore {
                     }
                 }
 
-                Effect::ToggleGripPoseTool => self.interaction.toggle_grip_pose_tool(),
+                Effect::ToggleGripPoseTool => {
+                    // The workbench freezes the world: not over the cyber
+                    // interface, which would stay up on top of it, nor for a
+                    // dead player.
+                    if self.player_is_alive() && !self.use_mode {
+                        self.interaction.toggle_grip_pose_tool();
+                    } else {
+                        println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL active=false reason=unavailable");
+                    }
+                }
 
                 Effect::ToggleUseMode => {
                     match game_options.presentation_mode {
@@ -18444,8 +18495,16 @@ impl MissionCore {
             .borrow::<View<crate::runtime_props::RuntimePropDoubleSided>>()
             .unwrap();
 
+        // The grip pose workbench is a scene of its own: of the mission, only
+        // its held item is drawn, onto the workbench (see the model loop).
+        let bench = self.interaction.pose_workbench();
+
         // Start with built in scene objects
-        let mut scene = self.scene_objects.clone();
+        let mut scene = if bench.is_some() {
+            Vec::new()
+        } else {
+            self.scene_objects.clone()
+        };
         scene.extend(crate::hud::survival_status::render(
             &self.world,
             asset_cache,
@@ -18578,6 +18637,12 @@ impl MissionCore {
 
         // Render models
         for (entity_id, objs) in &self.id_to_model {
+            if bench
+                .as_ref()
+                .is_some_and(|bench| bench.entity != *entity_id)
+            {
+                continue;
+            }
             total_model_count += 1;
             if flat_viewmodel_skip.contains(entity_id) {
                 continue;
@@ -18811,6 +18876,18 @@ impl MissionCore {
             total_model_count
         );
 
+        if let Some(bench) = bench {
+            let mut scene = draw_pose_workbench(scene, bench, &self.world);
+            scene.append(&mut self.interaction.render(
+                asset_cache,
+                &self.world,
+                self.use_mode,
+                None,
+            ));
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            return (scene, player.pos, player.rotation);
+        }
+
         // Where letting go of every hold lands (VR climbing), or the landing a
         // committed release is gliding to.
         if let Some(outcome) = self.climb_release_glide.or(self.climb_release.outcome) {
@@ -18935,29 +19012,6 @@ impl MissionCore {
             self.use_mode,
             object_lights.as_ref(),
         ));
-        // The grip pose tool's extra views of the held item, beside its gloves.
-        if let Some((entity, views)) = self.interaction.pose_tool_views() {
-            let item: Vec<SceneObject> = scene
-                .iter()
-                .filter(|object| {
-                    // The item's own model, not effects tagged with it (a
-                    // laser sight turned about the item would cross the view).
-                    object.debug_tag().is_some_and(|tag| {
-                        tag.entity_id == Some(entity.inner())
-                            && tag.source.as_deref() == Some("entity")
-                    })
-                })
-                .cloned()
-                .collect();
-            for view in views {
-                for object in &item {
-                    let mut copy = object.clone();
-                    copy.set_transform(view * object.get_transform());
-                    scene.push(copy);
-                }
-            }
-        }
-
         if options.presentation_mode == crate::PresentationMode::Vr {
             // The card rides the belt, so like the belt it needs the cyber interface.
             if crate::cyber_interface::installed(&self.world) {
@@ -25427,6 +25481,52 @@ impl crate::game_scene::GameScene for MissionCore {
         crate::vr_psi_sway::suspend(&self.world);
         crate::vr_tracking::RoomscaleState::invalidate(&self.world);
         self.flat_ui.cancel_item_use();
+    }
+
+    fn pose_workbench_open(&self) -> bool {
+        self.interaction.pose_workbench_open()
+    }
+
+    /// The workbench reads only its own controls: the toggle that closes it
+    /// and the face buttons that save or discard. Nothing reaches the world.
+    fn update_pose_workbench(
+        &mut self,
+        elapsed: std::time::Duration,
+        input: &InputContext,
+        actions: &crate::input::InputActionState,
+    ) {
+        for effect in crate::input::ActionDispatcher::dispatch(actions, input) {
+            match effect {
+                Effect::ToggleGripPoseTool => {
+                    self.interaction.toggle_grip_pose_tool();
+                    return;
+                }
+                Effect::HandButton { hand, button } => {
+                    self.interaction.pose_tool_button(hand, button)
+                }
+                _ => {}
+            }
+        }
+        let mut input = input.clone();
+        input.shift_rig(crate::vr_tracking::RoomscaleState::offset(&self.world));
+        let (pawn_pos, pawn_rotation) = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            (player.pos, player.rotation)
+        };
+        // The real floor: the tracked stage's, else (synthetic input) the feet.
+        let floor_y = pawn_pos.y
+            + input.tracking.map_or_else(
+                || -crate::physics::player_center_above_floor(self.player_handle.is_crouched()),
+                |tracking| tracking.stage_to_pawn(Vector3::new(0.0, 0.0, 0.0)).y,
+            );
+        self.interaction.update_pose_workbench(
+            &self.world,
+            &input,
+            pawn_pos,
+            pawn_rotation,
+            floor_y,
+            elapsed.as_secs_f32(),
+        );
     }
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
