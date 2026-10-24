@@ -1436,7 +1436,7 @@ export interface HandGrip {
   grip: ResolvedGrip | null;
   /** Raw analog input used for held finger animation, independent of action reservation. */
   visual_trigger: number;
-  finger_curls: ResolvedGrip["curls"] | null;
+  finger_curls: FingerCurls | null;
   /** Glove pose following a physical melee body; null uses raw tracked pose. */
   glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
   /** Pistol slide contact, independent of the ordinary two-hand support grip. */
@@ -1458,7 +1458,7 @@ export interface HandGrip {
     blocked: [boolean, boolean];
     step_dt: number;
     visual_trigger: number;
-    finger_curls: ResolvedGrip["curls"];
+    finger_curls: FingerCurls;
     socket_position: ResolvedGrip["offset"];
     pump?: {
       parameter: number;
@@ -1486,15 +1486,26 @@ export interface HandGrip {
   } | null;
 }
 
-export interface ResolvedGrip {
+export type FingerCurls = [number,number,number,number,number];
+
+/** Per-finger curls, or explicit finger-bone rotations (SteamVR bones 2..=25). */
+export type GripFingers =
+  | {
+      curls: FingerCurls;
+      /** Optional pressed pose; omission preserves resting curls at any trigger value. */
+      trigger_curls?: FingerCurls;
+    }
+  | {
+      bones: ResolvedGrip["rotation"][];
+      trigger_bones?: ResolvedGrip["rotation"][];
+    };
+
+export type ResolvedGrip = {
   item_scale: number;
   pose_family: string;
   offset: {x:number;y:number;z:number};
   rotation: {s:number;v:{x:number;y:number;z:number}};
-  curls: [number,number,number,number,number];
-  /** Optional pressed pose; omission preserves resting curls at any trigger value. */
-  trigger_curls?: [number,number,number,number,number];
   contacts: (Vec3 | null)[];
   anchor: Vec3;
   score: number;
-}
+} & GripFingers;

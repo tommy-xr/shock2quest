@@ -556,7 +556,7 @@ impl ModelPreview {
                     0.0,
                     true,
                     None,
-                    Some((grip.finger_amounts(), 1.0)),
+                    Some((grip.fingers.hand_shape_at(0.0), 1.0)),
                     shock2vr::HandLight::Off,
                     None,
                 ));
@@ -589,8 +589,8 @@ impl ModelPreview {
                         support.anchor_in_frame(*hand, model_mirror) * grip.item_scale,
                     );
                     let mut support_grip = grip.clone();
-                    support_grip.curls = support.curls;
-                    support_grip.trigger_curls = None; // Preview curls are already blended.
+                    // Preview curls are already blended.
+                    support_grip.fingers = shock2vr::vr_grip::FingerPose::curls(support.curls);
                     objects.extend(glove.render_hand(
                         pose.position,
                         pose.rotation,
@@ -599,7 +599,7 @@ impl ModelPreview {
                         0.0,
                         false,
                         None,
-                        Some((support_grip.finger_amounts(), 1.0)),
+                        Some((support_grip.fingers.hand_shape_at(0.0), 1.0)),
                         shock2vr::HandLight::Off,
                         None,
                     ));

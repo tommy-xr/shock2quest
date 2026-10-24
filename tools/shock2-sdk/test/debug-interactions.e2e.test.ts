@@ -71,7 +71,7 @@ test(
           assert.equal(before.source, "prepared", "gameplay reads a bake instead of running the search");
           assert.ok(before.grip);
           if (!before.authored) assert.ok(before.grip.contacts.filter(Boolean).length >= 3, "at least three fingers support each automatic fixture fit");
-          assert.ok(before.grip.curls.every(c => Number.isFinite(c) && c >= 0 && c <= 1));
+          assert.ok("curls" in before.grip && before.grip.curls.every(c => Number.isFinite(c) && c >= 0 && c <= 1));
           const heldDraws = (await game.scene.objects({entityId:item.id})).objects;
           assert.ok(heldDraws.length > 0);
           for (const draw of heldDraws) for (const scale of draw.scale) {

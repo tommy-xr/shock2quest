@@ -10,7 +10,10 @@ use rapier3d::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{hand_pose::FingerAmounts, vr_config::Handedness};
+use crate::{
+    hand_pose::{FingerAmounts, FingerBones, HandShape, Pose, fist_right_hand, open_right_hand},
+    vr_config::Handedness,
+};
 
 pub const CURL_STEPS: usize = 24;
 /// Bump when solver policy changes require existing results to be rebaked.
@@ -44,9 +47,8 @@ pub struct ResolvedGrip {
     /// Item origin and rotation in tracked-hand space (world units).
     pub offset: Vector3<f32>,
     pub rotation: Quaternion<f32>,
-    pub curls: [f32; 5],
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trigger_curls: Option<[f32; 5]>,
+    #[serde(flatten)]
+    pub fingers: FingerPose,
     /// Contact samples in item-local space; null means no contact was found.
     pub contacts: [Option<[f32; 3]>; 5],
     pub anchor: [f32; 3],
@@ -92,11 +94,8 @@ impl ResolvedGrip {
             && self.item_scale.is_finite()
             && self.item_scale > 0.0
             && self.item_scale <= 10.0
-            && (self.rotation.magnitude2() - 1.0).abs() < 0.001
-            && valid_finger_curls(&self.curls)
-            && self
-                .trigger_curls
-                .is_none_or(|curls| valid_finger_curls(&curls))
+            && is_unit_quaternion(self.rotation)
+            && self.fingers.is_valid()
             && self
                 .anchor
                 .iter()
@@ -120,34 +119,204 @@ impl ResolvedGrip {
             [bounds.max.x, bounds.max.y, bounds.max.z],
         ])
     }
+}
 
-    pub fn curls_at(&self, trigger: f32) -> [f32; 5] {
-        blended_curls(self.curls, self.trigger_curls, trigger)
-    }
+/// A grip's finger shape: either per-finger curls (fitted or slider-authored)
+/// or explicit bone rotations (captured from tracked hands). Untagged, so
+/// curl grips keep their original `curls`/`trigger_curls` JSON.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, try_from = "RawFingerPose")]
+pub enum FingerPose {
+    Curls {
+        curls: [f32; 5],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger_curls: Option<[f32; 5]>,
+    },
+    Bones {
+        bones: FingerBones,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger_bones: Option<FingerBones>,
+    },
+}
 
-    pub fn finger_amounts(&self) -> FingerAmounts {
-        self.finger_amounts_at(0.0)
-    }
+/// Decodes every finger field so a grip mixing curls and bones is an error
+/// rather than one variant silently dropping the other's data.
+#[derive(Deserialize)]
+struct RawFingerPose {
+    curls: Option<[f32; 5]>,
+    trigger_curls: Option<[f32; 5]>,
+    bones: Option<FingerBones>,
+    trigger_bones: Option<FingerBones>,
+}
 
-    pub fn finger_amounts_at(&self, trigger: f32) -> FingerAmounts {
-        let [thumb, index, middle, ring, pinky] = self.curls_at(trigger);
-        FingerAmounts {
-            thumb,
-            index,
-            middle,
-            ring,
-            pinky,
+impl TryFrom<RawFingerPose> for FingerPose {
+    type Error = &'static str;
+
+    fn try_from(raw: RawFingerPose) -> Result<Self, Self::Error> {
+        match raw {
+            RawFingerPose {
+                curls: Some(curls),
+                trigger_curls,
+                bones: None,
+                trigger_bones: None,
+            } => Ok(FingerPose::Curls {
+                curls,
+                trigger_curls,
+            }),
+            RawFingerPose {
+                curls: None,
+                trigger_curls: None,
+                bones: Some(bones),
+                trigger_bones,
+            } => Ok(FingerPose::Bones {
+                bones,
+                trigger_bones,
+            }),
+            _ => Err("a grip needs either curls or bones (with their trigger_ pose), not both"),
         }
     }
 }
 
-/// Analog visual blend, independent of the fire/use action threshold.
-pub fn blended_curls(rest: [f32; 5], pressed: Option<[f32; 5]>, trigger: f32) -> [f32; 5] {
-    let amount = if trigger.is_finite() {
+impl FingerPose {
+    pub fn curls(curls: [f32; 5]) -> Self {
+        FingerPose::Curls {
+            curls,
+            trigger_curls: None,
+        }
+    }
+
+    /// Rest curls; `None` for a bone pose.
+    pub fn rest_curls(&self) -> Option<&[f32; 5]> {
+        match self {
+            FingerPose::Curls { curls, .. } => Some(curls),
+            FingerPose::Bones { .. } => None,
+        }
+    }
+
+    pub fn rest_curls_mut(&mut self) -> Option<&mut [f32; 5]> {
+        match self {
+            FingerPose::Curls { curls, .. } => Some(curls),
+            FingerPose::Bones { .. } => None,
+        }
+    }
+
+    pub fn curls_at(&self, trigger: f32) -> Option<[f32; 5]> {
+        match self {
+            FingerPose::Curls {
+                curls,
+                trigger_curls,
+            } => Some(blended_curls(*curls, *trigger_curls, trigger)),
+            FingerPose::Bones { .. } => None,
+        }
+    }
+
+    /// This pose frozen at `trigger`, with no separate pressed pose.
+    pub fn at(&self, trigger: f32) -> FingerPose {
+        match self {
+            FingerPose::Curls { .. } => FingerPose::curls(self.curls_at(trigger).unwrap()),
+            FingerPose::Bones {
+                bones,
+                trigger_bones,
+            } => FingerPose::Bones {
+                bones: blended_bones(bones, trigger_bones.as_ref(), trigger),
+                trigger_bones: None,
+            },
+        }
+    }
+
+    pub fn hand_shape_at(&self, trigger: f32) -> HandShape {
+        match self.at(trigger) {
+            FingerPose::Curls { curls, .. } => HandShape::Curls(finger_amounts(curls)),
+            FingerPose::Bones { bones, .. } => HandShape::Pose(Pose::from_finger_bones(&bones)),
+        }
+    }
+
+    /// The same shape as explicit bones, e.g. as a starting point for a
+    /// captured pose. Exact at rest and fully pressed.
+    pub fn to_bones(&self) -> FingerPose {
+        match self {
+            FingerPose::Curls {
+                curls,
+                trigger_curls,
+            } => FingerPose::Bones {
+                bones: curls_to_bones(*curls),
+                trigger_bones: trigger_curls.map(curls_to_bones),
+            },
+            FingerPose::Bones { .. } => self.clone(),
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        match self {
+            FingerPose::Curls {
+                curls,
+                trigger_curls,
+            } => valid_finger_curls(curls) && trigger_curls.is_none_or(|c| valid_finger_curls(&c)),
+            FingerPose::Bones {
+                bones,
+                trigger_bones,
+            } => bones
+                .iter()
+                .chain(trigger_bones.iter().flatten())
+                .all(|q| is_unit_quaternion(*q)),
+        }
+    }
+}
+
+fn finger_amounts([thumb, index, middle, ring, pinky]: [f32; 5]) -> FingerAmounts {
+    FingerAmounts {
+        thumb,
+        index,
+        middle,
+        ring,
+        pinky,
+    }
+}
+
+/// The glove's own curl mapping: each finger blended open -> fist.
+fn curls_to_bones(curls: [f32; 5]) -> FingerBones {
+    open_right_hand()
+        .blend_per_finger(&fist_right_hand(), &finger_amounts(curls))
+        .finger_bones()
+}
+
+fn blended_bones(rest: &FingerBones, pressed: Option<&FingerBones>, trigger: f32) -> FingerBones {
+    let Some(pressed) = pressed else {
+        return *rest;
+    };
+    let amount = trigger_amount(trigger);
+    std::array::from_fn(|i| {
+        // Slerp along the shortest arc
+        let b = if rest[i].dot(pressed[i]) < 0.0 {
+            -pressed[i]
+        } else {
+            pressed[i]
+        };
+        rest[i].slerp(b, amount)
+    })
+}
+
+/// NaN fails the comparison, so non-finite rotations are rejected too.
+fn is_unit_quaternion(q: Quaternion<f32>) -> bool {
+    (q.magnitude2() - 1.0).abs() < 0.001
+}
+
+fn trigger_amount(trigger: f32) -> f32 {
+    if trigger.is_finite() {
         trigger.clamp(0.0, 1.0)
     } else {
         0.0
-    };
+    }
+}
+
+/// Curls of a pose the solver produced; the solver only emits curls.
+fn fitted_curls(grip: &ResolvedGrip) -> &[f32; 5] {
+    grip.fingers.rest_curls().expect("fits are curl poses")
+}
+
+/// Analog visual blend, independent of the fire/use action threshold.
+pub fn blended_curls(rest: [f32; 5], pressed: Option<[f32; 5]>, trigger: f32) -> [f32; 5] {
+    let amount = trigger_amount(trigger);
     let pressed = pressed.unwrap_or(rest);
     std::array::from_fn(|i| rest[i] + (pressed[i] - rest[i]) * amount)
 }
@@ -340,14 +509,15 @@ impl GripSurface {
                                         }
                                     }
                                     "cylindrical" => {
-                                        let curls = &resolved.curls[1..];
+                                        let curls = &fitted_curls(&resolved)[1..];
                                         let min = curls.iter().copied().fold(1.0, f32::min);
                                         let max = curls.iter().copied().fold(0.0, f32::max);
                                         resolved.score -= (max - min) * 0.5;
                                     }
-                                    "trigger" => resolved.score -= resolved.curls[1] * 0.5,
+                                    "trigger" => resolved.score -= fitted_curls(&resolved)[1] * 0.5,
                                     _ => {
-                                        resolved.score -= resolved.curls.iter().sum::<f32>() * 0.05
+                                        resolved.score -=
+                                            fitted_curls(&resolved).iter().sum::<f32>() * 0.05
                                     }
                                 }
                                 resolved.pose_family = family.to_owned();
@@ -379,7 +549,10 @@ impl GripSurface {
         }
         for (finger, amount) in hints.curls.iter().enumerate() {
             if let Some(amount) = amount {
-                result.curls[finger] = *amount;
+                result
+                    .fingers
+                    .rest_curls_mut()
+                    .expect("fits are curl poses")[finger] = *amount;
                 let step = (amount * CURL_STEPS as f32).round() as usize;
                 result.contacts[finger] = hand.fingers[finger][step].iter().find_map(|sample| {
                     let local = result
@@ -397,7 +570,7 @@ impl GripSurface {
             }
         }
         (result.is_valid()
-            && self.pose_is_clear(hand, result.offset, result.rotation, &result.curls))
+            && self.pose_is_clear(hand, result.offset, result.rotation, fitted_curls(&result)))
         .then_some(result)
     }
 
@@ -434,8 +607,7 @@ impl GripSurface {
                 let mut candidate = self.fit_at(hand, offset, rotation);
                 candidate.score -= drift * 3.0;
                 // Prefer wrapping the handle over balancing its butt on nearly open fingers.
-                candidate.score +=
-                    (candidate.curls[2] + candidate.curls[3] + candidate.curls[4]) * 0.7;
+                candidate.score += fitted_curls(&candidate)[2..].iter().sum::<f32>() * 0.7;
                 candidate.pose_family = "trigger".to_owned();
                 candidate.anchor = [point.x, point.y, point.z];
                 if candidate.is_valid() && best.as_ref().is_none_or(|b| candidate.score > b.score) {
@@ -548,8 +720,7 @@ impl GripSurface {
             pose_family: "broad".to_owned(),
             offset,
             rotation,
-            curls,
-            trigger_curls: None,
+            fingers: FingerPose::curls(curls),
             contacts,
             anchor: [0.0; 3],
             score,
@@ -761,7 +932,11 @@ mod tests {
     #[test]
     fn fingers_stop_before_crossing_a_thin_surface() {
         let grip = plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
-        assert!(grip.curls.iter().all(|c| (*c - 8.0 / 24.0).abs() < 1e-6));
+        assert!(
+            fitted_curls(&grip)
+                .iter()
+                .all(|c| (*c - 8.0 / 24.0).abs() < 1e-6)
+        );
         assert!(
             grip.contacts
                 .iter()
@@ -792,7 +967,7 @@ mod tests {
     #[test]
     fn unreachable_fingers_use_nearest_pose_instead_of_closing_into_empty_space() {
         let grip = plane(-0.5).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
-        assert_eq!(grip.curls, [0.0; 5]);
+        assert_eq!(fitted_curls(&grip), &[0.0; 5]);
         assert_eq!(grip.contacts, [None; 5]);
     }
 
@@ -801,7 +976,7 @@ mod tests {
         let hand = straight_fingers();
         let a = plane(0.05).fit_at(&hand, vec3(0.0, 0.0, 0.0), Quaternion::one());
         let b = plane(1.05).fit_at(&hand, vec3(0.0, 0.0, -1.0), Quaternion::one());
-        assert_eq!(a.curls, b.curls);
+        assert_eq!(a.fingers, b.fingers);
         for (a, b) in a.contacts.iter().zip(b.contacts) {
             assert!((a.unwrap()[2] + 1.0 - b.unwrap()[2]).abs() < 1e-6);
         }
@@ -835,7 +1010,7 @@ mod tests {
         let mut restored: ResolvedGrip =
             serde_json::from_str(&serde_json::to_string(&grip).unwrap()).unwrap();
         assert!(restored.is_valid());
-        assert_eq!(restored.curls, grip.curls);
+        assert_eq!(restored.fingers, grip.fingers);
         restored.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
         assert!(!restored.is_valid());
     }
@@ -843,48 +1018,177 @@ mod tests {
     fn extended_thumb_round_trips_and_blends_without_extending_other_fingers() {
         let mut grip =
             plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
-        grip.curls = [-0.5, 1.0, 1.0, 1.0, 1.0];
-        grip.trigger_curls = Some([-1.0, 0.8, 1.0, 1.0, 1.0]);
+        grip.fingers = FingerPose::Curls {
+            curls: [-0.5, 1.0, 1.0, 1.0, 1.0],
+            trigger_curls: Some([-1.0, 0.8, 1.0, 1.0, 1.0]),
+        };
         let mut restored: ResolvedGrip =
             serde_json::from_str(&serde_json::to_string(&grip).unwrap()).unwrap();
         assert!(restored.is_valid());
-        assert_eq!(restored.curls_at(0.5), [-0.75, 0.9, 1.0, 1.0, 1.0]);
-        restored.curls[0] = -1.01;
+        assert_eq!(
+            restored.fingers.curls_at(0.5),
+            Some([-0.75, 0.9, 1.0, 1.0, 1.0])
+        );
+        let curls = restored.fingers.rest_curls_mut().unwrap();
+        curls[0] = -1.01;
         assert!(!restored.is_valid());
-        restored.curls[0] = -0.5;
-        restored.curls[1] = -0.1;
+        let curls = restored.fingers.rest_curls_mut().unwrap();
+        curls[0] = -0.5;
+        curls[1] = -0.1;
         assert!(!restored.is_valid());
     }
     #[test]
     fn trigger_curls_blend_independently_and_round_trip() {
         let mut grip =
             plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
-        grip.curls = [0.2, 0.4, 0.6, 0.8, 1.0];
-        assert_eq!(grip.curls_at(1.0), grip.curls);
+        let rest = [0.2, 0.4, 0.6, 0.8, 1.0];
+        grip.fingers = FingerPose::curls(rest);
+        assert_eq!(grip.fingers.curls_at(1.0), Some(rest));
         let legacy = serde_json::to_value(&grip).unwrap();
         assert!(legacy.get("trigger_curls").is_none());
         assert_eq!(
             serde_json::from_value::<ResolvedGrip>(legacy)
                 .unwrap()
-                .trigger_curls,
-            None
+                .fingers,
+            FingerPose::curls(rest)
         );
-        grip.trigger_curls = Some([0.8, 0.8, 0.6, 0.8, 1.0]);
-        assert_eq!(grip.curls_at(-1.0), grip.curls);
-        assert_eq!(grip.curls_at(f32::NAN), grip.curls);
-        assert_eq!(grip.curls_at(2.0), grip.trigger_curls.unwrap());
-        let halfway = grip.curls_at(0.5);
+        let pressed = [0.8, 0.8, 0.6, 0.8, 1.0];
+        let with_pressed = |pressed| FingerPose::Curls {
+            curls: rest,
+            trigger_curls: Some(pressed),
+        };
+        grip.fingers = with_pressed(pressed);
+        assert_eq!(grip.fingers.curls_at(-1.0), Some(rest));
+        assert_eq!(grip.fingers.curls_at(f32::NAN), Some(rest));
+        assert_eq!(grip.fingers.curls_at(2.0), Some(pressed));
+        let halfway = grip.fingers.curls_at(0.5).unwrap();
         assert!((halfway[0] - 0.5).abs() < 1e-6);
         assert!((halfway[1] - 0.6).abs() < 1e-6);
-        assert_eq!(&halfway[2..], &grip.curls[2..]);
+        assert_eq!(&halfway[2..], &rest[2..]);
         let restored: ResolvedGrip =
             serde_json::from_str(&serde_json::to_string(&grip).unwrap()).unwrap();
         assert_eq!(restored, grip);
         assert!(restored.is_valid());
-        grip.trigger_curls = Some([1.1; 5]);
+        grip.fingers = with_pressed([1.1; 5]);
         assert!(!grip.is_valid());
-        grip.trigger_curls = Some([f32::NAN; 5]);
+        grip.fingers = with_pressed([f32::NAN; 5]);
         assert!(!grip.is_valid());
+    }
+
+    /// Bone rotations equal up to quaternion sign.
+    fn assert_bones_eq(a: &FingerBones, b: &FingerBones) {
+        for (bone, (a, b)) in a.iter().zip(b).enumerate() {
+            assert!(a.dot(*b).abs() > 1.0 - 1e-5, "bone {bone}: {a:?} vs {b:?}");
+        }
+    }
+
+    #[test]
+    fn curls_convert_to_the_bones_the_glove_draws() {
+        let rest = [-0.5, 0.3, 0.6, 0.8, 1.0];
+        let pressed = [-1.0, 1.0, 0.6, 0.8, 1.0];
+        let curls = FingerPose::Curls {
+            curls: rest,
+            trigger_curls: Some(pressed),
+        };
+        let bones = curls.to_bones();
+        assert!(bones.is_valid());
+        let drawn = |fingers: &FingerPose, trigger| match fingers.hand_shape_at(trigger) {
+            HandShape::Curls(amounts) => open_right_hand()
+                .blend_per_finger(&fist_right_hand(), &amounts)
+                .finger_bones(),
+            HandShape::Pose(pose) => pose.finger_bones(),
+        };
+        for trigger in [0.0, 1.0] {
+            assert_bones_eq(&drawn(&bones, trigger), &drawn(&curls, trigger));
+        }
+        // Mid-trigger is a real in-between pose.
+        let mid = drawn(&bones, 0.5);
+        let index = 6 - 2;
+        assert!(mid[index + 1].dot(drawn(&bones, 0.0)[index + 1]).abs() < 1.0 - 1e-4);
+        assert_eq!(bones.to_bones(), bones);
+    }
+
+    #[test]
+    fn bone_poses_round_trip_and_reject_unnormalized_rotations() {
+        let mut grip =
+            plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
+        grip.fingers = FingerPose::curls([0.2, 0.4, 0.6, 0.8, 1.0]).to_bones();
+        let json = serde_json::to_value(&grip).unwrap();
+        assert!(json.get("curls").is_none() && json.get("trigger_bones").is_none());
+        let restored: ResolvedGrip = serde_json::from_value(json).unwrap();
+        assert!(restored.is_valid());
+        assert_eq!(restored, grip);
+        assert_eq!(restored.fingers.curls_at(0.0), None);
+        let FingerPose::Bones { bones, .. } = &mut grip.fingers else {
+            unreachable!()
+        };
+        bones[3] = Quaternion::new(2.0, 0.0, 0.0, 0.0);
+        assert!(!grip.is_valid());
+    }
+
+    #[test]
+    fn grips_mixing_curls_and_bones_are_rejected() {
+        let bones = FingerPose::curls([0.5; 5]).to_bones();
+        let mut json = serde_json::to_value(ResolvedGrip {
+            fingers: bones,
+            ..plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one())
+        })
+        .unwrap();
+        for (key, value) in [
+            ("curls", serde_json::json!([0.5, 0.5, 0.5, 0.5, 0.5])),
+            (
+                "trigger_curls",
+                serde_json::json!([0.5, 0.5, 0.5, 0.5, 0.5]),
+            ),
+        ] {
+            let mut mixed = json.clone();
+            mixed[key] = value;
+            assert!(
+                serde_json::from_value::<ResolvedGrip>(mixed).is_err(),
+                "{key}"
+            );
+        }
+        json.as_object_mut().unwrap().remove("bones");
+        assert!(
+            serde_json::from_value::<ResolvedGrip>(json).is_err(),
+            "no finger pose"
+        );
+    }
+
+    /// Shipped grip libraries keep decoding as curls and re-encode with the
+    /// same fields, so Explorer saves do not churn them.
+    #[test]
+    fn shipped_grip_libraries_decode_as_curls_unchanged() {
+        for name in [
+            "vr-grips.json",
+            "vr-weapon-grips.json",
+            "vr-tricorder-grips.json",
+            "vr-magazine-grips.json",
+        ] {
+            let path = format!("{}/../assets/{name}", env!("CARGO_MANIFEST_DIR"));
+            let text = std::fs::read_to_string(&path).unwrap();
+            let original: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let library: GripLibrary = serde_json::from_str(&text).unwrap();
+            let encoded = serde_json::to_value(&library).unwrap();
+            for (entry, (before, after)) in library.entries.iter().zip(
+                original["entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .zip(encoded["entries"].as_array().unwrap()),
+            ) {
+                assert!(entry.grip.fingers.rest_curls().is_some(), "{name}");
+                let keys = |v: &serde_json::Value| {
+                    v["grip"]
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(keys(before), keys(after), "{name} {}", entry.model);
+            }
+        }
     }
 
     #[test]

@@ -55,6 +55,7 @@ for (const [model, template] of [["atek_h", -17], ["ar15_h", -18]] as const) {
       const prepared = library.entries.find(e => e.model === `${model}_magazine` && e.hand === hand);
       assert.equal(grip.source, prepared ? "prepared" : "bake");
       if (prepared) {
+        assert.ok("curls" in grip.grip! && "curls" in prepared.grip);
         const actual = [...Object.values(grip.grip.offset), ...Object.values(grip.grip.rotation.v), grip.grip.rotation.s, ...grip.grip.curls];
         const expected = [...Object.values(prepared.grip.offset), ...Object.values(prepared.grip.rotation.v), prepared.grip.rotation.s, ...prepared.grip.curls];
         actual.forEach((value, i) => assert.ok(Math.abs(value - expected[i]!) < 1e-6,

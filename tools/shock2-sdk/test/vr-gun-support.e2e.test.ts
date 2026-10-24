@@ -116,7 +116,9 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
       const fired = await grip();
       assert.equal(fired.support!.attached,true,"support latch survives actual firing");
       assert.equal(fired.visual_trigger,1);
-      assert.deepEqual(fired.finger_curls,fired.grip!.trigger_curls ?? fired.grip!.curls);
+      const firedGrip = fired.grip!;
+      assert.ok("curls" in firedGrip);
+      assert.deepEqual(fired.finger_curls,firedGrip.trigger_curls ?? firedGrip.curls);
       await game.input.set(`${primary}_hand.trigger`,0);
       if (model === "ar15_h") {
         await game.step({frames:12});
