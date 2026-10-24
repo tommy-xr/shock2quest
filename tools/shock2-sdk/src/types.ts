@@ -1501,6 +1501,8 @@ export interface HandGrip {
       /** How far the trigger pose curls the index from rest toward a fist
        * (0..1), null with no trigger pose. */
       trigger_index: number | null;
+      /** Why Tighten (close the slot's fingers onto the item) is disabled. */
+      tighten_disabled: string | null;
       hover: { x: number; y: number } | null;
       panel: {
         center: ResolvedGrip["offset"];
@@ -1508,7 +1510,7 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "AlignLess" | "AlignMore" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "Placement" | "IndexLess" | "IndexMore" | "ResetView" | "Exit";
+          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "AlignLess" | "AlignMore" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "Placement" | "IndexLess" | "IndexMore" | "Tighten" | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;

@@ -151,7 +151,6 @@ pub(super) fn tighten_log(fits: &[crate::vr_grip::FingerFit; 5]) -> String {
         FingerFit::Touching { amount, .. } if amount < 0.0 => "opened",
         FingerFit::Touching { .. } => "snug",
         FingerFit::NoContact => "none",
-        FingerFit::Stuck => "stuck",
     });
     // Grips are tightened in authored units.
     let mm = fits.map(|fit| match fit {
