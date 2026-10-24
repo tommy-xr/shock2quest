@@ -140,6 +140,29 @@ pub(super) fn slot_fingers(slot: Slot, current: &FingerPose, captured: FingerBon
     }
 }
 
+/// Tighten's log fields: what each finger did, and how far it rests off the
+/// item in millimetres (`-` where it touched nothing), e.g.
+/// `fingers=[closed,opened,snug,none,skip] contact_mm=[1.0,1.0,0.4,-,-]`.
+pub(super) fn tighten_log(fits: &[crate::vr_grip::FingerFit; 5]) -> String {
+    use crate::vr_grip::FingerFit;
+    let what = fits.map(|fit| match fit {
+        FingerFit::Skipped => "skip",
+        FingerFit::Touching { amount, .. } if amount > 0.0 => "closed",
+        FingerFit::Touching { amount, .. } if amount < 0.0 => "opened",
+        FingerFit::Touching { .. } => "snug",
+        FingerFit::NoContact => "none",
+        FingerFit::Stuck => "stuck",
+    });
+    // Grips are tightened in authored units.
+    let mm = fits.map(|fit| match fit {
+        FingerFit::Touching { gap, .. } => {
+            format!("{:.1}", gap * crate::METERS_PER_WORLD_UNIT * 1000.0)
+        }
+        _ => "-".to_owned(),
+    });
+    format!("fingers=[{}] contact_mm=[{}]", what.join(","), mm.join(","))
+}
+
 /// A physical distance in world units at the active world scale.
 fn world(metres: f32) -> f32 {
     metres / crate::world_scale::meters_per_world_unit()
@@ -223,6 +246,8 @@ pub(super) struct GripPoseTool {
     /// How far the grip's trigger pose curls the index from rest toward a
     /// fist (`FingerPose::trigger_index`), which the Index steps move.
     pub trigger_index: Option<f32>,
+    /// The posed hand's item mesh is known, so Tighten can close onto it.
+    pub item_mesh: bool,
     /// The free hand is tracked, so it works the panel by fingertip.
     fingertip: bool,
     /// Test hold: the posing hand's controller holds the item as play does.
@@ -362,6 +387,7 @@ impl GripPoseTool {
             slot: Slot::Rest,
             keep_placement: false,
             trigger_index: None,
+            item_mesh: false,
             fingertip: false,
             test_hold: None,
             muzzle: None,
@@ -503,6 +529,27 @@ impl GripPoseTool {
         }
         self.keep_placement = !self.keep_placement;
         true
+    }
+
+    /// Whether Tighten can act, or why not: on the primary grip, against a
+    /// known item mesh.
+    pub fn tighten_entry(&self) -> Result<(), String> {
+        if self.support {
+            Err("primary grip only".to_owned())
+        } else if !self.item_mesh {
+            Err("no item mesh".to_owned())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The fingers Tighten closes in the slot: all at rest, the index onto
+    /// the trigger.
+    pub fn tighten_fingers(&self) -> [bool; 5] {
+        match self.slot {
+            Slot::Rest => [true; 5],
+            Slot::Trigger => [false, true, false, false, false],
+        }
     }
 
     /// A primary snapshot places the glove where the tracked hand is: a rest
@@ -708,6 +755,7 @@ impl GripPoseTool {
             "slot_disabled": view.slot_entry.err(),
             "keep_placement": self.keep_placement,
             "trigger_index": self.trigger_index,
+            "tighten_disabled": view.tighten.err(),
             "hover": self.hover,
             "panel": placed,
             // The bench's view turn about its pivot (world space).
@@ -748,6 +796,7 @@ impl GripPoseTool {
             keep_placement: self.keep_placement,
             placement_entry: self.placement_entry(),
             trigger_index: self.trigger_index,
+            tighten: self.tighten_entry(),
             staged: self.staged.is_some(),
             fingertip: self.fingertip,
         }
@@ -1748,6 +1797,35 @@ mod tests {
         assert_eq!(tool.slot, Slot::Rest);
         assert_eq!(tool.slot_entry(), Err("primary grip only".to_owned()));
         assert!(!tool.toggle_slot());
+    }
+
+    #[test]
+    fn tighten_closes_all_fingers_at_rest_and_the_index_on_the_trigger() {
+        let mut tool = posing_tool();
+        assert_eq!(tool.tighten_entry(), Err("no item mesh".to_owned()));
+        tool.item_mesh = true;
+        assert_eq!(tool.tighten_entry(), Ok(()));
+        assert_eq!(tool.tighten_fingers(), [true; 5]);
+        assert!(tool.toggle_slot());
+        assert_eq!(tool.tighten_fingers(), [false, true, false, false, false]);
+        tool.set_support(true);
+        assert_eq!(tool.tighten_entry(), Err("primary grip only".to_owned()));
+        use crate::vr_grip::FingerFit;
+        let touch = |amount| FingerFit::Touching {
+            amount,
+            gap: 0.001 / crate::METERS_PER_WORLD_UNIT,
+            contact: [0.0; 3],
+        };
+        assert_eq!(
+            tighten_log(&[
+                touch(0.3),
+                touch(-0.2),
+                touch(0.0),
+                FingerFit::NoContact,
+                FingerFit::Skipped
+            ]),
+            "fingers=[closed,opened,snug,none,skip] contact_mm=[1.0,1.0,1.0,-,-]"
+        );
     }
 
     #[test]
