@@ -4329,6 +4329,13 @@ mod tests {
         let tool = interaction.pose_tool.as_mut().unwrap();
         assert!(at(tool.hand_pose, stored), "no jump on the snapshot");
         assert!(at(tool.live_glove_pose(posing, &glove), stored));
+        // And the live fingers (drawn from `glove.pose`) are the ones stored,
+        // so the tips seen are where the snapshot leaves them.
+        let posed = interaction.fitted_grips[1].as_ref().unwrap();
+        assert_eq!(
+            posed.resolved.as_ref().unwrap().fingers.rest_bones(),
+            glove.fit.bones
+        );
         let (mm, deg) = pose_tool::snapshot_offset(palm, tool.hand_pose);
         assert!(
             (mm - 30.0).abs() < 0.01 && (deg - 10.0).abs() < 0.01,

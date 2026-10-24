@@ -281,8 +281,8 @@ test(
     await game.step({ frames: 2 });
     assert.ok((await named("Right grip glove")) > 0, "tracking lost: the saved glove is back");
 
-    // A capture still staged on exit is saved, on disk and in play. Its
-    // fingers differ: a rest snapshot keeps the placement by default.
+    // A capture still staged on exit is saved, on disk and in play: a hand
+    // 5 cm higher, pinching.
     const savedText = readFileSync(path, "utf8");
     await game.input.set("right_hand.joints", trackedHand([hand[0], hand[1] + 0.05, hand[2]], unit, { pinch: true }));
     await game.step({ frames: 30 });
@@ -418,14 +418,6 @@ async function pressButton(game: GameServer, hand: "left" | "right", event: Pane
 }
 
 const saveOnPanel = (game: GameServer, hand: "left" | "right", unit: number) => pressButton(game, hand, "Save", unit);
-
-/** Rest snapshots keep the grip's placement by default; switch them to
- * capture it from the tracked hand too. */
-async function capturePlacement(game: GameServer, hand: "left" | "right", unit: number): Promise<void> {
-  assert.equal((await workbench(game)).tool.panel.keep_placement, true, "placement kept by default");
-  await pressButton(game, hand, "Placement", unit);
-  assert.equal((await workbench(game)).tool.panel.keep_placement, false);
-}
 
 /** Open the workbench on the mug held in `holding`, its controller set down
  * and its tracked hand held still; the head where the bench is placed from. */
@@ -817,7 +809,6 @@ async function captureRightGrip(game: GameServer, item: number): Promise<Resolve
     "right_hand.joints": handInMetres().map((p) =>
       toLocal(add(bench, scale(add(quatRotate(yaw(28), p), [0.1, -0.05, 0.05]), 1 / unit)))),
   });
-  await capturePlacement(game, "left", unit);
   await game.step({ frames: 30 });
   await click(game, "left");
   assert.equal((await workbench(game)).tool.staged, true, "staged");
@@ -1103,7 +1094,6 @@ async function captureAt(worldScale: number): Promise<{ saved: ResolvedGrip; tip
     return quatRotate(quatConjugate(player.rotation), sub(world, player.position));
   });
   await game.input.set("right_hand.joints", joints);
-  await capturePlacement(game, "left", unit);
   await game.step({ frames: 30 });
   const tipError = (await game.info()).player.hand_grips.find((g) => g.hand === "right")!.pose_tool!.tip_error_mm!;
   await game.input.set("left_hand.trigger", 1);
@@ -1225,7 +1215,7 @@ test(
       "right_hand.position": [controller.position[0] + 1, controller.position[1] - 0.5, controller.position[2]],
       "right_hand.joints": handWorld,
     });
-    await capturePlacement(game, "left", unit);
+    await aimAway(game, "left");
     await game.step({ frames: 30 });
     await click(game, "left");
     const captured = (await rightGrip()).grip!;
@@ -1332,6 +1322,8 @@ test(
     const tool = async () => (await rightGrip()).pose_tool!;
 
     // A rest snapshot (fingers only) to test-hold.
+    await pressButton(game, "left", "Placement", unit);
+    assert.equal((await tool()).panel.keep_placement, true);
     const controller = (await game.input.state()).right_hand;
     const { toLocal } = await workbench(game);
     const bench = (await game.scene.objects({ entityId: gun.id })).objects[0]!.position;
@@ -1458,9 +1450,14 @@ test(
       assert.equal((await tool()).panel.slot_disabled, null);
 
       // Rest: the tracked right hand round the grip, the controller set down;
-      // the snapshot keeps the grip's placement and takes only the fingers.
+      // with Placement on keep the snapshot takes only the fingers.
       const shipped = (await rightGrip()).grip!;
+      assert.equal((await tool()).panel.keep_placement, false, "placement captured by default");
+      await pressButton(game, "left", "Placement", unit);
       assert.equal((await tool()).panel.keep_placement, true);
+      const gloveAt = async (name: string) =>
+        (await game.scene.objects()).objects.filter((o) => o.name === name).at(-1)!.position;
+      const stored = await gloveAt("Right grip glove");
       const controller = (await game.input.state()).right_hand;
       const { toLocal } = await workbench(game);
       const bench = (await game.scene.objects({ entityId: gun.id })).objects[0]!.position;
@@ -1472,8 +1469,11 @@ test(
       });
       await aimAway(game, "left");
       await game.step({ frames: 30 });
+      // The live glove previews where the snapshot leaves it: the stored glove.
+      assert.ok(distance(await gloveAt("Right glove"), stored) < 1e-4, "the live glove sits on the kept placement");
       await click(game, "left");
       assert.equal((await tool()).staged, true, `rest staged (${(await tool()).capture_failure})`);
+      assert.ok(distance(await gloveAt("Right glove"), stored) < 1e-4, "and stays there on the snapshot");
       const rest = (await rightGrip()).grip!;
       assert.ok(fingers(rest).bones, "the rest capture is bones");
       assert.equal((await tool()).has_trigger_pose, false, "no pulled pose yet");
