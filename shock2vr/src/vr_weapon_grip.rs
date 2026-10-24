@@ -93,18 +93,7 @@ pub fn inputs(
     let source = cache.get_opt(&GLOVE_WEAPON_IMPORTER, name)?;
     let source = source.as_ref().as_ref()?;
     let mirror = model_frame(source, name, hand);
-    let triangles: Vec<_> = source
-        .triangles
-        .iter()
-        .map(|t| {
-            let t = t.map(|p| mirror.transform_point(p));
-            if mirror.determinant() < 0.0 {
-                [t[0], t[2], t[1]]
-            } else {
-                t
-            }
-        })
-        .collect();
+    let triangles = crate::vr_grip::transformed_triangles(&source.triangles, mirror);
     // The authored arm remains a handed fit guide. A gun-only reflection
     // must not turn that guide (or the replacement glove) into the other hand.
     let arm_frame = if source.melee_joints.is_some() {
