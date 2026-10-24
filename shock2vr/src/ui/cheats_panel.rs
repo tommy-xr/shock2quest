@@ -74,6 +74,8 @@ pub enum CheatAction {
     ClearExposure,
     MaxAlcohol,
     ClearAlcohol,
+    /// Author the held item's grip with tracked hands (VR).
+    GripPoseTool,
 }
 
 /// One entry in the list: the row's label and what clicking it does.
@@ -191,6 +193,12 @@ pub static CHEATS: &[Cheat] = &[
     Cheat {
         label: "Clear alcohol",
         action: CheatAction::ClearAlcohol,
+    },
+    Cheat {
+        // Resume, set the controllers down, form the grip, pinch the other
+        // hand to save; pick this again to finish.
+        label: "Pose held item (hand tracking)",
+        action: CheatAction::GripPoseTool,
     },
 ];
 
