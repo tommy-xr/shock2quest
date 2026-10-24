@@ -1442,8 +1442,19 @@ export interface HandGrip {
   /** Glove pose following a physical melee body; null uses raw tracked pose. */
   glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
   /** The grip pose tool posing this hand: an unsaved capture is applied
-   * live (`staged`) until saved; a failed save stays staged. */
-  pose_tool?: { staged: boolean; last_save_error: string | null } | null;
+   * live (`staged`) until saved; a failed save stays staged.
+   * `tip_error_mm`: glove vs tracked fingertip distance (thumb..little) for
+   * the tracked posing hand; `capture_failure`: why the last capture request
+   * captured nothing (`no_joints`, `window_short`, `jitter max_mm=<x>`,
+   * `degenerate_joints`); `contacts_shown`: contact spheres and joint markers
+   * drawn (free controller's thumbstick click toggles). */
+  pose_tool?: {
+    staged: boolean;
+    last_save_error: string | null;
+    tip_error_mm: number[] | null;
+    capture_failure: string | null;
+    contacts_shown: boolean;
+  } | null;
   /** Pistol slide contact, independent of the ordinary two-hand support grip. */
   slide?: {
     attached: boolean;

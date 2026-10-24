@@ -198,6 +198,20 @@ impl GloveRenderer {
         })
     }
 
+    /// The joints of a glove drawn fully in `shape` (as `render_hand` draws
+    /// a fitted shape at blend 1), in calibrated hand space.
+    pub(crate) fn shape_joints(
+        &mut self,
+        shape: &HandShape,
+        handedness: Handedness,
+    ) -> crate::hand_capture::HandJoints {
+        let pose = match shape {
+            HandShape::Curls(amounts) => self.open.blend_per_finger(&self.fist, amounts),
+            HandShape::Pose(pose) => pose.clone(),
+        };
+        self.posed_joints(&pose, handedness)
+    }
+
     /// The open glove's joints in calibrated hand space, to match against a
     /// tracked hand.
     pub fn open_joints(&mut self, handedness: Handedness) -> crate::hand_capture::HandJoints {
