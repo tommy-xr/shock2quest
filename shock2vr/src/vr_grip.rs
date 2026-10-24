@@ -833,20 +833,36 @@ impl GripLibrary {
     pub fn prepend(&mut self, overrides: GripLibrary) {
         self.entries.splice(0..0, overrides.entries);
     }
+}
 
+/// The overrides file (`GRIP_OVERRIDES_FILE`): grip entries ahead of the
+/// shipped libraries, and captured support poses by model over the authored
+/// support profiles. A file without `support` is a plain grip library.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct GripOverrides {
+    #[serde(flatten)]
+    pub grips: GripLibrary,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub support: std::collections::BTreeMap<String, crate::vr_support::SupportPose>,
+}
+
+impl GripOverrides {
     /// A missing file is normal; an unreadable one is logged and ignored.
     /// Logs to stdout: the Quest runtime has no tracing subscriber.
-    pub fn load_overrides(path: &std::path::Path) -> Option<GripLibrary> {
+    pub fn load(path: &std::path::Path) -> Option<GripOverrides> {
         let text = std::fs::read_to_string(path).ok()?;
         let path = path.display();
-        match serde_json::from_str::<GripLibrary>(&text) {
-            Ok(library) if library.version == 1 => {
-                let entries = library.entries.len();
-                println!("SHOCK2QUEST_VR_GRIP_OVERRIDES path={path} entries={entries}");
-                Some(library)
+        match serde_json::from_str::<GripOverrides>(&text) {
+            Ok(overrides) if overrides.grips.version == 1 => {
+                let entries = overrides.grips.entries.len();
+                let support = overrides.support.len();
+                println!(
+                    "SHOCK2QUEST_VR_GRIP_OVERRIDES path={path} entries={entries} support={support}"
+                );
+                Some(overrides)
             }
-            Ok(library) => {
-                let version = library.version;
+            Ok(overrides) => {
+                let version = overrides.grips.version;
                 println!("SHOCK2QUEST_VR_GRIP_OVERRIDES path={path} ignored=version_{version}");
                 None
             }
@@ -1186,13 +1202,18 @@ pub(crate) mod tests {
         library.entries.push(entry(1.0));
         let dir = crate::test_support::TempDir::new("grip-overrides");
         let path = dir.path().join(GRIP_OVERRIDES_FILE);
-        assert!(GripLibrary::load_overrides(&path).is_none(), "missing file");
+        assert!(GripOverrides::load(&path).is_none(), "missing file");
         std::fs::write(&path, "{not json").unwrap();
-        assert!(GripLibrary::load_overrides(&path).is_none(), "corrupt file");
+        assert!(GripOverrides::load(&path).is_none(), "corrupt file");
         let mut overrides = GripLibrary::default();
         overrides.entries.push(entry(0.5));
         std::fs::write(&path, serde_json::to_string(&overrides).unwrap()).unwrap();
-        library.prepend(GripLibrary::load_overrides(&path).unwrap());
+        let loaded = GripOverrides::load(&path).unwrap();
+        assert!(
+            loaded.support.is_empty(),
+            "a file from before support poses"
+        );
+        library.prepend(loaded.grips);
         assert_eq!(library.lookup("mug", "left").unwrap().item_scale, 0.5);
     }
 
