@@ -56,6 +56,10 @@ name = "android.permission.WRITE_EXTERNAL_STORAGE"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.READ_EXTERNAL_STORAGE"
 
+# Hand joints for the in-VR grip pose tool.
+[[package.metadata.android.uses_permission]]
+name = "com.oculus.permission.HAND_TRACKING"
+
 # Optional so ordinary VR remains usable when passthrough is unavailable.
 [[package.metadata.android.uses_feature]]
 name = "com.oculus.feature.PASSTHROUGH"

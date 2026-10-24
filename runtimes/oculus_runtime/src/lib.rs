@@ -148,6 +148,7 @@ fn main() {
     enabled_extensions.khr_opengl_es_enable = true;
     enabled_extensions.fb_display_refresh_rate = true;
     enabled_extensions.fb_passthrough = available_extensions.fb_passthrough;
+    enabled_extensions.ext_hand_tracking = available_extensions.ext_hand_tracking;
     foveation::enable_extensions(&available_extensions, &mut enabled_extensions);
     #[cfg(target_os = "android")]
     {
@@ -333,6 +334,18 @@ fn main() {
     let _local_space = session
         .create_reference_space(xr::ReferenceSpaceType::LOCAL, xr::Posef::IDENTITY)
         .unwrap();
+
+    // Tracked hand joints for the in-VR grip pose tool; controllers still
+    // drive play. Missing support just leaves `Hand::joints` empty.
+    let hand_trackers = if xr_instance.supports_hand_tracking(system).unwrap_or(false) {
+        [xr::Hand::LEFT, xr::Hand::RIGHT].map(|hand| session.create_hand_tracker(hand).ok())
+    } else {
+        [None, None]
+    };
+    println!(
+        "SHOCK2QUEST_HAND_TRACKING available={}",
+        hand_trackers.iter().all(Option::is_some)
+    );
 
     let _right_hand_path = xr_instance.string_to_path("/user/hand/right").unwrap();
     let action_set = xr_instance
@@ -1287,6 +1300,28 @@ fn main() {
         input_context.left_hand.trigger_value = left_trigger_value;
         input_context.left_hand.squeeze_value = left_squeeze_value;
         input_context.left_hand.thumbstick = vec2(left_thumbstick_value.x, left_thumbstick_value.y);
+        // Joints only when every one is located: a partly valid hand would
+        // capture as a broken pose.
+        let [left_joints, right_joints] = hand_trackers.each_ref().map(|tracker| {
+            let locations = stage
+                .locate_hand_joints(tracker.as_ref()?, xr_frame_state.predicted_display_time)
+                .ok()??;
+            locations
+                .iter()
+                .all(|joint| {
+                    joint
+                        .location_flags
+                        .contains(xr::SpaceLocationFlags::POSITION_VALID)
+                })
+                .then(|| {
+                    locations.map(|joint| {
+                        let p = joint.pose.position;
+                        tracking.stage_to_pawn(vec3(p.x, p.y, p.z))
+                    })
+                })
+        });
+        input_context.left_hand.joints = left_joints;
+        input_context.right_hand.joints = right_joints;
         // Jump is a hand's LOWER face button now, which arrives as an action
         // and is resolved per hand - so no runtime channel drives it in VR.
         input_context.jump = false;

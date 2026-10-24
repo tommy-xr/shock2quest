@@ -525,6 +525,9 @@ pub struct InputHand {
     pub world_target: Option<[f32; 3]>,
     /// Where the game puts this hand's calibrated grip point (VR only).
     pub world_position: Option<[f32; 3]>,
+    /// Tracked hand joints (`joints` channel), pawn-local; omitted when untracked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joints: Option<Vec<[f32; 3]>>,
 }
 
 impl Default for InputState {
@@ -561,6 +564,7 @@ impl Default for InputHand {
             a_value: 0.0,
             world_target: None,
             world_position: None,
+            joints: None,
         }
     }
 }

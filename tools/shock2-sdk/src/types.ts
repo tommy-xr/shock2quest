@@ -55,6 +55,8 @@ export interface InputHandState {
   world_target: Vec3 | null;
   /** Where the game puts the hand's calibrated grip point (VR only). */
   world_position: Vec3 | null;
+  /** Tracked hand joints (`<hand>_hand.joints`, XR_EXT_hand_tracking order), pawn-local; absent when untracked. */
+  joints?: Vec3[];
 }
 
 /** The runtime-owned input state (GET /v1/control/input). */
