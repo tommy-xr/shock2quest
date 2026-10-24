@@ -512,23 +512,26 @@ impl GripPoseTool {
     }
 
     /// The posing glove on a primary grip whose snapshot keeps the placement
-    /// is drawn at that placement, only its fingers following the hand: what
-    /// is seen is what the snapshot stores.
+    /// is drawn as that snapshot would store it (`kept_glove`).
     fn live_at_placement(&self) -> bool {
         !self.support && !self.places()
     }
 
-    /// Where tracked glove `index` is drawn: on its tracked palm, or for the
-    /// posing hand at the kept placement (`live_at_placement`).
-    pub fn live_glove_pose(&self, index: usize, glove: &TrackedGlove) -> GripPose {
-        if index == self.posing() && self.live_at_placement() {
-            self.hand_pose
-        } else {
-            GripPose {
-                position: glove.fit.position,
-                rotation: glove.fit.rotation,
-            }
-        }
+    /// Tracked glove `index` drawn as a snapshot of it would store it, when
+    /// that keeps `grip`'s placement: at the stored glove, with the slot's
+    /// fingers from the live hand (a trigger slot's live index over the
+    /// rest). `None`: drawn as tracked.
+    pub fn kept_glove(
+        &self,
+        index: usize,
+        glove: &TrackedGlove,
+        grip: Option<&ResolvedGrip>,
+    ) -> Option<(GripPose, FingerPose)> {
+        let grip = grip.filter(|_| index == self.posing() && self.live_at_placement())?;
+        Some((
+            self.hand_pose,
+            slot_fingers(self.slot, &grip.fingers, glove.fit.bones),
+        ))
     }
 
     /// The trigger value the posed glove is drawn at: test hold's controller
@@ -816,10 +819,8 @@ impl GripPoseTool {
                 .take()
                 .map(|nudge| nudge.item())
                 .filter(|released| {
-                    millimetres((released.position - item.position).magnitude()) > NUDGE_MIN_MM
-                        || crate::weapon_muzzle::turn_deg(
-                            item.rotation.normalize().conjugate() * released.rotation,
-                        ) > NUDGE_MIN_DEG
+                    let (mm, deg) = pose_offset(item, *released);
+                    mm > NUDGE_MIN_MM || deg > NUDGE_MIN_DEG
                 })
         };
         self.squeezed = squeeze;
@@ -1133,6 +1134,14 @@ impl TrackedGlove {
     pub fn tip_error_mm(&self) -> [f32; 5] {
         self.fit.tip_errors.map(millimetres)
     }
+
+    /// The glove's pose on the tracked palm.
+    pub fn palm(&self) -> GripPose {
+        GripPose {
+            position: self.fit.position,
+            rotation: self.fit.rotation,
+        }
+    }
 }
 
 pub(super) fn tracked_glove(
@@ -1185,7 +1194,8 @@ fn named_glove(
 /// as an open glove, and the posing gloves again in every extra view. While
 /// the posing hand is tracked its live glove replaces the saved grip's, which
 /// would only be in its way; a staged grip shows as the preview, unless the
-/// live glove is drawn on it (`live_glove_pose`).
+/// live glove is drawn as a rest snapshot keeping it would store it
+/// (`kept_glove`).
 /// In support mode the posed glove is `support` (its saved or staged pose)
 /// and the grip hand's glove is drawn frozen at its grip.
 pub(super) fn render(
@@ -1201,7 +1211,10 @@ pub(super) fn render(
     let mut posing_tracked = false;
     for (index, glove) in tool.gloves.iter().enumerate() {
         let Some(glove) = glove else { continue };
-        let at = tool.live_glove_pose(index, glove);
+        let (at, shape) = match tool.kept_glove(index, glove, grip) {
+            Some((at, fingers)) => (at, fingers.hand_shape_at(tool.preview_trigger())),
+            None => (glove.palm(), HandShape::Pose(glove.pose.clone())),
+        };
         let drawn = renderer.render_hand(
             at.position,
             at.rotation,
@@ -1210,7 +1223,7 @@ pub(super) fn render(
             0.0,
             false,
             None,
-            Some((HandShape::Pose(glove.pose.clone()), 1.0)),
+            Some((shape, 1.0)),
             HandLight::Off,
             lights.clone(),
         );
@@ -1232,8 +1245,9 @@ pub(super) fn render(
     } else {
         (held, None)
     };
-    // A live glove at the kept placement is itself the preview.
-    let preview = tool.staged.is_some() && !tool.live_at_placement();
+    // A live glove at a kept rest placement is itself the preview. A trigger
+    // slot's staged glove stays, so an Index step shows while tracked.
+    let preview = tool.staged.is_some() && !(tool.live_at_placement() && tool.slot == Slot::Rest);
     if let Some((pose, shape)) = posed_glove.filter(|_| preview || !posing_tracked) {
         let hand = handedness(tool.posing());
         posed.extend(named_glove(
@@ -1459,14 +1473,12 @@ pub(super) fn captured_grip(
     )
 }
 
-/// How far a snapshot leaves the glove (`left`) from the live tracked one
-/// (`live`): physical millimetres at the active world scale, and degrees.
-pub(super) fn snapshot_offset(live: GripPose, left: GripPose) -> (f32, f32) {
+/// How far `b` is from `a`: physical millimetres at the active world scale,
+/// and degrees.
+pub(super) fn pose_offset(a: GripPose, b: GripPose) -> (f32, f32) {
     (
-        millimetres((left.position - live.position).magnitude()),
-        crate::weapon_muzzle::turn_deg(
-            left.rotation.normalize().conjugate() * live.rotation.normalize(),
-        ),
+        millimetres((b.position - a.position).magnitude()),
+        crate::weapon_muzzle::turn_deg(a.rotation.normalize().conjugate() * b.rotation.normalize()),
     )
 }
 

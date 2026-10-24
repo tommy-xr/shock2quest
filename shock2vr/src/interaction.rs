@@ -1776,16 +1776,13 @@ impl VrInteraction {
         let Some(tool) = self.pose_tool.as_mut() else {
             return false;
         };
-        // The glove now sits where the tracked hand held the item. The grip
-        // previews in place while the mission is frozen; it refits from the
-        // library when the workbench closes.
+        // The glove now sits where the snapshot leaves it: the tracked palm
+        // when placed, else unchanged. The grip previews in place while the
+        // mission is frozen; it refits from the library when the workbench
+        // closes.
         tool.hand_pose = hand_pose;
-        // How far the glove now is from the tracked hand: ~0 when placed.
-        let live = GripPose {
-            position: fitted.fit.position,
-            rotation: fitted.fit.rotation,
-        };
-        let (offset_mm, turn_deg) = pose_tool::snapshot_offset(live, hand_pose);
+        // How far that is from the tracked hand: ~0 when placed.
+        let (offset_mm, turn_deg) = pose_tool::pose_offset(fitted.palm(), hand_pose);
         println!(
             "SHOCK2QUEST_VR_GRIP_POSE_TOOL snapshot_offset_mm={offset_mm:.1} snapshot_turn_deg={turn_deg:.1} placed={places}"
         );
@@ -4292,19 +4289,26 @@ mod tests {
         interaction.pose_tool.as_mut().unwrap().staged = None;
         let world = World::new();
         let glove = tracked_glove(0.3);
-        let palm = GripPose {
-            position: glove.fit.position,
-            rotation: glove.fit.rotation,
-        };
+        let palm = glove.palm();
         let at = |a: GripPose, b: GripPose| {
-            let (mm, deg) = pose_tool::snapshot_offset(a, b);
+            let (mm, deg) = pose_tool::pose_offset(a, b);
             mm < 0.01 && deg < 0.01
         };
+        // Where and with what fingers tracked glove `index` is drawn (`None`:
+        // its own tracked fingers).
+        let drawn = |interaction: &VrInteraction, index: usize, glove: &pose_tool::TrackedGlove| {
+            let tool = interaction.pose_tool.as_ref().unwrap();
+            let grip = interaction.fitted_grips[1]
+                .as_ref()
+                .unwrap()
+                .resolved
+                .as_ref();
+            tool.kept_glove(index, glove, grip)
+                .map_or((glove.palm(), None), |(at, fingers)| (at, Some(fingers)))
+        };
 
-        let tool = interaction.pose_tool.as_mut().unwrap();
-        let posing = tool.posing();
-        assert!(!tool.keep_placement, "placement captured by default");
-        assert!(at(tool.live_glove_pose(posing, &glove), palm));
+        let posing = interaction.pose_tool.as_ref().unwrap().posing();
+        assert!(at(drawn(&interaction, posing, &glove).0, palm));
         assert!(interaction.capture_grip(&world, Some(&glove)));
         let tool = interaction.pose_tool.as_mut().unwrap();
         assert!(at(tool.hand_pose, palm), "the snapshot lands on the palm");
@@ -4317,37 +4321,60 @@ mod tests {
         };
         tool.hand_pose = stored;
         tool.keep_placement = true;
+        let (pose, fingers) = drawn(&interaction, posing, &glove);
         assert!(
-            at(tool.live_glove_pose(posing, &glove), stored),
+            at(pose, stored),
             "drawn at the stored placement, not the tracked palm"
         );
+        assert_eq!(
+            fingers.map(|f| f.rest_bones()),
+            Some(glove.fit.bones),
+            "with the live fingers"
+        );
         assert!(
-            at(tool.live_glove_pose(1 - posing, &glove), palm),
+            at(drawn(&interaction, 1 - posing, &glove).0, palm),
             "the free hand stays on its palm"
         );
         assert!(interaction.capture_grip(&world, Some(&glove)));
-        let tool = interaction.pose_tool.as_mut().unwrap();
+        let tool = interaction.pose_tool.as_ref().unwrap();
         assert!(at(tool.hand_pose, stored), "no jump on the snapshot");
-        assert!(at(tool.live_glove_pose(posing, &glove), stored));
-        // And the live fingers (drawn from `glove.pose`) are the ones stored,
-        // so the tips seen are where the snapshot leaves them.
-        let posed = interaction.fitted_grips[1].as_ref().unwrap();
-        assert_eq!(
-            posed.resolved.as_ref().unwrap().fingers.rest_bones(),
-            glove.fit.bones
-        );
-        let (mm, deg) = pose_tool::snapshot_offset(palm, tool.hand_pose);
+        let (mm, deg) = pose_tool::pose_offset(palm, tool.hand_pose);
         assert!(
             (mm - 30.0).abs() < 0.01 && (deg - 10.0).abs() < 0.01,
             "{mm} mm {deg} deg"
         );
+        // What was drawn is what was stored: the tips seen are where the
+        // snapshot leaves them.
+        let (pose, fingers) = drawn(&interaction, posing, &glove);
+        assert!(at(pose, stored));
+        let stored_grip = interaction.fitted_grips[1].as_ref().unwrap();
+        assert_eq!(
+            fingers.as_ref(),
+            Some(&stored_grip.resolved.as_ref().unwrap().fingers)
+        );
 
-        // The trigger slot keeps it too; a support pose is taken where tracked.
+        // The trigger slot keeps it too, drawing the live index over the
+        // stored rest: what a trigger snapshot stores.
+        let tool = interaction.pose_tool.as_mut().unwrap();
         tool.keep_placement = false;
         assert!(tool.toggle_slot());
-        assert!(at(tool.live_glove_pose(posing, &glove), stored));
-        tool.set_support(true);
-        assert!(at(tool.live_glove_pose(tool.posing(), &glove), palm));
+        let pulled = tracked_glove(1.0);
+        let (pose, fingers) = drawn(&interaction, posing, &pulled);
+        assert!(at(pose, stored));
+        assert_eq!(
+            fingers,
+            Some(crate::vr_grip::FingerPose::Bones {
+                bones: glove.fit.bones,
+                trigger_bones: Some(crate::vr_grip::with_index(
+                    &glove.fit.bones,
+                    &pulled.fit.bones
+                )),
+            })
+        );
+        // A support pose is drawn where tracked.
+        interaction.pose_tool.as_mut().unwrap().set_support(true);
+        let support = interaction.pose_tool.as_ref().unwrap().posing();
+        assert_eq!(drawn(&interaction, support, &glove).1, None);
     }
 
     /// The Index steps set the trigger pose to the rest with the index a
