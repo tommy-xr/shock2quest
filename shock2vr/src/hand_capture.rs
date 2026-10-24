@@ -163,7 +163,7 @@ pub(crate) fn recorded_hands(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::hand_pose::{FingerAmounts, fist_right_hand};
     use cgmath::{Deg, Rotation3, vec3};
@@ -247,7 +247,7 @@ mod tests {
     /// A right hand as OpenXR reports one, built by hand rather than from the
     /// pose data: palm down (-Y), fingers forward (-Z), thumb on the left (-X).
     /// `index_curl` folds the index finger's joints down toward the palm side.
-    fn openxr_right_hand(index_curl: f32) -> HandJoints {
+    pub(crate) fn openxr_right_hand(index_curl: f32) -> HandJoints {
         let mut joints = [Vector3::new(0.0, 0.0, 0.0); HAND_JOINT_COUNT];
         joints[0] = vec3(0.0, 0.0, -0.05);
         joints[1] = vec3(0.0, 0.0, 0.0);

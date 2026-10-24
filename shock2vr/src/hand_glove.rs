@@ -182,8 +182,20 @@ impl GloveRenderer {
     }
 
     /// The glove's 26 skin joints (SteamVR order, so `XR_EXT_hand_tracking`
-    /// order too) posed with `pose`, in calibrated hand space.
+    /// order too) posed with `pose`, in calibrated hand space as drawn: at the
+    /// world scale's personal size, like tracked joints.
     pub(crate) fn posed_joints(
+        &mut self,
+        pose: &Pose,
+        handedness: Handedness,
+    ) -> crate::hand_capture::HandJoints {
+        let personal = crate::world_scale::WorldScale::active().personal();
+        self.authored_joints(pose, handedness)
+            .map(|joint| joint * personal)
+    }
+
+    /// `posed_joints` in authored units (world scale 1), as grips are fitted.
+    fn authored_joints(
         &mut self,
         pose: &Pose,
         handedness: Handedness,
@@ -199,7 +211,7 @@ impl GloveRenderer {
     }
 
     /// The joints of a glove drawn fully in `shape` (as `render_hand` draws
-    /// a fitted shape at blend 1), in calibrated hand space.
+    /// a fitted shape at blend 1), in calibrated hand space as drawn.
     pub(crate) fn shape_joints(
         &mut self,
         shape: &HandShape,
@@ -212,15 +224,18 @@ impl GloveRenderer {
         self.posed_joints(&pose, handedness)
     }
 
-    /// The open glove's joints in calibrated hand space, to match against a
-    /// tracked hand.
+    /// The open glove's joints in calibrated hand space as drawn, to match
+    /// against a tracked hand.
     pub fn open_joints(&mut self, handedness: Handedness) -> crate::hand_capture::HandJoints {
         let slot = handedness as usize;
         if self.open_joints[slot].is_none() {
             let open = self.open.clone();
-            self.open_joints[slot] = Some(self.posed_joints(&open, handedness));
+            self.open_joints[slot] = Some(self.authored_joints(&open, handedness));
         }
-        self.open_joints[slot].unwrap()
+        let personal = crate::world_scale::WorldScale::active().personal();
+        self.open_joints[slot]
+            .unwrap()
+            .map(|joint| joint * personal)
     }
 
     /// Sample the renderer's actual retargeted finger arcs once for fitting.
@@ -231,7 +246,7 @@ impl GloveRenderer {
         let mut closed_joints = Vec::new();
         for step in 0..=CURL_STEPS {
             let pose = self.open.blend(&self.fist, step as f32 / CURL_STEPS as f32);
-            let joints = self.posed_joints(&pose, handedness);
+            let joints = self.authored_joints(&pose, handedness);
             if step == 0 {
                 open_joints = joints.to_vec();
             }
