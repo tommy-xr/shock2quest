@@ -243,6 +243,10 @@ impl crate::game_scene::GameScene for Mission {
             .update_pose_workbench(elapsed, input, actions);
     }
 
+    fn hold_pose_workbench(&mut self) {
+        self.mission_core.hold_pose_workbench();
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }

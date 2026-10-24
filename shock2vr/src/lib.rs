@@ -1975,6 +1975,8 @@ impl Game {
             if workbench && !self.pause_menu.suspends_scene() {
                 self.active_game_scene
                     .update_pose_workbench(time.elapsed, input_context, actions);
+            } else if workbench {
+                self.active_game_scene.hold_pose_workbench();
             }
             actions.clear_triggered();
             return;

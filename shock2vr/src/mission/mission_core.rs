@@ -669,6 +669,16 @@ mod loot_table_tests {
     }
 }
 
+/// Send the grip pose workbench's controller pulses out with the frame's
+/// haptics.
+fn request_pulses(world: &World, pulses: Vec<(crate::Handedness, crate::haptics::HapticPulse)>) {
+    if let Ok(mut feedback) = world.borrow::<UniqueViewMut<crate::haptics::HapticFeedback>>() {
+        for (hand, pulse) in pulses {
+            feedback.request(hand, pulse);
+        }
+    }
+}
+
 /// The grip pose workbench's scene, built from the mission's draws of its held
 /// item (`scene`): the item on the workbench instead of in its frozen hand,
 /// again in each extra view, and the workbench's room. Nothing else of the
@@ -25495,6 +25505,7 @@ impl crate::game_scene::GameScene for MissionCore {
             match effect {
                 Effect::ToggleGripPoseTool => {
                     self.interaction.toggle_grip_pose_tool();
+                    request_pulses(&self.world, self.interaction.take_pose_tool_pulses());
                     return;
                 }
                 Effect::HandButton { hand, button } => {
@@ -25523,6 +25534,11 @@ impl crate::game_scene::GameScene for MissionCore {
             floor_y,
             elapsed.as_secs_f32(),
         );
+        request_pulses(&self.world, self.interaction.take_pose_tool_pulses());
+    }
+
+    fn hold_pose_workbench(&mut self) {
+        self.interaction.hold_pose_workbench();
     }
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {

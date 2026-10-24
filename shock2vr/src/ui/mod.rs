@@ -339,21 +339,32 @@ pub fn ray_to_canvas(
         return None;
     }
 
-    let hit = ray_origin + ray_direction * distance;
-    let local = hit - panel.center;
+    point_to_canvas(canvas_size, panel, ray_origin + ray_direction * distance).0
+}
+
+/// Where a world point lies over `panel`, in canvas pixels (`None` beyond its
+/// edges), and how far it is in front of the panel's face (world units,
+/// negative behind).
+pub fn point_to_canvas(
+    canvas_size: Vector2<f32>,
+    panel: &WorldPanel,
+    point: Vector3<f32>,
+) -> (Option<Vector2<f32>>, f32) {
     // Undo the panel's rotation to get panel-local axes.
-    let inverse = panel.rotation.conjugate();
-    let local = inverse.rotate_vector(local);
+    let local = panel
+        .rotation
+        .conjugate()
+        .rotate_vector(point - panel.center);
 
     // Panel-local -> [0,1] with the origin at the top-left, matching the
     // canvas convention (y grows downward on the canvas, upward in the world).
     let u = local.x / panel.size.x + 0.5;
     let v = 0.5 - local.y / panel.size.y;
-    if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
-        return None;
-    }
-
-    Some(vec2(u * canvas_size.x, v * canvas_size.y))
+    let on_face = (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v);
+    (
+        on_face.then(|| vec2(u * canvas_size.x, v * canvas_size.y)),
+        local.z,
+    )
 }
 
 /// Where a canvas point sits in world space on `panel` - the exact inverse of
