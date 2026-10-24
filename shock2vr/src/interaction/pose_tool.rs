@@ -5,9 +5,9 @@
 //! button test-holds it (the posing hand's controller holds the item as play
 //! would) and its upper button discards it, and its squeeze turns the bench
 //! to examine it, or in test hold carries the item to nudge the grip (the
-//! item is held where it is let go). A capture is exactly the tracked hand;
-//! a gun's aim correction is the glove's turn off its controller
-//! (`ResolvedGrip::hand_rotation`), set by Align.
+//! item is held where it is let go). A capture places the glove exactly where
+//! the tracked hand is and keeps the glove's turn off its controller
+//! (`ResolvedGrip::hand_rotation`: a gun's aim correction, set by Align).
 //! A panel beside the bench (`panel`) shows the state, saves, and repeats
 //! the controls. Its slot button picks which pose a snapshot sets: the rest
 //! grip, or the fingers with the trigger pulled (`Slot`).
@@ -524,16 +524,6 @@ impl GripPoseTool {
         true
     }
 
-    /// Whether the trigger index steps can act, or why not: they edit the
-    /// primary grip's trigger pose.
-    pub fn index_entry(&self) -> Result<(), String> {
-        if self.support {
-            Err("primary grip only".to_owned())
-        } else {
-            Ok(())
-        }
-    }
-
     /// Whether Tighten can act, or why not: on the primary grip, against a
     /// known item mesh.
     pub fn tighten_entry(&self) -> Result<(), String> {
@@ -790,7 +780,6 @@ impl GripPoseTool {
             keep_placement: self.keep_placement,
             placement_entry: self.placement_entry(),
             trigger_index: self.trigger_index,
-            index_entry: self.index_entry(),
             tighten: self.tighten_entry(),
             staged: self.staged.is_some(),
             fingertip: self.fingertip,
@@ -1791,7 +1780,6 @@ mod tests {
         tool.set_support(true);
         assert_eq!(tool.slot, Slot::Rest);
         assert_eq!(tool.slot_entry(), Err("primary grip only".to_owned()));
-        assert_eq!(tool.index_entry(), Err("primary grip only".to_owned()));
         assert!(!tool.toggle_slot());
     }
 
