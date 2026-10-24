@@ -376,18 +376,19 @@ impl FingerPose {
         match self {
             FingerPose::Curls { curls, .. } => {
                 let mut pressed = *curls;
-                pressed[1] += amount * (1.0 - pressed[1]);
+                pressed[1] = moved_curl(pressed[1], amount);
                 FingerPose::Curls {
                     curls: *curls,
                     trigger_curls: pulled.then_some(pressed),
                 }
             }
             FingerPose::Bones { bones, .. } => {
-                let fist = fist_right_hand().finger_bones();
-                let mut pressed = *bones;
-                for i in FINGER_BONES[1].clone() {
-                    pressed[i] = bones[i].slerp(fist[i], amount);
-                }
+                let pressed = moved_fingers(
+                    bones,
+                    &[0.0, amount, 0.0, 0.0, 0.0],
+                    &open_right_hand().finger_bones(),
+                    &fist_right_hand().finger_bones(),
+                );
                 FingerPose::Bones {
                     bones: *bones,
                     trigger_bones: pulled.then_some(pressed),
@@ -563,6 +564,70 @@ pub fn blended_curls(rest: [f32; 5], pressed: Option<[f32; 5]>, trigger: f32) ->
     let amount = trigger_amount(trigger);
     let pressed = pressed.unwrap_or(rest);
     std::array::from_fn(|i| rest[i] + (pressed[i] - rest[i]) * amount)
+}
+
+/// How far off the item `GripSurface::tighten` leaves a finger: snug, never
+/// through.
+pub const TIGHTEN_CLEARANCE: f32 = 0.001 / crate::METERS_PER_WORLD_UNIT;
+/// Tighten scans each finger's arc in this many steps (a fingertip moves a
+/// few millimetres per step, under the finger's radius), then bisects.
+const TIGHTEN_STEPS: usize = 48;
+const TIGHTEN_REFINE: usize = 12;
+
+/// What `GripSurface::tighten` did with one finger.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FingerFit {
+    /// Not asked to move.
+    Skipped,
+    /// Moved `amount` of the way toward a fist (negative: toward open) to
+    /// rest `gap` (world units) off the item, nearest it at `contact`
+    /// (item-local). Already snug: `amount` 0.
+    Touching {
+        amount: f32,
+        gap: f32,
+        contact: [f32; 3],
+    },
+    /// Nothing in reach all the way to a fist: left as it was.
+    NoContact,
+    /// Through the item even fully open: left as it was.
+    Stuck,
+}
+
+/// A grip with its fingers closed onto the item, and what each finger did.
+pub struct Tightened {
+    pub grip: ResolvedGrip,
+    pub fingers: [FingerFit; 5],
+}
+
+/// `bones` with each finger moved `amounts[finger]` along its own arc: toward
+/// `fist` (0..=1) or `open` (-1..0), so a captured shape keeps its character.
+fn moved_fingers(
+    bones: &FingerBones,
+    amounts: &[f32; 5],
+    open: &FingerBones,
+    fist: &FingerBones,
+) -> FingerBones {
+    let mut moved = *bones;
+    for (finger, &amount) in amounts.iter().enumerate() {
+        if amount == 0.0 {
+            continue;
+        }
+        let target = if amount > 0.0 { fist } else { open };
+        for i in FINGER_BONES[finger].clone() {
+            moved[i] = bones[i].slerp(target[i], amount.abs());
+        }
+    }
+    moved
+}
+
+/// `moved_fingers` for a curl: the open -> fist blend is a slerp per bone,
+/// so moving along it is linear in the curl.
+fn moved_curl(curl: f32, amount: f32) -> f32 {
+    if amount >= 0.0 {
+        curl + amount * (1.0 - curl)
+    } else {
+        curl * (1.0 + amount)
+    }
 }
 
 pub struct GripSurface {
@@ -970,6 +1035,228 @@ impl GripSurface {
             anchor: [0.0; 3],
             score,
         }
+    }
+
+    /// Close each finger chosen in `fingers` from where `grip` has it until
+    /// it rests `TIGHTEN_CLEARANCE` off the item; one already through it
+    /// opens out to there instead. Each moves along its own arc from its
+    /// current shape toward a fist (or the open hand), so a captured shape
+    /// is kept. A finger with nothing in reach all the way to a fist, or
+    /// through the item even fully open, is left as it was. The placement is
+    /// untouched and curls stay curls. `pressed` tightens the trigger pose
+    /// (from the rest if there is none) and leaves the rest; otherwise the
+    /// rest, and a trigger pose's chosen fingers but its index follow it.
+    /// `samples` gives each finger's fitting samples for a bone pose in the
+    /// glove's frame at authored size, as `GripKinematics` samples them;
+    /// `grip` is in authored units too.
+    pub fn tighten(
+        &self,
+        grip: &ResolvedGrip,
+        pressed: bool,
+        fingers: [bool; 5],
+        mut samples: impl FnMut(&FingerBones) -> [Vec<Vector3<f32>>; 5],
+    ) -> Tightened {
+        let start = grip
+            .fingers
+            .at(if pressed { 1.0 } else { 0.0 })
+            .rest_bones();
+        let open = open_right_hand().finger_bones();
+        let fist = fist_right_hand().finger_bones();
+        let mut gaps = |amounts: &[f32; 5]| -> [(f32, [f32; 3]); 5] {
+            let points = samples(&moved_fingers(&start, amounts, &open, &fist));
+            std::array::from_fn(|finger| self.finger_gap(grip, &points[finger]))
+        };
+        let touching = |(gap, _): (f32, [f32; 3])| gap <= TIGHTEN_CLEARANCE;
+        // Per finger: the direction to move (+1 closes, -1 opens), and once
+        // found, the clear amount and the touching one either side of contact.
+        let initial = gaps(&[0.0; 5]);
+        let mut result = [FingerFit::Skipped; 5];
+        let mut direction = [0.0f32; 5];
+        let mut bracket: [Option<(f32, f32)>; 5] = [None; 5];
+        for finger in (0..5).filter(|&f| fingers[f]) {
+            let (gap, contact) = initial[finger];
+            if gap < 0.0 {
+                direction[finger] = -1.0;
+            } else if gap <= TIGHTEN_CLEARANCE {
+                result[finger] = FingerFit::Touching {
+                    amount: 0.0,
+                    gap,
+                    contact,
+                };
+            } else {
+                direction[finger] = 1.0;
+            }
+        }
+        let searching = |bracket: &[Option<(f32, f32)>; 5], direction: &[f32; 5], f: usize| {
+            direction[f] != 0.0 && bracket[f].is_none()
+        };
+        for step in 1..=TIGHTEN_STEPS {
+            if !(0..5).any(|f| searching(&bracket, &direction, f)) {
+                break;
+            }
+            let along = step as f32 / TIGHTEN_STEPS as f32;
+            let previous = (step - 1) as f32 / TIGHTEN_STEPS as f32;
+            let amounts = std::array::from_fn(|f| match bracket[f] {
+                Some((clear, _)) => clear,
+                None => direction[f] * along,
+            });
+            let at = gaps(&amounts);
+            for f in 0..5 {
+                if !searching(&bracket, &direction, f) {
+                    continue;
+                }
+                let (here, before) = (direction[f] * along, direction[f] * previous);
+                // Closing stops at the first touch; opening at the first clear.
+                bracket[f] = match (direction[f] > 0.0, touching(at[f])) {
+                    (true, true) => Some((before, here)),
+                    (false, false) => Some((here, before)),
+                    _ => None,
+                };
+            }
+        }
+        for _ in 0..TIGHTEN_REFINE {
+            let amounts = std::array::from_fn(|f| bracket[f].map_or(0.0, |(c, t)| (c + t) * 0.5));
+            let at = gaps(&amounts);
+            for f in 0..5 {
+                if let Some((clear, hit)) = bracket[f].as_mut() {
+                    let middle = (*clear + *hit) * 0.5;
+                    if touching(at[f]) {
+                        *hit = middle;
+                    } else {
+                        *clear = middle;
+                    }
+                }
+            }
+        }
+        let amounts = std::array::from_fn(|f| bracket[f].map_or(0.0, |(clear, _)| clear));
+        let at = gaps(&amounts);
+        for f in 0..5 {
+            if bracket[f].is_some() {
+                let (gap, contact) = at[f];
+                result[f] = FingerFit::Touching {
+                    amount: amounts[f],
+                    gap,
+                    contact,
+                };
+            } else if direction[f] > 0.0 {
+                result[f] = FingerFit::NoContact;
+            } else if direction[f] < 0.0 {
+                result[f] = FingerFit::Stuck;
+            }
+        }
+        // A trigger pose is the rest with its index pulled: the rest's moved
+        // fingers carry over, its own index stays.
+        let follows = |f: usize| f != 1 && fingers[f];
+        let fingers_pose = match &grip.fingers {
+            FingerPose::Curls {
+                curls,
+                trigger_curls,
+            } => {
+                let moved = |c: [f32; 5]| std::array::from_fn(|f| moved_curl(c[f], amounts[f]));
+                if pressed {
+                    let base = trigger_curls.unwrap_or(*curls);
+                    let tightened = moved(base);
+                    FingerPose::Curls {
+                        curls: *curls,
+                        trigger_curls: (trigger_curls.is_some() || tightened != base)
+                            .then_some(tightened),
+                    }
+                } else {
+                    let rest: [f32; 5] = moved(*curls);
+                    FingerPose::Curls {
+                        curls: rest,
+                        trigger_curls: trigger_curls.map(|pulled| {
+                            std::array::from_fn(|f| if follows(f) { rest[f] } else { pulled[f] })
+                        }),
+                    }
+                }
+            }
+            FingerPose::Bones {
+                bones,
+                trigger_bones,
+            } => {
+                if pressed {
+                    let base = trigger_bones.unwrap_or(*bones);
+                    let tightened = moved_fingers(&base, &amounts, &open, &fist);
+                    FingerPose::Bones {
+                        bones: *bones,
+                        trigger_bones: (trigger_bones.is_some() || tightened != base)
+                            .then_some(tightened),
+                    }
+                } else {
+                    let rest = moved_fingers(bones, &amounts, &open, &fist);
+                    FingerPose::Bones {
+                        bones: rest,
+                        trigger_bones: trigger_bones.map(|mut pulled| {
+                            for f in (0..5).filter(|&f| follows(f)) {
+                                for i in FINGER_BONES[f].clone() {
+                                    pulled[i] = rest[i];
+                                }
+                            }
+                            pulled
+                        }),
+                    }
+                }
+            }
+        };
+        // Contacts describe the rest pose: a rest tighten refreshes its fingers'.
+        let mut contacts = grip.contacts;
+        if !pressed {
+            for f in (0..5).filter(|&f| fingers[f]) {
+                contacts[f] = match result[f] {
+                    FingerFit::Touching { contact, .. } => Some(contact),
+                    _ => None,
+                };
+            }
+        }
+        Tightened {
+            grip: ResolvedGrip {
+                fingers: fingers_pose,
+                contacts,
+                ..grip.clone()
+            },
+            fingers: result,
+        }
+    }
+
+    /// How far a finger's samples (glove frame) are off the item, in world
+    /// units past the finger's radius, and the item-local point nearest
+    /// them. Negative is through it: inside a closed mesh, or a finger
+    /// segment crossing a surface (its axis on it, so at most -radius).
+    fn finger_gap(&self, grip: &ResolvedGrip, points: &[Vector3<f32>]) -> (f32, [f32; 3]) {
+        let inverse = grip.rotation.conjugate();
+        let local: Vec<_> = points
+            .iter()
+            .map(|p| inverse.rotate_vector(*p - grip.offset) / grip.item_scale)
+            .collect();
+        let mut nearest = (f32::INFINITY, [0.0; 3]);
+        for q in &local {
+            let p = na::Point3::new(q.x, q.y, q.z);
+            let projection = self.mesh.project_local_point_and_get_feature(&p).0;
+            let distance = (p - projection.point).norm() * grip.item_scale;
+            let inside = self.closed && projection.is_inside;
+            let gap = if inside { -distance } else { distance } - FINGER_RADIUS;
+            if gap < nearest.0 {
+                nearest = (
+                    gap,
+                    [projection.point.x, projection.point.y, projection.point.z],
+                );
+            }
+        }
+        let crosses = local.windows(2).any(|pair| {
+            let delta = pair[1] - pair[0];
+            delta.magnitude2() > 1e-10 && {
+                let ray = Ray::new(
+                    na::Point3::new(pair[0].x, pair[0].y, pair[0].z),
+                    na::Vector3::new(delta.x, delta.y, delta.z),
+                );
+                self.mesh.cast_local_ray(&ray, 1.0, false).is_some()
+            }
+        });
+        if crosses {
+            nearest.0 = nearest.0.min(-FINGER_RADIUS);
+        }
+        nearest
     }
 }
 
@@ -2336,5 +2623,191 @@ mod tests {
             offset(library.select("sg_h", Handedness::Left, true)),
             Some((1.0, false))
         );
+    }
+
+    fn metres(m: f32) -> f32 {
+        m / crate::METERS_PER_WORLD_UNIT
+    }
+
+    /// Each finger's curl read back off its bones: exact on the open -> fist arc.
+    fn curl_of(bones: &FingerBones, finger: usize) -> f32 {
+        let open = open_right_hand().finger_bones();
+        let fist = fist_right_hand().finger_bones();
+        let along = |a: &FingerBones, b: &FingerBones| -> f32 {
+            FINGER_BONES[finger]
+                .clone()
+                .map(|i| rotation_error(a[i], b[i]))
+                .sum()
+        };
+        along(&open, bones) / along(&open, &fist)
+    }
+
+    const FINGER_LENGTH: f32 = 0.08;
+
+    /// A rigid 8 cm finger per finger, side by side, pointing +z open and
+    /// swinging down to -y as it curls (90 degrees at a fist).
+    fn swinging_fingers(bones: &FingerBones) -> [Vec<Vector3<f32>>; 5] {
+        std::array::from_fn(|finger| {
+            let angle = curl_of(bones, finger) * std::f32::consts::FRAC_PI_2;
+            let along = vec3(0.0, -angle.sin(), angle.cos());
+            let pivot = vec3(metres(0.025 * finger as f32), 0.0, 0.0);
+            [0.25, 0.5, 0.75, 1.0]
+                .map(|s| pivot + along * metres(FINGER_LENGTH * s))
+                .to_vec()
+        })
+    }
+
+    /// A closed box with its top `drop` metres below the fingers' pivots.
+    fn slab(drop: f32) -> Vec<[Point3<f32>; 3]> {
+        let half = na::Vector3::new(metres(0.1), metres(0.05), metres(0.1));
+        let (vertices, indices) = rapier3d::prelude::Cuboid::new(half).to_trimesh();
+        let center = vec3(metres(0.05), -metres(drop) - half.y, metres(0.1));
+        indices
+            .iter()
+            .map(|t| {
+                t.map(|i| {
+                    let p = vertices[i as usize];
+                    Point3::from_vec(vec3(p.x, p.y, p.z) + center)
+                })
+            })
+            .collect()
+    }
+
+    /// The gap a swinging fingertip at `curl` leaves above `slab(drop)`.
+    fn tip_gap_mm(curl: f32, drop: f32) -> f32 {
+        let tip = FINGER_LENGTH * (curl * std::f32::consts::FRAC_PI_2).sin();
+        (drop - tip - 0.007) * 1000.0
+    }
+
+    fn held(fingers: FingerPose) -> ResolvedGrip {
+        ResolvedGrip {
+            item_scale: 1.0,
+            pose_family: "broad".to_owned(),
+            offset: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::one(),
+            hand_rotation: Quaternion::from_angle_y(cgmath::Deg(5.0)),
+            fingers,
+            contacts: [None; 5],
+            anchor: [0.0; 3],
+            score: 0.0,
+        }
+    }
+
+    fn assert_same_placement(a: &ResolvedGrip, b: &ResolvedGrip) {
+        assert_eq!(
+            (a.offset, a.rotation, a.hand_rotation, a.item_scale),
+            (b.offset, b.rotation, b.hand_rotation, b.item_scale)
+        );
+    }
+
+    #[test]
+    fn tighten_closes_an_open_finger_onto_the_surface_and_opens_one_through_it() {
+        let surface = GripSurface::new(&slab(0.05)).unwrap();
+        // Thumb open, index through the slab, the rest open but masked out.
+        let grip = held(FingerPose::curls([0.0, 0.6, 0.0, 0.0, 0.0]).to_bones());
+        let fingers = [true, true, false, false, false];
+        let out = surface.tighten(&grip, false, fingers, swinging_fingers);
+        assert_same_placement(&out.grip, &grip);
+        assert!(out.grip.is_valid(), "{:?}", out.grip);
+        let FingerPose::Bones { bones, .. } = &out.grip.fingers else {
+            panic!("bones stay bones");
+        };
+        for finger in [0, 1] {
+            let gap = tip_gap_mm(curl_of(bones, finger), 0.05);
+            assert!((0.9..1.2).contains(&gap), "finger {finger} {gap} mm off");
+            assert!(matches!(out.fingers[finger], FingerFit::Touching { .. }));
+            assert!(out.grip.contacts[finger].is_some());
+        }
+        let FingerFit::Touching { amount, .. } = out.fingers[1] else {
+            unreachable!()
+        };
+        assert!(amount < 0.0, "the index opened out: {amount}");
+        let before = grip.fingers.rest_bones();
+        for finger in 2..5 {
+            assert_eq!(out.fingers[finger], FingerFit::Skipped);
+            for i in FINGER_BONES[finger].clone() {
+                assert_eq!(bones[i], before[i], "masked finger {finger} unchanged");
+            }
+        }
+    }
+
+    #[test]
+    fn tighten_leaves_a_finger_with_nothing_in_reach_and_keeps_curls_curls() {
+        let surface = GripSurface::new(&slab(0.5)).unwrap();
+        let grip = held(FingerPose::curls([0.2; 5]));
+        let out = surface.tighten(&grip, false, [true; 5], swinging_fingers);
+        assert_eq!(out.fingers, [FingerFit::NoContact; 5]);
+        assert_eq!(out.grip.fingers, grip.fingers);
+        // A curl grip tightens its curls, onto the bones the bone grip gets.
+        let surface = GripSurface::new(&slab(0.05)).unwrap();
+        let curls = surface.tighten(&grip, false, [true; 5], swinging_fingers);
+        let bones = surface.tighten(
+            &held(grip.fingers.to_bones()),
+            false,
+            [true; 5],
+            swinging_fingers,
+        );
+        let FingerPose::Curls { curls: tight, .. } = curls.grip.fingers else {
+            panic!("curls stay curls");
+        };
+        assert!(valid_finger_curls(&tight) && tight.iter().all(|c| *c > 0.3), "{tight:?}");
+        assert_bones_eq(&curls_to_bones(tight), &bones.grip.fingers.rest_bones());
+    }
+
+    #[test]
+    fn tighten_measures_the_drawn_item_at_its_scale() {
+        // Half-size geometry drawn at twice the size is the same item.
+        let half: Vec<_> = slab(0.05)
+            .iter()
+            .map(|t| t.map(|p| Point3::from_vec(p.to_vec() * 0.5)))
+            .collect();
+        let grip = held(FingerPose::curls([0.0; 5]));
+        let scaled = ResolvedGrip {
+            item_scale: 2.0,
+            ..grip.clone()
+        };
+        let a = GripSurface::new(&slab(0.05))
+            .unwrap()
+            .tighten(&grip, false, [true; 5], swinging_fingers);
+        let b = GripSurface::new(&half)
+            .unwrap()
+            .tighten(&scaled, false, [true; 5], swinging_fingers);
+        let (FingerPose::Curls { curls: a, .. }, FingerPose::Curls { curls: b, .. }) =
+            (a.grip.fingers, b.grip.fingers)
+        else {
+            unreachable!()
+        };
+        assert!(a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3), "{a:?} {b:?}");
+    }
+
+    #[test]
+    fn tightening_the_trigger_pose_closes_only_its_index_and_keeps_the_rest() {
+        let surface = GripSurface::new(&slab(0.05)).unwrap();
+        let rest = FingerPose::curls([0.1, 0.0, 0.2, 0.2, 0.2]).to_bones();
+        let grip = held(rest.clone());
+        let out = surface.tighten(&grip, true, [false, true, false, false, false], swinging_fingers);
+        let FingerPose::Bones {
+            bones,
+            trigger_bones: Some(pulled),
+        } = &out.grip.fingers
+        else {
+            panic!("a trigger pose: {:?}", out.grip.fingers);
+        };
+        assert_eq!(*bones, rest.rest_bones(), "the rest is untouched");
+        assert_eq!(*pulled, with_index(bones, pulled), "only the index moves");
+        let gap = tip_gap_mm(curl_of(pulled, 1), 0.05);
+        assert!((0.9..1.2).contains(&gap), "{gap} mm");
+        assert_eq!(out.grip.contacts, grip.contacts, "contacts describe the rest");
+        // A rest tighten carries the moved fingers into the trigger pose but
+        // keeps its pulled index.
+        let again = surface.tighten(&out.grip, false, [true; 5], swinging_fingers);
+        let FingerPose::Bones {
+            bones: rest,
+            trigger_bones: Some(again_pulled),
+        } = &again.grip.fingers
+        else {
+            unreachable!()
+        };
+        assert_eq!(*again_pulled, with_index(rest, pulled));
     }
 }
