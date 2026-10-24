@@ -162,12 +162,6 @@ fn tighten_button(
     pressed: bool,
     tighten: impl FnOnce(&ResolvedGrip, bool, [bool; 5]) -> Result<shock2vr::vr_grip::Tightened, String>,
 ) -> Option<Result<String, String>> {
-    use shock2vr::vr_grip::FingerFit;
-    let fingers = if pressed {
-        [false, true, false, false, false]
-    } else {
-        [true; 5]
-    };
     if !ui
         .button("Tighten to surface")
         .on_hover_text(if pressed {
@@ -179,22 +173,18 @@ fn tighten_button(
     {
         return None;
     }
+    let fingers = shock2vr::vr_grip::tighten_fingers(pressed);
     Some(tighten(grip, pressed, fingers).map(|tightened| {
-        grip.fingers = tightened.grip.fingers;
-        grip.contacts = tightened.grip.contacts;
+        // As in VR: nothing moved, nothing changes (contacts included).
+        if tightened.grip.fingers != grip.fingers {
+            grip.fingers = tightened.grip.fingers;
+            grip.contacts = tightened.grip.contacts;
+        }
         let said: Vec<_> = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
             .into_iter()
             .zip(tightened.fingers)
-            .filter_map(|(name, fit)| {
-                let what = match fit {
-                    FingerFit::Skipped => return None,
-                    FingerFit::Touching { amount, .. } if amount > 0.0 => "closed",
-                    FingerFit::Touching { amount, .. } if amount < 0.0 => "opened",
-                    FingerFit::Touching { .. } => "already touching",
-                    FingerFit::NoContact => "nothing in reach",
-                };
-                Some(format!("{name} {what}"))
-            })
+            .filter(|(_, fit)| *fit != shock2vr::vr_grip::FingerFit::Skipped)
+            .map(|(name, fit)| format!("{name} {}", fit.outcome()))
             .collect();
         format!("Tightened: {}", said.join(", "))
     }))

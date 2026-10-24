@@ -144,17 +144,10 @@ pub(super) fn slot_fingers(slot: Slot, current: &FingerPose, captured: FingerBon
 /// item in millimetres (`-` where it touched nothing), e.g.
 /// `fingers=[closed,opened,snug,none,skip] contact_mm=[1.0,1.0,0.4,-,-]`.
 pub(super) fn tighten_log(fits: &[crate::vr_grip::FingerFit; 5]) -> String {
-    use crate::vr_grip::FingerFit;
-    let what = fits.map(|fit| match fit {
-        FingerFit::Skipped => "skip",
-        FingerFit::Touching { amount, .. } if amount > 0.0 => "closed",
-        FingerFit::Touching { amount, .. } if amount < 0.0 => "opened",
-        FingerFit::Touching { .. } => "snug",
-        FingerFit::NoContact => "none",
-    });
+    let what = fits.map(|fit| fit.outcome());
     // Grips are tightened in authored units.
     let mm = fits.map(|fit| match fit {
-        FingerFit::Touching { gap, .. } => {
+        crate::vr_grip::FingerFit::Touching { gap, .. } => {
             format!("{:.1}", gap * crate::METERS_PER_WORLD_UNIT * 1000.0)
         }
         _ => "-".to_owned(),
@@ -539,15 +532,6 @@ impl GripPoseTool {
             Err("no item mesh".to_owned())
         } else {
             Ok(())
-        }
-    }
-
-    /// The fingers Tighten closes in the slot: all at rest, the index onto
-    /// the trigger.
-    pub fn tighten_fingers(&self) -> [bool; 5] {
-        match self.slot {
-            Slot::Rest => [true; 5],
-            Slot::Trigger => [false, true, false, false, false],
         }
     }
 
@@ -1799,14 +1783,11 @@ mod tests {
     }
 
     #[test]
-    fn tighten_closes_all_fingers_at_rest_and_the_index_on_the_trigger() {
+    fn tighten_needs_an_item_mesh_on_the_primary_grip_and_logs_each_finger() {
         let mut tool = posing_tool();
         assert_eq!(tool.tighten_entry(), Err("no item mesh".to_owned()));
         tool.item_mesh = true;
         assert_eq!(tool.tighten_entry(), Ok(()));
-        assert_eq!(tool.tighten_fingers(), [true; 5]);
-        assert!(tool.toggle_slot());
-        assert_eq!(tool.tighten_fingers(), [false, true, false, false, false]);
         tool.set_support(true);
         assert_eq!(tool.tighten_entry(), Err("primary grip only".to_owned()));
         use crate::vr_grip::FingerFit;
