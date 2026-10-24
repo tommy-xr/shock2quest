@@ -8,7 +8,7 @@ use super::{Slot, world};
 use crate::ui::{HAlign, PanelPlacement, Rect, UiCanvas, VAlign, WorldPanel};
 use crate::vr_config::Handedness;
 
-pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 450.0 };
+pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 490.0 };
 /// Physical panel width; its height keeps the canvas aspect.
 const PANEL_WIDTH: f32 = 0.3;
 /// Where the panel hangs from the eye: nearer and lower than the bench, and
@@ -30,6 +30,9 @@ const BACKGROUND: [u8; 3] = [16, 20, 26];
 const BUTTON: [u8; 3] = [44, 56, 72];
 const BUTTON_HOVER: [u8; 3] = [74, 104, 140];
 const BUTTON_DISABLED: [u8; 3] = [28, 32, 38];
+/// A locked finger's chip.
+const LOCKED: [u8; 3] = [150, 108, 24];
+const LOCKED_HOVER: [u8; 3] = [190, 140, 40];
 
 const TITLE: Rect = Rect::new(10.0, 4.0, 380.0, 26.0);
 const STATUS: Rect = Rect::new(10.0, 32.0, 380.0, 34.0);
@@ -50,10 +53,20 @@ const INDEX: Rect = Rect::new(248.0, 224.0, 98.0, 44.0);
 const INDEX_MORE: Rect = Rect::new(350.0, 224.0, 40.0, 44.0);
 /// Closes the slot's fingers onto the item.
 const TIGHTEN: Rect = Rect::new(10.0, 274.0, 380.0, 44.0);
-const SHOW_AIM: Rect = Rect::new(10.0, 324.0, 122.0, 32.0);
-pub(in crate::interaction) const RESET_VIEW: Rect = Rect::new(139.0, 324.0, 122.0, 32.0);
-const EXIT: Rect = Rect::new(268.0, 324.0, 122.0, 32.0);
-const LEGEND: Rect = Rect::new(10.0, 364.0, 380.0, 80.0);
+/// A chip per finger (thumb..little) after the row's label, locking it.
+const LOCK_LABEL: Rect = Rect::new(10.0, 324.0, 62.0, 36.0);
+const FINGER_CHIPS: [Rect; 5] = [
+    Rect::new(76.0, 324.0, 58.0, 36.0),
+    Rect::new(140.0, 324.0, 58.0, 36.0),
+    Rect::new(204.0, 324.0, 58.0, 36.0),
+    Rect::new(268.0, 324.0, 58.0, 36.0),
+    Rect::new(332.0, 324.0, 58.0, 36.0),
+];
+const FINGER_LETTERS: [&str; 5] = ["T", "I", "M", "R", "L"];
+const SHOW_AIM: Rect = Rect::new(10.0, 366.0, 122.0, 32.0);
+pub(in crate::interaction) const RESET_VIEW: Rect = Rect::new(139.0, 366.0, 122.0, 32.0);
+const EXIT: Rect = Rect::new(268.0, 366.0, 122.0, 32.0);
+const LEGEND: Rect = Rect::new(10.0, 406.0, 380.0, 80.0);
 /// A test-held gun aiming within this many degrees of its controller reads
 /// as aligned.
 const ALIGNED_DEG: f32 = 1.0;
@@ -79,6 +92,8 @@ pub(in crate::interaction) enum PanelEvent {
     IndexMore,
     /// Close the slot's fingers onto the item (`GripSurface::tighten`).
     Tighten,
+    /// Lock or unlock a finger (0 thumb .. 4 little).
+    Lock(usize),
     ResetView,
     Exit,
 }
@@ -155,6 +170,8 @@ impl Status {
                 "window_short" => "Hold still...".to_owned(),
                 "degenerate_joints" => "Tracking glitch, try again".to_owned(),
                 "invalid_support_pose" => "Pose not usable, try again".to_owned(),
+                "fingers_locked" => "All fingers locked".to_owned(),
+                "index_locked" => "Index locked".to_owned(),
                 jitter => jitter.strip_prefix("jitter max_mm=").map_or_else(
                     || jitter.to_owned(),
                     |mm| format!("Hold still (moved {mm} mm)"),
@@ -204,10 +221,14 @@ pub(in crate::interaction) struct PanelView {
     /// switch or why not.
     pub keep_placement: bool,
     pub placement_entry: Result<(), String>,
-    /// How far the trigger pose curls the index (`None`: no trigger pose).
+    /// How far the trigger pose curls the index (`None`: no trigger pose),
+    /// and whether the Index steps can move it, or why not.
     pub trigger_index: Option<f32>,
+    pub index_steps: Result<(), String>,
     /// Whether Tighten can act, or why not.
     pub tighten: Result<(), String>,
+    /// Which fingers (thumb..little) are locked.
+    pub locks: [bool; 5],
     /// A snapshot awaits Save or Discard.
     pub staged: bool,
     /// Test holding, and whether it can start or why not.
@@ -417,8 +438,12 @@ pub(in crate::interaction) fn emit(
             view.placement_entry.clone(),
         )),
         Slot::Trigger => {
-            buttons.push((INDEX_LESS, "-".to_owned(), PanelEvent::IndexLess, Ok(())));
-            buttons.push((INDEX_MORE, "+".to_owned(), PanelEvent::IndexMore, Ok(())));
+            for (rect, label, event) in [
+                (INDEX_LESS, "-", PanelEvent::IndexLess),
+                (INDEX_MORE, "+", PanelEvent::IndexMore),
+            ] {
+                buttons.push((rect, label.to_owned(), event, view.index_steps.clone()));
+            }
             // A readout, not a button: no trigger pose reads as the rest.
             canvas.fill(INDEX, BUTTON_DISABLED);
             canvas.text_fit(
@@ -492,6 +517,27 @@ pub(in crate::interaction) fn emit(
                     .opacity(0.7);
             }
         }
+    }
+    // Finger chips toggle a lock, so a locked one is lit rather than dimmed.
+    canvas.text_fit(LOCK_LABEL, "Lock", FONT, 18.0, HAlign::Left, VAlign::Middle);
+    for (finger, rect) in FINGER_CHIPS.into_iter().enumerate() {
+        let hovered = hover.is_some_and(|p| rect.contains(p));
+        let color = match (view.locks[finger], hovered) {
+            (true, true) => LOCKED_HOVER,
+            (true, false) => LOCKED,
+            (false, true) => BUTTON_HOVER,
+            (false, false) => BUTTON,
+        };
+        canvas.fill(rect, color);
+        canvas.text_fit(
+            rect,
+            FINGER_LETTERS[finger],
+            FONT,
+            18.0,
+            HAlign::Center,
+            VAlign::Middle,
+        );
+        targets.push((rect, PanelEvent::Lock(finger)));
     }
     let lines = legend(
         view.posing.other(),
@@ -724,7 +770,9 @@ mod tests {
             keep_placement: true,
             placement_entry: Ok(()),
             trigger_index: None,
+            index_steps: Ok(()),
             tighten: Ok(()),
+            locks: [false; 5],
             staged: false,
             fingertip: false,
             test_hold: false,
@@ -1084,6 +1132,45 @@ mod tests {
         let (canvas, targets) = emit(&support, None);
         assert!(texts(&canvas).contains(&"primary grip only".to_owned()));
         assert_eq!(event_at(&targets, TIGHTEN.center()), None);
+    }
+
+    /// A chip per finger toggles its lock, lit while locked; a locked index
+    /// disables its trigger steps with why.
+    #[test]
+    fn finger_chips_lock_each_finger_and_a_locked_index_has_no_steps() {
+        let fill = |canvas: &UiCanvas, rect: Rect| {
+            canvas.elements().iter().rev().find_map(|e| match e {
+                crate::ui::UiElement::Fill {
+                    position, color, ..
+                } if *position == vec2(rect.x, rect.y) => Some(*color),
+                _ => None,
+            })
+        };
+        let mut locked = view(Status::Ready);
+        locked.locks = [false, true, false, false, true];
+        let (canvas, targets) = emit(&locked, None);
+        let shown = texts(&canvas);
+        for (finger, (rect, letter)) in FINGER_CHIPS.iter().zip(FINGER_LETTERS).enumerate() {
+            assert!(shown.contains(&letter.to_owned()), "{shown:?}");
+            assert_eq!(
+                event_at(&targets, rect.center()),
+                Some(PanelEvent::Lock(finger))
+            );
+            let lit = if locked.locks[finger] { LOCKED } else { BUTTON };
+            assert_eq!(fill(&canvas, *rect), Some(lit), "finger {finger}");
+        }
+        // Hovered, a chip lightens either way.
+        let (canvas, _) = emit(&locked, Some(FINGER_CHIPS[1].center()));
+        assert_eq!(fill(&canvas, FINGER_CHIPS[1]), Some(LOCKED_HOVER));
+        let (canvas, _) = emit(&locked, Some(FINGER_CHIPS[0].center()));
+        assert_eq!(fill(&canvas, FINGER_CHIPS[0]), Some(BUTTON_HOVER));
+
+        locked.slot = Slot::Trigger;
+        locked.index_steps = Err("index locked".to_owned());
+        let (canvas, targets) = emit(&locked, None);
+        assert!(texts(&canvas).contains(&"index locked".to_owned()));
+        assert_eq!(event_at(&targets, INDEX_LESS.center()), None);
+        assert_eq!(event_at(&targets, INDEX_MORE.center()), None);
     }
 
     #[test]

@@ -473,9 +473,16 @@ const FINGER_BONES: [std::ops::Range<usize>; 5] = [0..4, 4..9, 9..14, 14..19, 19
 
 /// `rest` with the index finger's bones taken from `index`.
 pub fn with_index(rest: &FingerBones, index: &FingerBones) -> FingerBones {
-    let mut bones = *rest;
-    let bones_of_index = FINGER_BONES[1].clone();
-    bones[bones_of_index.clone()].copy_from_slice(&index[bones_of_index]);
+    with_fingers(rest, index, [false, true, false, false, false])
+}
+
+/// `base` with the bones of each finger (thumb..little) `fingers` picks
+/// taken from `from`, e.g. a tracked hand with its locked fingers stored.
+pub fn with_fingers(base: &FingerBones, from: &FingerBones, fingers: [bool; 5]) -> FingerBones {
+    let mut bones = *base;
+    for (range, _) in FINGER_BONES.iter().zip(fingers).filter(|(_, take)| *take) {
+        bones[range.clone()].copy_from_slice(&from[range.clone()]);
+    }
     bones
 }
 
@@ -611,13 +618,9 @@ impl FingerFit {
 }
 
 /// The fingers Tighten closes: all five at rest, the index onto the trigger
-/// for the pressed pose.
-pub fn tighten_fingers(pressed: bool) -> [bool; 5] {
-    if pressed {
-        [false, true, false, false, false]
-    } else {
-        [true; 5]
-    }
+/// for the pressed pose, less any `locked` (thumb..little) by the editor.
+pub fn tighten_fingers(pressed: bool, locked: [bool; 5]) -> [bool; 5] {
+    std::array::from_fn(|finger| (!pressed || finger == 1) && !locked[finger])
 }
 
 /// `triangles` moved by `transform`, wound to keep facing out through a
@@ -2000,6 +2003,36 @@ mod tests {
             };
             assert_eq!(mixed[i], expected, "bone {i}");
         }
+    }
+
+    #[test]
+    fn with_fingers_takes_each_picked_fingers_bones() {
+        let base = curls_to_bones([0.1; 5]);
+        let other = curls_to_bones([0.9; 5]);
+        let picked = [true, false, false, true, true];
+        let mixed = with_fingers(&base, &other, picked);
+        for (finger, bones) in FINGER_BONES.iter().enumerate() {
+            for i in bones.clone() {
+                let expected = if picked[finger] { other[i] } else { base[i] };
+                assert_eq!(mixed[i], expected, "finger {finger} bone {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn tighten_closes_the_slots_fingers_never_a_locked_one() {
+        let none = [false; 5];
+        assert_eq!(tighten_fingers(false, none), [true; 5]);
+        assert_eq!(
+            tighten_fingers(true, none),
+            [false, true, false, false, false]
+        );
+        let locked = [true, true, false, false, false];
+        assert_eq!(
+            tighten_fingers(false, locked),
+            [false, false, true, true, true]
+        );
+        assert_eq!(tighten_fingers(true, locked), none);
     }
 
     #[test]
