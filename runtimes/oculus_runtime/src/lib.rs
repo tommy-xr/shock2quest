@@ -24,6 +24,7 @@ mod android_permissions;
 mod debug_input;
 mod foveation;
 mod frame_profiler;
+mod hand_tracking;
 mod passthrough;
 mod quest_config;
 mod refresh_rate;
@@ -148,7 +149,7 @@ fn main() {
     enabled_extensions.khr_opengl_es_enable = true;
     enabled_extensions.fb_display_refresh_rate = true;
     enabled_extensions.fb_passthrough = available_extensions.fb_passthrough;
-    enabled_extensions.ext_hand_tracking = available_extensions.ext_hand_tracking;
+    hand_tracking::enable_extensions(&available_extensions, &mut enabled_extensions);
     foveation::enable_extensions(&available_extensions, &mut enabled_extensions);
     #[cfg(target_os = "android")]
     {
@@ -337,14 +338,14 @@ fn main() {
 
     // Tracked hand joints for the in-VR grip pose tool; controllers still
     // drive play. Missing support just leaves `Hand::joints` empty.
-    let hand_trackers = if xr_instance.supports_hand_tracking(system).unwrap_or(false) {
-        [xr::Hand::LEFT, xr::Hand::RIGHT].map(|hand| session.create_hand_tracker(hand).ok())
-    } else {
-        [None, None]
-    };
+    let hand_trackers = hand_tracking::create_trackers(&xr_instance, system, &session);
+    let multimodal = hand_trackers.iter().all(Option::is_some)
+        && quest_config::multimodal_requested()
+        && hand_tracking::enable_multimodal(&xr_instance, system, &session);
     println!(
-        "SHOCK2QUEST_HAND_TRACKING available={}",
-        hand_trackers.iter().all(Option::is_some)
+        "SHOCK2QUEST_HAND_TRACKING available={} optical_only={} multimodal={multimodal}",
+        hand_trackers.iter().all(Option::is_some),
+        xr_instance.exts().ext_hand_tracking_data_source.is_some(),
     );
 
     let _right_hand_path = xr_instance.string_to_path("/user/hand/right").unwrap();
@@ -1300,8 +1301,9 @@ fn main() {
         input_context.left_hand.trigger_value = left_trigger_value;
         input_context.left_hand.squeeze_value = left_squeeze_value;
         input_context.left_hand.thumbstick = vec2(left_thumbstick_value.x, left_thumbstick_value.y);
-        // Joints only when every one is located: a partly valid hand would
-        // capture as a broken pose.
+        // Joints only when every one is tracked: a partly valid hand would
+        // capture as a broken pose, and positions inferred after tracking
+        // loss are guesses.
         let [left_joints, right_joints] = hand_trackers.each_ref().map(|tracker| {
             let locations = stage
                 .locate_hand_joints(tracker.as_ref()?, xr_frame_state.predicted_display_time)
@@ -1309,9 +1311,10 @@ fn main() {
             locations
                 .iter()
                 .all(|joint| {
-                    joint
-                        .location_flags
-                        .contains(xr::SpaceLocationFlags::POSITION_VALID)
+                    joint.location_flags.contains(
+                        xr::SpaceLocationFlags::POSITION_VALID
+                            | xr::SpaceLocationFlags::POSITION_TRACKED,
+                    )
                 })
                 .then(|| {
                     locations.map(|joint| {

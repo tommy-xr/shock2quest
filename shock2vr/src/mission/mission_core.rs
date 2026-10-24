@@ -12430,6 +12430,11 @@ impl MissionCore {
                 }
 
                 Effect::HandButton { hand, button } => {
+                    // The grip pose tool's control hand saves and discards
+                    // with these, unless the cyber interface took them back.
+                    if !self.use_mode && self.interaction.pose_tool_button(hand, button) {
+                        continue;
+                    }
                     // A face button means whatever the hand that pressed it is
                     // holding says it means - except while the cyber interface
                     // is up, which takes both buttons back on both hands so

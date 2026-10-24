@@ -1,7 +1,8 @@
 //! In-VR grip authoring (a developer cheat). The posing hand is held where it
 //! was, so the item stays put and stays held after its controller is set
-//! down; a tracked hand then forms the grip around it, and a pinch of the
-//! other hand saves that pose as a headset override that applies at once.
+//! down; a tracked hand then forms the grip around it. The other hand's
+//! controller trigger (or its tracked pinch) stages that pose live; its lower
+//! button saves it as a headset override and its upper button discards it.
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
@@ -16,8 +17,11 @@ use crate::vr_support::GripPose;
 
 /// Thumb and index tips closer than this pinch (world units).
 const PINCH_DISTANCE: f32 = 0.02 / crate::METERS_PER_WORLD_UNIT;
-/// Frames of the posing hand averaged into a capture, to steady tracking.
-const CAPTURE_FRAMES: usize = 10;
+/// Seconds of steady posing-hand tracking averaged into a capture.
+const STEADY_SECONDS: f32 = 0.3;
+/// Every joint stays this close to its window mean to count as steady
+/// (world units).
+const STEADY_DISTANCE: f32 = 0.005 / crate::METERS_PER_WORLD_UNIT;
 /// Natural-log item scale change per second at full thumbstick.
 const SCALE_RATE: f32 = 0.7;
 /// The grip editor's item scale range.
@@ -37,6 +41,9 @@ pub(super) struct GripPoseTool {
     pub tracked: [Option<HandJoints>; 2],
     /// Averaged posing-hand joints awaiting capture.
     pub capture: Option<HandJoints>,
+    /// A capture shown live but not yet saved.
+    pub staged: Option<super::StagedGrip>,
+    pub last_save_error: Option<String>,
     pub overrides_path: PathBuf,
     /// The held item's model frame (where its grip surface lies) and scale,
     /// and that surface, for the fingertip contacts and the extra views.
@@ -44,8 +51,10 @@ pub(super) struct GripPoseTool {
     pub surface: Option<GripSurface>,
     /// The player, whom the extra views face.
     pub viewer: Vector3<f32>,
-    recent: VecDeque<HandJoints>,
-    pinched: bool,
+    /// Recent posing-hand frames, each with the time since the one before
+    /// (zero for the oldest), spanning the steady window.
+    recent: VecDeque<(HandJoints, f32)>,
+    requested: bool,
 }
 
 impl GripPoseTool {
@@ -61,32 +70,47 @@ impl GripPoseTool {
             hand_pose,
             tracked: [None, None],
             capture: None,
+            staged: None,
+            last_save_error: None,
             overrides_path,
             item: None,
             surface: None,
             viewer: hand_pose.position,
             recent: VecDeque::new(),
-            pinched: false,
+            requested: false,
         }
     }
 
-    /// Take this frame's tracked hands; the other hand's pinch (on its
-    /// leading edge) queues a capture of the posing hand's recent frames.
-    pub fn observe(&mut self, tracked: [Option<HandJoints>; 2]) {
+    /// Take this frame's tracked hands. The leading edge of `trigger` (the
+    /// other controller's) or the other hand's pinch queues a capture of the
+    /// posing hand, if it has held steady for the last `STEADY_SECONDS`.
+    /// Losing its tracking restarts that window.
+    pub fn observe(&mut self, tracked: [Option<HandJoints>; 2], trigger: bool, dt: f32) {
         match tracked[self.hand] {
             Some(joints) => {
-                self.recent.push_back(joints);
-                if self.recent.len() > CAPTURE_FRAMES {
+                // A first frame spans no time: one long frame is not
+                // a steady window.
+                let since = if self.recent.is_empty() { 0.0 } else { dt };
+                self.recent.push_back((joints, since));
+                // Drop the oldest frame while the rest still span the window.
+                while self.recent.len() > 1
+                    && spans_window(window_seconds(&self.recent) - self.recent[1].1)
+                {
                     self.recent.pop_front();
+                    self.recent[0].1 = 0.0;
                 }
             }
             None => self.recent.clear(),
         }
-        let pinching = tracked[1 - self.hand].is_some_and(|joints| is_pinching(&joints));
-        if pinching && !self.pinched && self.recent.len() == CAPTURE_FRAMES {
-            self.capture = Some(mean_joints(&self.recent));
+        let requested =
+            trigger || tracked[1 - self.hand].is_some_and(|joints| is_pinching(&joints));
+        if requested && !self.requested {
+            self.capture = steady_mean(&self.recent);
+            if self.capture.is_none() {
+                println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=false reason=unsteady");
+            }
         }
-        self.pinched = pinching;
+        self.requested = requested;
         self.tracked = tracked;
     }
 
@@ -151,14 +175,36 @@ fn is_pinching(joints: &HandJoints) -> bool {
     (joints[5] - joints[10]).magnitude() < PINCH_DISTANCE
 }
 
-fn mean_joints(frames: &VecDeque<HandJoints>) -> HandJoints {
-    std::array::from_fn(|joint| {
+fn window_seconds(frames: &VecDeque<(HandJoints, f32)>) -> f32 {
+    frames.iter().map(|(_, dt)| dt).sum()
+}
+
+/// f32 sums of 1/60 s frames fall a hair short of the window.
+fn spans_window(seconds: f32) -> bool {
+    seconds >= STEADY_SECONDS - 1e-4
+}
+
+/// The mean pose over a full window in which no joint strays from it.
+fn steady_mean(frames: &VecDeque<(HandJoints, f32)>) -> Option<HandJoints> {
+    if !spans_window(window_seconds(frames)) {
+        return None;
+    }
+    let mean: HandJoints = std::array::from_fn(|joint| {
         frames
             .iter()
-            .map(|frame| frame[joint])
+            .map(|(frame, _)| frame[joint])
             .sum::<Vector3<f32>>()
             / frames.len() as f32
-    })
+    });
+    frames
+        .iter()
+        .all(|(frame, _)| {
+            frame
+                .iter()
+                .zip(&mean)
+                .all(|(p, m)| (p - m).magnitude() <= STEADY_DISTANCE)
+        })
+        .then_some(mean)
 }
 
 /// Where a grip puts its item for a hand pose (as `fit_held_items` places it).
@@ -221,34 +267,107 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_pinch_edge_captures_the_steady_posing_hand() {
-        let entity = EntityId::dead();
+    fn posing_tool() -> GripPoseTool {
         let pose = GripPose {
             position: vec3(0.0, 0.0, 0.0),
             rotation: Quaternion::from_angle_y(Deg(0.0)),
         };
-        let mut tool = GripPoseTool::new(1, entity, pose, PathBuf::new());
+        GripPoseTool::new(1, EntityId::dead(), pose, PathBuf::new())
+    }
+
+    fn posing(x: f32) -> Option<HandJoints> {
+        Some([vec3(x, 0.0, 0.0); HAND_JOINT_COUNT])
+    }
+
+    /// Feed `frames` posing-hand frames (x from `xs`) at `dt`, trigger released.
+    fn hold(tool: &mut GripPoseTool, xs: impl IntoIterator<Item = f32>, dt: f32) {
+        for x in xs {
+            tool.observe([None, posing(x)], false, dt);
+        }
+    }
+
+    const FRAME: f32 = 1.0 / 60.0;
+    /// 18 frame intervals at 60 Hz span the window.
+    const STEADY_FRAMES: usize = 19;
+
+    #[test]
+    fn a_trigger_edge_captures_the_mean_of_a_steady_window() {
+        let mut tool = posing_tool();
+        let wobble = STEADY_DISTANCE * 0.8;
+        hold(
+            &mut tool,
+            (0..STEADY_FRAMES - 1).map(|i| if i % 2 == 0 { wobble } else { -wobble }),
+            FRAME,
+        );
+        tool.observe([None, posing(0.0)], true, FRAME);
+        let captured = tool.capture.take().expect("a steady hand captures");
+        // 18 frames alternate +w/-w from +w, then a 0: the mean is 0.
+        assert!(captured[0].x.abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_window_is_measured_in_seconds_not_frames() {
+        let mut tool = posing_tool();
+        hold(&mut tool, [0.0; STEADY_FRAMES - 2], FRAME);
+        tool.observe([None, posing(0.0)], true, FRAME);
+        assert!(tool.capture.is_none(), "0.283 s is not yet steady");
+        // Four frames 0.1 s apart span the window at any frame rate, but one
+        // long frame spans none.
+        let mut slow = posing_tool();
+        slow.observe([None, posing(0.0)], true, 0.3);
+        assert!(slow.capture.is_none(), "a lone long frame");
+        hold(&mut slow, [0.0; 3], 0.1);
+        slow.observe([None, posing(0.0)], true, 0.1);
+        assert!(slow.capture.is_some());
+        // At 120 Hz the window is 37 frames, and older frames fall out of it.
+        let mut fast = posing_tool();
+        hold(&mut fast, [10.0; 50], 1.0 / 120.0);
+        hold(&mut fast, [0.0; 36], 1.0 / 120.0);
+        fast.observe([None, posing(0.0)], true, 1.0 / 120.0);
+        assert_eq!(fast.capture.expect("37 steady frames")[0].x, 0.0);
+    }
+
+    #[test]
+    fn a_jittering_hand_does_not_capture() {
+        let mut tool = posing_tool();
+        hold(&mut tool, [0.0; STEADY_FRAMES - 1], FRAME);
+        tool.observe([None, posing(STEADY_DISTANCE * 2.0)], true, FRAME);
+        assert!(tool.capture.is_none());
+    }
+
+    #[test]
+    fn losing_tracking_restarts_the_window() {
+        let mut tool = posing_tool();
+        hold(&mut tool, [0.0; STEADY_FRAMES], FRAME);
+        tool.observe([None, None], false, FRAME);
+        tool.observe([None, posing(0.0)], true, FRAME);
+        assert!(tool.capture.is_none());
+    }
+
+    #[test]
+    fn a_capture_rearms_only_once_trigger_and_pinch_release() {
+        let mut tool = posing_tool();
         let open = Some(hand_with_tips(1.0));
         let pinch = Some(hand_with_tips(0.0));
-        let posing = |x: f32| Some([vec3(x, 0.0, 0.0); HAND_JOINT_COUNT]);
-        tool.observe([pinch, posing(0.0)]);
-        assert!(tool.capture.is_none(), "too few posing frames to capture");
-        for frame in 0..CAPTURE_FRAMES {
-            tool.observe([open, posing(frame as f32)]);
-        }
-        tool.observe([pinch, posing(CAPTURE_FRAMES as f32)]);
-        let captured = tool.capture.take().expect("pinch edge captures");
-        // The mean of frames 1..=10.
-        assert!((captured[0].x - 5.5).abs() < 1e-5);
-        tool.observe([pinch, posing(0.0)]);
-        assert!(tool.capture.is_none(), "a held pinch captures once");
-        tool.observe([open, None]);
-        tool.observe([pinch, posing(0.0)]);
+        hold(&mut tool, [0.0; STEADY_FRAMES], FRAME);
+        tool.observe([None, posing(0.0)], true, FRAME);
+        assert!(tool.capture.take().is_some(), "trigger edge captures");
+        tool.observe([pinch, posing(0.0)], true, FRAME);
         assert!(
             tool.capture.is_none(),
-            "losing the posing hand restarts its window"
+            "a held trigger or pinch captures once"
         );
+        tool.observe([open, posing(0.0)], false, FRAME);
+        tool.observe([pinch, posing(0.0)], false, FRAME);
+        assert!(tool.capture.take().is_some(), "a fresh pinch captures");
+        // A press while unsteady is spent: steadying under it fires nothing.
+        tool.observe([open, posing(1.0)], false, FRAME);
+        tool.observe([open, posing(0.0)], true, FRAME);
+        assert!(tool.capture.is_none(), "unsteady");
+        for _ in 0..STEADY_FRAMES {
+            tool.observe([open, posing(0.0)], true, FRAME);
+        }
+        assert!(tool.capture.is_none(), "still the same press");
     }
 
     fn tool_with_item(position: Vector3<f32>, viewer: Vector3<f32>) -> GripPoseTool {

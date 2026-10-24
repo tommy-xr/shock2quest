@@ -1441,6 +1441,9 @@ export interface HandGrip {
   finger_curls: FingerCurls | null;
   /** Glove pose following a physical melee body; null uses raw tracked pose. */
   glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
+  /** The grip pose tool posing this hand: an unsaved capture is applied
+   * live (`staged`) until saved; a failed save stays staged. */
+  pose_tool?: { staged: boolean; last_save_error: string | null } | null;
   /** Pistol slide contact, independent of the ordinary two-hand support grip. */
   slide?: {
     attached: boolean;
