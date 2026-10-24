@@ -360,7 +360,7 @@ impl GripPoseTool {
             support: false,
             support_mode: Err("one-handed".to_owned()),
             slot: Slot::Rest,
-            keep_placement: true,
+            keep_placement: false,
             trigger_index: None,
             fingertip: false,
             test_hold: None,
@@ -503,6 +503,35 @@ impl GripPoseTool {
         }
         self.keep_placement = !self.keep_placement;
         true
+    }
+
+    /// A primary snapshot places the glove where the tracked hand is: a rest
+    /// one with the placement not kept (a trigger one always keeps it).
+    pub fn places(&self) -> bool {
+        self.slot == Slot::Rest && !self.keep_placement
+    }
+
+    /// The posing glove on a primary grip whose snapshot keeps the placement
+    /// is drawn as that snapshot would store it (`kept_glove`).
+    fn live_at_placement(&self) -> bool {
+        !self.support && !self.places()
+    }
+
+    /// Tracked glove `index` drawn as a snapshot of it would store it, when
+    /// that keeps `grip`'s placement: at the stored glove, with the slot's
+    /// fingers from the live hand (a trigger slot's live index over the
+    /// rest). `None`: drawn as tracked.
+    pub fn kept_glove(
+        &self,
+        index: usize,
+        glove: &TrackedGlove,
+        grip: Option<&ResolvedGrip>,
+    ) -> Option<(GripPose, FingerPose)> {
+        let grip = grip.filter(|_| index == self.posing() && self.live_at_placement())?;
+        Some((
+            self.hand_pose,
+            slot_fingers(self.slot, &grip.fingers, glove.fit.bones),
+        ))
     }
 
     /// The trigger value the posed glove is drawn at: test hold's controller
@@ -790,10 +819,8 @@ impl GripPoseTool {
                 .take()
                 .map(|nudge| nudge.item())
                 .filter(|released| {
-                    millimetres((released.position - item.position).magnitude()) > NUDGE_MIN_MM
-                        || crate::weapon_muzzle::turn_deg(
-                            item.rotation.normalize().conjugate() * released.rotation,
-                        ) > NUDGE_MIN_DEG
+                    let (mm, deg) = pose_offset(item, *released);
+                    mm > NUDGE_MIN_MM || deg > NUDGE_MIN_DEG
                 })
         };
         self.squeezed = squeeze;
@@ -1107,6 +1134,14 @@ impl TrackedGlove {
     pub fn tip_error_mm(&self) -> [f32; 5] {
         self.fit.tip_errors.map(millimetres)
     }
+
+    /// The glove's pose on the tracked palm.
+    pub fn palm(&self) -> GripPose {
+        GripPose {
+            position: self.fit.position,
+            rotation: self.fit.rotation,
+        }
+    }
 }
 
 pub(super) fn tracked_glove(
@@ -1158,7 +1193,9 @@ fn named_glove(
 /// trigger's), each tracked hand live, each untracked controller
 /// as an open glove, and the posing gloves again in every extra view. While
 /// the posing hand is tracked its live glove replaces the saved grip's, which
-/// would only be in its way; a staged grip always shows, as the preview.
+/// would only be in its way; a staged grip shows as the preview, unless the
+/// live glove is drawn as a rest snapshot keeping it would store it
+/// (`kept_glove`).
 /// In support mode the posed glove is `support` (its saved or staged pose)
 /// and the grip hand's glove is drawn frozen at its grip.
 pub(super) fn render(
@@ -1174,15 +1211,19 @@ pub(super) fn render(
     let mut posing_tracked = false;
     for (index, glove) in tool.gloves.iter().enumerate() {
         let Some(glove) = glove else { continue };
+        let (at, shape) = match tool.kept_glove(index, glove, grip) {
+            Some((at, fingers)) => (at, fingers.hand_shape_at(tool.preview_trigger())),
+            None => (glove.palm(), HandShape::Pose(glove.pose.clone())),
+        };
         let drawn = renderer.render_hand(
-            glove.fit.position,
-            glove.fit.rotation,
+            at.position,
+            at.rotation,
             handedness(index),
             0.0,
             0.0,
             false,
             None,
-            Some((HandShape::Pose(glove.pose.clone()), 1.0)),
+            Some((shape, 1.0)),
             HandLight::Off,
             lights.clone(),
         );
@@ -1204,7 +1245,10 @@ pub(super) fn render(
     } else {
         (held, None)
     };
-    if let Some((pose, shape)) = posed_glove.filter(|_| tool.staged.is_some() || !posing_tracked) {
+    // A live glove at a kept rest placement is itself the preview. A trigger
+    // slot's staged glove stays, so an Index step shows while tracked.
+    let preview = tool.staged.is_some() && !(tool.live_at_placement() && tool.slot == Slot::Rest);
+    if let Some((pose, shape)) = posed_glove.filter(|_| preview || !posing_tracked) {
         let hand = handedness(tool.posing());
         posed.extend(named_glove(
             renderer,
@@ -1426,6 +1470,15 @@ pub(super) fn captured_grip(
     (
         grip_for_item(hand, item, grip, contact).rescaled(1.0 / personal),
         hand,
+    )
+}
+
+/// How far `b` is from `a`: physical millimetres at the active world scale,
+/// and degrees.
+pub(super) fn pose_offset(a: GripPose, b: GripPose) -> (f32, f32) {
+    (
+        millimetres((b.position - a.position).magnitude()),
+        crate::weapon_muzzle::turn_deg(a.rotation.normalize().conjugate() * b.rotation.normalize()),
     )
 }
 
@@ -1698,15 +1751,16 @@ mod tests {
     }
 
     #[test]
-    fn a_rest_snapshot_keeps_the_placement_until_toggled_on_a_primary_grip() {
+    fn a_rest_snapshot_captures_the_placement_until_toggled_on_a_primary_grip() {
         let mut tool = posing_tool();
-        assert!(tool.keep_placement, "fingers only by default");
+        assert!(!tool.keep_placement, "placement captured by default");
+        assert!(tool.places());
         assert!(tool.toggle_placement());
-        assert!(!tool.keep_placement);
+        assert!(tool.keep_placement && !tool.places());
         tool.set_support(true);
         assert_eq!(tool.placement_entry(), Err("primary grip only".to_owned()));
         assert!(!tool.toggle_placement());
-        assert!(!tool.keep_placement);
+        assert!(tool.keep_placement);
     }
 
     fn staged() -> crate::interaction::StagedGrip {
