@@ -1014,9 +1014,10 @@ impl GripEditor {
                     .auto_shrink([false, false])
                     .show(ui, |ui| shown = self.show_controls(ui, preview));
             });
-        let Some((scene, grip_camera)) = shown else {
+        let Some(scene) = shown else {
             return;
         };
+        let grip_camera = matches!(scene, PreviewScene::Grip(..));
         let hand = if self.hand == "left" {
             Handedness::Left
         } else {
@@ -1046,13 +1047,13 @@ impl GripEditor {
         clicked
     }
 
-    /// The editing pane. Returns the scene to preview and whether it takes a
-    /// pending grip camera, or `None` when nothing should be previewed.
+    /// The editing pane. Returns the scene to preview, or `None` when nothing
+    /// should be previewed.
     fn show_controls(
         &mut self,
         ui: &mut egui::Ui,
         preview: &mut ModelPreview,
-    ) -> Option<(PreviewScene, bool)> {
+    ) -> Option<PreviewScene> {
         if self.holster_button(ui) {
             return None;
         }
@@ -1134,7 +1135,7 @@ impl GripEditor {
             if !busy && ui.button("Prepare left and right drafts").clicked() {
                 self.prepare_missing = true;
             }
-            return Some((PreviewScene::Model, false));
+            return Some(PreviewScene::Model);
         };
         let hand = if self.hand == "left" {
             Handedness::Left
@@ -1193,7 +1194,7 @@ impl GripEditor {
                 None,
             );
             preview.show_lighting(ui, false);
-            return Some((scene, true));
+            return Some(scene);
         }
         ui.horizontal_wrapped(|ui| {
             let label = if doc.dirty() || self.support_editor.dirty() {
@@ -1494,7 +1495,7 @@ impl GripEditor {
                 self.family.is_some(),
             );
         }
-        Some((scene, true))
+        Some(scene)
     }
 }
 
@@ -1518,13 +1519,13 @@ fn aim_controls(
     use cgmath::One;
     use shock2vr::weapon_muzzle::{aim_turn, aim_turn_amount, turn_deg};
     let mut amount = None;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.checkbox(show_aim, "Show aim");
         if *show_aim {
             ui.label(aim_readout(grip, muzzle));
         }
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui.button("Align aim").clicked() {
             amount = Some(1.0);
         }

@@ -176,7 +176,7 @@ fn parse_window_size(text: &str) -> Result<[f32; 2], String> {
     let size = text
         .split_once('x')
         .and_then(|(w, h)| Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?]))
-        .filter(|size| size.iter().all(|v| *v >= 1.0));
+        .filter(|size| size.iter().all(|v| v.is_finite() && *v >= 1.0));
     size.ok_or_else(|| format!("expected WIDTHxHEIGHT, got {text:?}"))
 }
 
