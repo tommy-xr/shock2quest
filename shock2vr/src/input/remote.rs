@@ -45,6 +45,7 @@ pub fn input_channels_help() -> &'static str {
      {left,right}_hand.{trigger,squeeze,a} <number 0..1>, \
      {left,right}_hand.thumbstick [x,y] (+x right, +y forward), \
      {left,right}_hand.thumbstick_click 0|1, \
+     {left,right}_hand.tracked 0|1 (0: the controller is set down or lost), \
      {left,right}_hand.position [x,y,z] (pawn-local), \
      {left,right}_hand.rotation [x,y,z,w], \
      {left,right}_hand.world_target [x,y,z] world, VR, within arm reach (debug runtime only; null clears), \
@@ -116,6 +117,23 @@ pub fn apply_input_patch(
 
     // Hand channels: "<left|right>_hand.<field>"
     if let Some((side, field)) = channel.split_once("_hand.") {
+        // Whether the runtime tracks that controller, as a headset reports
+        // in `pose_tracking`: 0 is one set down or lost.
+        if field == "tracked" && matches!(side, "left" | "right") {
+            let tracked = match num(channel, value)? {
+                v if v == 0.0 => false,
+                v if v == 1.0 => true,
+                v => return Err(format!("channel '{channel}' expects 0 or 1, got {v}")),
+            };
+            let tracking = input
+                .pose_tracking
+                .get_or_insert(crate::input_context::PoseTracking {
+                    head: true,
+                    hands: [true; 2],
+                });
+            tracking.hands[usize::from(side == "right")] = tracked;
+            return Ok(());
+        }
         let hand = match side {
             "left" => &mut input.left_hand,
             "right" => &mut input.right_hand,
@@ -498,6 +516,17 @@ mod tests {
         for value in [json!(-1.01), json!(1.01), json!(true), json!("left")] {
             assert!(overrides.set("lean", value).is_err());
         }
+    }
+
+    #[test]
+    fn a_hand_can_be_reported_untracked_and_tracked_again() {
+        let mut input = InputContext::default();
+        apply_input_patch(&mut input, "left_hand.tracked", &json!(0)).unwrap();
+        let tracking = input.pose_tracking.unwrap();
+        assert_eq!((tracking.head, tracking.hands), (true, [false, true]));
+        apply_input_patch(&mut input, "left_hand.tracked", &json!(1)).unwrap();
+        assert_eq!(input.pose_tracking.unwrap().hands, [true, true]);
+        assert!(apply_input_patch(&mut input, "right_hand.tracked", &json!(0.5)).is_err());
     }
 
     #[test]

@@ -96,6 +96,70 @@ pub(crate) fn system_button() -> ReadoutButtonSpec {
     }
 }
 
+/// Developer grip posing, straight above the system button: the quick way
+/// into the grip pose workbench (the Developer cheats' "Pose held item").
+pub(crate) const POSE_BUTTON: Rect = Rect::new(288.0, 332.0, 64.0, 36.0);
+
+/// Whether the interface offers the Pose button, and whether it can be
+/// pressed (or why not): only on a headset tracking hands and controllers
+/// at once, with developer mode on, so never in flat.
+pub(crate) fn pose_entry(
+    multimodal: bool,
+    developer: bool,
+    poseable: bool,
+) -> Option<Result<(), &'static str>> {
+    (multimodal && developer).then_some(if poseable {
+        Ok(())
+    } else {
+        Err("hold an item")
+    })
+}
+
+fn pose_button() -> ReadoutButtonSpec {
+    ReadoutButtonSpec {
+        button: ReadoutButton::PoseHeldItem,
+        rect: POSE_BUTTON,
+        texture: Some("IFBTN00.PCX"),
+        text: Some("POSE".to_owned()),
+        font: crate::ui::CHROME_BOLD_FONT,
+        font_size: 12.0,
+        nine_slice: Some(ammo_panel::PLATE_ART),
+    }
+}
+
+/// The Pose button: pressable, or dimmed with why under its label.
+fn emit_pose_button(canvas: &mut UiCanvas, entry: Result<(), &'static str>) {
+    let pose = pose_button();
+    match entry {
+        Ok(()) => ammo_panel::draw_button(canvas, &pose, pose.rect),
+        Err(reason) => {
+            let rect = pose.rect;
+            let (art_size, borders) = ammo_panel::PLATE_ART;
+            canvas
+                .nine_slice_image(rect, "IFBTN00.PCX", art_size, borders)
+                .opacity(0.45);
+            canvas
+                .text_fit(
+                    Rect::new(rect.x, rect.y + 2.0, rect.w, 18.0),
+                    "POSE",
+                    crate::ui::CHROME_BOLD_FONT,
+                    12.0,
+                    HAlign::Center,
+                    VAlign::Middle,
+                )
+                .opacity(0.45);
+            canvas.text_fit(
+                Rect::new(rect.x, rect.y + 19.0, rect.w, 14.0),
+                reason,
+                crate::ui::CHROME_FONT,
+                8.0,
+                HAlign::Center,
+                VAlign::Middle,
+            );
+        }
+    }
+}
+
 /// The bottom-center mouse-look gadget, in native canvas pixels.
 pub(crate) fn exit_button() -> ReadoutButtonSpec {
     ReadoutButtonSpec {
@@ -216,6 +280,8 @@ pub(crate) struct UseModeReadouts {
     pub resources: [i32; 2],
     pub hazards: Option<super::hazards::HazardReadout>,
     pub alarm_seconds: Option<f32>,
+    /// The Pose button ([`pose_entry`]), when offered.
+    pub pose: Option<Result<(), &'static str>>,
 }
 
 impl UseModeReadouts {
@@ -229,6 +295,7 @@ impl UseModeReadouts {
             hand_entities: [None; 2],
             hazards: Some(super::hazards::HazardReadout::from_world(world)),
             alarm_seconds: crate::security_alarm::status(world).hud_seconds(),
+            pose: None,
             bio: BioReadout::from_world(world),
             ammo: AmmoReadout::for_weapon(world, weapon, true),
             resources: [
@@ -279,6 +346,9 @@ pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
     // Always: the way out of the game does not depend on what is wielded.
     let system = system_button();
     ammo_panel::draw_button(canvas, &system, system.rect);
+    if let Some(entry) = readouts.pose {
+        emit_pose_button(canvas, entry);
+    }
     emit_exit_button(canvas);
     // shkiface.cpp button 0 and shkinv.cpp fake equipment icon wells.
     canvas.image(LOG_BUTTON, "iface/ifbtn00.pcx");
@@ -359,6 +429,7 @@ pub(crate) fn buttons(readouts: &UseModeReadouts) -> Vec<ReadoutButtonSpec> {
                 }),
         )
         .chain([system, logs, exit_button()])
+        .chain((readouts.pose == Some(Ok(()))).then(pose_button))
         .collect()
 }
 
@@ -374,6 +445,7 @@ mod tests {
             resources: [0; 2],
             hazards: Default::default(),
             alarm_seconds: None,
+            pose: None,
             bio: BioReadout {
                 health_points: 40,
                 psi_points: 21,
@@ -490,6 +562,45 @@ mod tests {
             SYSTEM_BUTTON.y + SYSTEM_BUTTON.h <= BIO_ORIGIN.y,
             "above the bottom readouts"
         );
+    }
+
+    #[test]
+    fn the_pose_button_needs_multimodal_and_developer_mode_and_a_held_item() {
+        assert_eq!(pose_entry(false, true, true), None, "flat / no multimodal");
+        assert_eq!(pose_entry(true, false, true), None, "developer mode off");
+        assert_eq!(pose_entry(true, true, false), Some(Err("hold an item")));
+        assert_eq!(pose_entry(true, true, true), Some(Ok(())));
+    }
+
+    #[test]
+    fn the_pose_button_sits_above_menu_and_clicks_only_when_enabled() {
+        let clickable = |r: &UseModeReadouts| {
+            buttons(r)
+                .iter()
+                .any(|b| b.button == ReadoutButton::PoseHeldItem && b.rect == POSE_BUTTON)
+        };
+        let drawn = |r: &UseModeReadouts| {
+            let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
+            emit_use_mode(&mut canvas, r);
+            canvas
+                .elements()
+                .iter()
+                .filter(|e| POSE_BUTTON.contains(e.rect().center()))
+                .count()
+        };
+        let mut r = readouts(None, false);
+        assert!(!clickable(&r) && drawn(&r) == 0, "hidden");
+        r.pose = Some(Err("hold an item"));
+        assert!(!clickable(&r), "disabled");
+        assert_eq!(drawn(&r), 3, "plate, label and reason");
+        r.pose = Some(Ok(()));
+        assert!(clickable(&r));
+        assert_eq!(drawn(&r), 2, "plate and label");
+        // In the free column, directly above MENU.
+        assert!(POSE_BUTTON.y >= 121.0 && POSE_BUTTON.x >= 190.0);
+        assert!(POSE_BUTTON.x + POSE_BUTTON.w <= 450.0);
+        assert!(POSE_BUTTON.y + POSE_BUTTON.h < SYSTEM_BUTTON.y);
+        assert_eq!(POSE_BUTTON.x, SYSTEM_BUTTON.x);
     }
 
     #[test]

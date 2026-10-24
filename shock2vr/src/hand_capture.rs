@@ -147,6 +147,87 @@ pub fn tip_errors(tracked: &HandJoints, open: &HandJoints, posed: &HandJoints) -
     Some(TIPS.map(|tip| (position + rotation.rotate_vector(posed[tip]) - tracked[tip]).magnitude()))
 }
 
+/// A grip pose capture's joints as one log line: the tracked hand (`raw`)
+/// and the glove fitted over it (`glove`, what the tip error compares), both
+/// pawn-local world units at `world_scale`.
+pub fn joints_log_line(
+    hand: Handedness,
+    model: &str,
+    world_scale: f32,
+    raw: &HandJoints,
+    glove: &HandJoints,
+) -> String {
+    let list = |joints: &HandJoints| {
+        joints
+            .iter()
+            .map(|p| format!("[{:.5},{:.5},{:.5}]", p.x, p.y, p.z))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    format!(
+        "{JOINTS_LOG} hand={} model={model} world_scale={world_scale} raw=[{}] glove=[{}]",
+        match hand {
+            Handedness::Left => "l",
+            Handedness::Right => "r",
+        },
+        list(raw),
+        list(glove),
+    )
+}
+
+const JOINTS_LOG: &str = "SHOCK2QUEST_VR_GRIP_POSE_JOINTS";
+
+/// Write device log text (e.g. logcat) to `path` as a hand recording (the
+/// fixture format [`recorded_hands`] reads): one frame per
+/// [`joints_log_line`], with its raw joints on its hand. Lines without one are
+/// skipped. A test-side tool: call it from a scratch test to turn a device
+/// session's captures into a fixture under `tests/fixtures/hand_recordings/`.
+#[cfg(test)]
+pub(crate) fn joints_log_recording(log: &str, path: &std::path::Path) -> std::io::Result<()> {
+    use crate::input::recording::{InputRecorder, RecordedFrame, RecordingHeader};
+    let mut recorder = InputRecorder::create(
+        path,
+        &RecordingHeader {
+            version: 2,
+            scene: String::new(),
+            save: String::new(),
+            presentation: crate::PresentationMode::Vr,
+            experimental: Vec::new(),
+            glove_forward_cm: 0.0,
+        },
+    )?;
+    for line in log.lines() {
+        let Some(fields) = line.split_once(JOINTS_LOG).map(|(_, rest)| rest) else {
+            continue;
+        };
+        let field = |name: &str| {
+            fields
+                .split(' ')
+                .find_map(|field| field.strip_prefix(name)?.strip_prefix('='))
+        };
+        let Some(raw) = field("raw")
+            .and_then(|raw| serde_json::from_str::<Vec<[f32; 3]>>(raw).ok())
+            .and_then(|raw| <[[f32; 3]; HAND_JOINT_COUNT]>::try_from(raw).ok())
+        else {
+            continue;
+        };
+        let mut input = crate::input_context::InputContext::default();
+        let hand = match field("hand") {
+            Some("l") => &mut input.left_hand,
+            _ => &mut input.right_hand,
+        };
+        hand.joints = Some(raw.map(Vector3::from));
+        recorder.record(&RecordedFrame {
+            dt: 0.0,
+            total: 0.0,
+            input,
+            triggered: Vec::new(),
+            held: Vec::new(),
+        })?;
+    }
+    recorder.finish().map(|_| ())
+}
+
 /// Each frame's tracked joints `[left, right]` from an input recording
 /// (`ToggleInputRecording`), skipping frames that track neither hand: real
 /// hands to test the mapping against.
@@ -353,6 +434,31 @@ pub(crate) mod tests {
         };
         assert!(pinch(&frames[0]) > 0.02 / crate::METERS_PER_WORLD_UNIT);
         assert!(pinch(frames.last().unwrap()) < 1e-4);
+    }
+
+    #[test]
+    fn capture_log_lines_round_trip_into_a_hand_recording() {
+        let raw = tracked(&open_right_hand(), Handedness::Left);
+        let glove = raw.map(|p| p + vec3(0.01, 0.0, 0.0));
+        let line = joints_log_line(Handedness::Left, "mug", 0.85, &raw, &glove);
+        assert!(line.starts_with(
+            "SHOCK2QUEST_VR_GRIP_POSE_JOINTS hand=l model=mug world_scale=0.85 raw=[["
+        ));
+        // As logcat prints it, among other lines.
+        let log = format!(
+            "10-22 17:51:56.072 I RustStdoutStderr: {line}\n\
+             10-22 17:51:56.073 I RustStdoutStderr: SHOCK2QUEST_VR_GRIP_POSE_TOOL tip_error_mm=[1]\n"
+        );
+        let root = crate::test_support::TempDir::new("joints-log");
+        let path = root.path().join("capture.jsonl");
+        joints_log_recording(&log, &path).unwrap();
+        let frames = recorded_hands(&path).unwrap();
+        assert_eq!(frames.len(), 1);
+        let [left, right] = frames[0];
+        assert!(right.is_none());
+        for (read, wrote) in left.expect("the left hand").iter().zip(&raw) {
+            assert!((read - wrote).magnitude() < 1e-4, "{read:?} vs {wrote:?}");
+        }
     }
 
     #[test]
