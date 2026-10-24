@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
+import { dataRoot } from "./helpers/crf.js";
+import { isolatedDataRoot } from "./helpers/isolated-data-root.js";
 
-import { findRepoRoot, GameServer } from "../src/index.js";
+import { GameServer } from "../src/index.js";
 import {
   AIM_AT_PANEL, clickCanvas, DEV_ACTION, DEV_DONE, norm, panelPoint,
   pauseEntry, vrClickCanvasPoint,
@@ -16,25 +17,9 @@ const SLOT_ROW: [number, number] = [362, 63.5 + 11 * 19];
 
 // Menu saves use fixed slots. Give each test its own writable save directory,
 // while sharing the retail assets, so no click can overwrite a user's save.
-function isolatedAssets(): { root: string; [Symbol.dispose](): void } {
-  const previous = process.env.DARK_ASSET_PATH;
-  const source = resolve(previous ?? join(findRepoRoot(process.cwd())!, "Data"));
-  assert.ok(existsSync(join(source, "sshock2.kpf")), "25AE assets are required");
-  const root = mkdtempSync(join(tmpdir(), "shock2-pause-save-"));
-  for (const entry of readdirSync(source, { withFileTypes: true })) {
-    if (entry.name !== "saves" && entry.name !== "recordings") {
-      symlinkSync(join(source, entry.name), join(root, entry.name), entry.isDirectory() ? "dir" : "file");
-    }
-  }
-  process.env.DARK_ASSET_PATH = root;
-  return {
-    root,
-    [Symbol.dispose]() {
-      if (previous === undefined) delete process.env.DARK_ASSET_PATH;
-      else process.env.DARK_ASSET_PATH = previous;
-      rmSync(root, { recursive: true, force: true });
-    },
-  };
+function isolatedAssets() {
+  assert.ok(existsSync(join(dataRoot(), "sshock2.kpf")), "25AE assets are required");
+  return isolatedDataRoot(["saves", "recordings"]);
 }
 
 async function aim(game: GameServer, vr: boolean, point: [number, number]): Promise<void> {
