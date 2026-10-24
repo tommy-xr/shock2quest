@@ -1732,7 +1732,7 @@ impl VrInteraction {
         };
         let personal = crate::world_scale::WorldScale::active().personal();
         let fingers = pose_tool::slot_fingers(tool.slot, &current.fingers, fitted.fit.bones);
-        let places = tool.slot == pose_tool::Slot::Rest && !tool.keep_placement;
+        let places = tool.places();
         let (grip, hand_pose) = if !places {
             // Fingers only: the wrist and item stay where the grip has them.
             (
@@ -1780,6 +1780,15 @@ impl VrInteraction {
         // previews in place while the mission is frozen; it refits from the
         // library when the workbench closes.
         tool.hand_pose = hand_pose;
+        // How far the glove now is from the tracked hand: ~0 when placed.
+        let live = GripPose {
+            position: fitted.fit.position,
+            rotation: fitted.fit.rotation,
+        };
+        let (offset_mm, turn_deg) = pose_tool::snapshot_offset(live, hand_pose);
+        println!(
+            "SHOCK2QUEST_VR_GRIP_POSE_TOOL snapshot_offset_mm={offset_mm:.1} snapshot_turn_deg={turn_deg:.1} placed={places}"
+        );
         if let Some(held) = self.fitted_grips[tool.hand].as_mut() {
             held.resolved = Some(entry.grip.for_world_scale());
             held.source = "prepared";
@@ -4200,16 +4209,18 @@ mod tests {
         assert_eq!(grip(&interaction).fingers, both.fingers);
     }
 
-    /// With placement kept (the default), a rest snapshot replaces only the
-    /// rest fingers: the item, wrist, glove turn, scale and trigger index
-    /// stay, and so does the glove on the bench. Off, it places them too.
+    /// With placement kept, a rest snapshot replaces only the rest fingers:
+    /// the item, wrist, glove turn, scale and trigger index stay, and so does
+    /// the glove on the bench. Off, it places them too.
     #[test]
     fn a_rest_snapshot_keeping_placement_takes_only_the_fingers() {
         use crate::vr_grip::FingerPose;
         use cgmath::{Deg, Rotation3};
         let dir = crate::test_support::TempDir::new("pose-fingers-only");
         let mut interaction = staged_workbench(dir.path().join("o.json"));
-        interaction.pose_tool.as_mut().unwrap().staged = None;
+        let tool = interaction.pose_tool.as_mut().unwrap();
+        tool.staged = None;
+        tool.keep_placement = true;
         let world = World::new();
         let pulled = tracked_glove(1.0).fit.bones;
         let before = {
@@ -4267,6 +4278,69 @@ mod tests {
         let tool = interaction.pose_tool.as_ref().unwrap();
         let millimetre = 0.001 / crate::world_scale::meters_per_world_unit();
         assert!((tool.hand_pose.position - glove.fit.position).magnitude() < millimetre);
+    }
+
+    /// The posing hand's live glove is drawn where a snapshot leaves it, so
+    /// snapshotting never moves it: captured (the default) at the tracked
+    /// palm; kept, at the stored glove, its fingers still live. The snapshot
+    /// log's offset reads the difference.
+    #[test]
+    fn the_live_glove_is_drawn_where_its_snapshot_leaves_it() {
+        use cgmath::{Deg, Rotation3};
+        let dir = crate::test_support::TempDir::new("pose-live-glove");
+        let mut interaction = staged_workbench(dir.path().join("o.json"));
+        interaction.pose_tool.as_mut().unwrap().staged = None;
+        let world = World::new();
+        let glove = tracked_glove(0.3);
+        let palm = GripPose {
+            position: glove.fit.position,
+            rotation: glove.fit.rotation,
+        };
+        let at = |a: GripPose, b: GripPose| {
+            let (mm, deg) = pose_tool::snapshot_offset(a, b);
+            mm < 0.01 && deg < 0.01
+        };
+
+        let tool = interaction.pose_tool.as_mut().unwrap();
+        let posing = tool.posing();
+        assert!(!tool.keep_placement, "placement captured by default");
+        assert!(at(tool.live_glove_pose(posing, &glove), palm));
+        assert!(interaction.capture_grip(&world, Some(&glove)));
+        let tool = interaction.pose_tool.as_mut().unwrap();
+        assert!(at(tool.hand_pose, palm), "the snapshot lands on the palm");
+
+        // Kept: the stored glove, 30 mm and 10 deg off the tracked palm.
+        let stored = GripPose {
+            position: palm.position
+                + vec3(0.03 / crate::world_scale::meters_per_world_unit(), 0.0, 0.0),
+            rotation: palm.rotation * Quaternion::from_angle_y(Deg(10.0)),
+        };
+        tool.hand_pose = stored;
+        tool.keep_placement = true;
+        assert!(
+            at(tool.live_glove_pose(posing, &glove), stored),
+            "drawn at the stored placement, not the tracked palm"
+        );
+        assert!(
+            at(tool.live_glove_pose(1 - posing, &glove), palm),
+            "the free hand stays on its palm"
+        );
+        assert!(interaction.capture_grip(&world, Some(&glove)));
+        let tool = interaction.pose_tool.as_mut().unwrap();
+        assert!(at(tool.hand_pose, stored), "no jump on the snapshot");
+        assert!(at(tool.live_glove_pose(posing, &glove), stored));
+        let (mm, deg) = pose_tool::snapshot_offset(palm, tool.hand_pose);
+        assert!(
+            (mm - 30.0).abs() < 0.01 && (deg - 10.0).abs() < 0.01,
+            "{mm} mm {deg} deg"
+        );
+
+        // The trigger slot keeps it too; a support pose is taken where tracked.
+        tool.keep_placement = false;
+        assert!(tool.toggle_slot());
+        assert!(at(tool.live_glove_pose(posing, &glove), stored));
+        tool.set_support(true);
+        assert!(at(tool.live_glove_pose(tool.posing(), &glove), palm));
     }
 
     /// The Index steps set the trigger pose to the rest with the index a
