@@ -1822,8 +1822,7 @@ impl VrInteraction {
             return false;
         }
         let personal = crate::world_scale::WorldScale::active().personal();
-        let captured = tool.with_locked(&current.fingers, fitted.fit.bones);
-        let fingers = pose_tool::slot_fingers(tool.slot, &current.fingers, captured);
+        let fingers = tool.snapshot_fingers(&current.fingers, fitted.fit.bones);
         let places = tool.places();
         let (grip, hand_pose) = if !places {
             // Fingers only: the wrist and item stay where the grip has them.
@@ -2103,8 +2102,9 @@ impl VrInteraction {
         };
         let profile = self.support_profiles.get(&held.model);
         let posed = glove.ok_or("degenerate_joints").and_then(|(glove, bones)| {
+            let profile = profile.ok_or("invalid_support_pose")?;
             // Locked fingers keep the support pose's.
-            let bones = profile.map_or(bones, |profile| tool.with_locked(&profile.fingers, bones));
+            let bones = tool.with_locked(&profile.fingers, bones);
             let pose = SupportProfile::captured_pose(
                 [Handedness::Left, Handedness::Right][tool.hand],
                 model,
@@ -2118,9 +2118,9 @@ impl VrInteraction {
                 },
             )
             .ok_or("degenerate_joints")?;
-            self.support_profiles
-                .get(&held.model)
-                .is_some_and(|profile| profile.with_pose(&pose).is_valid())
+            profile
+                .with_pose(&pose)
+                .is_valid()
                 .then_some(pose)
                 .ok_or("invalid_support_pose")
         });

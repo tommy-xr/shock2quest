@@ -1280,15 +1280,11 @@ impl GripSurface {
                     let rest = moved_fingers(bones, &amounts, &open, &fist);
                     FingerPose::Bones {
                         bones: rest,
-                        trigger_bones: trigger_bones.map(|mut pulled| {
+                        trigger_bones: trigger_bones.map(|pulled| {
                             let behind =
                                 fingers[1] && bones_to_curls(&pulled)[1] < bones_to_curls(&rest)[1];
-                            for f in (0..5).filter(|&f| follows(f) || (f == 1 && behind)) {
-                                for i in FINGER_BONES[f].clone() {
-                                    pulled[i] = rest[i];
-                                }
-                            }
-                            pulled
+                            let take = std::array::from_fn(|f| follows(f) || (f == 1 && behind));
+                            with_fingers(&pulled, &rest, take)
                         }),
                     }
                 }
