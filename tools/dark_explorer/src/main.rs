@@ -90,6 +90,9 @@ enum Commands {
         /// Write a PNG of the first rendered frame to this path and exit
         #[arg(long)]
         screenshot: Option<std::path::PathBuf>,
+        /// Initial window size in points, as WIDTHxHEIGHT (e.g. 2000x900)
+        #[arg(long, default_value = "1150x760", value_parser = parse_window_size)]
+        window_size: [f32; 2],
         /// Initial model-preview ambient level (0 to 1)
         #[arg(long)]
         model_ambient: Option<f32>,
@@ -166,6 +169,15 @@ enum Commands {
         /// Pulled vr-grip-overrides.json
         overrides: std::path::PathBuf,
     },
+}
+
+/// "2000x900" -> [2000.0, 900.0].
+fn parse_window_size(text: &str) -> Result<[f32; 2], String> {
+    let size = text
+        .split_once('x')
+        .and_then(|(w, h)| Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?]))
+        .filter(|size| size.iter().all(|v| *v >= 1.0));
+    size.ok_or_else(|| format!("expected WIDTHxHEIGHT, got {text:?}"))
 }
 
 fn ls(family: Option<String>, filter: Option<String>, limit: usize) {
@@ -298,6 +310,7 @@ fn main() {
             grip_view,
             grip_library,
             screenshot,
+            window_size,
             model_ambient,
             model_lights,
             play_song,
@@ -328,6 +341,7 @@ fn main() {
             grip_view,
             grip_library,
             screenshot,
+            window_size,
             model_ambient,
             model_lights,
             play_song,

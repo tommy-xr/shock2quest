@@ -41,6 +41,7 @@ pub struct UiOptions {
     pub grip_view: String,
     pub grip_library: Option<PathBuf>,
     pub screenshot: Option<PathBuf>,
+    pub window_size: [f32; 2],
     pub model_ambient: Option<f32>,
     pub model_lights: Option<String>,
     pub play_song: bool,
@@ -70,7 +71,7 @@ pub struct UiOptions {
 pub fn run(options: UiOptions) {
     explorer::print_coverage_caveat();
     let viewport = egui::ViewportBuilder::default()
-        .with_inner_size([1150.0, 760.0])
+        .with_inner_size(options.window_size)
         .with_title("dark_explorer");
     let native_options = eframe::NativeOptions {
         viewport,
