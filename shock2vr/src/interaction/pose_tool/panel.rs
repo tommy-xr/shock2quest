@@ -204,8 +204,10 @@ pub(in crate::interaction) struct PanelView {
     /// switch or why not.
     pub keep_placement: bool,
     pub placement_entry: Result<(), String>,
-    /// How far the trigger pose curls the index (`None`: no trigger pose).
+    /// How far the trigger pose curls the index (`None`: no trigger pose),
+    /// and whether its steps can act or why not.
     pub trigger_index: Option<f32>,
+    pub index_entry: Result<(), String>,
     /// Whether Tighten can act, or why not.
     pub tighten: Result<(), String>,
     /// A snapshot awaits Save or Discard.
@@ -417,8 +419,14 @@ pub(in crate::interaction) fn emit(
             view.placement_entry.clone(),
         )),
         Slot::Trigger => {
-            buttons.push((INDEX_LESS, "-".to_owned(), PanelEvent::IndexLess, Ok(())));
-            buttons.push((INDEX_MORE, "+".to_owned(), PanelEvent::IndexMore, Ok(())));
+            let index = view.index_entry.clone();
+            buttons.push((
+                INDEX_LESS,
+                "-".to_owned(),
+                PanelEvent::IndexLess,
+                index.clone(),
+            ));
+            buttons.push((INDEX_MORE, "+".to_owned(), PanelEvent::IndexMore, index));
             // A readout, not a button: no trigger pose reads as the rest.
             canvas.fill(INDEX, BUTTON_DISABLED);
             canvas.text_fit(
@@ -457,11 +465,14 @@ pub(in crate::interaction) fn emit(
         (EXIT, "Exit".to_owned(), PanelEvent::Exit, Ok(())),
     ]);
     // Only a gun has an aim to show: the toggle is hidden for anything else,
-    // as are Align's steps while it cannot act (too narrow to say why).
+    // as are the Align and Index steps while they cannot act (too narrow to
+    // say why).
     let hidden_when_disabled = [
         PanelEvent::ShowAim,
         PanelEvent::AlignLess,
         PanelEvent::AlignMore,
+        PanelEvent::IndexLess,
+        PanelEvent::IndexMore,
     ];
     let shown = buttons
         .into_iter()
@@ -724,6 +735,7 @@ mod tests {
             keep_placement: true,
             placement_entry: Ok(()),
             trigger_index: None,
+            index_entry: Ok(()),
             tighten: Ok(()),
             staged: false,
             fingertip: false,
@@ -1038,6 +1050,9 @@ mod tests {
         assert_eq!(event_at(&targets, INDEX.center()), None, "a readout");
         trigger.trigger_index = None;
         assert!(texts(&emit(&trigger, None).0).contains(&"Index +0%".to_owned()));
+        // The steps edit the primary grip: hidden while they cannot act.
+        trigger.index_entry = Err("primary grip only".to_owned());
+        assert!(!steps(&emit(&trigger, None).1));
         // Reset view and Exit share the bottom row with the aim toggle.
         assert_eq!(
             event_at(&targets, RESET_VIEW.center()),
