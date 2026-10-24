@@ -563,7 +563,8 @@ impl GripPoseTool {
         if self.slot != Slot::Trigger {
             Err("trigger slot only".to_owned())
         } else if self.locks[1] {
-            Err("index locked".to_owned())
+            // The Trigger slot's only finger.
+            Err(self.all_locked().replace('_', " "))
         } else {
             Ok(())
         }
@@ -572,6 +573,14 @@ impl GripPoseTool {
     /// Lock or unlock finger `finger` (0 thumb .. 4 little).
     pub fn toggle_lock(&mut self, finger: usize) {
         self.locks[finger] = !self.locks[finger];
+        // A snapshot refused for locks is stale once they change.
+        if self
+            .capture_failure
+            .as_deref()
+            .is_some_and(|reason| reason.ends_with("_locked"))
+        {
+            self.capture_failure = None;
+        }
     }
 
     /// Whether a snapshot can set anything, or why not (a capture failure
@@ -590,6 +599,26 @@ impl GripPoseTool {
     pub fn with_locked(&self, stored: &FingerPose, tracked: FingerBones) -> FingerBones {
         let stored = stored.at(self.slot.trigger()).rest_bones();
         crate::vr_grip::with_fingers(&tracked, &stored, self.locks)
+    }
+
+    /// The fingers a primary snapshot of `tracked` stores over `stored`:
+    /// the slot's (`slot_fingers`), locked ones as stored.
+    pub fn snapshot_fingers(&self, stored: &FingerPose, tracked: FingerBones) -> FingerPose {
+        match slot_fingers(self.slot, stored, self.with_locked(stored, tracked)) {
+            // A locked index keeps its rest, so a curl grip's trigger pose
+            // still pairs with it: kept, as a bone grip's is.
+            FingerPose::Bones {
+                bones,
+                trigger_bones: None,
+            } if self.locks[1] && stored.has_trigger_pose() => FingerPose::Bones {
+                trigger_bones: Some(crate::vr_grip::with_index(
+                    &bones,
+                    &stored.at(1.0).rest_bones(),
+                )),
+                bones,
+            },
+            fingers => fingers,
+        }
     }
 
     /// A primary snapshot places the glove where the tracked hand is: a rest
@@ -619,8 +648,7 @@ impl GripPoseTool {
         let stored =
             stored.filter(|_| index == self.posing() && (kept || self.locks.contains(&true)))?;
         let at = if kept { self.hand_pose } else { glove.palm() };
-        let fingers = self.with_locked(stored, glove.fit.bones);
-        Some((at, slot_fingers(self.slot, stored, fingers)))
+        Some((at, self.snapshot_fingers(stored, glove.fit.bones)))
     }
 
     /// The trigger value the posed glove is drawn at: test hold's controller
@@ -1946,6 +1974,41 @@ mod tests {
             tool.with_locked(&stored, tracked),
             with_fingers(&tracked, &pulled, locked)
         );
+    }
+
+    /// A curl grip's trigger pose survives a rest snapshot while the index is
+    /// locked (the rest index it pairs with is kept); unlocked, it goes.
+    #[test]
+    fn a_locked_index_keeps_a_curl_grips_trigger_pose_through_a_rest_snapshot() {
+        use crate::vr_grip::with_index;
+        let mut tool = posing_tool();
+        let stored = FingerPose::curls([0.2; 5]).with_trigger_index(0.6);
+        let tracked = FingerPose::curls([0.9; 5]).rest_bones();
+        assert!(!tool.snapshot_fingers(&stored, tracked).has_trigger_pose());
+        tool.toggle_lock(1);
+        let FingerPose::Bones {
+            bones,
+            trigger_bones,
+        } = tool.snapshot_fingers(&stored, tracked)
+        else {
+            panic!("a snapshot is bones");
+        };
+        assert_eq!(
+            trigger_bones,
+            Some(with_index(&bones, &stored.at(1.0).rest_bones()))
+        );
+    }
+
+    /// A snapshot refused for locks stops saying so once they change.
+    #[test]
+    fn changing_a_lock_clears_a_lock_refusal() {
+        let mut tool = posing_tool();
+        tool.capture_failure = Some("index_locked".to_owned());
+        tool.toggle_lock(1);
+        assert_eq!(tool.capture_failure, None);
+        tool.capture_failure = Some("window_short".to_owned());
+        tool.toggle_lock(1);
+        assert_eq!(tool.capture_failure.as_deref(), Some("window_short"));
     }
 
     #[test]

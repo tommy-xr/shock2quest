@@ -59,7 +59,7 @@ impl CurlPoseEditor {
             ui.label("Lock:");
             for (name, lock) in FINGER_NAMES.into_iter().zip(self.locks.iter_mut()) {
                 ui.checkbox(lock, name)
-                    .on_hover_text("Keep this finger as it is while editing the others");
+                    .on_hover_text("Keep this finger: its sliders, presets and Tighten skip it");
             }
         });
         if let FingerPose::Bones { .. } = fingers {
