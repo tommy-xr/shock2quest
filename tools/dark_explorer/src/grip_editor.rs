@@ -993,20 +993,72 @@ impl GripEditor {
             self.holster_editor.show(ui, frame, preview);
             return;
         }
-        if ui.button("Edit holster pose").clicked() {
-            self.holster_editor.open_model(&self.model);
-            self.mode = VrSetupMode::Holster;
-            return;
-        }
         if matches!(self.model.as_str(), "amp_h" | "amp_w") {
+            if self.holster_button(ui) {
+                return;
+            }
             ui.heading("Psi amp — integrated forearm reference");
             ui.label("The psi amp retains its authored forearm and does not use a glove override.");
             preview.show(ui, frame, "amp_h.bin", &PreviewScene::VrReference);
             return;
         }
+        // Controls scroll in a resizable right pane so the preview keeps the
+        // rest of the tab at full height.
+        let mut shown = None;
+        egui::Panel::right(egui::Id::new("grip_controls"))
+            .resizable(true)
+            .default_size(420.0)
+            .min_size(320.0)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| shown = self.show_controls(ui, preview));
+            });
+        let Some((scene, grip_camera)) = shown else {
+            return;
+        };
+        let hand = if self.hand == "left" {
+            Handedness::Left
+        } else {
+            Handedness::Right
+        };
+        // Build first, then select the requested camera so the initial model
+        // framing cannot overwrite it. show() keeps the same camera on edits.
+        preview.show_grip(
+            ui,
+            frame,
+            &format!("{}.bin", self.model),
+            &scene,
+            (grip_camera && self.camera_pending).then_some((&self.view, hand)),
+        );
+        if grip_camera {
+            self.camera_pending = false;
+        }
+    }
+
+    /// Switches to the holster editor when clicked.
+    fn holster_button(&mut self, ui: &mut egui::Ui) -> bool {
+        let clicked = ui.button("Edit holster pose").clicked();
+        if clicked {
+            self.holster_editor.open_model(&self.model);
+            self.mode = VrSetupMode::Holster;
+        }
+        clicked
+    }
+
+    /// The editing pane. Returns the scene to preview and whether it takes a
+    /// pending grip camera, or `None` when nothing should be previewed.
+    fn show_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        preview: &mut ModelPreview,
+    ) -> Option<(PreviewScene, bool)> {
+        if self.holster_button(ui) {
+            return None;
+        }
         if let (Err(error), _) | (_, Err(error)) = (&self.document, &self.hints) {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
-            return;
+            return None;
         }
         self.poll_fit(ui.ctx());
         if self.prepare_missing && !self.is_busy() {
@@ -1047,7 +1099,7 @@ impl GripEditor {
                 ui.selectable_value(&mut self.support_mode, true, "Support grip");
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Primary hand");
             for hand in ["left", "right"] {
                 if ui
@@ -1082,13 +1134,7 @@ impl GripEditor {
             if !busy && ui.button("Prepare left and right drafts").clicked() {
                 self.prepare_missing = true;
             }
-            preview.show(
-                ui,
-                frame,
-                &format!("{}.bin", self.model),
-                &PreviewScene::Model,
-            );
-            return;
+            return Some((PreviewScene::Model, false));
         };
         let hand = if self.hand == "left" {
             Handedness::Left
@@ -1102,7 +1148,7 @@ impl GripEditor {
                 Ok(None) => unreachable!(),
                 Err(error) => {
                     ui.label(error);
-                    return;
+                    return None;
                 }
             }
         }
@@ -1127,7 +1173,7 @@ impl GripEditor {
                 Ok(mirror) => mirror,
                 Err(error) => {
                     ui.label(error);
-                    return;
+                    return None;
                 }
             };
             self.support_editor.show(
@@ -1146,17 +1192,10 @@ impl GripEditor {
                 self.support_editor.preview_profile(&self.model),
                 None,
             );
-            preview.show_grip(
-                ui,
-                frame,
-                &key,
-                &scene,
-                self.camera_pending.then_some((&self.view, hand)),
-            );
-            self.camera_pending = false;
-            return;
+            preview.show_lighting(ui, false);
+            return Some((scene, true));
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let label = if doc.dirty() || self.support_editor.dirty() {
                 "Save all edits *"
             } else {
@@ -1254,8 +1293,138 @@ impl GripEditor {
             }
             if let Some((model, _)) = &self.clipboard { ui.small(format!("Copied: {model} · both hands + trigger poses")); }
         });
+        let entry = &mut doc.library.entries[index];
+        let before = entry.grip.clone();
+        // Keep entered Euler angles stable while dragging across a singularity;
+        // only re-project when the pose changes outside these sliders.
+        if self
+            .rotation_edit
+            .as_ref()
+            .is_none_or(|(q, _)| *q != entry.grip.rotation)
+        {
+            let angles: Euler<Rad<f32>> = entry.grip.rotation.into();
+            self.rotation_edit = Some((
+                entry.grip.rotation,
+                [
+                    angles.x.0.to_degrees(),
+                    angles.y.0.to_degrees(),
+                    angles.z.0.to_degrees(),
+                ],
+            ));
+        }
+        let mut tightened = None;
+        egui::CollapsingHeader::new("Placement")
+            .id_salt("grip_placement")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.strong("Position (cm)");
+                    for (axis, value) in ["X", "Y", "Z"].into_iter().zip([
+                        &mut entry.grip.offset.x,
+                        &mut entry.grip.offset.y,
+                        &mut entry.grip.offset.z,
+                    ]) {
+                        let mut cm = *value * shock2vr::METERS_PER_WORLD_UNIT * 100.0;
+                        if tweak_slider(ui, axis, &mut cm, -50.0..=50.0, 0.1, 2) {
+                            *value = cm / (shock2vr::METERS_PER_WORLD_UNIT * 100.0);
+                        }
+                    }
+                    ui.strong("Rotation (degrees)");
+                    let (last, angles) = self.rotation_edit.as_mut().unwrap();
+                    let mut changed = false;
+                    for (axis, angle) in ["X", "Y", "Z"].into_iter().zip(angles.iter_mut()) {
+                        changed |=
+                            tweak_slider(ui, axis, angle, -180.0..=180.0, self.rotation_step, 1);
+                    }
+                    if changed {
+                        entry.grip.rotation = Quaternion::from(Euler::new(
+                            Deg(angles[0]),
+                            Deg(angles[1]),
+                            Deg(angles[2]),
+                        ))
+                        .normalize();
+                        *last = entry.grip.rotation;
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Rotation nudge step");
+                        ui.add(egui::Slider::new(&mut self.rotation_step, 0.1..=15.0).suffix("°"));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Uniform item scale");
+                        ui.add_enabled_ui(!magazine, |ui| {
+                            tweak_slider(ui, "×", &mut entry.grip.item_scale, 0.1..=3.0, 0.02, 2);
+                        });
+                    });
+                });
+            });
+        self.curl_editor
+            .edit(&format!("{}/{}", self.model, self.hand));
+        egui::CollapsingHeader::new("Fingers")
+            .id_salt("grip_fingers")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!busy, |ui| {
+                    self.curl_editor.show_fingers(
+                        ui,
+                        &mut entry.grip.fingers,
+                        "Primary trigger preview",
+                    );
+                    tightened = tighten_button(
+                        ui,
+                        &mut entry.grip,
+                        self.curl_editor.pressed,
+                        self.curl_editor.locks,
+                        |grip, pressed, fingers| {
+                            preview.tighten_grip(&key, hand, grip, pressed, fingers)
+                        },
+                    );
+                });
+            });
+        let after_tighten_contacts = entry.grip.contacts;
+        if before != entry.grip {
+            entry.authored = true;
+            // Contact diagnostics describe the old solver pose, not this edit.
+            entry.grip.contacts = [None; 5];
+            entry.grip.score = 0.0;
+        }
+        match tightened {
+            // Its contacts describe the tightened fingers.
+            Some(Ok(message)) => {
+                entry.grip.contacts = after_tighten_contacts;
+                self.message = message;
+            }
+            Some(Err(error)) => self.message = error,
+            None => {}
+        }
+        if !self.message.is_empty() {
+            ui.label(&self.message);
+        }
+        ui.small("Drag sliders or click values to type. Ball is a cupped starting pose; adjust curls to the item. Unsaved drafts stay when switching models.");
+        if let Some(muzzle) = self.muzzle
+            && egui::CollapsingHeader::new("Aim")
+                .id_salt("grip_aim")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(!busy, |ui| {
+                        aim_controls(ui, &mut self.show_aim, &mut entry.grip, muzzle)
+                    })
+                    .inner
+                })
+                .body_returned
+                .unwrap_or(false)
+        {
+            entry.authored = true;
+        }
+        let mut visual_grip = entry.grip.clone();
+        visual_grip.fingers = entry.grip.fingers.at(self.curl_editor.preview);
+        let scene = PreviewScene::Grip(
+            hand,
+            visual_grip,
+            self.support_editor.preview_profile(&self.model),
+            self.muzzle.filter(|_| self.show_aim),
+        );
         egui::CollapsingHeader::new("Automatic fitting").show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if shock2vr::vr_weapon_grip::supports_model(&self.model) {
                     ui.label("Fit near the authored weapon grip");
                 } else {
@@ -1288,136 +1457,7 @@ impl GripEditor {
                 }
             });
         });
-        let entry = &mut doc.library.entries[index];
-        let before = entry.grip.clone();
-        // Keep entered Euler angles stable while dragging across a singularity;
-        // only re-project when the pose changes outside these sliders.
-        if self
-            .rotation_edit
-            .as_ref()
-            .is_none_or(|(q, _)| *q != entry.grip.rotation)
-        {
-            let angles: Euler<Rad<f32>> = entry.grip.rotation.into();
-            self.rotation_edit = Some((
-                entry.grip.rotation,
-                [
-                    angles.x.0.to_degrees(),
-                    angles.y.0.to_degrees(),
-                    angles.z.0.to_degrees(),
-                ],
-            ));
-        }
-        let mut tightened = None;
-        ui.add_enabled_ui(!busy, |ui| {
-            ui.columns(3, |columns| {
-                columns[0].strong("Position (cm)");
-                for (axis, value) in ["X", "Y", "Z"].into_iter().zip([
-                    &mut entry.grip.offset.x,
-                    &mut entry.grip.offset.y,
-                    &mut entry.grip.offset.z,
-                ]) {
-                    let mut cm = *value * shock2vr::METERS_PER_WORLD_UNIT * 100.0;
-                    if tweak_slider(&mut columns[0], axis, &mut cm, -50.0..=50.0, 0.1, 2) {
-                        *value = cm / (shock2vr::METERS_PER_WORLD_UNIT * 100.0);
-                    }
-                }
-                columns[1].strong("Rotation (degrees)");
-                let (last, angles) = self.rotation_edit.as_mut().unwrap();
-                let mut changed = false;
-                for (axis, angle) in ["X", "Y", "Z"].into_iter().zip(angles.iter_mut()) {
-                    changed |= tweak_slider(
-                        &mut columns[1],
-                        axis,
-                        angle,
-                        -180.0..=180.0,
-                        self.rotation_step,
-                        1,
-                    );
-                }
-                if changed {
-                    entry.grip.rotation = Quaternion::from(Euler::new(
-                        Deg(angles[0]),
-                        Deg(angles[1]),
-                        Deg(angles[2]),
-                    ))
-                    .normalize();
-                    *last = entry.grip.rotation;
-                }
-                columns[2].strong("Finger curls");
-                self.curl_editor
-                    .edit(&format!("{}/{}", self.model, self.hand));
-                self.curl_editor.show_fingers(
-                    &mut columns[2],
-                    &mut entry.grip.fingers,
-                    "Primary trigger preview",
-                );
-                tightened = tighten_button(
-                    &mut columns[2],
-                    &mut entry.grip,
-                    self.curl_editor.pressed,
-                    self.curl_editor.locks,
-                    |grip, pressed, fingers| {
-                        preview.tighten_grip(&key, hand, grip, pressed, fingers)
-                    },
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("Rotation nudge step");
-                ui.add(egui::Slider::new(&mut self.rotation_step, 0.1..=15.0).suffix("°"));
-                ui.separator();
-                ui.label("Uniform item scale");
-                ui.add_enabled_ui(!magazine, |ui| {
-                    tweak_slider(ui, "×", &mut entry.grip.item_scale, 0.1..=3.0, 0.02, 2);
-                });
-            });
-        });
-        let after_tighten_contacts = entry.grip.contacts;
-        if before != entry.grip {
-            entry.authored = true;
-            // Contact diagnostics describe the old solver pose, not this edit.
-            entry.grip.contacts = [None; 5];
-            entry.grip.score = 0.0;
-        }
-        match tightened {
-            // Its contacts describe the tightened fingers.
-            Some(Ok(message)) => {
-                entry.grip.contacts = after_tighten_contacts;
-                self.message = message;
-            }
-            Some(Err(error)) => self.message = error,
-            None => {}
-        }
-        if !self.message.is_empty() {
-            ui.label(&self.message);
-        }
-        ui.small("Drag sliders or click values to type. Ball is a cupped starting pose; adjust curls to the item. Unsaved drafts stay when switching models.");
-        if let Some(muzzle) = self.muzzle
-            && ui
-                .add_enabled_ui(!busy, |ui| {
-                    aim_controls(ui, &mut self.show_aim, &mut entry.grip, muzzle)
-                })
-                .inner
-        {
-            entry.authored = true;
-        }
-        // Build first, then select the requested camera so the initial model
-        // framing cannot overwrite it. show() keeps the same camera on edits.
-        let mut visual_grip = entry.grip.clone();
-        visual_grip.fingers = entry.grip.fingers.at(self.curl_editor.preview);
-        let scene = PreviewScene::Grip(
-            hand,
-            visual_grip,
-            self.support_editor.preview_profile(&self.model),
-            self.muzzle.filter(|_| self.show_aim),
-        );
-        preview.show_grip(
-            ui,
-            frame,
-            &key,
-            &scene,
-            self.camera_pending.then_some((&self.view, hand)),
-        );
-        self.camera_pending = false;
+        preview.show_lighting(ui, false);
         if let Some(path) = &mut self.save_as_path {
             let mut close = false;
             egui::Modal::new(egui::Id::new("save_grips_as")).show(ui.ctx(), |ui| {
@@ -1454,6 +1494,7 @@ impl GripEditor {
                 self.family.is_some(),
             );
         }
+        Some((scene, true))
     }
 }
 
