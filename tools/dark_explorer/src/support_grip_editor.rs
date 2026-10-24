@@ -304,6 +304,7 @@ impl SupportEditor {
                             }
                         }
                         columns[2].strong("Support finger curls");
+                        self.curl_editor.edit(model);
                         self.curl_editor.show_fingers(
                             &mut columns[2],
                             &mut profile.fingers,

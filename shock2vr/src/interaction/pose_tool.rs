@@ -239,6 +239,10 @@ pub(super) struct GripPoseTool {
     /// How far the grip's trigger pose curls the index from rest toward a
     /// fist (`FingerPose::trigger_index`), which the Index steps move.
     pub trigger_index: Option<f32>,
+    /// Fingers (thumb..little) frozen at the posed pose's stored shape:
+    /// drawn, snapshotted and tightened as stored. Editing state only, reset
+    /// whenever another hand or grip (`restart_posing`) or item is posed.
+    pub locks: [bool; 5],
     /// The posed hand's item mesh is known, so Tighten can close onto it.
     pub item_mesh: bool,
     /// The free hand is tracked, so it works the panel by fingertip.
@@ -380,6 +384,7 @@ impl GripPoseTool {
             slot: Slot::Rest,
             keep_placement: false,
             trigger_index: None,
+            locks: [false; 5],
             item_mesh: false,
             fingertip: false,
             test_hold: None,
@@ -531,9 +536,60 @@ impl GripPoseTool {
             Err("primary grip only".to_owned())
         } else if !self.item_mesh {
             Err("no item mesh".to_owned())
+        } else if !self.editable().contains(&true) {
+            Err(self.all_locked().replace('_', " "))
         } else {
             Ok(())
         }
+    }
+
+    /// The fingers this slot's snapshot and Tighten set, less the locked:
+    /// all five at rest, the index in the Trigger slot.
+    pub fn editable(&self) -> [bool; 5] {
+        crate::vr_grip::tighten_fingers(self.slot == Slot::Trigger, self.locks)
+    }
+
+    /// Why this slot can change no finger: they are locked.
+    fn all_locked(&self) -> &'static str {
+        match self.slot {
+            Slot::Rest => "fingers_locked",
+            Slot::Trigger => "index_locked",
+        }
+    }
+
+    /// Whether the Index steps can act, or why not: in the Trigger slot,
+    /// with the index unlocked.
+    pub fn index_step_entry(&self) -> Result<(), String> {
+        if self.slot != Slot::Trigger {
+            Err("trigger slot only".to_owned())
+        } else if self.locks[1] {
+            Err("index locked".to_owned())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Lock or unlock finger `finger` (0 thumb .. 4 little).
+    pub fn toggle_lock(&mut self, finger: usize) {
+        self.locks[finger] = !self.locks[finger];
+    }
+
+    /// Whether a snapshot can set anything, or why not (a capture failure
+    /// reason): a fingers-only one (`places` off) with every finger of its
+    /// slot locked would set nothing.
+    pub fn snapshot_entry(&self) -> Result<(), &'static str> {
+        if !self.support && !self.places() && !self.editable().contains(&true) {
+            Err(self.all_locked())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// `tracked` with each locked finger as `stored` holds it in this slot
+    /// (its trigger pose in the Trigger slot): what a snapshot takes.
+    pub fn with_locked(&self, stored: &FingerPose, tracked: FingerBones) -> FingerBones {
+        let stored = stored.at(self.slot.trigger()).rest_bones();
+        crate::vr_grip::with_fingers(&tracked, &stored, self.locks)
     }
 
     /// A primary snapshot places the glove where the tracked hand is: a rest
@@ -543,26 +599,28 @@ impl GripPoseTool {
     }
 
     /// The posing glove on a primary grip whose snapshot keeps the placement
-    /// is drawn as that snapshot would store it (`kept_glove`).
+    /// is drawn as that snapshot would store it (`snapshot_glove`).
     fn live_at_placement(&self) -> bool {
         !self.support && !self.places()
     }
 
-    /// Tracked glove `index` drawn as a snapshot of it would store it, when
-    /// that keeps `grip`'s placement: at the stored glove, with the slot's
-    /// fingers from the live hand (a trigger slot's live index over the
-    /// rest). `None`: drawn as tracked.
-    pub fn kept_glove(
+    /// Tracked glove `index` drawn as a snapshot of it would store it over
+    /// the posed pose's `stored` fingers, when that differs from the tracked
+    /// hand: at the stored glove when the snapshot keeps the placement, and
+    /// with the slot's fingers from the live hand (a trigger slot's live
+    /// index over the rest), locked ones as stored. `None`: drawn as tracked.
+    pub fn snapshot_glove(
         &self,
         index: usize,
         glove: &TrackedGlove,
-        grip: Option<&ResolvedGrip>,
+        stored: Option<&FingerPose>,
     ) -> Option<(GripPose, FingerPose)> {
-        let grip = grip.filter(|_| index == self.posing() && self.live_at_placement())?;
-        Some((
-            self.hand_pose,
-            slot_fingers(self.slot, &grip.fingers, glove.fit.bones),
-        ))
+        let kept = self.live_at_placement();
+        let stored =
+            stored.filter(|_| index == self.posing() && (kept || self.locks.contains(&true)))?;
+        let at = if kept { self.hand_pose } else { glove.palm() };
+        let fingers = self.with_locked(stored, glove.fit.bones);
+        Some((at, slot_fingers(self.slot, stored, fingers)))
     }
 
     /// The trigger value the posed glove is drawn at: test hold's controller
@@ -603,6 +661,8 @@ impl GripPoseTool {
     /// the old one starts over, from its rest slot.
     fn restart_posing(&mut self) {
         self.slot = Slot::Rest;
+        // Locks name the fingers that looked right on the old pose.
+        self.locks = [false; 5];
         self.tip_error_mm = None;
         self.hand_size_ratio = None;
         self.capture_failure = None;
@@ -739,7 +799,9 @@ impl GripPoseTool {
             "slot_disabled": view.slot_entry.err(),
             "keep_placement": self.keep_placement,
             "trigger_index": self.trigger_index,
+            "index_steps_disabled": view.index_steps.err(),
             "tighten_disabled": view.tighten.err(),
+            "locks": self.locks,
             "hover": self.hover,
             "panel": placed,
             // The bench's view turn about its pivot (world space).
@@ -780,7 +842,9 @@ impl GripPoseTool {
             keep_placement: self.keep_placement,
             placement_entry: self.placement_entry(),
             trigger_index: self.trigger_index,
+            index_steps: self.index_step_entry(),
             tighten: self.tighten_entry(),
+            locks: self.locks,
             staged: self.staged.is_some(),
             fingertip: self.fingertip,
         }
@@ -1228,23 +1292,29 @@ fn named_glove(
 /// the posing hand is tracked its live glove replaces the saved grip's, which
 /// would only be in its way; a staged grip shows as the preview, unless the
 /// live glove is drawn as a rest snapshot keeping it would store it
-/// (`kept_glove`).
+/// (`snapshot_glove`).
 /// In support mode the posed glove is `support` (its saved or staged pose)
 /// and the grip hand's glove is drawn frozen at its grip.
 pub(super) fn render(
     tool: &GripPoseTool,
     renderer: &mut GloveRenderer,
     grip: Option<&ResolvedGrip>,
-    support: Option<(GripPose, HandShape)>,
+    support: Option<(GripPose, &FingerPose)>,
     lights: Option<Rc<LightArray>>,
 ) -> Vec<SceneObject> {
     let handedness = |index: usize| [Handedness::Left, Handedness::Right][index];
     let mut objs = Vec::new();
     let mut posed = Vec::new();
     let mut posing_tracked = false;
+    // The posed pose's fingers, which locked live fingers show.
+    let stored = if tool.support {
+        support.map(|(_, fingers)| fingers)
+    } else {
+        grip.map(|grip| &grip.fingers)
+    };
     for (index, glove) in tool.gloves.iter().enumerate() {
         let Some(glove) = glove else { continue };
-        let (at, shape) = match tool.kept_glove(index, glove, grip) {
+        let (at, shape) = match tool.snapshot_glove(index, glove, stored) {
             Some((at, fingers)) => (at, fingers.hand_shape_at(tool.preview_trigger())),
             None => (glove.palm(), HandShape::Pose(glove.pose.clone())),
         };
@@ -1274,6 +1344,7 @@ pub(super) fn render(
         (tool.holding(grip), grip.fingers.hand_shape_at(trigger))
     });
     let (posed_glove, frozen) = if tool.support {
+        let support = support.map(|(pose, fingers)| (pose, fingers.hand_shape_at(0.0)));
         (support, held)
     } else {
         (held, None)
@@ -1806,6 +1877,74 @@ mod tests {
                 FingerFit::Skipped
             ]),
             "fingers=[closed,opened,snug,none,skip] contact_mm=[1.0,1.0,1.0,-,-]"
+        );
+    }
+
+    /// Locks narrow what Tighten closes and a snapshot sets, refuse the Index
+    /// steps, and reset whenever another hand or grip is posed.
+    #[test]
+    fn locks_narrow_each_edit_and_reset_when_another_pose_is_posed() {
+        let mut tool = posing_tool();
+        tool.item_mesh = true;
+        assert_eq!(tool.locks, [false; 5], "opens unlocked");
+        tool.toggle_lock(0);
+        tool.toggle_lock(2);
+        assert_eq!(tool.editable(), [false, true, false, true, true]);
+        assert_eq!(tool.tighten_entry(), Ok(()));
+        // The Trigger slot sets the index only.
+        assert!(tool.toggle_slot());
+        assert_eq!(tool.editable(), [false, true, false, false, false]);
+        assert_eq!(tool.index_step_entry(), Ok(()));
+        tool.toggle_lock(1);
+        assert_eq!(tool.editable(), [false; 5]);
+        assert_eq!(tool.index_step_entry(), Err("index locked".to_owned()));
+        assert_eq!(tool.tighten_entry(), Err("index locked".to_owned()));
+        assert_eq!(tool.snapshot_entry(), Err("index_locked"));
+        // At rest, all locked: a snapshot placing the glove still sets that.
+        assert!(tool.toggle_slot());
+        assert_eq!(tool.index_step_entry(), Err("trigger slot only".to_owned()));
+        tool.locks = [true; 5];
+        assert_eq!(tool.tighten_entry(), Err("fingers locked".to_owned()));
+        assert_eq!(tool.snapshot_entry(), Ok(()), "places the glove");
+        tool.keep_placement = true;
+        assert_eq!(tool.snapshot_entry(), Err("fingers_locked"));
+        tool.toggle_lock(4);
+        assert_eq!(tool.snapshot_entry(), Ok(()));
+
+        tool.retarget(0, tool.hand_pose);
+        assert_eq!(tool.locks, [false; 5], "another hand");
+        tool.locks = [true; 5];
+        tool.set_support(true);
+        assert_eq!(tool.locks, [false; 5], "the support grip");
+        tool.locks = [true; 5];
+        assert_eq!(tool.snapshot_entry(), Ok(()), "a support snapshot places");
+        tool.set_support(false);
+        assert_eq!(tool.locks, [false; 5], "the primary again");
+    }
+
+    /// A snapshot takes the tracked fingers, each locked one as the stored
+    /// pose holds it in the slot (its trigger pose in the Trigger slot).
+    #[test]
+    fn a_locked_finger_takes_its_stored_bones_in_the_slots_pose() {
+        use crate::vr_grip::with_fingers;
+        let mut tool = posing_tool();
+        let stored = FingerPose::curls([0.2; 5]).with_trigger_index(0.8);
+        let tracked = FingerPose::curls([0.9; 5]).rest_bones();
+        assert_eq!(tool.with_locked(&stored, tracked), tracked, "none locked");
+        tool.toggle_lock(1);
+        tool.toggle_lock(4);
+        let locked = [false, true, false, false, true];
+        let rest = stored.rest_bones();
+        assert_eq!(
+            tool.with_locked(&stored, tracked),
+            with_fingers(&tracked, &rest, locked)
+        );
+        assert!(tool.toggle_slot());
+        let pulled = stored.at(1.0).rest_bones();
+        assert_ne!(pulled, rest);
+        assert_eq!(
+            tool.with_locked(&stored, tracked),
+            with_fingers(&tracked, &pulled, locked)
         );
     }
 
