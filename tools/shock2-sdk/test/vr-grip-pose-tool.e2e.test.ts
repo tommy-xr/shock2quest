@@ -1455,6 +1455,7 @@ test(
       assert.equal((await tool()).panel.keep_placement, false, "placement captured by default");
       await pressButton(game, "left", "Placement", unit);
       assert.equal((await tool()).panel.keep_placement, true);
+      // The last one named: the bench's own, drawn after its extra-view copies.
       const gloveAt = async (name: string) =>
         (await game.scene.objects()).objects.filter((o) => o.name === name).at(-1)!.position;
       const stored = await gloveAt("Right grip glove");
