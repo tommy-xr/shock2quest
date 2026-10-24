@@ -183,7 +183,7 @@ impl GloveRenderer {
 
     /// The glove's 26 skin joints (SteamVR order, so `XR_EXT_hand_tracking`
     /// order too) posed with `pose`, in calibrated hand space.
-    fn posed_joints(
+    pub(crate) fn posed_joints(
         &mut self,
         pose: &Pose,
         handedness: Handedness,

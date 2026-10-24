@@ -399,6 +399,13 @@ impl GripSurface {
         })
     }
 
+    /// Distance from a model-space point to the nearest surface, inside the
+    /// mesh or out.
+    pub fn distance(&self, point: Point3<f32>) -> f32 {
+        let p = na::Point3::new(point.x, point.y, point.z);
+        (p - self.mesh.project_local_point_and_get_feature(&p).0.point).norm()
+    }
+
     /// Bounded candidate search. Face rays select actual visible surfaces,
     /// including concave handles; AABBs only seed rays, never finger contacts.
     pub fn resolve(&self, hand: &GripKinematics, hints: &GripHints) -> Option<ResolvedGrip> {
@@ -1115,6 +1122,14 @@ mod tests {
         assert!(!grip.is_valid());
         grip.fingers = with_pressed([f32::NAN; 5]);
         assert!(!grip.is_valid());
+    }
+
+    #[test]
+    fn surface_distance_measures_to_the_nearest_face_inside_or_out() {
+        let surface = closed_cube();
+        assert!((surface.distance(point3(0.0, 0.0, 0.075)) - 0.025).abs() < 1e-5);
+        // Deep inside is far from every face, not touching.
+        assert!((surface.distance(point3(0.0, 0.0, 0.0)) - 0.05).abs() < 1e-5);
     }
 
     #[test]
