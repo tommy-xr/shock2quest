@@ -1221,8 +1221,8 @@ test(
     const captured = (await rightGrip()).grip!;
     assert.equal((await tool()).staged, true, `staged (${(await tool()).capture_failure})`);
     assert.ok("bones" in captured, "the capture's fingers apply");
-    // The capture is the tracked hand as it held the gun, aim and all: no
-    // longer the previous grip's 20 degrees.
+    // The capture is the tracked hand as it held the gun, aim and all, not
+    // the previous grip's 20 degrees.
     const capturedOff = aimOff(captured);
     assert.ok(Math.abs(capturedOff - 20) > 1, `the capture takes the hand's own aim: ${capturedOff} deg`);
     assert.equal(captured.hand_rotation, undefined, "no glove turn to keep");
