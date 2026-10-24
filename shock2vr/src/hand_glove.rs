@@ -232,16 +232,7 @@ impl GloveRenderer {
             if step == CURL_STEPS {
                 closed_joints = joints.to_vec();
             }
-            for (finger, range) in [3..5, 7..10, 12..15, 17..20, 22..25]
-                .into_iter()
-                .enumerate()
-            {
-                let mut points = Vec::new();
-                for joint in range {
-                    for t in [0.0, 0.5, 1.0] {
-                        points.push(joints[joint] * (1.0 - t) + joints[joint + 1] * t);
-                    }
-                }
+            for (finger, points) in finger_samples(&joints).into_iter().enumerate() {
                 fingers[finger].push(points);
             }
         }
@@ -260,6 +251,17 @@ impl GloveRenderer {
             palm,
             normal,
         }
+    }
+
+    /// Each finger's fitting samples with the glove posed by `bones`, as
+    /// `grip_kinematics` samples its arcs: what `GripSurface::tighten` tests.
+    pub fn finger_samples(
+        &mut self,
+        bones: &crate::hand_pose::FingerBones,
+        handedness: Handedness,
+    ) -> [Vec<Vector3<f32>>; 5] {
+        let joints = self.authored_joints(&Pose::from_finger_bones(bones), handedness);
+        finger_samples(&joints)
     }
 
     /// A readable plate basis measured from this glove's wrist and palm, in
@@ -458,6 +460,18 @@ pub fn load_glove_texture(
     asset_cache
         .get_opt::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, GLOVE_TEXTURE)
         .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>)
+}
+
+/// Points along each finger's joints (half a phalanx apart, thumb first):
+/// the samples grip fitting tests against an item.
+fn finger_samples(joints: &crate::hand_capture::HandJoints) -> [Vec<Vector3<f32>>; 5] {
+    [3..5, 7..10, 12..15, 17..20, 22..25].map(|range| {
+        range
+            .flat_map(|joint| {
+                [0.0, 0.5, 1.0].map(|t| joints[joint] * (1.0 - t) + joints[joint + 1] * t)
+            })
+            .collect()
+    })
 }
 
 /// The glove model's 26 skin joints posed with `pose`, in calibrated hand

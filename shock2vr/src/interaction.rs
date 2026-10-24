@@ -1186,9 +1186,11 @@ impl VrInteraction {
             let (_, travel) = self.pump_motion(world, tool.hand)?;
             Some(travel * crate::vr_shotgun_pump::state(world, tool.entity).fraction)
         });
+        let item_mesh = self.pose_tool_geometry().is_some();
         let Some(tool) = self.pose_tool.as_mut() else {
             return;
         };
+        tool.item_mesh = item_mesh;
         tool.pump_travel = pump_travel.unwrap_or(Vector3::new(0.0, 0.0, 0.0));
         let holding = [&self.left_hand, &self.right_hand][tool.holder].get_held_entity();
         if holding != Some(tool.entity) {
@@ -1436,6 +1438,7 @@ impl VrInteraction {
             }
             pose_tool::panel::PanelEvent::IndexLess => self.step_trigger_index(false),
             pose_tool::panel::PanelEvent::IndexMore => self.step_trigger_index(true),
+            pose_tool::panel::PanelEvent::Tighten => self.tighten_pose_tool_grip(),
             pose_tool::panel::PanelEvent::ResetView => {
                 if let Some(tool) = self.pose_tool.as_mut() {
                     tool.reset_view();
@@ -1670,6 +1673,89 @@ impl VrInteraction {
             ["left", "right"][tool.hand]
         );
         self.stage_edit(crate::vr_grip::ResolvedGrip { fingers, ..current });
+    }
+
+    /// The posed item's mesh as its holder's fit cached it, and the frame
+    /// into the posed hand's (`pose_frame`) when that hand draws it mirrored.
+    fn pose_tool_geometry(&self) -> Option<(&GripGeometry, Option<Matrix4<f32>>)> {
+        let tool = self.pose_tool.as_ref()?;
+        let held = self.fitted_grips[tool.hand].as_ref()?;
+        let key = format!("{}:{}", held.model, ["left", "right"][tool.holder]);
+        let geometry = self.grip_geometry.get(&key)?.as_ref()?;
+        Some((geometry, pose_frame(tool, Some(held))))
+    }
+
+    /// Close the slot's fingers (`GripPoseTool::tighten_fingers`) onto the
+    /// item from where the grip has them, keeping its placement; staged like
+    /// any edit. The surface is built from the cached mesh on the press.
+    fn tighten_pose_tool_grip(&mut self) {
+        use cgmath::{SquareMatrix, Transform};
+        let start = std::time::Instant::now();
+        let Some(tool) = self.pose_tool.as_ref() else {
+            return;
+        };
+        if tool.tighten_entry().is_err() {
+            return;
+        }
+        let (hand, pressed, fingers) = (
+            tool.hand,
+            tool.slot == pose_tool::Slot::Trigger,
+            tool.tighten_fingers(),
+        );
+        let (Some(current), Some((geometry, frame))) = (
+            self.fitted_grips[hand]
+                .as_ref()
+                .and_then(|held| held.resolved.clone()),
+            self.pose_tool_geometry(),
+        ) else {
+            return;
+        };
+        let triangles: Vec<_> = match frame {
+            None => geometry.triangles.to_vec(),
+            Some(frame) => geometry
+                .triangles
+                .iter()
+                .map(|t| {
+                    let t = t.map(|p| frame.transform_point(p));
+                    // A reflection keeps the faces pointing out.
+                    if frame.determinant() < 0.0 {
+                        [t[0], t[2], t[1]]
+                    } else {
+                        t
+                    }
+                })
+                .collect(),
+        };
+        let Some(surface) = crate::vr_grip::GripSurface::new(&triangles) else {
+            return;
+        };
+        // Tightened as authored, against the glove at authored size.
+        let personal = crate::world_scale::WorldScale::active().personal();
+        let authored = current.clone().rescaled(1.0 / personal);
+        let handedness = [Handedness::Left, Handedness::Right][hand];
+        let mut slot = self.glove_renderer.borrow_mut();
+        let Some(renderer) = slot.as_mut().and_then(|renderer| renderer.as_mut()) else {
+            return;
+        };
+        let tightened = surface.tighten(&authored, pressed, fingers, |bones| {
+            renderer.finger_samples(bones, handedness)
+        });
+        drop(slot);
+        let changed = tightened.grip.fingers != current.fingers;
+        println!(
+            "SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened={changed} slot={} {} elapsed_ms={:.1}",
+            if pressed { "trigger" } else { "rest" },
+            pose_tool::tighten_log(&tightened.fingers),
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        if changed {
+            // Only the fingers (and their contacts) change.
+            self.stage_edit(crate::vr_grip::ResolvedGrip {
+                fingers: tightened.grip.fingers,
+                contacts: tightened.grip.contacts,
+                ..current
+            });
+        }
     }
 
     /// Stage `grip` (world units) as an edit of the posed grip and preview it.

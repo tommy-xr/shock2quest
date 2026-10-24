@@ -8,7 +8,7 @@ use super::{Slot, world};
 use crate::ui::{HAlign, PanelPlacement, Rect, UiCanvas, VAlign, WorldPanel};
 use crate::vr_config::Handedness;
 
-pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 400.0 };
+pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 450.0 };
 /// Physical panel width; its height keeps the canvas aspect.
 const PANEL_WIDTH: f32 = 0.3;
 /// Where the panel hangs from the eye: nearer and lower than the bench, and
@@ -48,10 +48,12 @@ const PLACEMENT: Rect = Rect::new(204.0, 224.0, 186.0, 44.0);
 const INDEX_LESS: Rect = Rect::new(204.0, 224.0, 40.0, 44.0);
 const INDEX: Rect = Rect::new(248.0, 224.0, 98.0, 44.0);
 const INDEX_MORE: Rect = Rect::new(350.0, 224.0, 40.0, 44.0);
-const SHOW_AIM: Rect = Rect::new(10.0, 274.0, 122.0, 32.0);
-pub(in crate::interaction) const RESET_VIEW: Rect = Rect::new(139.0, 274.0, 122.0, 32.0);
-const EXIT: Rect = Rect::new(268.0, 274.0, 122.0, 32.0);
-const LEGEND: Rect = Rect::new(10.0, 314.0, 380.0, 80.0);
+/// Closes the slot's fingers onto the item.
+const TIGHTEN: Rect = Rect::new(10.0, 274.0, 380.0, 44.0);
+const SHOW_AIM: Rect = Rect::new(10.0, 324.0, 122.0, 32.0);
+pub(in crate::interaction) const RESET_VIEW: Rect = Rect::new(139.0, 324.0, 122.0, 32.0);
+const EXIT: Rect = Rect::new(268.0, 324.0, 122.0, 32.0);
+const LEGEND: Rect = Rect::new(10.0, 364.0, 380.0, 80.0);
 /// A test-held gun aiming within this many degrees of its controller reads
 /// as aligned.
 const ALIGNED_DEG: f32 = 1.0;
@@ -75,6 +77,8 @@ pub(in crate::interaction) enum PanelEvent {
     /// The trigger index a tenth less or more curled (Trigger slot).
     IndexLess,
     IndexMore,
+    /// Close the slot's fingers onto the item (`GripSurface::tighten`).
+    Tighten,
     ResetView,
     Exit,
 }
@@ -202,6 +206,8 @@ pub(in crate::interaction) struct PanelView {
     pub placement_entry: Result<(), String>,
     /// How far the trigger pose curls the index (`None`: no trigger pose).
     pub trigger_index: Option<f32>,
+    /// Whether Tighten can act, or why not.
+    pub tighten: Result<(), String>,
     /// A snapshot awaits Save or Discard.
     pub staged: bool,
     /// Test holding, and whether it can start or why not.
@@ -426,6 +432,16 @@ pub(in crate::interaction) fn emit(
         }
     }
     buttons.extend([
+        (
+            TIGHTEN,
+            match view.slot {
+                Slot::Rest => "Tighten fingers",
+                Slot::Trigger => "Tighten index",
+            }
+            .to_owned(),
+            PanelEvent::Tighten,
+            view.tighten.clone(),
+        ),
         (
             RESET_VIEW,
             "Reset view".to_owned(),
@@ -708,6 +724,7 @@ mod tests {
             keep_placement: true,
             placement_entry: Ok(()),
             trigger_index: None,
+            tighten: Ok(()),
             staged: false,
             fingertip: false,
             test_hold: false,
@@ -1048,6 +1065,25 @@ mod tests {
         assert!(texts(&canvas).contains(&"nothing staged".to_owned()));
         assert_eq!(event_at(&targets, SAVE.center()), None);
         assert_eq!(event_at(&targets, DISCARD.center()), None);
+    }
+
+    #[test]
+    fn tighten_names_what_the_slot_closes_and_says_why_it_cannot() {
+        let rest = view(Status::Ready);
+        let (canvas, targets) = emit(&rest, None);
+        assert!(texts(&canvas).contains(&"Tighten fingers".to_owned()));
+        assert_eq!(
+            event_at(&targets, TIGHTEN.center()),
+            Some(PanelEvent::Tighten)
+        );
+        let mut trigger = view(Status::Ready);
+        trigger.slot = Slot::Trigger;
+        assert!(texts(&emit(&trigger, None).0).contains(&"Tighten index".to_owned()));
+        let mut support = view(Status::Ready);
+        support.tighten = Err("primary grip only".to_owned());
+        let (canvas, targets) = emit(&support, None);
+        assert!(texts(&canvas).contains(&"primary grip only".to_owned()));
+        assert_eq!(event_at(&targets, TIGHTEN.center()), None);
     }
 
     #[test]
