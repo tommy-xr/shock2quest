@@ -1195,7 +1195,7 @@ impl VrInteraction {
             control.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
             dt,
         );
-        tool.toggle_contacts(control.thumbstick_click);
+        tool.cycle_contact_view(control.thumbstick_click);
         grip.item_scale = pose_tool::GripPoseTool::scale(grip.item_scale, control.thumbstick.y, dt);
         tool.controllers = std::array::from_fn(|i| {
             let hand = [&input.left_hand, &input.right_hand][i];
@@ -2076,7 +2076,7 @@ impl PlayerInteraction for VrInteraction {
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
                 "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm_in_world()), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal),
-                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"staged": tool.staged.is_some(), "last_save_error": tool.last_save_error, "tip_error_mm": tool.tip_error_mm, "capture_failure": tool.capture_failure, "contacts_shown": tool.show_contacts}))}))
+                "pose_tool": self.pose_tool.as_ref().filter(|tool| tool.hand == i).map(|tool| serde_json::json!({"staged": tool.staged.is_some(), "last_save_error": tool.last_save_error, "tip_error_mm": tool.tip_error_mm, "capture_failure": tool.capture_failure, "contact_view": tool.contact_view.name()}))}))
         }).collect())
     }
 

@@ -115,6 +115,19 @@ test(
       "with the workbench behind it");
     await game.input.trigger("TogglePauseMenu");
     await game.step({ frames: 2 });
+    // The free (left) controller's thumbstick grows the mug as drawn on the
+    // bench, not only its grip's scale.
+    const benchScale = async () => (await mugDraws())[0]!.scale[0];
+    const unscaled = (await rightGrip()).grip!.item_scale;
+    assert.ok(Math.abs((await benchScale()) - unscaled) < 1e-3, "drawn at its grip's scale");
+    await game.input.set("left_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 30 });
+    await game.input.set("left_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 1 });
+    grip = await rightGrip();
+    const scaled = grip.grip!.item_scale;
+    assert.ok(scaled > unscaled * 1.2, `${unscaled} -> ${scaled}`);
+    assert.ok(Math.abs((await benchScale()) - scaled) < 1e-3, `drawn at ${await benchScale()}, grip ${scaled}`);
     const fitted = grip.grip;
     assert.ok(fitted && !("bones" in fitted), "the mug starts on its shipped grip");
 
@@ -136,14 +149,17 @@ test(
     grip = await rightGrip();
     assert.equal(grip.pose_tool?.capture_failure, "no_joints");
     assert.equal(grip.pose_tool?.tip_error_mm, null, "no tracked hand, no tip error");
-    // The frozen glove carries a contact sphere on every joint, palm and wrist
-    // included; with nothing tracked there are no raw joint markers.
-    assert.equal(await named("contact sphere"), JOINTS * VIEWS);
+    // Untracked, the saved grip's glove holds the mug. By default only its
+    // spheres touching or through the mug show; with nothing tracked there
+    // are no raw joint markers.
+    assert.ok((await named("Right grip glove")) > 0, "the saved grip's glove");
+    assert.equal(await named("contact sphere free"), 0);
     assert.equal(await named("tracked joint"), 0);
 
-    // A posing hand that shakes by a centimetre never captures.
+    // A posing hand that shakes by 4 cm (2 cm either side of its mean) never
+    // captures.
     for (let frame = 0; frame < 30; frame++) {
-      const x = frame % 2 === 0 ? 0.01 / METERS_PER_WORLD_UNIT : 0;
+      const x = frame % 2 === 0 ? 0.04 / METERS_PER_WORLD_UNIT : 0;
       await game.input.setMany({
         "right_hand.joints": trackedHand([hand[0] + x, hand[1], hand[2]]),
         "left_hand.joints": otherHand,
@@ -160,29 +176,36 @@ test(
     // Hold still, then the left trigger stages the pose: applied, not saved.
     await game.input.set("right_hand.joints", trackedHand(hand));
     await game.step({ frames: 30 });
-    // The tracked hand's glove gets spheres too, and its raw joints markers.
-    assert.equal(await named("contact sphere"), 2 * JOINTS * VIEWS);
-    assert.equal(await named("tracked joint"), JOINTS * VIEWS);
+    // The live glove replaces the saved grip's, which would be in the real
+    // hand's way. Its raw joints show markers on the wrist and fingertips.
+    assert.equal(await named("Right grip glove"), 0, "the saved glove steps aside");
+    assert.ok((await named("Right glove")) > 0, "for the live one");
+    assert.equal(await named("contact sphere free"), 0);
+    assert.equal(await named("tracked joint"), 6 * VIEWS);
     // How far each glove fingertip lands from the tracked one.
     const tipError = (await rightGrip()).pose_tool?.tip_error_mm;
     assert.equal(tipError?.length, 5);
     assert.ok(tipError!.every((mm) => Number.isFinite(mm) && mm >= 0), `${tipError}`);
-    // The free (left) controller's thumbstick click hides them, and shows them again.
+    // The free (left) controller's thumbstick click steps to every sphere and
+    // marker, then none, then back to contacts only.
     const clickStick = async () => {
       await game.input.set("left_hand.thumbstick_click", 1);
       await game.step({ frames: 1 });
       await game.input.set("left_hand.thumbstick_click", 0);
       await game.step({ frames: 1 });
+      return (await rightGrip()).pose_tool?.contact_view;
     };
-    await clickStick();
+    assert.equal(await clickStick(), "full");
+    assert.equal(await named("contact sphere"), JOINTS * VIEWS, "every live glove joint");
+    assert.equal(await named("tracked joint"), JOINTS * VIEWS);
+    assert.equal(await clickStick(), "off");
     assert.equal(await named("contact sphere"), 0);
     assert.equal(await named("tracked joint"), 0);
-    assert.equal((await rightGrip()).pose_tool?.contacts_shown, false);
-    await clickStick();
-    assert.equal(await named("contact sphere"), 2 * JOINTS * VIEWS);
+    assert.equal(await clickStick(), "contacts");
     await pullTrigger();
     grip = await rightGrip();
     assert.ok(grip.grip && "bones" in grip.grip, "the staged capture applies at once");
+    assert.ok((await named("Right grip glove")) > 0, "the staged grip previews beside the live hand");
     assert.deepEqual(saveState(grip), { staged: true, last_save_error: null });
     assert.equal(grip.pose_tool?.capture_failure, null, "a capture clears the last failure");
     assert.ok(!existsSync(path), "staging writes nothing");
@@ -224,6 +247,12 @@ test(
     assert.ok(grip.grip && "bones" in grip.grip, "the saved capture stays applied");
     assert.equal(grip.pose_tool?.staged, false);
     const savedGrip = grip.grip;
+    // Saved, nothing staged: the live hand alone again, until its tracking is
+    // lost and the saved grip's glove holds the mug once more.
+    assert.equal(await named("Right grip glove"), 0);
+    await game.input.setMany({ "right_hand.joints": null });
+    await game.step({ frames: 2 });
+    assert.ok((await named("Right grip glove")) > 0, "tracking lost: the saved glove is back");
 
     // A capture still staged on exit is thrown away, in memory and on disk.
     const savedText = readFileSync(path, "utf8");
@@ -258,5 +287,48 @@ test(
     await game.input.set("right_hand.squeeze", 0);
     await game.step({ frames: 3 });
     assert.notEqual((await game.info()).player.right_hand_entity_id, mug.id);
+  },
+);
+
+test(
+  "grip pose tool: the left hand poses what it holds; the right controller stages and saves",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    const mug = await holdDebugMug(game, "left");
+    const leftGrip = async () =>
+      (await game.info()).player.hand_grips.find((g) => g.hand === "left")!;
+    assert.equal((await leftGrip()).entity_id, mug.id);
+    await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 2 });
+    assert.ok((await leftGrip()).pose_tool, "the workbench poses the left hand");
+    // Set the left controller down; its tracked hand poses, steadily.
+    const hand = (await game.input.state()).left_hand.position;
+    await game.input.setMany({
+      "left_hand.squeeze": 0,
+      "left_hand.position": [hand[0] - 1, hand[1] - 0.5, hand[2]],
+      "left_hand.joints": trackedHand(hand, { left: true }),
+    });
+    await game.step({ frames: 30 });
+    assert.equal((await leftGrip()).pose_tool?.tip_error_mm?.length, 5, "the left hand is tracked");
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 2 });
+    const grip = await leftGrip();
+    assert.equal(grip.pose_tool?.staged, true, `staged (${grip.pose_tool?.capture_failure})`);
+    assert.ok(grip.grip && "bones" in grip.grip);
+    // A (the right controller's lower button) saves it for the left hand.
+    await game.input.trigger("RightHandLowerButton");
+    await game.step({ frames: 2 });
+    const saved = JSON.parse(readFileSync(join(data.root, "vr-grip-overrides.json"), "utf8")) as {
+      entries: { model: string; hand: string; grip: { bones?: unknown[] } }[];
+    };
+    assert.deepEqual(saved.entries.map((e) => [e.model, e.hand]), [["mug", "left"]]);
+    assert.equal(saved.entries[0]!.grip.bones?.length, 24);
+    assert.equal((await leftGrip()).pose_tool?.staged, false);
   },
 );

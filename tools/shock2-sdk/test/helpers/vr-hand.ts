@@ -290,14 +290,14 @@ export async function reachHolster(
   );
 }
 
-/** Pick up the `debug_interactions` rack's coffee mug in the right hand (`--vr`). */
-export async function holdDebugMug(game: GameServer): Promise<{ id: number; position: Vec3 }> {
+/** Pick up the `debug_interactions` rack's coffee mug (`--vr`). */
+export async function holdDebugMug(game: GameServer, hand: Hand = "right"): Promise<{ id: number; position: Vec3 }> {
   await game.step({ frames: 90 });
   const mug = (await game.entities.list()).entities.find((e) => e.template_id === -1221)!;
   await game.player.teleport({ x: mug.position[0], y: 1.0, z: 0 });
-  await aimVrHandAt(game, mug.position, 0.2, 0, 0, { hand: "right" });
+  await aimVrHandAt(game, mug.position, 0.2, 0, 0, { hand });
   await game.step({ frames: 2 });
-  await game.input.set("right_hand.squeeze", 1);
+  await game.input.set(`${hand}_hand.squeeze`, 1);
   await game.step({ frames: 3 });
   return mug;
 }
