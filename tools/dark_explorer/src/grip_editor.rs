@@ -27,7 +27,8 @@ pub(crate) const POSE_PRESETS: [(&str, [f32; 5]); 6] = [
 /// Shared Rest/pressed authoring for primary and support finger poses.
 #[derive(Default)]
 pub(crate) struct CurlPoseEditor {
-    pressed: bool,
+    /// Editing the trigger-pressed pose rather than the rest.
+    pub pressed: bool,
     pub preview: f32,
 }
 impl CurlPoseEditor {
@@ -149,6 +150,54 @@ fn trigger_index_slider(ui: &mut egui::Ui, fingers: &mut FingerPose) {
     ) {
         *fingers = fingers.with_trigger_index(percent / 100.0);
     }
+}
+
+/// "Tighten to surface": close the fingers onto the item from where they
+/// are (`GripSurface::tighten`), keeping the placement: all five at rest,
+/// only the index for the trigger-pressed pose. `None` until clicked; then
+/// what happened, or why it could not.
+fn tighten_button(
+    ui: &mut egui::Ui,
+    grip: &mut ResolvedGrip,
+    pressed: bool,
+    tighten: impl FnOnce(&ResolvedGrip, bool, [bool; 5]) -> Result<shock2vr::vr_grip::Tightened, String>,
+) -> Option<Result<String, String>> {
+    use shock2vr::vr_grip::FingerFit;
+    let fingers = if pressed {
+        [false, true, false, false, false]
+    } else {
+        [true; 5]
+    };
+    if !ui
+        .button("Tighten to surface")
+        .on_hover_text(if pressed {
+            "Close the pressed index onto the item"
+        } else {
+            "Close each finger onto the item from where it is"
+        })
+        .clicked()
+    {
+        return None;
+    }
+    Some(tighten(grip, pressed, fingers).map(|tightened| {
+        grip.fingers = tightened.grip.fingers;
+        grip.contacts = tightened.grip.contacts;
+        let said: Vec<_> = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+            .into_iter()
+            .zip(tightened.fingers)
+            .filter_map(|(name, fit)| {
+                let what = match fit {
+                    FingerFit::Skipped => return None,
+                    FingerFit::Touching { amount, .. } if amount > 0.0 => "closed",
+                    FingerFit::Touching { amount, .. } if amount < 0.0 => "opened",
+                    FingerFit::Touching { .. } => "already touching",
+                    FingerFit::NoContact => "nothing in reach",
+                };
+                Some(format!("{name} {what}"))
+            })
+            .collect();
+        format!("Tightened: {}", said.join(", "))
+    }))
 }
 
 pub fn default_library_path() -> PathBuf {
@@ -1231,6 +1280,7 @@ impl GripEditor {
                 ],
             ));
         }
+        let mut tightened = None;
         ui.add_enabled_ui(!busy, |ui| {
             ui.columns(3, |columns| {
                 columns[0].strong("Position (cm)");
@@ -1272,6 +1322,14 @@ impl GripEditor {
                     &mut entry.grip.fingers,
                     "Primary trigger preview",
                 );
+                tightened = tighten_button(
+                    &mut columns[2],
+                    &mut entry.grip,
+                    self.curl_editor.pressed,
+                    |grip, pressed, fingers| {
+                        preview.tighten_grip(&key, hand, grip, pressed, fingers)
+                    },
+                );
             });
             ui.horizontal(|ui| {
                 ui.label("Rotation nudge step");
@@ -1283,11 +1341,21 @@ impl GripEditor {
                 });
             });
         });
+        let after_tighten_contacts = entry.grip.contacts;
         if before != entry.grip {
             entry.authored = true;
             // Contact diagnostics describe the old solver pose, not this edit.
             entry.grip.contacts = [None; 5];
             entry.grip.score = 0.0;
+        }
+        match tightened {
+            // Its contacts describe the tightened fingers.
+            Some(Ok(message)) => {
+                entry.grip.contacts = after_tighten_contacts;
+                self.message = message;
+            }
+            Some(Err(error)) => self.message = error,
+            None => {}
         }
         if !self.message.is_empty() {
             ui.label(&self.message);
@@ -1611,6 +1679,66 @@ pub(crate) mod tests {
 
         click_button("+", |ui| trigger_index_slider(ui, &mut fingers));
         assert_eq!(fingers, snapshot.with_trigger_index(0.1));
+    }
+
+    /// Tighten closes the fingers onto the item through the game's solver
+    /// and changes nothing else: here 8 cm rods over a slab 5 cm down.
+    #[test]
+    fn tighten_to_surface_changes_only_the_fingers() {
+        use cgmath::{EuclideanSpace, Point3, vec3};
+        let metres = |m: f32| m / shock2vr::METERS_PER_WORLD_UNIT;
+        let rods = |bones: &shock2vr::hand_pose::FingerBones| {
+            let FingerPose::Curls { curls, .. } = FingerPose::Bones {
+                bones: *bones,
+                trigger_bones: None,
+            }
+            .to_curls() else {
+                unreachable!()
+            };
+            std::array::from_fn(|finger| {
+                let angle = curls[finger] * std::f32::consts::FRAC_PI_2;
+                let along = vec3(0.0, -angle.sin(), angle.cos());
+                [0.25, 0.5, 0.75, 1.0]
+                    .map(|s| {
+                        vec3(metres(0.02 * finger as f32), 0.0, 0.0) + along * metres(0.08 * s)
+                    })
+                    .to_vec()
+            })
+        };
+        let p = |x: f32, z: f32| Point3::from_vec(vec3(metres(x), metres(-0.05), metres(z)));
+        let surface = shock2vr::vr_grip::GripSurface::new(&[
+            [p(-0.1, -0.1), p(0.2, 0.3), p(0.2, -0.1)],
+            [p(-0.1, -0.1), p(-0.1, 0.3), p(0.2, 0.3)],
+        ])
+        .unwrap();
+        let (_dir, mut doc) = document();
+        let grip = &mut doc.library.entries[0].grip;
+        grip.fingers = FingerPose::curls([0.0; 5]);
+        let before = grip.clone();
+        let mut message = None;
+        click_button("Tighten to surface", |ui| {
+            if let Some(said) = tighten_button(ui, grip, false, |grip, pressed, fingers| {
+                Ok(surface.tighten(grip, pressed, fingers, rods))
+            }) {
+                message = Some(said);
+            }
+        });
+        let message = message.expect("clicked").unwrap();
+        assert!(message.starts_with("Tightened: Thumb closed"), "{message}");
+        let FingerPose::Curls { curls, .. } = grip.fingers else {
+            panic!("curls stay curls");
+        };
+        assert!(curls.iter().all(|c| *c > 0.2), "{curls:?}");
+        assert!(grip.contacts.iter().all(Option::is_some));
+        assert_eq!(
+            ResolvedGrip {
+                fingers: before.fingers.clone(),
+                contacts: before.contacts,
+                ..grip.clone()
+            },
+            before,
+            "only the fingers change"
+        );
     }
 
     #[test]
