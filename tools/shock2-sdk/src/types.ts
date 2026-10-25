@@ -1420,14 +1420,16 @@ export interface WaitForOptions {
 
 /** Diagnostics from the same resolved pose used by gameplay and rendering. */
 export interface HandGrip {
-  /** Visible fitted mesh bounds in controller-local space, excluding the glove. */
+  /** Visible fitted mesh bounds in the glove's frame (the grip's offset and rotation), excluding the glove. */
   item_bounds: [Vec3, Vec3] | null;
   /** Manual Explorer override; solver contact samples do not validate this pose. */
   authored: boolean;
   hand: "left" | "right";
   entity_id: number;
   model: string;
-  source: "bake" | "prepared" | "missing_or_invalid";
+  /** `mirrored`: the other hand's grip, mirrored (a glove weapon posed on
+   * the headset for one hand only). */
+  source: "bake" | "prepared" | "mirrored" | "missing_or_invalid";
   solve_ms: number;
   surface_hash: string;
   kinematics_hash: string;
@@ -1439,7 +1441,9 @@ export interface HandGrip {
   /** Raw analog input used for held finger animation, independent of action reservation. */
   visual_trigger: number;
   finger_curls: FingerCurls | null;
-  /** Glove pose following a physical melee body; null uses raw tracked pose. */
+  /** The finger bones drawn at `visual_trigger` (bone grips; null for curls). */
+  finger_bones: ResolvedGrip["rotation"][] | null;
+  /** Where the held hand's glove is drawn when not at its tracked pose: following a physical body, or its controller turned by the grip's `hand_rotation`; null uses the raw tracked pose. */
   glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
   /** The grip pose tool posing this hand: an unsaved capture is applied
    * live (`staged`) until saved; a failed save stays staged.
@@ -1453,6 +1457,10 @@ export interface HandGrip {
      * against this hand's glove, frozen at its grip. */
     mode: "primary" | "support";
     posing: "left" | "right";
+    /** Which pose a snapshot sets: the rest grip, or only the fingers with
+     * the trigger pulled; and whether the grip has a pulled pose. */
+    slot: "rest" | "trigger";
+    has_trigger_pose: boolean;
     staged: boolean;
     last_save_error: string | null;
     tip_error_mm: number[] | null;
@@ -1461,11 +1469,17 @@ export interface HandGrip {
     /** A save succeeded and nothing was staged since. */
     saved: boolean;
     /** Test hold: the posing hand's controller holds the item as play
-     * would; `tracked` false leaves it where that controller was last seen. */
-    test_hold: { tracked: boolean } | null;
-    /** While test-holding a gun with its controller tracked: degrees between
-     * where it fires and where the controller aims. */
+     * would; `tracked` false leaves it where that controller was last seen.
+     * `nudging`: the free controller's squeeze is carrying the item; let go,
+     * the grip that holds it there is staged. */
+    test_hold: { tracked: boolean; nudging: boolean } | null;
+    /** While a gun's aim is shown (on the bench from where its glove puts
+     * the controller, or test-held with its controller tracked): degrees
+     * between where it fires and where the controller aims. */
     aim_error_deg: number | null;
+    /** A gun's glove turn as a share (0..1) of Align aim's full turn; null
+     * for no barrel. */
+    align_amount: number | null;
     /** The workbench's control panel: its status line, why "Pose: <other
      * hand>" is disabled (null when enabled), the pointer on it in canvas
      * pixels, and where it and each enabled button are (world space). */
@@ -1477,6 +1491,24 @@ export interface HandGrip {
       /** Why Test hold cannot start, and why Align aim is disabled. */
       test_hold_disabled: string | null;
       align_disabled: string | null;
+      /** Why the aim toggle is hidden (no barrel), and whether it is on. */
+      aim_disabled: string | null;
+      show_aim: boolean;
+      /** Why the Rest/Trigger slot button is disabled. */
+      slot_disabled: string | null;
+      /** Whether a rest snapshot keeps the grip's placement (fingers only). */
+      keep_placement: boolean;
+      /** How far the trigger pose curls the index from rest toward a fist
+       * (0..1), null with no trigger pose. */
+      trigger_index: number | null;
+      /** Why the Index steps are disabled (not the Trigger slot, or the
+       * index locked). */
+      index_steps_disabled: string | null;
+      /** Why Tighten (close the slot's fingers onto the item) is disabled. */
+      tighten_disabled: string | null;
+      /** Which fingers (thumb..little) are locked: kept as stored by the
+       * live glove, snapshots and Tighten. */
+      locks: [boolean, boolean, boolean, boolean, boolean];
       hover: { x: number; y: number } | null;
       panel: {
         center: ResolvedGrip["offset"];
@@ -1484,7 +1516,7 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "SwitchHand" | "SupportMode" | "ResetView" | "Exit";
+          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "AlignLess" | "AlignMore" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "Placement" | "IndexLess" | "IndexMore" | "Unbury" | "Tighten" | `Lock(${0 | 1 | 2 | 3 | 4})` | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;
@@ -1565,6 +1597,8 @@ export type ResolvedGrip = {
   pose_family: string;
   offset: {x:number;y:number;z:number};
   rotation: {s:number;v:{x:number;y:number;z:number}};
+  /** The glove's turn off its controller; absent for none. */
+  hand_rotation?: {s:number;v:{x:number;y:number;z:number}};
   contacts: (Vec3 | null)[];
   anchor: Vec3;
   score: number;

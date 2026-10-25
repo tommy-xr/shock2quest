@@ -14,6 +14,13 @@ pub enum Handedness {
 }
 
 impl Handedness {
+    pub fn other(self) -> Handedness {
+        match self {
+            Handedness::Left => Handedness::Right,
+            Handedness::Right => Handedness::Left,
+        }
+    }
+
     /// The reflection that turns right-handed geometry into this hand's.
     ///
     /// Every first-person asset the player wears or wields is authored for the

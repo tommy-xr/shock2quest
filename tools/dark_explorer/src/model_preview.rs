@@ -22,6 +22,7 @@ use engine::assets::asset_cache::AssetCache;
 use shock2vr::{
     GloveRenderer, Handedness,
     vr_grip::{GripKinematics, GripSurface, ResolvedGrip, surface_fingerprint},
+    weapon_muzzle::{AimLines, MuzzleFallback},
 };
 
 use crate::ui::quiet_catch;
@@ -53,10 +54,13 @@ pub enum PreviewScene {
     Holster(shock2vr::vr_holster::HolsterPose),
     /// Authored VR weapon reference, retaining its integrated hand.
     VrReference,
+    /// A grip, with its support profile and, to draw its aim, its gun's
+    /// muzzle as held in that hand.
     Grip(
         Handedness,
         ResolvedGrip,
         Option<shock2vr::vr_support::SupportProfile>,
+        Option<MuzzleFallback>,
     ),
     /// The `.bin` model animated by a motion clip (`<name>_.mc`).
     Clip(String),
@@ -237,33 +241,13 @@ impl ModelPreview {
             self.frame_bounds(center, radius, 0.2);
         }
 
-        egui::CollapsingHeader::new("Lighting")
-            .default_open(self.object_preview.is_none() && !shock2vr::tricorder::is_model(key))
-            .show(ui, |ui| {
-                self.needs_render |= ui
-                    .add(egui::Slider::new(&mut self.ambient, 0.0..=1.0).text("Ambient"))
-                    .changed();
-                for (index, label) in ["Warm key", "Cool fill", "Green rim"].iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        self.needs_render |= ui
-                            .add(
-                                egui::Slider::new(&mut self.light_strengths[index], 0.0..=3.0)
-                                    .text(*label),
-                            )
-                            .changed();
-                        self.needs_render |= ui
-                            .color_edit_button_rgb(&mut self.light_colors[index])
-                            .changed();
-                    });
-                }
-                if ui.button("Reset lighting").clicked() {
-                    self.ambient = 0.5;
-                    self.light_strengths = [0.0; 3];
-                    self.light_colors = [[1.0, 0.55, 0.25], [0.25, 0.55, 1.0], [0.35, 1.0, 0.45]];
-                    self.needs_render = true;
-                }
-                ui.label("Lights stay fixed while you orbit. Unlit materials ignore lighting.");
-            });
+        // The grip editors show lighting in their control pane.
+        if !matches!(scene, PreviewScene::Grip(..)) {
+            self.show_lighting(
+                ui,
+                self.object_preview.is_none() && !shock2vr::tricorder::is_model(key),
+            );
+        }
 
         let available = ui.available_size();
         let size = egui::vec2(available.x.max(1.0), available.y.max(1.0));
@@ -307,6 +291,37 @@ impl ModelPreview {
             ui.painter()
                 .image(target.egui_texture, response.rect, uv, egui::Color32::WHITE);
         }
+    }
+
+    /// The light sliders, colors and reset; lights stay fixed while orbiting.
+    pub fn show_lighting(&mut self, ui: &mut egui::Ui, default_open: bool) {
+        egui::CollapsingHeader::new("Lighting")
+            .default_open(default_open)
+            .show(ui, |ui| {
+                self.needs_render |= ui
+                    .add(egui::Slider::new(&mut self.ambient, 0.0..=1.0).text("Ambient"))
+                    .changed();
+                for (index, label) in ["Warm key", "Cool fill", "Green rim"].iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        self.needs_render |= ui
+                            .add(
+                                egui::Slider::new(&mut self.light_strengths[index], 0.0..=3.0)
+                                    .text(*label),
+                            )
+                            .changed();
+                        self.needs_render |= ui
+                            .color_edit_button_rgb(&mut self.light_colors[index])
+                            .changed();
+                    });
+                }
+                if ui.button("Reset lighting").clicked() {
+                    self.ambient = 0.5;
+                    self.light_strengths = [0.0; 3];
+                    self.light_colors = [[1.0, 0.55, 0.25], [0.25, 0.55, 1.0], [0.35, 1.0, 0.45]];
+                    self.needs_render = true;
+                }
+                ui.label("Lights stay fixed while you orbit. Unlit materials ignore lighting.");
+            });
     }
 
     /// Both grip editing modes share model preparation and camera ordering.
@@ -518,7 +533,7 @@ impl ModelPreview {
             PreviewScene::VrReference => Ok(Box::new(GripPreviewScene(
                 engine::scene::Scene::from_objects(model.clone_scene_objects()),
             ))),
-            PreviewScene::Grip(hand, grip, support) => quiet_catch(|| {
+            PreviewScene::Grip(hand, grip, support, muzzle) => quiet_catch(|| {
                 let model_mirror = self
                     .grip_model_mirror(key)
                     .map_err(|_| "Weapon mirror unavailable")?;
@@ -560,6 +575,9 @@ impl ModelPreview {
                     shock2vr::HandLight::Off,
                     None,
                 ));
+                if let Some(muzzle) = muzzle {
+                    objects.extend(aim_overlay(&grip_aim(grip, *muzzle)));
+                }
                 let mut support_points = Vec::new();
                 if let Some(support) = support {
                     if support.region.is_some() {
@@ -754,6 +772,14 @@ impl ModelPreview {
             .ok_or_else(|| "Weapon mirror unavailable".into())
     }
 
+    /// A gun's muzzle as play sets it when held in `hand`; `None` for
+    /// anything without a barrel, or whose model fails to load.
+    pub fn grip_muzzle(&mut self, key: &str, hand: Handedness) -> Option<MuzzleFallback> {
+        quiet_catch(|| shock2vr::weapon_muzzle::held_muzzle(&mut self.asset_cache, key, hand))
+            .ok()
+            .flatten()
+    }
+
     /// Shared game geometry and rig samples for validation and explicit auto-fit.
     pub fn grip_inputs(
         &mut self,
@@ -825,6 +851,35 @@ impl ModelPreview {
             Ok((surface, rig, hash, guide))
         })
         .and_then(|r: Result<_, &str>| r.map_err(str::to_string))
+    }
+
+    /// `grip`'s chosen fingers closed onto the item (`GripSurface::tighten`),
+    /// or with `unbury` those buried in it opened out (`GripSurface::unbury`),
+    /// against the game's geometry and glove, as the VR workbench does; and
+    /// what each finger did.
+    pub fn fit_fingers(
+        &mut self,
+        key: &str,
+        hand: Handedness,
+        grip: &ResolvedGrip,
+        pressed: bool,
+        fingers: [bool; 5],
+        unbury: bool,
+    ) -> Result<(ResolvedGrip, [&'static str; 5]), String> {
+        // Its geometry here is pre-scaled to the weapon, unlike its grip.
+        if shock2vr::vr_magazine::grip_source(key).is_some() {
+            return Err("Magazine grips cannot be fitted to the surface here".into());
+        }
+        let (surface, _, _, _) = self.grip_inputs(key, hand)?;
+        let glove = self.glove.as_mut().ok_or("Glove model unavailable")?;
+        let chains = |bones: &_| glove.finger_chains(bones, hand);
+        Ok(if unbury {
+            let out = surface.unbury(grip, pressed, fingers, chains);
+            (out.grip, out.fingers.map(|fit| fit.outcome()))
+        } else {
+            let out = surface.tighten(grip, pressed, fingers, chains);
+            (out.grip, out.fingers.map(|fit| fit.outcome()))
+        })
     }
 
     /// Preview a pouch magazine at the opposite hand's weapon scale. Gameplay
@@ -1233,6 +1288,48 @@ fn support_region_overlay(
         color_material::create(vec3(0.1, 0.9, 0.8)),
         Box::new(lines_mesh::create(vertices)),
     )
+}
+
+/// A grip's aim in the grip preview, whose origin is the glove's frame: the
+/// controller is turned back off it by the grip's glove turn. `AimLines`
+/// exactly as play computes it.
+pub(crate) fn grip_aim(grip: &ResolvedGrip, muzzle: MuzzleFallback) -> AimLines {
+    use shock2vr::vr_support::GripPose;
+    AimLines::new(
+        GripPose {
+            position: grip.offset,
+            rotation: grip.rotation,
+        },
+        grip.item_scale,
+        muzzle,
+        grip.controller_pose(GripPose {
+            position: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::one(),
+        }),
+    )
+}
+
+/// The aim lines as the VR workbench draws them (length and colours): the
+/// firing line from the muzzle and the controller's aim.
+fn aim_overlay(aim: &AimLines) -> [engine::scene::SceneObject; 2] {
+    use engine::scene::{SceneObject, VertexPosition, color_material, lines_mesh};
+    use shock2vr::weapon_muzzle::{AIM_LINE_COLORS, AIM_LINE_METRES, FIRING_LINE_COLORS};
+    let length = AIM_LINE_METRES / shock2vr::METERS_PER_WORLD_UNIT;
+    [
+        (aim.muzzle, aim.firing, FIRING_LINE_COLORS[0]),
+        (aim.controller, aim.aim, AIM_LINE_COLORS[0]),
+    ]
+    .map(|(start, direction, color)| {
+        SceneObject::new(
+            color_material::create(color),
+            Box::new(lines_mesh::create(vec![
+                VertexPosition { position: start },
+                VertexPosition {
+                    position: start + direction * length,
+                },
+            ])),
+        )
+    })
 }
 
 // Authoring must see weapon grip saves made earlier in this editor session.

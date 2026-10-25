@@ -19,7 +19,7 @@ use dark::{glb_model::GlbModel, glb_skeleton::GlbSkeleton};
 /// GLB skin joints driven by pose data. Joint 0 (Root) carries the exporter's
 /// unit-conversion scale and joint 1 (wrist) is the hand's attachment point -
 /// both keep their bind transforms.
-const FIRST_POSED_JOINT: usize = 2;
+pub(crate) const FIRST_POSED_JOINT: usize = 2;
 const LAST_POSED_JOINT: usize = 25;
 
 /// A hand pose: per-bone parent-relative translations and rotations, in the

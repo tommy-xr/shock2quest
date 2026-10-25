@@ -177,6 +177,37 @@ fn load_glb(
 /// Build just the skeleton from raw GLB bytes - no GPU resources or asset
 /// cache required, so it works in headless tests and tools.
 pub fn skeleton_from_glb_bytes(bytes: &[u8]) -> Option<GlbSkeleton> {
+    let (document, buffers) = glb_document(bytes)?;
+    extract_glb_skeleton(&document, &buffers)
+}
+
+/// Every skinned vertex in raw GLB bytes, in mesh space with its joints and
+/// normalized weights - for measuring a model on the CPU, no GPU needed.
+pub fn skinned_vertices_from_glb_bytes(
+    bytes: &[u8],
+) -> Option<Vec<VertexPositionTextureSkinnedNormal>> {
+    let (document, buffers) = glb_document(bytes)?;
+    let mut meshes = Vec::new();
+    let mut min = Vector3::new(f32::MAX, f32::MAX, f32::MAX);
+    let mut max = -min;
+    for scene in document.scenes() {
+        for node in scene.nodes() {
+            process_node(&node, &buffers, &mut meshes, &mut min, &mut max);
+        }
+    }
+    Some(
+        meshes
+            .into_iter()
+            .flat_map(|mesh| match mesh.vertex_data {
+                GlbVertexData::Skinned(vertices) => vertices,
+                GlbVertexData::Static(_) => Vec::new(),
+            })
+            .collect(),
+    )
+}
+
+/// A GLB's document and embedded buffers.
+fn glb_document(bytes: &[u8]) -> Option<(gltf::Document, Vec<gltf::buffer::Data>)> {
     let gltf = gltf::Gltf::from_slice(bytes).ok()?;
     let document = gltf.document;
     let blob = gltf.blob;
@@ -190,8 +221,7 @@ pub fn skeleton_from_glb_bytes(bytes: &[u8]) -> Option<GlbSkeleton> {
         };
         buffers.push(gltf::buffer::Data(data));
     }
-
-    extract_glb_skeleton(&document, &buffers)
+    Some((document, buffers))
 }
 
 /// Extract GLB skeleton from document

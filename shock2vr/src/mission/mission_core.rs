@@ -701,37 +701,49 @@ fn draw_pose_workbench(
     else {
         return bench.environment;
     };
+    // The other hand's model frame, reflected about the model origin (the
+    // drawn frame sits at the grip contact).
+    let mirror = bench.mirror.map(|mirror| {
+        let contact = crate::interaction::grip_contact(world, bench.entity);
+        Matrix4::from_translation(-contact) * mirror * Matrix4::from_translation(contact)
+    });
     // Turned for viewing, the extra views included.
     let rebase = bench.turn
         * Matrix4::from_translation(bench.item.position)
         * Matrix4::from(bench.item.rotation)
         * Matrix4::from_scale(bench.item_scale)
+        * mirror.unwrap_or_else(Matrix4::identity)
         * from_world;
     // The item's own model; effects tagged with it (a laser sight) are left
     // out, rather than left behind at the frozen hand or turned across the
     // views.
     let item: Vec<_> = scene
         .into_iter()
-        .filter(|object| {
-            object.debug_tag().is_some_and(|tag| {
+        .filter_map(|object| {
+            let tag = object.debug_tag().filter(|tag| {
                 tag.entity_id == Some(bench.entity.inner())
                     && tag.source.as_deref() == Some("entity")
-            })
+            })?;
+            let tag = Rc::new(engine::scene::SceneObjectDebugTag {
+                source: Some(crate::util::render_source::GRIP_WORKBENCH.to_owned()),
+                ..tag.clone()
+            });
+            Some((object, tag))
         })
         .collect();
     let mut objects = bench.environment;
     let placements =
         std::iter::once(rebase).chain(bench.views.into_iter().flatten().map(|view| view * rebase));
     for placement in placements {
-        for object in &item {
+        for (object, tag) in &item {
             let mut copy = object.clone();
             copy.set_transform(placement * object.get_transform());
+            // A reflection turns the faces inside out.
+            if mirror.is_some() {
+                copy.set_backface_culling(copy.backface_culling().map(dark::model::flip_winding));
+            }
             copy.set_lights(bench.lights.clone());
-            let tag = engine::scene::SceneObjectDebugTag {
-                source: Some(crate::util::render_source::GRIP_WORKBENCH.to_owned()),
-                ..object.debug_tag().unwrap().clone()
-            };
-            copy.set_debug_tag(Some(Rc::new(tag)));
+            copy.set_debug_tag(Some(tag.clone()));
             objects.push(copy);
         }
     }
@@ -14927,10 +14939,7 @@ impl MissionCore {
                             for vhot in vhots.iter_mut() {
                                 vhot.point = mirror.transform_point(vhot.point);
                             }
-                            if let Some(muzzle) = muzzle.as_mut() {
-                                muzzle.point = mirror.transform_point(muzzle.point);
-                                muzzle.axis = mirror.transform_vector(muzzle.axis);
-                            }
+                            muzzle = muzzle.map(|muzzle| muzzle.framed(mirror));
                         }
                         // An articulated VR-wielded first-person model (hand +
                         // arm + gun as skeleton sub-objects) renders unposed
@@ -18690,7 +18699,9 @@ impl MissionCore {
                 };
             }
 
-            let visible = self.visibility_engine.is_visible(*entity_id);
+            // The workbench draws its item away from the frozen mission spot
+            // that portal culling judges.
+            let visible = bench.is_some() || self.visibility_engine.is_visible(*entity_id);
             let echo = radar_contacts.get(&entity_id.inner()).copied();
             let item_echo = item_contacts.get(&entity_id.inner()).copied();
             if !visible && echo.is_none() && item_echo.is_none() {

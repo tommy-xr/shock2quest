@@ -3,7 +3,6 @@ use crate::grip_editor::{CurlPoseEditor, default_library_path, persist_json, twe
 use eframe::egui;
 use shock2vr::{
     Handedness,
-    vr_grip::FingerPose,
     vr_support::{SupportPose, SupportProfile, SupportRegion},
 };
 use std::{collections::BTreeMap, path::PathBuf};
@@ -69,13 +68,18 @@ impl SupportDocument {
         if !self.dirty() {
             return Ok(());
         }
+        self.check_unchanged()?;
+        self.write(self.path.clone(), false)
+    }
+    /// Save refuses a file edited on disk since it was loaded or saved.
+    pub(crate) fn check_unchanged(&self) -> Result<(), String> {
         if std::fs::read(&self.path).map_err(|e| e.to_string())? != self.saved_bytes {
             return Err(
                 "Support resource changed on disk. Save As a new file to preserve your draft."
                     .into(),
             );
         }
-        self.write(self.path.clone(), false)
+        Ok(())
     }
     fn write(&mut self, path: PathBuf, new_file: bool) -> Result<(), String> {
         if self.profiles.values().any(|p| !p.is_valid()) {
@@ -199,7 +203,7 @@ impl SupportEditor {
                 "Preview only: this model does not yet support two-hand grabbing in game.",
             );
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
                     enabled && doc.dirty(),
@@ -270,62 +274,64 @@ impl SupportEditor {
                             profile.region = Some(SupportRegion { start: profile.palm_anchor, end });
                         }
                     });
-                    ui.columns(3, |columns| {
-                        columns[0].strong("Palm position on item (cm)");
-                        if let Some(region) = &mut profile.region {
-                            columns[0].small("Region start");
-                            tweak_anchor(&mut columns[0], &mut region.start, primary, model_mirror, item_scale);
-                            columns[0].small("Region end");
-                            tweak_anchor(&mut columns[0], &mut region.end, primary, model_mirror, item_scale);
-                        } else {
-                            tweak_anchor(&mut columns[0], &mut profile.palm_anchor, primary, model_mirror, item_scale);
-                        }
-                        columns[1].strong("Support wrist rotation (degrees)");
-                        for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
-                            let mirror = if primary == Handedness::Left && i > 0 {
-                                -1.0
+                    egui::CollapsingHeader::new("Placement")
+                        .id_salt("support_placement")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.strong("Palm position on item (cm)");
+                            if let Some(region) = &mut profile.region {
+                                ui.small("Region start");
+                                tweak_anchor(ui, &mut region.start, primary, model_mirror, item_scale);
+                                ui.small("Region end");
+                                tweak_anchor(ui, &mut region.end, primary, model_mirror, item_scale);
                             } else {
-                                1.0
-                            };
-                            let mut angle = profile.rotation_degrees[i] * mirror;
-                            if tweak_slider(
-                                &mut columns[1],
-                                axis,
-                                &mut angle,
-                                -180.0..=180.0,
-                                self.rotation_step,
-                                1,
-                            ) {
-                                profile.rotation_degrees[i] = angle * mirror;
+                                tweak_anchor(ui, &mut profile.palm_anchor, primary, model_mirror, item_scale);
                             }
-                        }
-                        columns[2].strong("Support finger curls");
-                        match &mut profile.fingers {
-                            FingerPose::Curls { curls, trigger_curls } => self.curl_editor.show(
-                                &mut columns[2],
-                                curls,
-                                trigger_curls,
+                            ui.strong("Support wrist rotation (degrees)");
+                            for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+                                let mirror = if primary == Handedness::Left && i > 0 {
+                                    -1.0
+                                } else {
+                                    1.0
+                                };
+                                let mut angle = profile.rotation_degrees[i] * mirror;
+                                if tweak_slider(
+                                    ui,
+                                    axis,
+                                    &mut angle,
+                                    -180.0..=180.0,
+                                    self.rotation_step,
+                                    1,
+                                ) {
+                                    profile.rotation_degrees[i] = angle * mirror;
+                                }
+                            }
+                            if profile.region.is_some() {
+                                ui.add(egui::Slider::new(&mut self.region_preview, 0.0..=1.0).text("Position along region"));
+                                ui.small("Squeeze selects the nearest point; the contact stays fixed until release.");
+                            }
+                            let units = shock2vr::METERS_PER_WORLD_UNIT * 100.0;
+                            let mut radius = profile.grab_radius * units;
+                            if tweak_slider(ui, "Grab radius (cm)", &mut radius, 0.01*units..=0.15*units, 0.1, 2) {
+                                profile.grab_radius = (radius / units).clamp(0.01,0.15);
+                                profile.release_distance = profile.release_distance.max(profile.grab_radius);
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Rotation nudge");
+                                ui.add(egui::Slider::new(&mut self.rotation_step, 0.1..=15.0).suffix("°"));
+                            });
+                        });
+                    self.curl_editor.edit(model);
+                    egui::CollapsingHeader::new("Fingers")
+                        .id_salt("support_fingers")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            self.curl_editor.show_fingers(
+                                ui,
+                                &mut profile.fingers,
                                 "Support trigger preview",
-                            ),
-                            FingerPose::Bones { .. } => {
-                                columns[2].small("Bone pose captured in VR; curls do not apply.");
-                            }
-                        }
-                    });
-                    if profile.region.is_some() {
-                        ui.add(egui::Slider::new(&mut self.region_preview, 0.0..=1.0).text("Position along region"));
-                        ui.small("Squeeze selects the nearest point; the contact stays fixed until release.");
-                    }
-                    let units = shock2vr::METERS_PER_WORLD_UNIT * 100.0;
-                    let mut radius = profile.grab_radius * units;
-                    if tweak_slider(ui, "Grab radius (cm)", &mut radius, 0.01*units..=0.15*units, 0.1, 2) {
-                        profile.grab_radius = (radius / units).clamp(0.01,0.15);
-                        profile.release_distance = profile.release_distance.max(profile.grab_radius);
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("Rotation nudge");
-                        ui.add(egui::Slider::new(&mut self.rotation_step, 0.1..=15.0).suffix("°"));
-                    });
+                            );
+                        });
                 },
             );
         }
@@ -367,6 +373,55 @@ impl SupportEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shock2vr::vr_grip::FingerPose;
+
+    #[test]
+    fn converting_a_vr_snapshot_keeps_the_support_placement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("support.json");
+        let bones = FingerPose::curls([0.1, 0.4, 0.6, 0.7, 0.9]).to_bones();
+        let snapshot = SupportProfile {
+            palm_anchor: [-0.2, 0.1, 0.03],
+            region: Some(SupportRegion {
+                start: [-0.2, 0.1, 0.03],
+                end: [-0.4, 0.1, 0.03],
+            }),
+            motion: None,
+            rotation_degrees: [5.0, -30.0, 90.0],
+            fingers: bones.clone(),
+            grab_radius: 0.07,
+            release_distance: 0.12,
+            max_swing_degrees: 75.0,
+        };
+        let profiles = BTreeMap::from([("fsn_h", snapshot)]);
+        std::fs::write(&path, serde_json::to_vec(&profiles).unwrap()).unwrap();
+        let mut editor = SupportEditor::new(Some(path));
+        let before = editor.profile("fsn_h").unwrap().clone();
+        assert_eq!(before.fingers, bones);
+        crate::grip_editor::tests::click_button("Convert fingers to curls", |ui| {
+            editor.show(
+                ui,
+                "fsn_h",
+                Handedness::Right,
+                1.0,
+                cgmath::SquareMatrix::identity(),
+                true,
+            )
+        });
+        let after = editor.profile("fsn_h").unwrap();
+        assert_eq!(after.fingers, bones.to_curls());
+        assert_eq!(
+            SupportProfile {
+                fingers: before.fingers.clone(),
+                ..after.clone()
+            },
+            before,
+            "only the fingers change"
+        );
+        assert!(editor.dirty());
+        editor.save().unwrap();
+    }
+
     #[test]
     fn trigger_preview_does_not_change_saved_support_curls() {
         let dir = tempfile::tempdir().unwrap();

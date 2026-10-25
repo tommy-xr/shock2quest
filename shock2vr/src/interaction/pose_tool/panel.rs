@@ -4,11 +4,11 @@
 //! shared frontend pointer) or by the free hand's tracked index fingertip.
 use cgmath::{InnerSpace, Quaternion, Rotation, Vector2, Vector3, vec2};
 
-use super::world;
+use super::{Slot, world};
 use crate::ui::{HAlign, PanelPlacement, Rect, UiCanvas, VAlign, WorldPanel};
 use crate::vr_config::Handedness;
 
-pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 390.0 };
+pub(in crate::interaction) const CANVAS: Vector2<f32> = Vector2 { x: 400.0, y: 490.0 };
 /// Physical panel width; its height keeps the canvas aspect.
 const PANEL_WIDTH: f32 = 0.3;
 /// Where the panel hangs from the eye: nearer and lower than the bench, and
@@ -30,18 +30,44 @@ const BACKGROUND: [u8; 3] = [16, 20, 26];
 const BUTTON: [u8; 3] = [44, 56, 72];
 const BUTTON_HOVER: [u8; 3] = [74, 104, 140];
 const BUTTON_DISABLED: [u8; 3] = [28, 32, 38];
+/// A locked finger's chip.
+const LOCKED: [u8; 3] = [150, 108, 24];
+const LOCKED_HOVER: [u8; 3] = [190, 140, 40];
 
 const TITLE: Rect = Rect::new(10.0, 4.0, 380.0, 26.0);
 const STATUS: Rect = Rect::new(10.0, 32.0, 380.0, 34.0);
 const SAVE: Rect = Rect::new(10.0, 74.0, 186.0, 44.0);
 const DISCARD: Rect = Rect::new(204.0, 74.0, 186.0, 44.0);
 const TEST_HOLD: Rect = Rect::new(10.0, 124.0, 186.0, 44.0);
-const ALIGN_AIM: Rect = Rect::new(204.0, 124.0, 186.0, 44.0);
+const ALIGN_LESS: Rect = Rect::new(204.0, 124.0, 40.0, 44.0);
+const ALIGN_AIM: Rect = Rect::new(248.0, 124.0, 98.0, 44.0);
+const ALIGN_MORE: Rect = Rect::new(350.0, 124.0, 40.0, 44.0);
 const POSE_HAND: Rect = Rect::new(10.0, 174.0, 186.0, 44.0);
 const SUPPORT_MODE: Rect = Rect::new(204.0, 174.0, 186.0, 44.0);
-const RESET_VIEW: Rect = Rect::new(10.0, 224.0, 380.0, 34.0);
-const EXIT: Rect = Rect::new(10.0, 264.0, 380.0, 32.0);
-const LEGEND: Rect = Rect::new(10.0, 304.0, 380.0, 80.0);
+const SLOT: Rect = Rect::new(10.0, 224.0, 186.0, 44.0);
+// Beside the slot, what it offers: the placement toggle at rest, the
+// trigger index steps around their readout when pulled.
+const PLACEMENT: Rect = Rect::new(204.0, 224.0, 186.0, 44.0);
+const INDEX_LESS: Rect = Rect::new(204.0, 224.0, 40.0, 44.0);
+const INDEX: Rect = Rect::new(248.0, 224.0, 98.0, 44.0);
+const INDEX_MORE: Rect = Rect::new(350.0, 224.0, 40.0, 44.0);
+/// Opens the slot's buried fingers out of the item, and closes them onto it.
+const UNBURY: Rect = Rect::new(10.0, 274.0, 186.0, 44.0);
+const TIGHTEN: Rect = Rect::new(204.0, 274.0, 186.0, 44.0);
+/// A chip per finger (thumb..little) after the row's label, locking it.
+const LOCK_LABEL: Rect = Rect::new(10.0, 324.0, 62.0, 36.0);
+const FINGER_CHIPS: [Rect; 5] = [
+    Rect::new(76.0, 324.0, 58.0, 36.0),
+    Rect::new(140.0, 324.0, 58.0, 36.0),
+    Rect::new(204.0, 324.0, 58.0, 36.0),
+    Rect::new(268.0, 324.0, 58.0, 36.0),
+    Rect::new(332.0, 324.0, 58.0, 36.0),
+];
+const FINGER_LETTERS: [&str; 5] = ["T", "I", "M", "R", "L"];
+const SHOW_AIM: Rect = Rect::new(10.0, 366.0, 122.0, 32.0);
+pub(in crate::interaction) const RESET_VIEW: Rect = Rect::new(139.0, 366.0, 122.0, 32.0);
+const EXIT: Rect = Rect::new(268.0, 366.0, 122.0, 32.0);
+const LEGEND: Rect = Rect::new(10.0, 406.0, 380.0, 80.0);
 /// A test-held gun aiming within this many degrees of its controller reads
 /// as aligned.
 const ALIGNED_DEG: f32 = 1.0;
@@ -52,9 +78,25 @@ pub(in crate::interaction) enum PanelEvent {
     Save,
     Discard,
     TestHold,
+    /// Align fully; the steps move it a tenth less or more.
     AlignAim,
+    AlignLess,
+    AlignMore,
+    ShowAim,
     SwitchHand,
     SupportMode,
+    Slot,
+    /// Whether a rest snapshot keeps the placement (Rest slot).
+    Placement,
+    /// The trigger index a tenth less or more curled (Trigger slot).
+    IndexLess,
+    IndexMore,
+    /// Close the slot's fingers onto the item (`GripSurface::tighten`).
+    Tighten,
+    /// Open the slot's buried fingers out of the item (`GripSurface::unbury`).
+    Unbury,
+    /// Lock or unlock a finger (0 thumb .. 4 little).
+    Lock(usize),
     ResetView,
     Exit,
 }
@@ -131,6 +173,8 @@ impl Status {
                 "window_short" => "Hold still...".to_owned(),
                 "degenerate_joints" => "Tracking glitch, try again".to_owned(),
                 "invalid_support_pose" => "Pose not usable, try again".to_owned(),
+                "fingers_locked" => "All fingers locked".to_owned(),
+                "index_locked" => "Index locked".to_owned(),
                 jitter => jitter.strip_prefix("jitter max_mm=").map_or_else(
                     || jitter.to_owned(),
                     |mm| format!("Hold still (moved {mm} mm)"),
@@ -173,16 +217,48 @@ pub(in crate::interaction) struct PanelView {
     /// Posing the support grip, and whether the item offers one, or why not.
     pub support: bool,
     pub support_mode: Result<(), String>,
+    /// The pose a snapshot sets, and whether it can switch or why not.
+    pub slot: Slot,
+    pub slot_entry: Result<(), String>,
+    /// Whether a rest snapshot keeps the placement, and whether that can
+    /// switch or why not.
+    pub keep_placement: bool,
+    pub placement_entry: Result<(), String>,
+    /// How far the trigger pose curls the index (`None`: no trigger pose),
+    /// and whether the Index steps can move it, or why not.
+    pub trigger_index: Option<f32>,
+    pub index_steps: Result<(), String>,
+    /// Whether Tighten and Unbury can act, or why not.
+    pub tighten: Result<(), String>,
+    /// Which fingers (thumb..little) are locked.
+    pub locks: [bool; 5],
     /// A snapshot awaits Save or Discard.
     pub staged: bool,
     /// Test holding, and whether it can start or why not.
     pub test_hold: bool,
     pub test_hold_entry: Result<(), String>,
-    /// Whether Align aim can act, or why not.
+    /// Whether Align aim can act, or why not, and how far it is turned.
     pub align: Result<(), String>,
+    pub align_amount: Option<f32>,
+    /// Whether the aim toggle can act or why not, whether it is on, and
+    /// the aim error of the lines drawn this frame.
+    pub aim: Result<(), String>,
+    pub show_aim: bool,
+    pub aim_error_deg: Option<f32>,
     /// The free hand is tracked with no controller in it: it taps the
     /// buttons and pinches to snapshot.
     pub fingertip: bool,
+}
+
+/// The aim toggle's label: off, or on with the drawn lines' error (none
+/// while a test-held controller is put down). The bitmap fonts carry no
+/// degree sign.
+fn aim_label(show: bool, error_deg: Option<f32>) -> String {
+    match (show, error_deg) {
+        (false, _) => "Aim: Off".to_owned(),
+        (true, None) => "Aim: On".to_owned(),
+        (true, Some(deg)) => format!("Aim: {deg:.1} deg"),
+    }
 }
 
 fn hand_name(hand: Handedness) -> &'static str {
@@ -192,33 +268,32 @@ fn hand_name(hand: Handedness) -> &'static str {
     }
 }
 
-fn other(hand: Handedness) -> Handedness {
-    match hand {
-        Handedness::Left => Handedness::Right,
-        Handedness::Right => Handedness::Left,
-    }
-}
-
 /// How the free hand works the tool. With its controller: the buttons as
 /// printed on it (X/Y on the left, A/B on the right). Tracked with no
-/// controller in it: fingertip taps and pinches. Saving is on the panel.
+/// controller in it: fingertip taps and pinches. Saving is on the panel. A
+/// snapshot names the slot's pose it sets.
 pub(in crate::interaction) fn legend(
     free: Handedness,
     fingertip: bool,
     support: bool,
     test_hold: bool,
+    slot: Slot,
 ) -> Vec<String> {
     let hold = format!(
         "Hold the item with the {} controller",
-        hand_name(other(free))
+        hand_name(free.other())
     );
+    let snapshot = match slot {
+        Slot::Rest => "snapshot",
+        Slot::Trigger => "snapshot pulled index",
+    };
     if fingertip {
         return vec![
             "Tap buttons with your fingertip".to_owned(),
             if test_hold {
                 hold
             } else {
-                "Pinch: snapshot".to_owned()
+                format!("Pinch: {snapshot}")
             },
         ];
     }
@@ -227,10 +302,14 @@ pub(in crate::interaction) fn legend(
         Handedness::Right => ("A", "B"),
     };
     if test_hold {
-        return vec![hold, format!("{lower}: end test hold    {upper}: discard")];
+        return vec![
+            hold,
+            format!("{lower}: end test hold    {upper}: discard"),
+            "Squeeze: move the item in the hand".to_owned(),
+        ];
     }
     vec![
-        format!("{} controller   Trigger: snapshot", hand_name(free)),
+        format!("{} controller   Trigger: {snapshot}", hand_name(free)),
         format!("{lower}: test hold    {upper}: discard"),
         // A support pose leaves the item's scale to the grip.
         if support {
@@ -255,10 +334,10 @@ pub(in crate::interaction) fn emit(
         TITLE,
         &format!(
             "{}: {} hand",
-            if view.support {
-                "Support grip"
-            } else {
-                "Grip pose"
+            match (view.support, view.slot) {
+                (true, _) => "Support grip",
+                (false, Slot::Rest) => "Grip pose",
+                (false, Slot::Trigger) => "Trigger pose",
             },
             hand_name(view.posing)
         ),
@@ -282,7 +361,13 @@ pub(in crate::interaction) fn emit(
     } else {
         Err("nothing staged".to_owned())
     };
-    let buttons = [
+    // The steps move a turn on Align's arc; a kept turn off it needs Align first.
+    let steps = view.align.clone().and_then(|()| {
+        view.align_amount
+            .map(|_| ())
+            .ok_or_else(|| "align first".to_owned())
+    });
+    let mut buttons = vec![
         (SAVE, "Save".to_owned(), PanelEvent::Save, staged.clone()),
         (DISCARD, "Discard".to_owned(), PanelEvent::Discard, staged),
         if view.test_hold {
@@ -301,14 +386,23 @@ pub(in crate::interaction) fn emit(
             )
         },
         (
+            ALIGN_LESS,
+            "-".to_owned(),
+            PanelEvent::AlignLess,
+            steps.clone(),
+        ),
+        (
             ALIGN_AIM,
-            "Align aim".to_owned(),
+            view.align_amount.map_or("Align".to_owned(), |amount| {
+                format!("Align {:.0}%", amount * 100.0)
+            }),
             PanelEvent::AlignAim,
             view.align.clone(),
         ),
+        (ALIGN_MORE, "+".to_owned(), PanelEvent::AlignMore, steps),
         (
             POSE_HAND,
-            format!("Pose: {}", hand_name(other(view.posing))),
+            format!("Pose: {}", hand_name(view.posing.other())),
             PanelEvent::SwitchHand,
             view.switch.clone(),
         ),
@@ -324,14 +418,89 @@ pub(in crate::interaction) fn emit(
             view.support_mode.clone(),
         ),
         (
+            SLOT,
+            match view.slot {
+                Slot::Rest => "Slot: Rest",
+                Slot::Trigger => "Slot: Trigger",
+            }
+            .to_owned(),
+            PanelEvent::Slot,
+            view.slot_entry.clone(),
+        ),
+    ];
+    match view.slot {
+        Slot::Rest => buttons.push((
+            PLACEMENT,
+            if view.keep_placement {
+                "Placement: keep"
+            } else {
+                "Placement: capture"
+            }
+            .to_owned(),
+            PanelEvent::Placement,
+            view.placement_entry.clone(),
+        )),
+        Slot::Trigger => {
+            for (rect, label, event) in [
+                (INDEX_LESS, "-", PanelEvent::IndexLess),
+                (INDEX_MORE, "+", PanelEvent::IndexMore),
+            ] {
+                buttons.push((rect, label.to_owned(), event, view.index_steps.clone()));
+            }
+            // A readout, not a button: no trigger pose reads as the rest.
+            canvas.fill(INDEX, BUTTON_DISABLED);
+            canvas.text_fit(
+                INDEX,
+                &format!("Index +{:.0}%", view.trigger_index.unwrap_or(0.0) * 100.0),
+                FONT,
+                18.0,
+                HAlign::Center,
+                VAlign::Middle,
+            );
+        }
+    }
+    let fingers = match view.slot {
+        Slot::Rest => "fingers",
+        Slot::Trigger => "index",
+    };
+    buttons.extend([
+        (
+            UNBURY,
+            format!("Unbury {fingers}"),
+            PanelEvent::Unbury,
+            view.tighten.clone(),
+        ),
+        (
+            TIGHTEN,
+            format!("Tighten {fingers}"),
+            PanelEvent::Tighten,
+            view.tighten.clone(),
+        ),
+        (
             RESET_VIEW,
             "Reset view".to_owned(),
             PanelEvent::ResetView,
             Ok(()),
         ),
+        (
+            SHOW_AIM,
+            aim_label(view.show_aim, view.aim_error_deg),
+            PanelEvent::ShowAim,
+            view.aim.clone(),
+        ),
         (EXIT, "Exit".to_owned(), PanelEvent::Exit, Ok(())),
+    ]);
+    // Only a gun has an aim to show: the toggle is hidden for anything else,
+    // as are Align's steps while it cannot act (too narrow to say why).
+    let hidden_when_disabled = [
+        PanelEvent::ShowAim,
+        PanelEvent::AlignLess,
+        PanelEvent::AlignMore,
     ];
-    for (rect, label, event, enabled) in buttons {
+    let shown = buttons
+        .into_iter()
+        .filter(|(_, _, event, enabled)| !hidden_when_disabled.contains(event) || enabled.is_ok());
+    for (rect, label, event, enabled) in shown {
         let color = match &enabled {
             Err(_) => BUTTON_DISABLED,
             Ok(()) if hover.is_some_and(|p| rect.contains(p)) => BUTTON_HOVER,
@@ -358,11 +527,33 @@ pub(in crate::interaction) fn emit(
             }
         }
     }
+    // Finger chips toggle a lock, so a locked one is lit rather than dimmed.
+    canvas.text_fit(LOCK_LABEL, "Lock", FONT, 18.0, HAlign::Left, VAlign::Middle);
+    for (finger, rect) in FINGER_CHIPS.into_iter().enumerate() {
+        let hovered = hover.is_some_and(|p| rect.contains(p));
+        let color = match (view.locks[finger], hovered) {
+            (true, true) => LOCKED_HOVER,
+            (true, false) => LOCKED,
+            (false, true) => BUTTON_HOVER,
+            (false, false) => BUTTON,
+        };
+        canvas.fill(rect, color);
+        canvas.text_fit(
+            rect,
+            FINGER_LETTERS[finger],
+            FONT,
+            18.0,
+            HAlign::Center,
+            VAlign::Middle,
+        );
+        targets.push((rect, PanelEvent::Lock(finger)));
+    }
     let lines = legend(
-        other(view.posing),
+        view.posing.other(),
         view.fingertip,
         view.support,
         view.test_hold,
+        view.slot,
     );
     // Spaced for the controller legend, which is the longest.
     let line_height = LEGEND.h / 3.0;
@@ -583,17 +774,48 @@ mod tests {
             switch: Ok(()),
             support: false,
             support_mode: Err("one-handed".to_owned()),
+            slot: Slot::Rest,
+            slot_entry: Ok(()),
+            keep_placement: true,
+            placement_entry: Ok(()),
+            trigger_index: None,
+            index_steps: Ok(()),
+            tighten: Ok(()),
+            locks: [false; 5],
             staged: false,
             fingertip: false,
             test_hold: false,
             test_hold_entry: Err("snapshot first".to_owned()),
-            align: Err("test hold first".to_owned()),
+            align: Err("no barrel".to_owned()),
+            align_amount: None,
+            aim: Err("no barrel".to_owned()),
+            show_aim: true,
+            aim_error_deg: None,
         }
     }
 
     #[test]
+    fn the_aim_toggle_shows_only_for_a_gun_with_its_readout() {
+        let label = |view: &PanelView| {
+            let (canvas, targets) = emit(view, None);
+            let shown = targets.iter().any(|(_, e)| *e == PanelEvent::ShowAim);
+            let text = texts(&canvas).into_iter().find(|t| t.starts_with("Aim:"));
+            (shown, text)
+        };
+        assert_eq!(label(&view(Status::Ready)), (false, None), "no barrel");
+        let mut gun = view(Status::Ready);
+        gun.aim = Ok(());
+        gun.aim_error_deg = Some(3.24);
+        assert_eq!(label(&gun), (true, Some("Aim: 3.2 deg".to_owned())));
+        gun.aim_error_deg = None;
+        assert_eq!(label(&gun), (true, Some("Aim: On".to_owned())));
+        gun.show_aim = false;
+        assert_eq!(label(&gun), (true, Some("Aim: Off".to_owned())));
+    }
+
+    #[test]
     fn a_tracked_free_hand_is_told_to_tap_not_shown_controller_buttons() {
-        let lines = legend(Handedness::Left, true, false, false);
+        let lines = legend(Handedness::Left, true, false, false, Slot::Rest);
         assert_eq!(lines[0], "Tap buttons with your fingertip");
         let all = lines.join(" ");
         assert!(
@@ -650,13 +872,13 @@ mod tests {
 
     #[test]
     fn the_legend_names_the_free_controllers_own_buttons() {
-        let left = legend(Handedness::Left, false, false, false).join(" ");
+        let left = legend(Handedness::Left, false, false, false, Slot::Rest).join(" ");
         assert!(
             left.contains("X: test hold") && left.contains("Y: discard"),
             "{left}"
         );
         assert!(left.contains("Squeeze: turn"), "{left}");
-        let right = legend(Handedness::Right, false, false, false).join(" ");
+        let right = legend(Handedness::Right, false, false, false, Slot::Rest).join(" ");
         assert!(
             right.contains("A: test hold") && right.contains("B: discard"),
             "{right}"
@@ -675,18 +897,19 @@ mod tests {
 
     #[test]
     fn test_hold_names_the_controller_to_hold_and_how_to_go_back() {
-        let lines = legend(Handedness::Left, false, false, true).join(" ");
+        let lines = legend(Handedness::Left, false, false, true, Slot::Rest).join(" ");
         assert!(
             lines.contains("Hold the item with the Right controller")
                 && lines.contains("X: end test hold")
-                && lines.contains("Y: discard"),
+                && lines.contains("Y: discard")
+                && lines.contains("Squeeze: move the item in the hand"),
             "{lines}"
         );
         assert!(
-            !lines.contains("snapshot") && !lines.contains("Squeeze"),
+            !lines.contains("snapshot") && !lines.contains("turn"),
             "{lines}"
         );
-        let tapping = legend(Handedness::Left, true, false, true).join(" ");
+        let tapping = legend(Handedness::Left, true, false, true, Slot::Rest).join(" ");
         assert!(!tapping.contains("Pinch"), "{tapping}");
     }
 
@@ -729,28 +952,48 @@ mod tests {
     }
 
     #[test]
-    fn test_hold_needs_a_snapshot_and_align_needs_a_test_held_gun() {
+    fn test_hold_needs_a_snapshot_and_align_needs_a_gun() {
         let (canvas, targets) = emit(&view(Status::Ready), None);
         let shown = texts(&canvas);
         assert!(shown.contains(&"snapshot first".to_owned()));
-        assert!(shown.contains(&"test hold first".to_owned()));
+        assert!(shown.contains(&"no barrel".to_owned()));
+        assert!(
+            !shown.contains(&"+".to_owned()),
+            "no steps without a barrel"
+        );
         assert_eq!(event_at(&targets, TEST_HOLD.center()), None);
         assert_eq!(event_at(&targets, ALIGN_AIM.center()), None);
+        assert_eq!(event_at(&targets, ALIGN_MORE.center()), None);
         let mut holding = view(Status::Unsaved);
         holding.test_hold = true;
         holding.test_hold_entry = Err("snapshot first".to_owned());
         holding.align = Ok(());
+        holding.align_amount = Some(0.7);
         let (canvas, targets) = emit(&holding, None);
-        assert!(texts(&canvas).contains(&"End test hold".to_owned()));
+        let shown = texts(&canvas);
+        assert!(shown.contains(&"End test hold".to_owned()));
+        assert!(shown.contains(&"Align 70%".to_owned()), "{shown:?}");
         assert_eq!(
             event_at(&targets, TEST_HOLD.center()),
             Some(PanelEvent::TestHold),
             "ending test hold is always allowed"
         );
+        for (rect, event) in [
+            (ALIGN_LESS, PanelEvent::AlignLess),
+            (ALIGN_AIM, PanelEvent::AlignAim),
+            (ALIGN_MORE, PanelEvent::AlignMore),
+        ] {
+            assert_eq!(event_at(&targets, rect.center()), Some(event));
+        }
+        // A kept turn off Align's arc: Align, but no steps from it.
+        holding.align_amount = None;
+        let (canvas, targets) = emit(&holding, None);
+        assert!(texts(&canvas).contains(&"Align".to_owned()));
         assert_eq!(
             event_at(&targets, ALIGN_AIM.center()),
             Some(PanelEvent::AlignAim)
         );
+        assert_eq!(event_at(&targets, ALIGN_LESS.center()), None);
     }
 
     #[test]
@@ -774,6 +1017,93 @@ mod tests {
     }
 
     #[test]
+    fn the_slot_button_names_the_pose_a_snapshot_sets() {
+        let (canvas, targets) = emit(&view(Status::Ready), None);
+        let shown = texts(&canvas);
+        assert!(shown.contains(&"Slot: Rest".to_owned()));
+        assert!(shown.contains(&"Grip pose: Right hand".to_owned()));
+        assert!(shown.iter().any(|t| t.ends_with("Trigger: snapshot")));
+        assert_eq!(event_at(&targets, SLOT.center()), Some(PanelEvent::Slot));
+        let mut trigger = view(Status::Ready);
+        trigger.slot = Slot::Trigger;
+        let (canvas, _) = emit(&trigger, None);
+        let shown = texts(&canvas);
+        assert!(shown.contains(&"Slot: Trigger".to_owned()), "{shown:?}");
+        assert!(shown.contains(&"Trigger pose: Right hand".to_owned()));
+        assert!(
+            shown
+                .iter()
+                .any(|t| t.ends_with("Trigger: snapshot pulled index")),
+            "{shown:?}"
+        );
+        trigger.fingertip = true;
+        let (canvas, _) = emit(&trigger, None);
+        assert!(texts(&canvas).contains(&"Pinch: snapshot pulled index".to_owned()));
+        // In support mode it is disabled, saying why.
+        let mut support = view(Status::Ready);
+        support.slot_entry = Err("primary grip only".to_owned());
+        let (canvas, targets) = emit(&support, None);
+        assert!(texts(&canvas).contains(&"primary grip only".to_owned()));
+        assert_eq!(event_at(&targets, SLOT.center()), None);
+    }
+
+    /// At rest the slot is joined by the placement toggle; pulled, by the
+    /// trigger index steps around their readout.
+    #[test]
+    fn the_slot_offers_placement_at_rest_and_index_steps_when_pulled() {
+        let steps = |targets: &[(Rect, PanelEvent)]| {
+            targets
+                .iter()
+                .any(|(_, e)| matches!(e, PanelEvent::IndexLess | PanelEvent::IndexMore))
+        };
+        let (canvas, targets) = emit(&view(Status::Ready), None);
+        assert!(
+            texts(&canvas).contains(&"Placement: keep".to_owned()),
+            "{:?}",
+            texts(&canvas)
+        );
+        assert_eq!(
+            event_at(&targets, PLACEMENT.center()),
+            Some(PanelEvent::Placement)
+        );
+        assert!(!steps(&targets));
+        let mut capture = view(Status::Ready);
+        capture.keep_placement = false;
+        assert!(texts(&emit(&capture, None).0).contains(&"Placement: capture".to_owned()));
+        let mut support = view(Status::Ready);
+        support.placement_entry = Err("primary grip only".to_owned());
+        assert_eq!(event_at(&emit(&support, None).1, PLACEMENT.center()), None);
+
+        let mut trigger = view(Status::Ready);
+        trigger.slot = Slot::Trigger;
+        trigger.trigger_index = Some(0.4);
+        let (canvas, targets) = emit(&trigger, None);
+        let shown = texts(&canvas);
+        assert!(shown.contains(&"Index +40%".to_owned()), "{shown:?}");
+        assert!(
+            !shown.iter().any(|t| t.starts_with("Placement")),
+            "{shown:?}"
+        );
+        assert_eq!(
+            event_at(&targets, INDEX_LESS.center()),
+            Some(PanelEvent::IndexLess)
+        );
+        assert_eq!(
+            event_at(&targets, INDEX_MORE.center()),
+            Some(PanelEvent::IndexMore)
+        );
+        assert_eq!(event_at(&targets, INDEX.center()), None, "a readout");
+        trigger.trigger_index = None;
+        assert!(texts(&emit(&trigger, None).0).contains(&"Index +0%".to_owned()));
+        // Reset view and Exit share the bottom row with the aim toggle.
+        assert_eq!(
+            event_at(&targets, RESET_VIEW.center()),
+            Some(PanelEvent::ResetView)
+        );
+        assert_eq!(event_at(&targets, EXIT.center()), Some(PanelEvent::Exit));
+    }
+
+    #[test]
     fn a_disabled_button_says_why_and_cannot_be_pressed() {
         let mut staged = view(Status::Unsaved);
         staged.staged = true;
@@ -792,6 +1122,72 @@ mod tests {
         assert!(texts(&canvas).contains(&"nothing staged".to_owned()));
         assert_eq!(event_at(&targets, SAVE.center()), None);
         assert_eq!(event_at(&targets, DISCARD.center()), None);
+    }
+
+    #[test]
+    fn tighten_and_unbury_name_what_the_slot_moves_and_say_why_they_cannot() {
+        let rest = view(Status::Ready);
+        let (canvas, targets) = emit(&rest, None);
+        assert!(texts(&canvas).contains(&"Tighten fingers".to_owned()));
+        assert!(texts(&canvas).contains(&"Unbury fingers".to_owned()));
+        assert_eq!(
+            event_at(&targets, TIGHTEN.center()),
+            Some(PanelEvent::Tighten)
+        );
+        assert_eq!(
+            event_at(&targets, UNBURY.center()),
+            Some(PanelEvent::Unbury)
+        );
+        let mut trigger = view(Status::Ready);
+        trigger.slot = Slot::Trigger;
+        let canvas = emit(&trigger, None).0;
+        assert!(texts(&canvas).contains(&"Tighten index".to_owned()));
+        assert!(texts(&canvas).contains(&"Unbury index".to_owned()));
+        let mut support = view(Status::Ready);
+        support.tighten = Err("primary grip only".to_owned());
+        let (canvas, targets) = emit(&support, None);
+        assert!(texts(&canvas).contains(&"primary grip only".to_owned()));
+        assert_eq!(event_at(&targets, TIGHTEN.center()), None);
+        assert_eq!(event_at(&targets, UNBURY.center()), None);
+    }
+
+    /// A chip per finger toggles its lock, lit while locked; a locked index
+    /// disables its trigger steps with why.
+    #[test]
+    fn finger_chips_lock_each_finger_and_a_locked_index_has_no_steps() {
+        let fill = |canvas: &UiCanvas, rect: Rect| {
+            canvas.elements().iter().rev().find_map(|e| match e {
+                crate::ui::UiElement::Fill {
+                    position, color, ..
+                } if *position == vec2(rect.x, rect.y) => Some(*color),
+                _ => None,
+            })
+        };
+        let mut locked = view(Status::Ready);
+        locked.locks = [false, true, false, false, true];
+        let (canvas, targets) = emit(&locked, None);
+        let shown = texts(&canvas);
+        for (finger, (rect, letter)) in FINGER_CHIPS.iter().zip(FINGER_LETTERS).enumerate() {
+            assert!(shown.contains(&letter.to_owned()), "{shown:?}");
+            assert_eq!(
+                event_at(&targets, rect.center()),
+                Some(PanelEvent::Lock(finger))
+            );
+            let lit = if locked.locks[finger] { LOCKED } else { BUTTON };
+            assert_eq!(fill(&canvas, *rect), Some(lit), "finger {finger}");
+        }
+        // Hovered, a chip lightens either way.
+        let (canvas, _) = emit(&locked, Some(FINGER_CHIPS[1].center()));
+        assert_eq!(fill(&canvas, FINGER_CHIPS[1]), Some(LOCKED_HOVER));
+        let (canvas, _) = emit(&locked, Some(FINGER_CHIPS[0].center()));
+        assert_eq!(fill(&canvas, FINGER_CHIPS[0]), Some(BUTTON_HOVER));
+
+        locked.slot = Slot::Trigger;
+        locked.index_steps = Err("index locked".to_owned());
+        let (canvas, targets) = emit(&locked, None);
+        assert!(texts(&canvas).contains(&"index locked".to_owned()));
+        assert_eq!(event_at(&targets, INDEX_LESS.center()), None);
+        assert_eq!(event_at(&targets, INDEX_MORE.center()), None);
     }
 
     #[test]

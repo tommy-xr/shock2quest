@@ -1,12 +1,13 @@
 //! Local authoring of prepared grips. The preview and runtime share geometry,
 //! glove poses, transforms, and pose validation.
 use crate::model_preview::{ModelPreview, PreviewScene};
-use cgmath::{Deg, Euler, InnerSpace, Matrix3, Matrix4, Quaternion, Rad, SquareMatrix, Transform};
+use cgmath::{Deg, Euler, InnerSpace, Matrix4, Quaternion, Rad};
 use eframe::egui;
 use shock2vr::{
     Handedness,
     scenes::debug_interactions::INTERACTION_FIXTURES,
     vr_grip::{BakedGripEntry, FingerPose, GRIP_RESOURCES, GripHints, GripLibrary, ResolvedGrip},
+    weapon_muzzle::MuzzleFallback,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,19 +24,83 @@ pub(crate) const POSE_PRESETS: [(&str, [f32; 5]); 6] = [
     ("Thumbs up", [-0.5, 1.0, 1.0, 1.0, 1.0]),
 ];
 
+const FINGER_NAMES: [&str; 5] = ["Thumb", "Index", "Middle", "Ring", "Pinky"];
+
 /// Shared Rest/pressed authoring for primary and support finger poses.
 #[derive(Default)]
 pub(crate) struct CurlPoseEditor {
-    pressed: bool,
+    /// Editing the trigger-pressed pose rather than the rest.
+    pub pressed: bool,
     pub preview: f32,
+    /// Fingers (thumb..pinky) kept as they are: their sliders are disabled,
+    /// presets and Tighten skip them. Editing state of `subject` only.
+    pub locks: [bool; 5],
+    subject: String,
 }
 impl CurlPoseEditor {
-    pub fn show(
+    /// Edit `subject`'s fingers (e.g. a model and hand): another one starts
+    /// unlocked.
+    pub fn edit(&mut self, subject: &str) {
+        if self.subject != subject {
+            self.subject = subject.to_owned();
+            self.locks = [false; 5];
+        }
+    }
+
+    /// The finger locks, mode and curls. A VR snapshot shows its estimated
+    /// curls read-only until converted to curls.
+    pub fn show_fingers(
+        &mut self,
+        ui: &mut egui::Ui,
+        fingers: &mut FingerPose,
+        preview_label: &str,
+    ) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Lock:");
+            for (name, lock) in FINGER_NAMES.into_iter().zip(self.locks.iter_mut()) {
+                ui.checkbox(lock, name)
+                    .on_hover_text("Keep this finger: its sliders, presets and Tighten skip it");
+            }
+        });
+        if let FingerPose::Bones { .. } = fingers {
+            ui.label("Mode: VR snapshot");
+            if ui
+                .button("Convert fingers to curls")
+                .on_hover_text("Replace the captured bones with these estimated curls")
+                .clicked()
+            {
+                *fingers = fingers.to_curls();
+            }
+        } else {
+            ui.label("Mode: Curls");
+        }
+        match fingers {
+            FingerPose::Curls {
+                curls,
+                trigger_curls,
+            } => self.show(ui, curls, trigger_curls, preview_label, true),
+            FingerPose::Bones { .. } => {
+                let FingerPose::Curls {
+                    mut curls,
+                    mut trigger_curls,
+                } = fingers.to_curls()
+                else {
+                    unreachable!("to_curls returns curls")
+                };
+                self.show(ui, &mut curls, &mut trigger_curls, preview_label, false);
+                ui.add_enabled_ui(!self.locks[1], |ui| trigger_index_slider(ui, fingers));
+            }
+        }
+    }
+
+    /// Rest/pressed curl sliders; `live: false` shows them disabled.
+    fn show(
         &mut self,
         ui: &mut egui::Ui,
         rest: &mut [f32; 5],
         pressed: &mut Option<[f32; 5]>,
         preview_label: &str,
+        live: bool,
     ) {
         ui.horizontal_wrapped(|ui| {
             if ui
@@ -54,36 +119,46 @@ impl CurlPoseEditor {
         if self.pressed {
             if pressed.is_none() {
                 ui.small("Pressed uses Rest until customized.");
-                if ui.button("Customize pressed pose").clicked() {
+                if live && ui.button("Customize pressed pose").clicked() {
                     *pressed = Some(*rest);
                 }
-            } else if ui.button("Use Rest for both").clicked() {
+            } else if live
+                // It would move a locked finger's pressed pose to its rest.
+                && ui
+                    .add_enabled(!self.locks.contains(&true), egui::Button::new("Use Rest for both"))
+                    .clicked()
+            {
                 *pressed = None;
             }
         }
-        let editable = !self.pressed || pressed.is_some();
+        let editable = live && (!self.pressed || pressed.is_some());
         let curls = if self.pressed {
             pressed.as_mut().unwrap_or(rest)
         } else {
             rest
         };
+        let locks = self.locks;
         ui.add_enabled_ui(editable, |ui| {
-            for (name, value) in ["Thumb", "Index", "Middle", "Ring", "Pinky"]
-                .into_iter()
-                .zip(curls.iter_mut())
+            for ((name, value), locked) in FINGER_NAMES.into_iter().zip(curls.iter_mut()).zip(locks)
             {
                 let min = if name == "Thumb" {
                     shock2vr::vr_grip::MIN_THUMB_CURL
                 } else {
                     0.0
                 };
-                tweak_slider(ui, name, value, min..=1.0, 0.02, 2);
+                ui.add_enabled_ui(!locked, |ui| {
+                    tweak_slider(ui, name, value, min..=1.0, 0.02, 2);
+                });
             }
             ui.small("Negative thumb values extend outward beyond the open pose.");
             ui.horizontal_wrapped(|ui| {
                 for (name, values) in POSE_PRESETS {
                     if ui.button(name).clicked() {
-                        *curls = values;
+                        for ((curl, value), locked) in curls.iter_mut().zip(values).zip(locks) {
+                            if !locked {
+                                *curl = value;
+                            }
+                        }
                     }
                 }
             });
@@ -93,14 +168,129 @@ impl CurlPoseEditor {
     }
 }
 
+/// A VR snapshot's trigger pose as its rest with the index curled toward a
+/// fist (`FingerPose::with_trigger_index`, as the VR workbench's Index steps).
+fn trigger_index_slider(ui: &mut egui::Ui, fingers: &mut FingerPose) {
+    let mut percent = fingers.trigger_index().unwrap_or(0.0) * 100.0;
+    if tweak_slider(
+        ui,
+        "Trigger index curl %",
+        &mut percent,
+        0.0..=100.0,
+        10.0,
+        0,
+    ) {
+        *fingers = fingers.with_trigger_index(percent / 100.0);
+    }
+}
+
+/// "Unbury" and "Tighten to surface": open the fingers buried in the item
+/// out of it (`GripSurface::unbury`), or close the fingers onto it from
+/// where they are (`GripSurface::tighten`), keeping the placement: all five
+/// at rest, only the index for the trigger-pressed pose; never a `locked`
+/// finger. `fit` takes the grip, the pose, the fingers and whether to
+/// unbury, and gives the moved grip and each finger's outcome. `None` until
+/// clicked; then what happened, or why it could not.
+fn surface_buttons(
+    ui: &mut egui::Ui,
+    grip: &mut ResolvedGrip,
+    pressed: bool,
+    locked: [bool; 5],
+    fit: impl FnOnce(
+        &ResolvedGrip,
+        bool,
+        [bool; 5],
+        bool,
+    ) -> Result<(ResolvedGrip, [&'static str; 5]), String>,
+) -> Option<Result<String, String>> {
+    let fingers = shock2vr::vr_grip::tighten_fingers(pressed, locked);
+    let which = if pressed {
+        "the pressed index"
+    } else {
+        "each unlocked finger"
+    };
+    let clicked = ui
+        .horizontal(|ui| {
+            let mut clicked = None;
+            for (unbury, label, hover) in [
+                (
+                    true,
+                    "Unbury",
+                    format!("Open {which} out of the item where it is buried in it"),
+                ),
+                (
+                    false,
+                    "Tighten to surface",
+                    format!("Close {which} onto the item from where it is"),
+                ),
+            ] {
+                if ui
+                    .add_enabled(fingers.contains(&true), egui::Button::new(label))
+                    .on_hover_text(hover)
+                    .on_disabled_hover_text("Its fingers are locked")
+                    .clicked()
+                {
+                    clicked = Some(unbury);
+                }
+            }
+            clicked
+        })
+        .inner?;
+    Some(
+        fit(grip, pressed, fingers, clicked).map(|(moved, outcomes)| {
+            // As in VR: nothing moved, nothing changes (contacts included).
+            if moved.fingers != grip.fingers {
+                grip.fingers = moved.fingers;
+                grip.contacts = moved.contacts;
+            }
+            let said: Vec<_> = FINGER_NAMES
+                .into_iter()
+                .zip(outcomes)
+                .filter(|(_, outcome)| *outcome != "skip")
+                .map(|(name, outcome)| format!("{name} {outcome}"))
+                .collect();
+            let done = if clicked { "Unburied" } else { "Tightened" };
+            format!("{done}: {}", said.join(", "))
+        }),
+    )
+}
+
 pub fn default_library_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/vr-grips.json")
 }
 
 /// Each override replaces the pose the runtime would pick for its model and
-/// hand (keeping that entry's provenance), or joins the pickup library.
+/// hand (keeping that entry's provenance), or joins the pickup library. A
+/// glove weapon posed for one hand only also replaces the other hand's,
+/// mirrored, as play holds it before the overrides are cleared.
 fn merge_overrides(libraries: &mut [GripLibrary], overrides: GripLibrary) -> Result<(), String> {
-    for entry in overrides.entries {
+    let posed = |model: &str, hand: &str| {
+        overrides
+            .entries
+            .iter()
+            .any(|e| e.model == model && e.hand == hand)
+    };
+    let mut merges = Vec::new();
+    for entry in &overrides.entries {
+        merges.push(entry.clone());
+        let (other, other_name) = match entry.hand.as_str() {
+            "left" => (Handedness::Right, "right"),
+            _ => (Handedness::Left, "left"),
+        };
+        if let Some(mirror) = shock2vr::vr_weapon_grip::named_model_mirror(&entry.model)
+            .filter(|_| !posed(&entry.model, other_name))
+        {
+            let grip = shock2vr::vr_grip::hand_model_mirror(mirror, other)
+                .and_then(|mirror| entry.grip.mirrored(mirror))
+                .ok_or("Invalid model reflection or grip")?;
+            merges.push(BakedGripEntry {
+                hand: other_name.to_owned(),
+                grip,
+                ..entry.clone()
+            });
+        }
+    }
+    for entry in merges {
         let existing = libraries.iter_mut().find_map(|library| {
             library
                 .entries
@@ -119,17 +309,26 @@ fn merge_overrides(libraries: &mut [GripLibrary], overrides: GripLibrary) -> Res
 }
 
 pub fn merge_override_file(path: PathBuf) -> Result<(), String> {
-    let support = serde_json::from_slice::<shock2vr::vr_grip::GripOverrides>(
-        &std::fs::read(&path).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?
-    .support;
-    let overrides = GripDocument::load(path)?.library;
-    let count = overrides.entries.len();
     let dir = default_library_path()
         .parent()
         .ok_or("Missing assets directory")?
         .to_owned();
+    merge_override_file_into(path, &dir)
+}
+
+/// Merge the overrides file into the grip and support resources in `dir`.
+fn merge_override_file_into(path: PathBuf, dir: &std::path::Path) -> Result<(), String> {
+    let file = shock2vr::vr_grip::GripOverrides::parse(
+        &std::fs::read_to_string(&path).map_err(|e| e.to_string())?,
+    )?;
+    // A partial merge into the shipped assets would silently drop poses.
+    let unread = file.unread.entries.len() + file.unread.support.len();
+    if unread > 0 {
+        return Err(format!("{unread} overrides this build cannot read"));
+    }
+    validate(&file.grips)?;
+    let (overrides, support) = (file.grips, file.support);
+    let count = overrides.entries.len();
     let mut docs = GRIP_RESOURCES
         .iter()
         .map(|name| GripDocument::load(dir.join(name)))
@@ -137,26 +336,49 @@ pub fn merge_override_file(path: PathBuf) -> Result<(), String> {
     let mut libraries: Vec<_> = docs.iter().map(|doc| doc.library.clone()).collect();
     merge_overrides(&mut libraries, overrides)?;
     // Merged in memory before anything is written, so a bad pose writes
-    // nothing; saved first, as its save also refuses an externally edited file.
-    let support_doc = crate::support_grip_editor::merged_support(
-        default_library_path().with_file_name("vr-support-grips.json"),
-        &support,
-    )?;
+    // nothing.
+    let support_doc =
+        crate::support_grip_editor::merged_support(dir.join("vr-support-grips.json"), &support)?;
+    for (doc, library) in docs.iter_mut().zip(libraries) {
+        doc.library = library;
+    }
+    docs.retain(GripDocument::dirty);
+    // Every save refuses an externally edited file: check them all first.
+    if let Some(doc) = &support_doc {
+        doc.check_unchanged()?;
+    }
+    for doc in &docs {
+        doc.check_unchanged()?;
+    }
     if let Some(mut doc) = support_doc {
         doc.save()?;
         println!("updated {}", doc.path.display());
     }
-    for (doc, library) in docs.iter_mut().zip(libraries) {
-        doc.library = library;
-        if doc.dirty() {
-            doc.save()?;
-            println!("updated {}", doc.path.display());
-        }
+    for doc in &mut docs {
+        doc.save()?;
+        println!("updated {}", doc.path.display());
     }
     println!(
         "merged {count} grip overrides and {} support poses",
         support.len()
     );
+    Ok(())
+}
+
+/// A version 1 library of valid grips, one per model and hand.
+fn validate(library: &GripLibrary) -> Result<(), String> {
+    if library.version != 1 {
+        return Err("Unsupported grip resource version".into());
+    }
+    let mut keys = BTreeSet::new();
+    for e in &library.entries {
+        if !matches!(e.hand.as_str(), "left" | "right")
+            || !e.grip.is_valid()
+            || !keys.insert((e.model.clone(), e.hand.clone()))
+        {
+            return Err("Invalid or duplicate prepared grip entry".into());
+        }
+    }
     Ok(())
 }
 
@@ -179,18 +401,7 @@ impl GripDocument {
         let saved_bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
         let library: GripLibrary =
             serde_json::from_slice(&saved_bytes).map_err(|e| e.to_string())?;
-        if library.version != 1 {
-            return Err("Unsupported grip resource version".into());
-        }
-        let mut keys = BTreeSet::new();
-        for e in &library.entries {
-            if !matches!(e.hand.as_str(), "left" | "right")
-                || !e.grip.is_valid()
-                || !keys.insert((e.model.clone(), e.hand.clone()))
-            {
-                return Err("Invalid or duplicate prepared grip entry".into());
-            }
-        }
+        validate(&library)?;
         Ok(Self {
             saved: library.clone(),
             library,
@@ -204,13 +415,19 @@ impl GripDocument {
     }
 
     pub fn save(&mut self) -> Result<(), String> {
+        self.check_unchanged()?;
+        self.write(self.path.clone(), false)
+    }
+
+    /// Save refuses a file edited on disk since it was loaded or saved.
+    pub fn check_unchanged(&self) -> Result<(), String> {
         if std::fs::read(&self.path).map_err(|e| e.to_string())? != self.saved_bytes {
             return Err(
                 "Resource changed on disk. Use Save As to keep your drafts, or reopen to load it."
                     .into(),
             );
         }
-        self.write(self.path.clone(), false)
+        Ok(())
     }
 
     /// Save As never replaces an existing file, including the current file.
@@ -280,25 +497,9 @@ fn transfer_grip(
 ) -> Result<(), String> {
     let mut grip = source.clone();
     if let Some(model_mirror) = mirror {
-        // The glove reflects across hand X. Guns and posed melee geometry use
-        // their own model reflection, including the melee contact-origin offset.
-        let scale = Matrix4::from_scale(grip.item_scale);
-        let pose = Handedness::Left.mirror()
-            * Matrix4::from_translation(grip.offset)
-            * Matrix4::from(grip.rotation)
-            * scale
-            * model_mirror.invert().ok_or("Invalid model reflection")?
-            * Matrix4::from_scale(1.0 / grip.item_scale);
-        grip.offset = pose.w.truncate();
-        grip.rotation = Quaternion::from(Matrix3::from_cols(
-            pose.x.truncate(),
-            pose.y.truncate(),
-            pose.z.truncate(),
-        ))
-        .normalize();
-        grip.anchor = model_mirror
-            .transform_point(cgmath::Point3::from(grip.anchor))
-            .into();
+        grip = grip
+            .mirrored(model_mirror)
+            .ok_or("Invalid model reflection or grip")?;
     }
     grip.contacts = [None; 5];
     grip.score = 0.0;
@@ -379,6 +580,10 @@ pub struct GripEditor {
     prepare_missing: bool,
     fitting: Option<std::sync::mpsc::Receiver<Result<Vec<BakedGripEntry>, String>>>,
     fitting_model: String,
+    /// The model's muzzle as held in the selected hand (a gun's only), and
+    /// whether the preview draws its aim.
+    muzzle: Option<MuzzleFallback>,
+    show_aim: bool,
 }
 
 impl GripEditor {
@@ -440,6 +645,8 @@ impl GripEditor {
             prepare_missing: true,
             fitting: None,
             fitting_model: String::new(),
+            muzzle: None,
+            show_aim: true,
         }
     }
 
@@ -814,20 +1021,73 @@ impl GripEditor {
             self.holster_editor.show(ui, frame, preview);
             return;
         }
-        if ui.button("Edit holster pose").clicked() {
-            self.holster_editor.open_model(&self.model);
-            self.mode = VrSetupMode::Holster;
-            return;
-        }
         if matches!(self.model.as_str(), "amp_h" | "amp_w") {
+            if self.holster_button(ui) {
+                return;
+            }
             ui.heading("Psi amp — integrated forearm reference");
             ui.label("The psi amp retains its authored forearm and does not use a glove override.");
             preview.show(ui, frame, "amp_h.bin", &PreviewScene::VrReference);
             return;
         }
+        // Controls scroll in a resizable right pane so the preview keeps the
+        // rest of the tab at full height.
+        let mut shown = None;
+        egui::Panel::right(egui::Id::new("grip_controls"))
+            .resizable(true)
+            .default_size(420.0)
+            .min_size(320.0)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| shown = self.show_controls(ui, preview));
+            });
+        let Some(scene) = shown else {
+            return;
+        };
+        let grip_camera = matches!(scene, PreviewScene::Grip(..));
+        let hand = if self.hand == "left" {
+            Handedness::Left
+        } else {
+            Handedness::Right
+        };
+        // Build first, then select the requested camera so the initial model
+        // framing cannot overwrite it. show() keeps the same camera on edits.
+        preview.show_grip(
+            ui,
+            frame,
+            &format!("{}.bin", self.model),
+            &scene,
+            (grip_camera && self.camera_pending).then_some((&self.view, hand)),
+        );
+        if grip_camera {
+            self.camera_pending = false;
+        }
+    }
+
+    /// Switches to the holster editor when clicked.
+    fn holster_button(&mut self, ui: &mut egui::Ui) -> bool {
+        let clicked = ui.button("Edit holster pose").clicked();
+        if clicked {
+            self.holster_editor.open_model(&self.model);
+            self.mode = VrSetupMode::Holster;
+        }
+        clicked
+    }
+
+    /// The editing pane. Returns the scene to preview, or `None` when nothing
+    /// should be previewed.
+    fn show_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        preview: &mut ModelPreview,
+    ) -> Option<PreviewScene> {
+        if self.holster_button(ui) {
+            return None;
+        }
         if let (Err(error), _) | (_, Err(error)) = (&self.document, &self.hints) {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
-            return;
+            return None;
         }
         self.poll_fit(ui.ctx());
         if self.prepare_missing && !self.is_busy() {
@@ -868,7 +1128,7 @@ impl GripEditor {
                 ui.selectable_value(&mut self.support_mode, true, "Support grip");
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Primary hand");
             for hand in ["left", "right"] {
                 if ui
@@ -903,13 +1163,7 @@ impl GripEditor {
             if !busy && ui.button("Prepare left and right drafts").clicked() {
                 self.prepare_missing = true;
             }
-            preview.show(
-                ui,
-                frame,
-                &format!("{}.bin", self.model),
-                &PreviewScene::Model,
-            );
-            return;
+            return Some(PreviewScene::Model);
         };
         let hand = if self.hand == "left" {
             Handedness::Left
@@ -923,7 +1177,7 @@ impl GripEditor {
                 Ok(None) => unreachable!(),
                 Err(error) => {
                     ui.label(error);
-                    return;
+                    return None;
                 }
             }
         }
@@ -936,6 +1190,7 @@ impl GripEditor {
                     None
                 }
             };
+            self.muzzle = preview.grip_muzzle(&key, hand);
             self.validated = Some(identity);
         }
         if self.support_mode {
@@ -947,7 +1202,7 @@ impl GripEditor {
                 Ok(mirror) => mirror,
                 Err(error) => {
                     ui.label(error);
-                    return;
+                    return None;
                 }
             };
             self.support_editor.show(
@@ -964,18 +1219,12 @@ impl GripEditor {
                 hand,
                 visual_grip,
                 self.support_editor.preview_profile(&self.model),
+                None,
             );
-            preview.show_grip(
-                ui,
-                frame,
-                &key,
-                &scene,
-                self.camera_pending.then_some((&self.view, hand)),
-            );
-            self.camera_pending = false;
-            return;
+            preview.show_lighting(ui, false);
+            return Some(scene);
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let label = if doc.dirty() || self.support_editor.dirty() {
                 "Save all edits *"
             } else {
@@ -1073,8 +1322,138 @@ impl GripEditor {
             }
             if let Some((model, _)) = &self.clipboard { ui.small(format!("Copied: {model} · both hands + trigger poses")); }
         });
+        let entry = &mut doc.library.entries[index];
+        let before = entry.grip.clone();
+        // Keep entered Euler angles stable while dragging across a singularity;
+        // only re-project when the pose changes outside these sliders.
+        if self
+            .rotation_edit
+            .as_ref()
+            .is_none_or(|(q, _)| *q != entry.grip.rotation)
+        {
+            let angles: Euler<Rad<f32>> = entry.grip.rotation.into();
+            self.rotation_edit = Some((
+                entry.grip.rotation,
+                [
+                    angles.x.0.to_degrees(),
+                    angles.y.0.to_degrees(),
+                    angles.z.0.to_degrees(),
+                ],
+            ));
+        }
+        let mut fitted = None;
+        egui::CollapsingHeader::new("Placement")
+            .id_salt("grip_placement")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.strong("Position (cm)");
+                    for (axis, value) in ["X", "Y", "Z"].into_iter().zip([
+                        &mut entry.grip.offset.x,
+                        &mut entry.grip.offset.y,
+                        &mut entry.grip.offset.z,
+                    ]) {
+                        let mut cm = *value * shock2vr::METERS_PER_WORLD_UNIT * 100.0;
+                        if tweak_slider(ui, axis, &mut cm, -50.0..=50.0, 0.1, 2) {
+                            *value = cm / (shock2vr::METERS_PER_WORLD_UNIT * 100.0);
+                        }
+                    }
+                    ui.strong("Rotation (degrees)");
+                    let (last, angles) = self.rotation_edit.as_mut().unwrap();
+                    let mut changed = false;
+                    for (axis, angle) in ["X", "Y", "Z"].into_iter().zip(angles.iter_mut()) {
+                        changed |=
+                            tweak_slider(ui, axis, angle, -180.0..=180.0, self.rotation_step, 1);
+                    }
+                    if changed {
+                        entry.grip.rotation = Quaternion::from(Euler::new(
+                            Deg(angles[0]),
+                            Deg(angles[1]),
+                            Deg(angles[2]),
+                        ))
+                        .normalize();
+                        *last = entry.grip.rotation;
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Rotation nudge step");
+                        ui.add(egui::Slider::new(&mut self.rotation_step, 0.1..=15.0).suffix("°"));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Uniform item scale");
+                        ui.add_enabled_ui(!magazine, |ui| {
+                            tweak_slider(ui, "×", &mut entry.grip.item_scale, 0.1..=3.0, 0.02, 2);
+                        });
+                    });
+                });
+            });
+        self.curl_editor
+            .edit(&format!("{}/{}", self.model, self.hand));
+        egui::CollapsingHeader::new("Fingers")
+            .id_salt("grip_fingers")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!busy, |ui| {
+                    self.curl_editor.show_fingers(
+                        ui,
+                        &mut entry.grip.fingers,
+                        "Primary trigger preview",
+                    );
+                    fitted = surface_buttons(
+                        ui,
+                        &mut entry.grip,
+                        self.curl_editor.pressed,
+                        self.curl_editor.locks,
+                        |grip, pressed, fingers, unbury| {
+                            preview.fit_fingers(&key, hand, grip, pressed, fingers, unbury)
+                        },
+                    );
+                });
+            });
+        let after_fit_contacts = entry.grip.contacts;
+        if before != entry.grip {
+            entry.authored = true;
+            // Contact diagnostics describe the old solver pose, not this edit.
+            entry.grip.contacts = [None; 5];
+            entry.grip.score = 0.0;
+        }
+        match fitted {
+            // Its contacts describe the fitted fingers.
+            Some(Ok(message)) => {
+                entry.grip.contacts = after_fit_contacts;
+                self.message = message;
+            }
+            Some(Err(error)) => self.message = error,
+            None => {}
+        }
+        if !self.message.is_empty() {
+            ui.label(&self.message);
+        }
+        ui.small("Drag sliders or click values to type. Ball is a cupped starting pose; adjust curls to the item. Unsaved drafts stay when switching models.");
+        if let Some(muzzle) = self.muzzle
+            && egui::CollapsingHeader::new("Aim")
+                .id_salt("grip_aim")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(!busy, |ui| {
+                        aim_controls(ui, &mut self.show_aim, &mut entry.grip, muzzle)
+                    })
+                    .inner
+                })
+                .body_returned
+                .unwrap_or(false)
+        {
+            entry.authored = true;
+        }
+        let mut visual_grip = entry.grip.clone();
+        visual_grip.fingers = entry.grip.fingers.at(self.curl_editor.preview);
+        let scene = PreviewScene::Grip(
+            hand,
+            visual_grip,
+            self.support_editor.preview_profile(&self.model),
+            self.muzzle.filter(|_| self.show_aim),
+        );
         egui::CollapsingHeader::new("Automatic fitting").show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if shock2vr::vr_weapon_grip::supports_model(&self.model) {
                     ui.label("Fit near the authored weapon grip");
                 } else {
@@ -1107,118 +1486,7 @@ impl GripEditor {
                 }
             });
         });
-        let entry = &mut doc.library.entries[index];
-        let before = entry.grip.clone();
-        // Keep entered Euler angles stable while dragging across a singularity;
-        // only re-project when the pose changes outside these sliders.
-        if self
-            .rotation_edit
-            .as_ref()
-            .is_none_or(|(q, _)| *q != entry.grip.rotation)
-        {
-            let angles: Euler<Rad<f32>> = entry.grip.rotation.into();
-            self.rotation_edit = Some((
-                entry.grip.rotation,
-                [
-                    angles.x.0.to_degrees(),
-                    angles.y.0.to_degrees(),
-                    angles.z.0.to_degrees(),
-                ],
-            ));
-        }
-        ui.add_enabled_ui(!busy, |ui| {
-            ui.columns(3, |columns| {
-                columns[0].strong("Position (cm)");
-                for (axis, value) in ["X", "Y", "Z"].into_iter().zip([
-                    &mut entry.grip.offset.x,
-                    &mut entry.grip.offset.y,
-                    &mut entry.grip.offset.z,
-                ]) {
-                    let mut cm = *value * shock2vr::METERS_PER_WORLD_UNIT * 100.0;
-                    if tweak_slider(&mut columns[0], axis, &mut cm, -50.0..=50.0, 0.1, 2) {
-                        *value = cm / (shock2vr::METERS_PER_WORLD_UNIT * 100.0);
-                    }
-                }
-                columns[1].strong("Rotation (degrees)");
-                let (last, angles) = self.rotation_edit.as_mut().unwrap();
-                let mut changed = false;
-                for (axis, angle) in ["X", "Y", "Z"].into_iter().zip(angles.iter_mut()) {
-                    changed |= tweak_slider(
-                        &mut columns[1],
-                        axis,
-                        angle,
-                        -180.0..=180.0,
-                        self.rotation_step,
-                        1,
-                    );
-                }
-                if changed {
-                    entry.grip.rotation = Quaternion::from(Euler::new(
-                        Deg(angles[0]),
-                        Deg(angles[1]),
-                        Deg(angles[2]),
-                    ))
-                    .normalize();
-                    *last = entry.grip.rotation;
-                }
-                columns[2].strong("Finger curls");
-                match &mut entry.grip.fingers {
-                    FingerPose::Curls {
-                        curls,
-                        trigger_curls,
-                    } => self.curl_editor.show(
-                        &mut columns[2],
-                        curls,
-                        trigger_curls,
-                        "Primary trigger preview",
-                    ),
-                    FingerPose::Bones { trigger_bones, .. } => {
-                        columns[2].small("Bone pose captured in VR; curls do not apply.");
-                        if trigger_bones.is_some() {
-                            columns[2].label("Primary trigger preview");
-                            columns[2]
-                                .add(egui::Slider::new(&mut self.curl_editor.preview, 0.0..=1.0));
-                        }
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Rotation nudge step");
-                ui.add(egui::Slider::new(&mut self.rotation_step, 0.1..=15.0).suffix("°"));
-                ui.separator();
-                ui.label("Uniform item scale");
-                ui.add_enabled_ui(!magazine, |ui| {
-                    tweak_slider(ui, "×", &mut entry.grip.item_scale, 0.1..=3.0, 0.02, 2);
-                });
-            });
-        });
-        if before != entry.grip {
-            entry.authored = true;
-            // Contact diagnostics describe the old solver pose, not this edit.
-            entry.grip.contacts = [None; 5];
-            entry.grip.score = 0.0;
-        }
-        if !self.message.is_empty() {
-            ui.label(&self.message);
-        }
-        ui.small("Drag sliders or click values to type. Ball is a cupped starting pose; adjust curls to the item. Unsaved drafts stay when switching models.");
-        // Build first, then select the requested camera so the initial model
-        // framing cannot overwrite it. show() keeps the same camera on edits.
-        let mut visual_grip = entry.grip.clone();
-        visual_grip.fingers = entry.grip.fingers.at(self.curl_editor.preview);
-        let scene = PreviewScene::Grip(
-            hand,
-            visual_grip,
-            self.support_editor.preview_profile(&self.model),
-        );
-        preview.show_grip(
-            ui,
-            frame,
-            &key,
-            &scene,
-            self.camera_pending.then_some((&self.view, hand)),
-        );
-        self.camera_pending = false;
+        preview.show_lighting(ui, false);
         if let Some(path) = &mut self.save_as_path {
             let mut close = false;
             egui::Modal::new(egui::Id::new("save_grips_as")).show(ui.ctx(), |ui| {
@@ -1255,7 +1523,66 @@ impl GripEditor {
                 self.family.is_some(),
             );
         }
+        Some(scene)
     }
+}
+
+/// How far a gun held by `grip` fires off its controller's aim, as the VR
+/// workbench reads it: 0 fires straight in play.
+fn aim_readout(grip: &ResolvedGrip, muzzle: MuzzleFallback) -> String {
+    let deg = crate::model_preview::grip_aim(grip, muzzle).error_deg;
+    format!("Fires {deg:.1}° off the controller's aim (orange: fires, cyan: aims)")
+}
+
+/// A gun's aim: the toggle and readout, then Align, which turns the glove
+/// off the controller (`hand_rotation`) by the slider's share of the way to
+/// firing straight, as the VR workbench does; the hand's hold on the gun is
+/// untouched. Whether the grip changed.
+fn aim_controls(
+    ui: &mut egui::Ui,
+    show_aim: &mut bool,
+    grip: &mut ResolvedGrip,
+    muzzle: MuzzleFallback,
+) -> bool {
+    use cgmath::One;
+    use shock2vr::weapon_muzzle::{aim_turn, aim_turn_amount, turn_deg};
+    let mut amount = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.checkbox(show_aim, "Show aim");
+        if *show_aim {
+            ui.label(aim_readout(grip, muzzle));
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Align aim").clicked() {
+            amount = Some(1.0);
+        }
+        // A turn kept off Align's arc (from an earlier grip) has no share:
+        // the slider starts it over from none.
+        let along = aim_turn_amount(grip.rotation, muzzle.axis, grip.hand_rotation);
+        let mut percent = along.unwrap_or(0.0) * 100.0;
+        if ui
+            .add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix("%"))
+            .changed()
+        {
+            amount = Some(percent / 100.0);
+        }
+        if !grip.hand_rotation.is_one() {
+            let off_arc = if along.is_none() { ", off the aim" } else { "" };
+            ui.label(format!(
+                "Hand turned {:.1}°{off_arc}",
+                turn_deg(grip.hand_rotation)
+            ));
+            if ui.button("Clear hand rotation").clicked() {
+                amount = Some(0.0);
+            }
+        }
+    });
+    let Some(amount) = amount else {
+        return false;
+    };
+    grip.hand_rotation = aim_turn(grip.rotation, muzzle.axis, amount);
+    true
 }
 
 /// Each value offers a coarse slider, small nudges, and optional exact entry.
@@ -1293,8 +1620,348 @@ pub(crate) fn tweak_slider(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use cgmath::Transform;
+
+    /// Draws `show` headlessly and clicks the button labelled `label`;
+    /// returns the texts drawn by the frame after the click.
+    pub(crate) fn click_button(label: &str, show: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+        click_nth(label, false, show)
+    }
+
+    /// `click_button` on the last button labelled `label`.
+    fn click_last(label: &str, show: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+        click_nth(label, true, show)
+    }
+
+    fn click_nth(label: &str, last: bool, mut show: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+        fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
+            fn visit(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+                match shape {
+                    egui::Shape::Text(text) => out.push((
+                        text.galley.text().to_owned(),
+                        text.galley.rect.translate(text.pos.to_vec2()),
+                    )),
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| visit(s, out)),
+                    _ => {}
+                }
+            }
+            let mut out = Vec::new();
+            shapes.iter().for_each(|s| visit(&s.shape, &mut out));
+            out
+        }
+        let ctx = egui::Context::default();
+        let mut frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            texts(&ctx.run_ui(input, |ui| show(ui)).shapes)
+        };
+        let drawn = frame(Vec::new());
+        let mut labelled = drawn.into_iter().filter(|(text, _)| text == label);
+        let at = if last {
+            labelled.last()
+        } else {
+            labelled.next()
+        }
+        .unwrap_or_else(|| panic!("{label} not drawn"))
+        .1
+        .center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(at), button(true)]);
+        frame(vec![button(false)]);
+        frame(Vec::new())
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect()
+    }
+
+    /// The readout is the game's aim error (`weapon_muzzle`), so the shipped
+    /// shotgun grip reads straight and a turned one reads its turn; the
+    /// preview's lines run from the glove's origin and from the muzzle.
+    #[test]
+    fn the_aim_readout_is_the_games_aim_for_the_shipped_shotgun_grip() {
+        use cgmath::{EuclideanSpace, Rotation, Rotation3, point3, vec3};
+        let library: GripLibrary =
+            serde_json::from_str(include_str!("../../../assets/vr-weapon-grips.json")).unwrap();
+        let grip = library.lookup("sg_h", "right").unwrap().clone();
+        // The right-hand shotgun fires down its model's -X.
+        let muzzle = MuzzleFallback {
+            point: point3(-1.2, 0.1, 0.0),
+            axis: vec3(-1.0, 0.0, 0.0),
+        };
+        let straight = shock2vr::weapon_muzzle::aim_error_deg(grip.rotation, muzzle.axis);
+        assert!(
+            straight < 0.1,
+            "the shipped grip fires straight: {straight}"
+        );
+        assert!(aim_readout(&grip, muzzle).starts_with(&format!("Fires {straight:.1}°")));
+        let turned = ResolvedGrip {
+            rotation: Quaternion::from_angle_y(Deg(15.0)) * grip.rotation,
+            ..grip.clone()
+        };
+        assert!(
+            aim_readout(&turned, muzzle).starts_with("Fires 15.0°"),
+            "{}",
+            aim_readout(&turned, muzzle)
+        );
+        let aim = crate::model_preview::grip_aim(&turned, muzzle);
+        assert_eq!(
+            (aim.controller, aim.aim),
+            (vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, -1.0))
+        );
+        let tip = turned.offset
+            + turned
+                .rotation
+                .rotate_vector(muzzle.point.to_vec() * turned.item_scale);
+        assert!((aim.muzzle - tip).magnitude() < 1e-6);
+    }
+
+    /// Align turns only the glove off the controller, so the readout goes to
+    /// 0 with the hand's hold on the gun untouched; clearing turns it back.
+    #[test]
+    fn align_aim_turns_the_glove_so_the_readout_reads_straight() {
+        use cgmath::{Rotation3, point3, vec3};
+        let library: GripLibrary =
+            serde_json::from_str(include_str!("../../../assets/vr-weapon-grips.json")).unwrap();
+        let shipped = library.lookup("sg_h", "right").unwrap();
+        let muzzle = MuzzleFallback {
+            point: point3(-1.2, 0.1, 0.0),
+            axis: vec3(-1.0, 0.0, 0.0),
+        };
+        let mut grip = ResolvedGrip {
+            rotation: Quaternion::from_angle_y(Deg(15.0)) * shipped.rotation,
+            ..shipped.clone()
+        };
+        let before = grip.clone();
+        let mut show = true;
+        let drawn = click_button("Align aim", |ui| {
+            aim_controls(ui, &mut show, &mut grip, muzzle);
+        });
+        assert_ne!(grip.hand_rotation, before.hand_rotation);
+        assert_eq!(
+            ResolvedGrip {
+                hand_rotation: before.hand_rotation,
+                ..grip.clone()
+            },
+            before,
+            "only the glove turns"
+        );
+        assert!(
+            aim_readout(&grip, muzzle).starts_with("Fires 0.0°"),
+            "{}",
+            aim_readout(&grip, muzzle)
+        );
+        assert!(drawn.iter().any(|t| t == "Hand turned 15.0°"), "{drawn:?}");
+        click_button("Clear hand rotation", |ui| {
+            aim_controls(ui, &mut show, &mut grip, muzzle);
+        });
+        assert_eq!(grip, before);
+    }
+
+    /// A VR snapshot offers the trigger index slider, which sets the trigger
+    /// pose through the game's own blend; a curl grip has its pressed curls.
+    #[test]
+    fn the_trigger_index_slider_curls_a_snapshots_index_as_the_game_does() {
+        let snapshot = FingerPose::curls([0.1, 0.2, 0.4, 0.5, 0.6]).to_bones();
+        let mut editor = CurlPoseEditor::default();
+        let mut fingers = snapshot.clone();
+        let drawn = click_button("Mode: VR snapshot", |ui| {
+            editor.show_fingers(ui, &mut fingers, "Preview")
+        });
+        assert!(
+            drawn.iter().any(|t| t == "Trigger index curl %"),
+            "{drawn:?}"
+        );
+        let mut curls = FingerPose::curls([0.5; 5]);
+        let drawn = click_button("Mode: Curls", |ui| {
+            editor.show_fingers(ui, &mut curls, "Preview")
+        });
+        assert!(!drawn.iter().any(|t| t == "Trigger index curl %"));
+
+        click_button("+", |ui| trigger_index_slider(ui, &mut fingers));
+        assert_eq!(fingers, snapshot.with_trigger_index(0.1));
+    }
+
+    /// Tighten closes the fingers onto the item through the game's solver
+    /// and changes nothing else: here 8 cm rods over a slab 5 cm down.
+    #[test]
+    fn tighten_to_surface_changes_only_the_fingers() {
+        use cgmath::{EuclideanSpace, Point3, vec3};
+        let metres = |m: f32| m / shock2vr::METERS_PER_WORLD_UNIT;
+        let rods = |bones: &shock2vr::hand_pose::FingerBones| {
+            let FingerPose::Curls { curls, .. } = FingerPose::Bones {
+                bones: *bones,
+                trigger_bones: None,
+            }
+            .to_curls() else {
+                unreachable!()
+            };
+            std::array::from_fn(|finger| {
+                let angle = curls[finger] * std::f32::consts::FRAC_PI_2;
+                let along = vec3(0.0, -angle.sin(), angle.cos());
+                shock2vr::vr_grip::FingerChain::uniform(
+                    &[0.25, 1.0].map(|s| {
+                        vec3(metres(0.02 * finger as f32), 0.0, 0.0) + along * metres(0.08 * s)
+                    }),
+                    shock2vr::vr_grip::FINGER_RADIUS,
+                )
+            })
+        };
+        let p = |x: f32, z: f32| Point3::from_vec(vec3(metres(x), metres(-0.05), metres(z)));
+        let surface = shock2vr::vr_grip::GripSurface::new(&[
+            [p(-0.1, -0.1), p(0.2, 0.3), p(0.2, -0.1)],
+            [p(-0.1, -0.1), p(-0.1, 0.3), p(0.2, 0.3)],
+        ])
+        .unwrap();
+        let (_dir, mut doc) = document();
+        let grip = &mut doc.library.entries[0].grip;
+        grip.fingers = FingerPose::curls([0.0; 5]);
+        let before = grip.clone();
+        let click = |button: &str, grip: &mut ResolvedGrip, locked: [bool; 5]| {
+            let mut message = None;
+            click_button(button, |ui| {
+                let fit = |grip: &ResolvedGrip, pressed, fingers, unbury| {
+                    Ok(if unbury {
+                        let out = surface.unbury(grip, pressed, fingers, rods);
+                        (out.grip, out.fingers.map(|fit| fit.outcome()))
+                    } else {
+                        let out = surface.tighten(grip, pressed, fingers, rods);
+                        (out.grip, out.fingers.map(|fit| fit.outcome()))
+                    })
+                };
+                if let Some(said) = surface_buttons(ui, grip, false, locked, fit) {
+                    message = Some(said);
+                }
+            });
+            message.expect("clicked").unwrap()
+        };
+        let tighten = |grip: &mut ResolvedGrip, locked| click("Tighten to surface", grip, locked);
+
+        // Unbury opens a finger through the slab out of it, and only that.
+        let mut buried = ResolvedGrip {
+            fingers: FingerPose::curls([0.0, 0.9, 0.9, 0.0, 0.0]),
+            ..before.clone()
+        };
+        let message = click("Unbury", &mut buried, [false, false, true, false, false]);
+        assert_eq!(
+            message,
+            "Unburied: Thumb clear, Index unburied, Ring clear, Pinky clear"
+        );
+        let curls = *buried.fingers.rest_curls().unwrap();
+        assert!(curls[1] < 0.9, "{curls:?}");
+        assert_eq!(
+            [curls[0], curls[2], curls[3], curls[4]],
+            [0.0, 0.9, 0.0, 0.0]
+        );
+        // Locked fingers are skipped, the rest close.
+        let mut locked = before.clone();
+        let message = tighten(&mut locked, [true, false, true, false, false]);
+        assert!(message.starts_with("Tightened: Index closed"), "{message}");
+        assert!(
+            !message.contains("Thumb") && !message.contains("Middle"),
+            "{message}"
+        );
+        let curls = *locked.fingers.rest_curls().unwrap();
+        assert_eq!((curls[0], curls[2]), (0.0, 0.0), "{curls:?}");
+        assert!([1, 3, 4].iter().all(|&f| curls[f] > 0.2), "{curls:?}");
+
+        let message = tighten(grip, [false; 5]);
+        assert!(message.starts_with("Tightened: Thumb closed"), "{message}");
+        let FingerPose::Curls { curls, .. } = grip.fingers else {
+            panic!("curls stay curls");
+        };
+        assert!(curls.iter().all(|c| *c > 0.2), "{curls:?}");
+        assert!(grip.contacts.iter().all(Option::is_some));
+        assert_eq!(
+            ResolvedGrip {
+                fingers: before.fingers.clone(),
+                contacts: before.contacts,
+                ..grip.clone()
+            },
+            before,
+            "only the fingers change"
+        );
+    }
+
+    /// A locked finger's slider, preset and (index) trigger slider leave it
+    /// be; the others still edit; another grip starts unlocked.
+    #[test]
+    fn a_locked_finger_cannot_be_edited_but_the_others_can() {
+        let mut editor = CurlPoseEditor::default();
+        editor.edit("wrench_h/right");
+        let mut fingers = FingerPose::curls([0.5; 5]);
+        // Thumb's "+" is the first drawn.
+        editor.locks[0] = true;
+        click_button("+", |ui| editor.show_fingers(ui, &mut fingers, "Preview"));
+        assert_eq!(fingers, FingerPose::curls([0.5; 5]), "locked thumb");
+        click_button("Closed", |ui| {
+            editor.show_fingers(ui, &mut fingers, "Preview")
+        });
+        assert_eq!(fingers, FingerPose::curls([0.5, 1.0, 1.0, 1.0, 1.0]));
+        editor.locks[0] = false;
+        click_button("+", |ui| editor.show_fingers(ui, &mut fingers, "Preview"));
+        assert_eq!(fingers.rest_curls().unwrap()[0], 0.52, "unlocked");
+
+        // A snapshot's trigger index slider (its last "+") is the index's.
+        let snapshot = FingerPose::curls([0.1, 0.2, 0.4, 0.5, 0.6]).to_bones();
+        let mut bones = snapshot.clone();
+        editor.locks[1] = true;
+        click_last("+", |ui| editor.show_fingers(ui, &mut bones, "Preview"));
+        assert_eq!(bones, snapshot, "locked index");
+        editor.locks[1] = false;
+        click_last("+", |ui| editor.show_fingers(ui, &mut bones, "Preview"));
+        assert_eq!(bones, snapshot.with_trigger_index(0.1));
+
+        editor.locks = [true; 5];
+        editor.edit("wrench_h/right");
+        assert_eq!(editor.locks, [true; 5], "same grip keeps its locks");
+        editor.edit("wrench_h/left");
+        assert_eq!(editor.locks, [false; 5], "another starts unlocked");
+    }
+
+    #[test]
+    fn converting_a_vr_snapshot_keeps_its_placement_and_saves_curls() {
+        let (_dir, mut doc) = document();
+        let grip = &mut doc.library.entries[0].grip;
+        grip.fingers = FingerPose::Curls {
+            curls: [-0.5, 0.3, 0.6, 0.8, 1.0],
+            trigger_curls: Some([0.2, 1.0, 0.6, 0.8, 1.0]),
+        }
+        .to_bones();
+        let snapshot = grip.clone();
+        let mut editor = CurlPoseEditor::default();
+        let drawn = click_button("Convert fingers to curls", |ui| {
+            editor.show_fingers(ui, &mut doc.library.entries[0].grip.fingers, "Preview")
+        });
+        assert!(drawn.iter().any(|t| t == "Mode: Curls"), "{drawn:?}");
+        let converted = doc.library.entries[0].grip.clone();
+        assert_eq!(converted.fingers, snapshot.fingers.to_curls());
+        assert_eq!(
+            ResolvedGrip {
+                fingers: snapshot.fingers.clone(),
+                ..converted.clone()
+            },
+            snapshot,
+            "only the fingers change"
+        );
+        assert!(doc.dirty());
+        doc.save().unwrap();
+        let restored = GripDocument::load(doc.path.clone()).unwrap();
+        assert_eq!(restored.library.entries[0].grip, converted);
+    }
+
     #[test]
     fn overrides_replace_the_entry_the_runtime_picks_or_join_pickups() {
         let (_dir, doc) = document();
@@ -1325,6 +1992,139 @@ mod tests {
         let new = libraries[0].entries.last().unwrap();
         assert_eq!((new.model.as_str(), new.authored), ("new_item", true));
         assert_eq!(libraries[0].entries.len(), doc.library.entries.len() + 1);
+    }
+
+    #[test]
+    fn a_headset_trigger_pose_survives_the_merge() {
+        let (dir, doc) = document();
+        let mut entry = doc.library.entries[0].clone();
+        let pressed = FingerPose::curls([0.9; 5]).rest_bones();
+        entry.grip.fingers = FingerPose::Bones {
+            bones: entry.grip.fingers.rest_bones(),
+            trigger_bones: Some(pressed),
+        };
+        // As the headset writes it: overrides file, then loaded for the merge.
+        let path = dir.path().join("vr-grip-overrides.json");
+        let mut overrides = shock2vr::vr_grip::GripOverrides::default();
+        overrides.grips.entries.push(entry.clone());
+        std::fs::write(&path, serde_json::to_vec(&overrides).unwrap()).unwrap();
+        let mut libraries = vec![doc.library.clone()];
+        merge_overrides(&mut libraries, GripDocument::load(path).unwrap().library).unwrap();
+        let merged = libraries[0]
+            .entries
+            .iter()
+            .find(|e| e.model == entry.model && e.hand == entry.hand)
+            .unwrap();
+        assert_eq!(merged.grip.fingers, entry.grip.fingers);
+    }
+
+    /// merge-grips writes the grip and support resources, or with an
+    /// override it cannot read, nothing at all.
+    #[test]
+    fn merging_an_overrides_file_writes_all_or_nothing() {
+        let assets = default_library_path().parent().unwrap().to_owned();
+        let dir = tempfile::tempdir().unwrap();
+        let names = GRIP_RESOURCES
+            .iter()
+            .copied()
+            .chain(["vr-support-grips.json"]);
+        for name in names.clone() {
+            std::fs::copy(assets.join(name), dir.path().join(name)).unwrap();
+        }
+        let read_all = || {
+            names
+                .clone()
+                .map(|n| std::fs::read(dir.path().join(n)).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let shipped = read_all();
+        let weapons: GripLibrary =
+            serde_json::from_str(include_str!("../../../assets/vr-weapon-grips.json")).unwrap();
+        let mut entry = weapons.entries[0].clone();
+        let scale = entry.grip.item_scale * 1.1;
+        entry.grip = entry.grip.with_item_scale(scale);
+        let support: BTreeMap<String, shock2vr::vr_support::SupportProfile> =
+            serde_json::from_str(include_str!("../../../assets/vr-support-grips.json")).unwrap();
+        let (model, profile) = support.iter().next().unwrap();
+        let mut overrides = shock2vr::vr_grip::GripOverrides::default();
+        overrides.grips.entries.push(entry);
+        overrides.support.insert(
+            model.clone(),
+            shock2vr::vr_support::SupportPose {
+                palm_anchor: profile.palm_anchor,
+                rotation_degrees: [profile.rotation_degrees[0] + 5.0, 0.0, 0.0],
+                fingers: profile.fingers.clone(),
+            },
+        );
+        let mut file = serde_json::to_value(&overrides).unwrap();
+        file["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"model": "sg_h", "hand": "left"}));
+        let path = dir.path().join("vr-grip-overrides.json");
+        std::fs::write(&path, file.to_string()).unwrap();
+        assert!(merge_override_file_into(path.clone(), dir.path()).is_err());
+        assert_eq!(read_all(), shipped, "nothing written");
+
+        std::fs::write(&path, serde_json::to_vec(&overrides).unwrap()).unwrap();
+        merge_override_file_into(path, dir.path()).unwrap();
+        let merged = read_all();
+        let changed: Vec<_> = names
+            .zip(merged.iter().zip(&shipped))
+            .filter(|(_, (a, b))| a != b)
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(changed, ["vr-weapon-grips.json", "vr-support-grips.json"]);
+    }
+
+    #[test]
+    fn a_glove_weapon_posed_for_one_hand_merges_mirrored_into_the_other() {
+        let (_dir, doc) = document();
+        let weapons: GripLibrary =
+            serde_json::from_str(include_str!("../../../assets/vr-weapon-grips.json")).unwrap();
+        let mut libraries = vec![doc.library.clone(), weapons];
+        let entry = |libraries: &[GripLibrary], model: &str, hand: &str| {
+            libraries
+                .iter()
+                .flat_map(|l| &l.entries)
+                .find(|e| e.model == model && e.hand == hand)
+                .unwrap()
+                .clone()
+        };
+        let moved = |mut e: BakedGripEntry| {
+            e.grip.offset.x += 0.05;
+            e
+        };
+        // The shotgun and a mug posed right only; the wrench posed both hands.
+        let shotgun = moved(entry(&libraries, "sg_h", "right"));
+        let mug_left = entry(&libraries, "mug", "left");
+        let wrench_left = moved(entry(&libraries, "wrench_h", "left"));
+        let overrides = GripLibrary {
+            entries: vec![
+                shotgun.clone(),
+                moved(entry(&libraries, "mug", "right")),
+                moved(entry(&libraries, "wrench_h", "right")),
+                wrench_left.clone(),
+            ],
+            ..Default::default()
+        };
+        merge_overrides(&mut libraries, overrides).unwrap();
+        // The shotgun's left hand takes the right pose mirrored, as play does.
+        let mirror = shock2vr::vr_weapon_grip::named_model_mirror("sg_h").unwrap();
+        let expected = shotgun.grip.mirrored(mirror).unwrap();
+        let left = entry(&libraries, "sg_h", "left");
+        assert!(left.authored);
+        assert_eq!(
+            (left.grip.offset, left.grip.rotation),
+            (expected.offset, expected.rotation)
+        );
+        // A prop is drawn alike in both hands: its left is untouched.
+        assert_eq!(entry(&libraries, "mug", "left").grip, mug_left.grip);
+        // A left pose of its own wins.
+        assert_eq!(
+            entry(&libraries, "wrench_h", "left").grip.offset,
+            wrench_left.grip.offset
+        );
     }
 
     fn curls_mut(grip: &mut ResolvedGrip) -> (&mut [f32; 5], &mut Option<[f32; 5]>) {

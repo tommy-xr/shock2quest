@@ -15,7 +15,7 @@ use engine::{
 };
 
 /// The opposite winding: what a mirrored copy of a mesh presents to the GPU.
-fn flip_winding(winding: FrontFaceWinding) -> FrontFaceWinding {
+pub fn flip_winding(winding: FrontFaceWinding) -> FrontFaceWinding {
     match winding {
         FrontFaceWinding::Clockwise => FrontFaceWinding::CounterClockwise,
         FrontFaceWinding::CounterClockwise => FrontFaceWinding::Clockwise,
