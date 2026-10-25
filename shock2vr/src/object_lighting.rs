@@ -215,8 +215,7 @@ pub fn gallery_lights(
         )
         .with_specular(dev_params::get(dev_params::OBJECT_SPECULAR))
         .with_veins(growth_vein_tuning(), weapon_vein_tuning());
-    let brightness = dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS)
-        * dev_params::get(dev_params::LEVEL_LIGHT_INTENSITY);
+    let brightness = gallery_brightness();
     // They cover the standard 48-unit debug floor, and stay put when the
     // player turns or walks, unlike a head-mounted lamp.
     for (offset, intensity) in [
@@ -230,6 +229,12 @@ pub fn gallery_lights(
         });
     }
     Some(std::rc::Rc::new(lights))
+}
+
+/// What the brightness sliders scale a gallery light's intensity by.
+pub(crate) fn gallery_brightness() -> f32 {
+    dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS)
+        * dev_params::get(dev_params::LEVEL_LIGHT_INTENSITY)
 }
 
 /// The lights that shade an object at `position`, strongest first.
