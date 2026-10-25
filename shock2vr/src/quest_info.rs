@@ -318,9 +318,9 @@ impl QuestInfo {
         self.quest_bit_values.iter().filter_map(|(name, value)| {
             note_checked(*value)?;
             let (deck, n) = name.strip_prefix("note_")?.split_once('_')?;
-            let deck = deck.parse().ok()?;
-            (1..=NOTES_PER_DECK)
-                .contains(&n.parse().ok()?)
+            let (deck, n): (u32, u32) = (deck.parse().ok()?, n.parse().ok()?);
+            // Only the exact names `pda_notes` reads: `note_05_3` is not deck 5.
+            ((1..=NOTES_PER_DECK).contains(&n) && *name == format!("note_{deck}_{n}"))
                 .then_some(deck)
         })
     }
@@ -563,6 +563,7 @@ mod log_tests {
         quest_info.set_quest_bit_value("Note_5_33", QuestBitValue::INCOMPLETE);
         quest_info.set_quest_bit_value("Note_6_1", QuestBitValue::UNKNOWN);
         quest_info.set_quest_bit_value("Note_7_1", QuestBitValue::all());
+        quest_info.set_quest_bit_value("Note_08_1", QuestBitValue::INCOMPLETE);
 
         assert_eq!(quest_info.pda_notes(5), vec![(1, false), (3, true)]);
         assert_eq!(quest_info.pda_notes(6), vec![]);

@@ -86,8 +86,11 @@ impl PdaList {
             return;
         };
         self.decks = quests.pda_decks();
-        let entries = quests.pda_entries(self.kind, self.deck);
-        let notes = quests.pda_notes(self.deck);
+        let (entries, notes) = if self.kind == PdaKind::Note {
+            (Vec::new(), quests.pda_notes(self.deck))
+        } else {
+            (quests.pda_entries(self.kind, self.deck), Vec::new())
+        };
         drop(quests);
         let misc = assets.get(&dark::importers::STRINGS_IMPORTER, "misc.str");
         let (base, prefix, fallback) = match self.kind {
@@ -148,7 +151,7 @@ impl PdaList {
     }
 
     fn max_offset(&self) -> usize {
-        self.len().saturating_sub(self.page_rows())
+        crate::ui::list_scroll::max_scroll(self.len(), self.page_rows())
     }
 
     /// Retail's deck arrows wrap through the decks that hold anything.
@@ -634,7 +637,12 @@ mod tests {
             .iter()
             .find(|e| e.label.as_deref() == Some("pda_note:0"))
             .unwrap();
-        let checkbox_to_text = text_rect(&elements, "pda_note_text:0")[0] - note.rect[0];
+        let text_x = elements
+            .iter()
+            .find(|e| e.label.as_deref() == Some("pda_note_text:0"))
+            .unwrap()
+            .rect[0];
+        let checkbox_to_text = text_x - note.rect[0];
         assert_eq!(
             checkbox_to_text, 18.0,
             "text starts 2 px past the 16 px box"
@@ -652,14 +660,6 @@ mod tests {
                 .iter()
                 .any(|e| e.text.as_deref() == Some("No notes."))
         );
-    }
-
-    fn text_rect(elements: &[DebugUiElement], label: &str) -> [f32; 4] {
-        elements
-            .iter()
-            .find(|e| e.label.as_deref() == Some(label))
-            .unwrap_or_else(|| panic!("{label} is drawn"))
-            .rect
     }
 
     /// A deck holding only notes is still a deck-arrow stop, and notes page
