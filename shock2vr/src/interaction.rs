@@ -452,6 +452,12 @@ struct SupportCandidate {
     hand_pose: GripPose,
 }
 
+/// `VrInteraction::grip_geometry`'s key: an item's mesh as hand 0 (left) or
+/// 1 (right) holds it.
+fn grip_geometry_key(model: &str, hand: usize) -> String {
+    format!("{model}:{}", ["left", "right"][hand])
+}
+
 struct GripGeometry {
     triangles: std::rc::Rc<Vec<[Point3<f32>; 3]>>,
     fingerprint: String,
@@ -1186,9 +1192,11 @@ impl VrInteraction {
             let (_, travel) = self.pump_motion(world, tool.hand)?;
             Some(travel * crate::vr_shotgun_pump::state(world, tool.entity).fraction)
         });
+        let item_mesh = self.pose_tool_geometry().is_some();
         let Some(tool) = self.pose_tool.as_mut() else {
             return;
         };
+        tool.item_mesh = item_mesh;
         tool.pump_travel = pump_travel.unwrap_or(Vector3::new(0.0, 0.0, 0.0));
         let holding = [&self.left_hand, &self.right_hand][tool.holder].get_held_entity();
         if holding != Some(tool.entity) {
@@ -1436,6 +1444,7 @@ impl VrInteraction {
             }
             pose_tool::panel::PanelEvent::IndexLess => self.step_trigger_index(false),
             pose_tool::panel::PanelEvent::IndexMore => self.step_trigger_index(true),
+            pose_tool::panel::PanelEvent::Tighten => self.tighten_pose_tool_grip(),
             pose_tool::panel::PanelEvent::ResetView => {
                 if let Some(tool) = self.pose_tool.as_mut() {
                     tool.reset_view();
@@ -1670,6 +1679,78 @@ impl VrInteraction {
             ["left", "right"][tool.hand]
         );
         self.stage_edit(crate::vr_grip::ResolvedGrip { fingers, ..current });
+    }
+
+    /// The posed item's mesh as its holder's fit cached it, and the frame
+    /// into the posed hand's (`pose_frame`) when that hand draws it mirrored.
+    fn pose_tool_geometry(&self) -> Option<(&GripGeometry, Option<Matrix4<f32>>)> {
+        let tool = self.pose_tool.as_ref()?;
+        let held = self.fitted_grips[tool.hand].as_ref()?;
+        let key = grip_geometry_key(&held.model, tool.holder);
+        let geometry = self.grip_geometry.get(&key)?.as_ref()?;
+        Some((geometry, pose_frame(tool, Some(held))))
+    }
+
+    /// Close the slot's fingers (`vr_grip::tighten_fingers`) onto the item
+    /// from where the grip has them, keeping its placement; staged like any
+    /// edit. The surface is built from the cached mesh on the press.
+    fn tighten_pose_tool_grip(&mut self) {
+        let start = std::time::Instant::now();
+        let Some(tool) = self.pose_tool.as_ref() else {
+            return;
+        };
+        if tool.tighten_entry().is_err() {
+            return;
+        }
+        let (hand, pressed) = (tool.hand, tool.slot == pose_tool::Slot::Trigger);
+        let (Some(current), Some((geometry, frame))) = (
+            self.fitted_grips[hand]
+                .as_ref()
+                .and_then(|held| held.resolved.clone()),
+            self.pose_tool_geometry(),
+        ) else {
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened=false reason=no_grip");
+            return;
+        };
+        let surface = match frame {
+            None => crate::vr_grip::GripSurface::new(&geometry.triangles),
+            Some(frame) => crate::vr_grip::GripSurface::new(
+                &crate::vr_grip::transformed_triangles(&geometry.triangles, frame),
+            ),
+        };
+        let Some(surface) = surface else {
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened=false reason=no_surface");
+            return;
+        };
+        // Tightened as authored, against the glove at authored size.
+        let personal = crate::world_scale::WorldScale::active().personal();
+        let authored = current.clone().rescaled(1.0 / personal);
+        let handedness = [Handedness::Left, Handedness::Right][hand];
+        let mut slot = self.glove_renderer.borrow_mut();
+        let Some(renderer) = slot.as_mut().and_then(|renderer| renderer.as_mut()) else {
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened=false reason=no_glove");
+            return;
+        };
+        let fingers = crate::vr_grip::tighten_fingers(pressed);
+        let tightened = surface.tighten(&authored, pressed, fingers, |bones| {
+            renderer.finger_samples(bones, handedness)
+        });
+        drop(slot);
+        let changed = tightened.grip.fingers != current.fingers;
+        println!(
+            "SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened={changed} slot={} {} elapsed_ms={:.1}",
+            if pressed { "trigger" } else { "rest" },
+            pose_tool::tighten_log(&tightened.fingers),
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        if changed {
+            // Only the fingers (and their contacts) change.
+            self.stage_edit(crate::vr_grip::ResolvedGrip {
+                fingers: tightened.grip.fingers,
+                contacts: tightened.grip.contacts,
+                ..current
+            });
+        }
     }
 
     /// Stage `grip` (world units) as an edit of the posed grip and preview it.
@@ -2437,7 +2518,7 @@ impl PlayerInteraction for VrInteraction {
                         .is_some();
                 let geometry = if eligible {
                     self.grip_geometry
-                        .entry(format!("{model}:{hand_name}"))
+                        .entry(grip_geometry_key(&model, index))
                         .or_insert_with(|| {
                             if let Some(magazine) = magazine.as_ref() {
                                 let source = crate::vr_magazine::load(assets, &magazine.source)?;

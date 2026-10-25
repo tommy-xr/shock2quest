@@ -842,6 +842,27 @@ impl ModelPreview {
         .and_then(|r: Result<_, &str>| r.map_err(str::to_string))
     }
 
+    /// `grip`'s chosen fingers closed onto the item (`GripSurface::tighten`)
+    /// against the game's geometry and glove, as the VR workbench does.
+    pub fn tighten_grip(
+        &mut self,
+        key: &str,
+        hand: Handedness,
+        grip: &ResolvedGrip,
+        pressed: bool,
+        fingers: [bool; 5],
+    ) -> Result<shock2vr::vr_grip::Tightened, String> {
+        // Its geometry here is pre-scaled to the weapon, unlike its grip.
+        if shock2vr::vr_magazine::grip_source(key).is_some() {
+            return Err("Magazine grips cannot be tightened here".into());
+        }
+        let (surface, _, _, _) = self.grip_inputs(key, hand)?;
+        let glove = self.glove.as_mut().ok_or("Glove model unavailable")?;
+        Ok(surface.tighten(grip, pressed, fingers, |bones| {
+            glove.finger_samples(bones, hand)
+        }))
+    }
+
     /// Preview a pouch magazine at the opposite hand's weapon scale. Gameplay
     /// records that size on the ammo entity when it is drawn from the pouch.
     pub fn magazine_grip_scale(
