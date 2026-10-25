@@ -44,6 +44,7 @@ for (const vr of [false, true]) {
     assert.equal((await game.audio.recent({ sample: "psikinac" })).sounds.length, 0,
       "refused pulls must not play an activation sound");
     await aim(hypo.id);
+    if (vr) assert.ok(!(await game.ui.state()).bracket_hints.includes("Collect"), "the amp trigger casts instead of collecting");
     const before = (await game.info()).player;
     const start = (await game.entities.detail(hypo.id)).position;
     const body = (await game.physics.bodies({ entityId: hypo.id })).bodies[0]!;
