@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "classes": [
+    ["as", "ba", "cf", "cs", "cu", "fm", "ga", "hs", "ir", "mo", "na", "os", "ra", "sb", "se", "tc", "te", "v", "yt"],
+    ["magci", "magapi", "magaro", "magdj", "magka", "magvi"],
+    ["puzzle1", "puzzle2", "puzzle3", "puzzle4", "puzzle5", "puzzle6"],
+    ["chemif", "chemif2", "chemif3", "chemif4"],
+    ["chemil", "chemil2", "chemil3", "chemil4"],
+    ["softred", "softblue", "softpurp", "softgren"],
+    ["animp01", "animp02", "animp03", "animp04"],
+    ["ammoss", "ammoaps", "ammohes"],
+    ["cardwh_2", "cardwh_3", "cardwh_4", "cardwh_1"],
+    ["medanex", "medpass", "reckey"],
+    ["soft11", "soft12", "soft13", "soft21", "soft22", "soft23", "soft31", "soft32", "soft33", "soft41", "soft42", "soft43"],
+    ["medpatch", "psipatch", "radpatch", "toxpatch", "spdpatch", "patchx"],
+    ["chip_a", "chip_b", "chip_c"],
+    ["battery", "batteryb"],
+    ["ammoin", "ammopx"]
+  ]
+}

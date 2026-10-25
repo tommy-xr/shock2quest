@@ -313,6 +313,17 @@ later asset edits. To pose with a tracked hand while the other holds a
 controller, run `cargo dvr features set multimodal on` (Quest multimodal; off by
 default).
 
+Models with the same geometry share one grip: `assets/vr-grip-classes.json`
+lists each class as an array whose **first model is canonical**. Every grip
+lookup, headset save, Explorer edit and `merge-grips` uses the canonical
+model's entry, so shipped libraries keep entries for canonical models only
+(a test enforces it; headset poses saved under a member are re-keyed on
+load). To let another member's pose win, move it first and rename its entry
+(restore it from git if it was pruned); a model taken out of a class needs a
+pose of its own (Explorer prepares one). Add a model only when its mesh
+matches the canonical one within ~1 mm at the same scale. An invalid file (a
+model in two classes, a one-model class) is logged and ignored.
+
 Developer parameters such as belt height/distance are **session-only whole-belt
 fit controls**. They do not replace asset authoring when the request is to
 adjust the card *relative to the buckle*, or a hand *relative to an item*.

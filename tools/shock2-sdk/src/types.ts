@@ -1509,6 +1509,9 @@ export interface HandGrip {
       /** Which fingers (thumb..little) are locked: kept as stored by the
        * live glove, snapshots and Tighten. */
       locks: [boolean, boolean, boolean, boolean, boolean];
+      /** The held item's shared grip as the panel names it ("Shared by N
+       * models (canonical: X)"), null if its grip is its own. */
+      class: string | null;
       hover: { x: number; y: number } | null;
       panel: {
         center: ResolvedGrip["offset"];

@@ -35,6 +35,9 @@ const LOCKED: [u8; 3] = [150, 108, 24];
 const LOCKED_HOVER: [u8; 3] = [190, 140, 40];
 
 const TITLE: Rect = Rect::new(10.0, 4.0, 380.0, 26.0);
+/// A shared grip's note, in the aim toggle's slot (`SHOW_AIM`): the title
+/// row's inner corner sits under the bench's extra views.
+const CLASS: Rect = SHOW_AIM;
 const STATUS: Rect = Rect::new(10.0, 32.0, 380.0, 34.0);
 const SAVE: Rect = Rect::new(10.0, 74.0, 186.0, 44.0);
 const DISCARD: Rect = Rect::new(204.0, 74.0, 186.0, 44.0);
@@ -248,6 +251,9 @@ pub(in crate::interaction) struct PanelView {
     /// The free hand is tracked with no controller in it: it taps the
     /// buttons and pinches to snapshot.
     pub fingertip: bool,
+    /// The item's grip class note (`GripClasses::label`) if its grip is
+    /// shared, so the author knows a save poses them all.
+    pub class: Option<[String; 2]>,
 }
 
 /// The aim toggle's label: off, or on with the drawn lines' error (none
@@ -346,6 +352,25 @@ pub(in crate::interaction) fn emit(
         HAlign::Left,
         VAlign::Middle,
     );
+    // A shared grip's note takes the aim toggle's slot, free for anything
+    // but a gun (no grip class holds one).
+    if let (Some(class), Err(_)) = (&view.class, &view.aim) {
+        for (i, line) in class.iter().enumerate() {
+            canvas.text_fit(
+                Rect::new(
+                    CLASS.x,
+                    CLASS.y + i as f32 * CLASS.h / 2.0,
+                    CLASS.w,
+                    CLASS.h / 2.0,
+                ),
+                line,
+                FONT,
+                12.0,
+                HAlign::Left,
+                VAlign::Middle,
+            );
+        }
+    }
     canvas.fill(STATUS, view.status.color());
     canvas.text_fit(
         STATUS,
@@ -791,7 +816,25 @@ mod tests {
             aim: Err("no barrel".to_owned()),
             show_aim: true,
             aim_error_deg: None,
+            class: None,
         }
+    }
+
+    #[test]
+    fn a_shared_grip_names_its_class_in_the_free_aim_slot() {
+        let mut shared = view(Status::Ready);
+        let (canvas, _) = emit(&shared, None);
+        assert!(!texts(&canvas).iter().any(|t| t.starts_with("Shared")));
+        shared.class = Some(["Shared by 6 models".into(), "(canonical: medpatch)".into()]);
+        let (canvas, _) = emit(&shared, None);
+        let shown = texts(&canvas);
+        for line in ["Shared by 6 models", "(canonical: medpatch)"] {
+            assert!(shown.contains(&line.to_owned()), "{shown:?}");
+        }
+        // A gun's aim toggle keeps its slot.
+        shared.aim = Ok(());
+        let (canvas, _) = emit(&shared, None);
+        assert!(!texts(&canvas).iter().any(|t| t.starts_with("Shared")));
     }
 
     #[test]

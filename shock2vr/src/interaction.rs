@@ -1908,9 +1908,14 @@ impl VrInteraction {
             held.model,
             ["left", "right"][tool.hand]
         );
+        // Saved under the class's canonical model: the pose holds them all.
+        let model = match &self.grip_library {
+            Some(library) => library.classes.canonical(&held.model).to_owned(),
+            None => held.model.clone(),
+        };
         let entry = crate::vr_grip::BakedGripEntry {
             authored: true,
-            model: held.model.clone(),
+            model,
             hand: ["left", "right"][tool.hand].to_owned(),
             surface_hash: String::new(),
             kinematics_hash: String::new(),
@@ -2008,7 +2013,9 @@ impl VrInteraction {
                     entry.grip.item_scale =
                         grip.item_scale / crate::world_scale::WorldScale::active().personal();
                 }
-                pose_tool::save_override(&tool.overrides_path, entry).map(|()| {
+                let none = crate::vr_grip::GripClasses::default();
+                let classes = self.grip_library.as_ref().map_or(&none, |l| &l.classes);
+                pose_tool::save_override(&tool.overrides_path, entry, classes).map(|()| {
                     // Keep the in-memory library in step with the file: one
                     // headset entry per model and hand, at the saved scale.
                     if let Some(library) = self.grip_library.as_mut() {
@@ -2471,6 +2478,13 @@ impl PlayerInteraction for VrInteraction {
                     .entries
                     .extend(magazines.entries);
             }
+            // Before the overrides: their entries are keyed by class on prepend.
+            self.grip_library.as_mut().unwrap().classes = crate::vr_grip::GripClasses::load(
+                assets
+                    .get_opt(&TEXT_IMPORTER, crate::vr_grip::GRIP_CLASSES_FILE)
+                    .as_deref()
+                    .map(String::as_str),
+            );
             // Read from the data root directly: a loose file there is shadowed
             // by the bundled assets when going through the asset cache.
             if let Some(overrides) = crate::vr_grip::GripOverrides::load(
@@ -2662,14 +2676,13 @@ impl PlayerInteraction for VrInteraction {
                 println!(
                     "SHOCK2QUEST_VR_GRIP model={model} hand={hand_name} source={source} elapsed_ms={solve_ms:.3}"
                 );
+                let library = self.grip_library.as_ref().unwrap();
                 if resolved.is_none() {
-                    let matching = self
-                        .grip_library
-                        .as_ref()
-                        .unwrap()
+                    let key = library.classes.canonical(&model);
+                    let matching = library
                         .entries
                         .iter()
-                        .filter(|e| e.model == model && e.hand == hand_name)
+                        .filter(|e| e.model == key && e.hand == hand_name)
                         .count();
                     println!(
                         "SHOCK2QUEST_VR_GRIP_REJECT model={model} hand={hand_name} matching_entries={matching} reason=missing_or_invalid_pose"
@@ -2677,13 +2690,13 @@ impl PlayerInteraction for VrInteraction {
                 }
                 let authored = !bake
                     && resolved.is_some()
-                    && self.grip_library.as_ref().unwrap().entries.iter().any(|e| {
+                    && library.entries.iter().any(|e| {
                         let mut expected = e.grip.clone();
                         let key = if let Some(magazine) = magazine.as_ref() {
                             expected.item_scale = magazine.item_scale;
                             crate::vr_magazine::grip_model(&magazine.source).unwrap_or(&model)
                         } else {
-                            &model
+                            library.classes.canonical(&model)
                         };
                         e.model == key
                             && e.hand == hand_name
@@ -3205,15 +3218,21 @@ impl PlayerInteraction for VrInteraction {
             .resolved
             .as_ref()
             .map_or(controller, |grip| grip.glove_pose(controller));
+        let class = self
+            .grip_library
+            .as_ref()
+            .and_then(|library| library.classes.label(&held.model));
         self.support = None;
         self.slide = None;
         self.pose_tool_pulses.clear();
-        self.pose_tool = Some(pose_tool::GripPoseTool::new(
+        let mut tool = pose_tool::GripPoseTool::new(
             hand,
             entity,
             hand_pose,
             crate::paths::data_root().join(crate::vr_grip::GRIP_OVERRIDES_FILE),
-        ));
+        );
+        tool.class = class;
+        self.pose_tool = Some(tool);
     }
 
     fn can_pose_held_item(&self) -> bool {
@@ -4089,6 +4108,40 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// Posing any member of a class saves the class's grip: the canonical
+    /// model's key, which every member then looks up.
+    #[test]
+    fn posing_a_class_member_saves_under_its_canonical_model() {
+        let dir = crate::test_support::TempDir::new("pose-class-save");
+        let path = dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
+        let mut interaction = staged_workbench(path.clone());
+        interaction.pose_tool.as_mut().unwrap().staged = None;
+        interaction.grip_library.as_mut().unwrap().classes = crate::vr_grip::GripClasses::parse(
+            r#"{"version": 1, "classes": [["wrench_h", "wrench_b"]]}"#,
+        )
+        .unwrap();
+        let held = interaction.fitted_grips[1].as_mut().unwrap();
+        held.model = "wrench_b".into();
+        let mut grip = held.resolved.clone().unwrap();
+        grip.offset.x = 0.25;
+        let staged = interaction.stage_grip(grip, "test").unwrap();
+        assert_eq!(staged.model, "wrench_h");
+        interaction.save_staged();
+        let saved = crate::vr_grip::GripOverrides::load(&path).expect("saved");
+        let keys: Vec<_> = saved
+            .grips
+            .entries
+            .iter()
+            .map(|e| e.model.as_str())
+            .collect();
+        assert_eq!(keys, ["wrench_h"]);
+        let library = interaction.grip_library.as_ref().unwrap();
+        assert_eq!(library.headset, 1);
+        for model in ["wrench_h", "wrench_b"] {
+            assert_eq!(library.lookup(model, "right").unwrap().offset.x, 0.25);
+        }
     }
 
     #[test]
