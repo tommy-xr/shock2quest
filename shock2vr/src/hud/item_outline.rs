@@ -2,7 +2,7 @@ use cgmath::{Matrix4, Vector2, Vector4, point2, vec2, vec3, vec4};
 use collision::{Aabb2, Aabb3};
 use dark::{
     importers::{
-        FONT_IMPORTER, STRINGS_IMPORTER, TEXTURE_IMPORTER, resolve_localized_property_string,
+        STRINGS_IMPORTER, TEXTURE_IMPORTER, resolve_localized_property_string,
         resolve_symbolic_name,
     },
     properties::{
@@ -443,11 +443,11 @@ mod tests {
     #[test]
     fn hud_use_is_left_aligned_below_brackets_and_keeps_the_right_margin() {
         let rect = extents((200.0, 100.0), (350.0, 300.0));
-        assert_eq!(hud_use_position(rect, 120.0, 800.0), vec2(200.0, 304.0));
+        assert_eq!(hud_use_position(rect, 120.0, 800.0), vec2(200.0, 310.0));
         let right_edge = extents((740.0, 100.0), (790.0, 300.0));
         assert_eq!(
             hud_use_position(right_edge, 120.0, 800.0),
-            vec2(670.0, 304.0)
+            vec2(670.0, 310.0)
         );
     }
 
@@ -1110,12 +1110,12 @@ fn hint_text(
         .or_else(|| resolve_hud_use(hud_use, huduse))
 }
 
-/// Original HUD use slot: left-aligned, four pixels below the selection rect,
-/// moving left only when needed to preserve the ten-pixel right margin.
+/// HUD use slot: left-aligned, two pixels below the bottom brackets (which hang
+/// below the selection rect), moving left only to keep the ten-pixel right margin.
 fn hud_use_position(extents: Aabb2<f32>, text_width: f32, screen_width: f32) -> Vector2<f32> {
     vec2(
         extents.min.x.min(screen_width - text_width - 10.0),
-        extents.max.y + 4.0,
+        extents.max.y + BRACKET_SIZE + 2.0,
     )
 }
 
@@ -1198,14 +1198,14 @@ pub fn draw_item_outline(
     ];
     if let Some(name) = name {
         use crate::ui::{HAlign, ScaleMode, UiCanvas, VAlign};
-        let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
+        let font = crate::ui::resolve_font(asset_cache, crate::ui::MESSAGE_FONT);
         let width = engine::measure_text_width(&**font, name, LABEL_HEIGHT);
         if let Some(rect) = bracket_name_rect(extents, width, screen_size) {
             let mut canvas = UiCanvas::new(screen_size);
             canvas.text_fit(
                 rect,
                 name,
-                "mainfont.fon",
+                crate::ui::MESSAGE_FONT,
                 LABEL_HEIGHT,
                 HAlign::Left,
                 VAlign::Top,
@@ -1218,7 +1218,7 @@ pub fn draw_item_outline(
         }
     }
     if let Some(hint) = hint {
-        let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
+        let font = crate::ui::resolve_font(asset_cache, crate::ui::MESSAGE_FONT);
         let width = engine::measure_text_width(&**font, hint, LABEL_HEIGHT);
         let position = hud_use_position(extents, width, screen_size.x);
         objects.push(SceneObject::screen_space_text(
