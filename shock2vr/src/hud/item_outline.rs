@@ -46,6 +46,9 @@ const HEALTH_BAR_MARGIN: f32 = 18.0;
 /// Line height of the use hint below the brackets, in screen pixels.
 const LABEL_HEIGHT: f32 = 10.0;
 
+/// Opacity of the bracket labels (VR name above, use hint below); shared so they match.
+const LABEL_ALPHA: f32 = 1.0;
+
 pub(crate) fn format_stack_aware_item_name(item_name: &str, stack_count: Option<i32>) -> String {
     match stack_count {
         Some(count) => item_name.replace("%d", &count.to_string()),
@@ -1202,14 +1205,16 @@ pub fn draw_item_outline(
         let width = engine::measure_text_width(&**font, name, LABEL_HEIGHT);
         if let Some(rect) = bracket_name_rect(extents, width, screen_size) {
             let mut canvas = UiCanvas::new(screen_size);
-            canvas.text_fit(
-                rect,
-                name,
-                crate::ui::MESSAGE_FONT,
-                LABEL_HEIGHT,
-                HAlign::Left,
-                VAlign::Top,
-            );
+            canvas
+                .text_fit(
+                    rect,
+                    name,
+                    crate::ui::MESSAGE_FONT,
+                    LABEL_HEIGHT,
+                    HAlign::Left,
+                    VAlign::Top,
+                )
+                .opacity(LABEL_ALPHA);
             objects.extend(canvas.render_screen_space(
                 asset_cache,
                 screen_size,
@@ -1225,7 +1230,7 @@ pub fn draw_item_outline(
             hint,
             font,
             LABEL_HEIGHT,
-            0.5,
+            LABEL_ALPHA,
             position.x,
             position.y,
         ));
