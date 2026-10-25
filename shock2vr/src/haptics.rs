@@ -111,20 +111,6 @@ pub const GRIP_POSE_SAVED: HapticPulse = HapticPulse {
     amplitude: 0.9,
     duration_ms: 60,
 };
-/// Penetration this deep (metres) buzzes at the peak, which stays below the
-/// workbench's clicks so the strongest-wins mixer never masks them.
-const GRIP_PENETRATION_FULL: f32 = 0.015;
-const GRIP_PENETRATION_PEAK: f32 = 0.35;
-
-/// The free controller's buzz for the posing glove's deepest penetration of
-/// its item (metres), sent every frame (each pulse outlasts it): nothing when
-/// clear, rising to the peak at `GRIP_PENETRATION_FULL`.
-pub(crate) fn grip_penetration_pulse(depth: f32) -> Option<HapticPulse> {
-    (depth > 0.0).then(|| HapticPulse {
-        amplitude: GRIP_PENETRATION_PEAK * (depth / GRIP_PENETRATION_FULL).min(1.0),
-        duration_ms: 20,
-    })
-}
 
 pub const GUN_RECOIL: HapticPulse = HapticPulse {
     amplitude: 0.75,
@@ -209,22 +195,6 @@ pub fn take(world: &World) -> [Option<HapticPulse>; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn grip_penetration_buzzes_from_nothing_to_the_peak_at_a_centimetre_and_a_half() {
-        assert_eq!(grip_penetration_pulse(0.0), None);
-        let amplitude = |depth: f32| grip_penetration_pulse(depth).unwrap().amplitude;
-        assert!((amplitude(0.0075) - GRIP_PENETRATION_PEAK / 2.0).abs() < 1e-5);
-        assert!((amplitude(0.015) - GRIP_PENETRATION_PEAK).abs() < 1e-5);
-        assert!(
-            (amplitude(0.05) - GRIP_PENETRATION_PEAK).abs() < 1e-5,
-            "capped"
-        );
-        assert!(amplitude(0.001) < amplitude(0.01));
-        // The mixer keeps the strongest pulse: a click must outrank the buzz.
-        assert!(GRIP_POSE_CLICK.amplitude > GRIP_PENETRATION_PEAK);
-        assert!(GRIP_POSE_SAVED.amplitude > GRIP_PENETRATION_PEAK);
-    }
 
     #[test]
     fn tool_ready_cues_on_entry_only() {

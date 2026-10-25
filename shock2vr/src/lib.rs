@@ -1454,8 +1454,7 @@ impl Game {
         self.pause_menu.is_open()
     }
 
-    /// Whether the grip pose workbench is up. Its free controller's
-    /// thumbstick click is its own while it is.
+    /// Whether the grip pose workbench is up (the mission frozen under it).
     pub fn pose_workbench_open(&self) -> bool {
         self.active_game_scene.pose_workbench_open()
     }

@@ -4,7 +4,7 @@
 //! shared frontend pointer) or by the free hand's tracked index fingertip.
 use cgmath::{InnerSpace, Quaternion, Rotation, Vector2, Vector3, vec2};
 
-use super::{ContactView, world};
+use super::world;
 use crate::ui::{HAlign, PanelPlacement, Rect, UiCanvas, VAlign, WorldPanel};
 use crate::vr_config::Handedness;
 
@@ -37,8 +37,7 @@ const SAVE: Rect = Rect::new(10.0, 74.0, 186.0, 44.0);
 const DISCARD: Rect = Rect::new(204.0, 74.0, 186.0, 44.0);
 const POSE_HAND: Rect = Rect::new(10.0, 124.0, 186.0, 44.0);
 const SUPPORT_MODE: Rect = Rect::new(204.0, 124.0, 186.0, 44.0);
-const CONTACTS: Rect = Rect::new(10.0, 174.0, 186.0, 34.0);
-const RESET_VIEW: Rect = Rect::new(204.0, 174.0, 186.0, 34.0);
+const RESET_VIEW: Rect = Rect::new(10.0, 174.0, 380.0, 34.0);
 const EXIT: Rect = Rect::new(10.0, 214.0, 380.0, 32.0);
 const LEGEND: Rect = Rect::new(10.0, 254.0, 380.0, 80.0);
 
@@ -49,7 +48,6 @@ pub(in crate::interaction) enum PanelEvent {
     Discard,
     SwitchHand,
     SupportMode,
-    Contacts,
     ResetView,
     Exit,
 }
@@ -121,7 +119,6 @@ pub(in crate::interaction) struct PanelView {
     /// The hand being posed; the other holds the controller the legend names.
     pub posing: Handedness,
     pub status: Status,
-    pub contact_view: ContactView,
     /// Whether the other hand can be posed instead, or why not.
     pub switch: Result<(), String>,
     /// Posing the support grip, and whether the item offers one, or why not.
@@ -175,7 +172,6 @@ pub(in crate::interaction) fn legend(
         } else {
             "Stick up/down: item scale    Squeeze: turn".to_owned()
         },
-        "Stick click: contacts".to_owned(),
     ]
 }
 
@@ -214,11 +210,6 @@ pub(in crate::interaction) fn emit(
         HAlign::Center,
         VAlign::Middle,
     );
-    let contacts = match view.contact_view {
-        ContactView::Contacts => "on",
-        ContactView::Full => "full",
-        ContactView::Off => "off",
-    };
     // Save and Discard act on a staged snapshot only.
     let staged = if view.staged {
         Ok(())
@@ -244,12 +235,6 @@ pub(in crate::interaction) fn emit(
             .to_owned(),
             PanelEvent::SupportMode,
             view.support_mode.clone(),
-        ),
-        (
-            CONTACTS,
-            format!("Contacts: {contacts}"),
-            PanelEvent::Contacts,
-            Ok(()),
         ),
         (
             RESET_VIEW,
@@ -288,7 +273,7 @@ pub(in crate::interaction) fn emit(
     }
     let lines = legend(other(view.posing), view.fingertip, view.support);
     // Spaced for the controller legend, which is the longest.
-    let line_height = LEGEND.h / 4.0;
+    let line_height = LEGEND.h / 3.0;
     for (i, line) in lines.iter().enumerate() {
         canvas.text_fit(
             Rect::new(
@@ -503,7 +488,6 @@ mod tests {
         PanelView {
             posing: Handedness::Right,
             status,
-            contact_view: ContactView::Contacts,
             switch: Ok(()),
             support: false,
             support_mode: Err("one-handed".to_owned()),

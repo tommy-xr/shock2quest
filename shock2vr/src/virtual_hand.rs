@@ -436,16 +436,17 @@ impl VirtualHand {
             HandState::Grabbing { entity_id } => {
                 // See what we're hitting
                 let mut msgs = Vec::new();
+                let tracked = crate::vr_support::GripPose {
+                    position: input_hand.position,
+                    rotation: input_hand.rotation,
+                }
+                .is_tracked();
 
                 // A held download also collects on trigger, through the same
                 // drop a release takes. Never from an untracked fallback pose.
                 let trigger_collects = prev.trigger_value < 0.5
                     && input_hand.trigger_value > 0.5
-                    && crate::vr_support::GripPose {
-                        position: input_hand.position,
-                        rotation: input_hand.rotation,
-                    }
-                    .is_tracked()
+                    && tracked
                     && crate::scripts::script_util::is_download_pickup(world, entity_id);
 
                 // If we're holding onto something, but not grabbing, we can drop it
@@ -520,19 +521,24 @@ impl VirtualHand {
                         });
                     }
 
-                    msgs.push(VirtualHandEffect::SetPositionRotation {
-                        entity_id,
-                        // The offset is hand-local (e.g. seating a weapon's
-                        // grip in the palm), so it must rotate with the hand
-                        position: hand_position
-                            + hand_rotation.rotate_vector(
-                                vr_offsets.offset
-                                    * crate::world_scale::WorldScale::active().personal(),
-                            ),
-                        rotation: hand_rotation * vr_offsets.rotation,
-                        scale: vec3(1.0, 1.0, 1.0)
-                            * crate::world_scale::WorldScale::active().personal(),
-                    });
+                    // A set-down controller (Quest: the zero quaternion)
+                    // leaves the item where it is. The hand keeps that pose,
+                    // so tracking checks downstream still see it lost.
+                    if tracked {
+                        msgs.push(VirtualHandEffect::SetPositionRotation {
+                            entity_id,
+                            // The offset is hand-local (e.g. seating a weapon's
+                            // grip in the palm), so it must rotate with the hand
+                            position: hand_position
+                                + hand_rotation.rotate_vector(
+                                    vr_offsets.offset
+                                        * crate::world_scale::WorldScale::active().personal(),
+                                ),
+                            rotation: hand_rotation * vr_offsets.rotation,
+                            scale: vec3(1.0, 1.0, 1.0)
+                                * crate::world_scale::WorldScale::active().personal(),
+                        });
+                    }
 
                     let updated_hand = VirtualHand {
                         position: hand_position,
@@ -1925,6 +1931,53 @@ mod tests {
         assert!(!crate::scripts::script_util::is_download_pickup(
             &world, invalid
         ));
+    }
+
+    /// Quest reports a set-down controller as the zero quaternion. A hand
+    /// still holding an item there (the grip workbench's posing hand, on
+    /// exit) must not place it with that pose: it normalizes to NaN, which
+    /// poisons the broad phase.
+    #[test]
+    fn a_held_item_stays_put_while_its_controller_is_untracked() {
+        let mut world = World::new();
+        let item = world.add_entity(dark::properties::PropSoftType(1));
+        let mut tracked = Hand::default();
+        tracked.position = vec3(0.1, 1.0, -0.2);
+        tracked.squeeze_value = 1.0;
+        let held = VirtualHand::new(Handedness::Right).grab_entity(&world, item);
+        let update = |hand: &VirtualHand, input: &Hand| {
+            VirtualHand::update(
+                hand,
+                &PhysicsWorld::new(),
+                &world,
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                input,
+                None,
+                Vector3::zero(),
+                1.0 / 60.0,
+            )
+        };
+        let (held, _) = update(&held, &tracked);
+        let mut untracked = tracked.clone();
+        untracked.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        untracked.position = Vector3::zero();
+        let (hand, effects) = update(&held, &untracked);
+        assert_eq!(hand.get_held_entity(), Some(item));
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, VirtualHandEffect::SetPositionRotation { .. })),
+            "the item is not moved"
+        );
+        assert!(
+            !crate::vr_support::GripPose {
+                position: hand.get_position(),
+                rotation: hand.get_rotation(),
+            }
+            .is_tracked(),
+            "the hand still reads as lost, so the refit places nothing either"
+        );
     }
 
     #[test]

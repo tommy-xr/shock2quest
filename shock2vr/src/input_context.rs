@@ -137,7 +137,6 @@ fn suppress_hand_controls(hand: &mut Hand, holds_item: bool) {
     hand.trigger_value = 0.0;
     hand.squeeze_value = if holds_item { 1.0 } else { 0.0 };
     hand.a_value = 0.0;
-    hand.thumbstick_click = false;
 }
 
 /// A 2D screen-space pointer for flatscreen UI. Position is normalized to
@@ -187,10 +186,6 @@ pub struct Hand {
     pub trigger_value: f32,
     pub squeeze_value: f32,
     pub a_value: f32,
-    /// The thumbstick is pressed in. Defaulted so recordings that predate it
-    /// still load.
-    #[serde(default)]
-    pub thumbstick_click: bool,
     /// Tracked hand joints (`XR_EXT_hand_tracking` order), pawn-local world
     /// units like `position`; `None` unless hand tracking sees this hand.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -209,7 +204,6 @@ impl Hand {
             trigger_value: 0.0,
             squeeze_value: 0.0,
             a_value: 0.0,
-            thumbstick_click: false,
             joints: None,
         }
     }
