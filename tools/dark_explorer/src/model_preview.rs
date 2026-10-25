@@ -853,25 +853,33 @@ impl ModelPreview {
         .and_then(|r: Result<_, &str>| r.map_err(str::to_string))
     }
 
-    /// `grip`'s chosen fingers closed onto the item (`GripSurface::tighten`)
-    /// against the game's geometry and glove, as the VR workbench does.
-    pub fn tighten_grip(
+    /// `grip`'s chosen fingers closed onto the item (`GripSurface::tighten`),
+    /// or with `unbury` those buried in it opened out (`GripSurface::unbury`),
+    /// against the game's geometry and glove, as the VR workbench does; and
+    /// what each finger did.
+    pub fn fit_fingers(
         &mut self,
         key: &str,
         hand: Handedness,
         grip: &ResolvedGrip,
         pressed: bool,
         fingers: [bool; 5],
-    ) -> Result<shock2vr::vr_grip::Tightened, String> {
+        unbury: bool,
+    ) -> Result<(ResolvedGrip, [&'static str; 5]), String> {
         // Its geometry here is pre-scaled to the weapon, unlike its grip.
         if shock2vr::vr_magazine::grip_source(key).is_some() {
-            return Err("Magazine grips cannot be tightened here".into());
+            return Err("Magazine grips cannot be fitted to the surface here".into());
         }
         let (surface, _, _, _) = self.grip_inputs(key, hand)?;
         let glove = self.glove.as_mut().ok_or("Glove model unavailable")?;
-        Ok(surface.tighten(grip, pressed, fingers, |bones| {
-            glove.finger_samples(bones, hand)
-        }))
+        let chains = |bones: &_| glove.finger_chains(bones, hand);
+        Ok(if unbury {
+            let out = surface.unbury(grip, pressed, fingers, chains);
+            (out.grip, out.fingers.map(|fit| fit.outcome()))
+        } else {
+            let out = surface.tighten(grip, pressed, fingers, chains);
+            (out.grip, out.fingers.map(|fit| fit.outcome()))
+        })
     }
 
     /// Preview a pouch magazine at the opposite hand's weapon scale. Gameplay

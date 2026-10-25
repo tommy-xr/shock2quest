@@ -117,7 +117,7 @@ test(
     const panelRight = cross(scale(facing, -1), panelUp);
     const onPanel = ([x, y]: [number, number]) =>
       add(panelCenter, add(scale(panelRight, (x / 400 - 0.5) * 0.3 / unit), scale(panelUp, (0.5 - y / 490) * 0.3675 / unit)));
-    for (const [event, canvasCenter] of [["Exit", [329, 382]], ["ResetView", [200, 382]], ["Placement", [297, 246]], ["Tighten", [200, 296]], ["Lock(0)", [105, 342]], ["Lock(4)", [361, 342]]] as const) {
+    for (const [event, canvasCenter] of [["Exit", [329, 382]], ["ResetView", [200, 382]], ["Placement", [297, 246]], ["Unbury", [103, 296]], ["Tighten", [297, 296]], ["Lock(0)", [105, 342]], ["Lock(4)", [361, 342]]] as const) {
       const button = xyz(panel.buttons.find((b) => b.event === event)!.center);
       const expected = onPanel([...canvasCenter]);
       assert.ok(distance(button, expected) < 0.005 / unit, `${event} ${button} vs ${expected}`);
@@ -458,7 +458,7 @@ test(
     assert.equal((await tool()).panel.status, "Pose, then snapshot");
     // Nothing staged: Save and Discard are disabled.
     assert.deepEqual((await tool()).panel.panel!.buttons.map((b) => b.event),
-      ["SwitchHand", "Slot", "Placement", "Tighten", "ResetView", "Exit", "Lock(0)", "Lock(1)", "Lock(2)", "Lock(3)", "Lock(4)"]);
+      ["SwitchHand", "Slot", "Placement", "Unbury", "Tighten", "ResetView", "Exit", "Lock(0)", "Lock(1)", "Lock(2)", "Lock(3)", "Lock(4)"]);
     const { v, s } = (await tool()).panel.panel!.rotation;
     const panelUp = (metres: number) => scale(quatRotate([v.x, v.y, v.z, s], [0, 1, 0]), metres);
 
@@ -1564,24 +1564,111 @@ test(
   },
 );
 
+
+/** An overrides file holding the shipped right `model` grip, curls loosened by `by`. */
+function looseOverrides(root: string, library: string, model: string, by: number): void {
+  const shipped = JSON.parse(
+    readFileSync(join(findRepoRoot(process.cwd())!, "assets", library), "utf8"),
+  ) as { solver_revision: number; entries: { model: string; hand: string; grip: ResolvedGrip }[] };
+  const entry = shipped.entries.find((e) => e.model === model && e.hand === "right")!;
+  const curls = (entry.grip as { curls: number[] }).curls.map((c) => Math.max(0, c - by));
+  writeFileSync(join(root, "vr-grip-overrides.json"), JSON.stringify({
+    version: 1,
+    solver_revision: shipped.solver_revision,
+    entries: [{ ...entry, grip: { ...entry.grip, curls } }],
+  }));
+}
+
 test(
-  "grip pose tool: Tighten closes a loose grip's fingers onto the shotgun, keeping the placement",
+  "grip pose tool: Tighten closes and wraps a loose mug grip's fingers and leaves buried ones, keeping the placement",
   { skip: !enabled, timeout: 300_000 },
   async () => {
     using data = isolatedDataRoot([
       "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
     ]);
-    // The shipped shotgun grip with its fingers loosened, as a rough capture.
-    const shipped = JSON.parse(
-      readFileSync(join(findRepoRoot(process.cwd())!, "assets/vr-weapon-grips.json"), "utf8"),
-    ) as { solver_revision: number; entries: { model: string; hand: string; grip: ResolvedGrip }[] };
-    const entry = shipped.entries.find((e) => e.model === "sg_h" && e.hand === "right")!;
-    writeFileSync(join(data.root, "vr-grip-overrides.json"), JSON.stringify({
-      version: 1,
-      solver_revision: shipped.solver_revision,
-      entries: [{ ...entry, grip: { ...entry.grip, curls: (entry.grip as { curls: number[] }).curls.map((c) => Math.max(0, c - 0.3)) } }],
-    }));
+    // The shipped mug grip loosened, as a rough capture: its thumb and index
+    // start through the mug, the others clear of it.
+    looseOverrides(data.root, "vr-grips.json", "mug", 0.15);
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    const rightGrip = async () => (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
+    await holdDebugMug(game, "right");
+    await game.input.set("head.position", [0, 1, 0]);
+    await game.step({ frames: 2 });
+    const unit = await metresPerWorldUnit(game);
+    await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 2 });
+    const tool = async () => (await rightGrip()).pose_tool!;
+    assert.equal((await tool()).panel.tighten_disabled, null, "the mug's mesh is known");
+    const placement = (grip: ResolvedGrip) =>
+      ({ offset: grip.offset, rotation: grip.rotation, hand_rotation: grip.hand_rotation, item_scale: grip.item_scale });
+    const tightenLog = () => game.logs().filter((l) => l.includes("SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened="));
 
+    const loose = (await rightGrip()).grip!;
+    await pressButton(game, "left", "Tighten", unit);
+    const tight = (await rightGrip()).grip!;
+    const log = tightenLog().at(-1)!;
+    assert.equal((await tool()).staged, true, `staged: ${log}`);
+    assert.match(log, /slot=rest fingers=\[buried,buried,closed[^,]*,closed\+wrap,[^\]]*\] contact_mm=\[-[\d.]+,-[\d.]+,[\d.]+,[\d.]+,[\d.]+\] elapsed_ms=\d/);
+    assertClose(placement(tight), placement(loose), 1e-5, "placement kept");
+    // A wrapped finger left its curl arc: the grip is bones now.
+    assert.ok(fingers(tight).bones, `bones after a wrap: ${log}`);
+
+    // Discard returns to the loose grip.
+    await pressButton(game, "left", "Discard", unit);
+    assert.deepEqual((await rightGrip()).grip, loose);
+  },
+);
+
+test(
+  "grip pose tool: Unbury opens the shipped mug grip's buried fingers out, and Tighten then seats them",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    looseOverrides(data.root, "vr-grips.json", "mug", 0);
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    const rightGrip = async () => (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
+    await holdDebugMug(game, "right");
+    await game.input.set("head.position", [0, 1, 0]);
+    await game.step({ frames: 2 });
+    const unit = await metresPerWorldUnit(game);
+    await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 2 });
+    const tool = async () => (await rightGrip()).pose_tool!;
+    const lastLog = (key: string) => game.logs().filter((l) => l.includes(`SHOCK2QUEST_VR_GRIP_POSE_TOOL ${key}=`)).at(-1)!;
+    const loose = (await rightGrip()).grip!;
+
+    // Locked, the middle finger stays buried; the ring comes out.
+    await pressButton(game, "left", "Lock(2)", unit);
+    await pressButton(game, "left", "Unbury", unit);
+    assert.match(lastLog("unburied"),
+      /unburied=true slot=rest fingers=\[buried,buried,skip,unburied,buried\] before_mm=\[-[\d.]+,-[\d.]+,-,-[\d.]+,-[\d.]+\] after_mm=\[-[\d.]+,-[\d.]+,-,1\.\d,-[\d.]+\]/);
+    assert.equal((await tool()).staged, true);
+    assert.ok(game.logs().some((l) => l.includes("staged=true reason=unbury")), "staged as an unbury");
+    await pressButton(game, "left", "Discard", unit);
+    assert.deepEqual((await rightGrip()).grip, loose);
+
+    // Unlocked: middle and ring come out, then Tighten finds them resting.
+    await pressButton(game, "left", "Lock(2)", unit);
+    await pressButton(game, "left", "Unbury", unit);
+    assert.match(lastLog("unburied"), /fingers=\[buried,buried,unburied,unburied,buried\]/);
+    await pressButton(game, "left", "Tighten", unit);
+    assert.match(lastLog("tightened"), /fingers=\[buried,buried,snug[^,]*,snug[^,]*,buried\] contact_mm=\[-[\d.]+,-[\d.]+,1\.\d,1\.\d,-[\d.]+\]/);
+    const placement = (grip: ResolvedGrip) =>
+      ({ offset: grip.offset, rotation: grip.rotation, hand_rotation: grip.hand_rotation, item_scale: grip.item_scale });
+    assertClose(placement((await rightGrip()).grip!), placement(loose), 1e-5, "placement kept");
+  },
+);
+
+test(
+  "grip pose tool: Tighten and Unbury leave the trigger index buried in a loose shotgun grip",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    looseOverrides(data.root, "vr-weapon-grips.json", "sg_h", 0.3);
     await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
     const rightGrip = async () => (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
     await holdShotgun(game);
@@ -1591,45 +1678,20 @@ test(
     await game.input.trigger("ToggleGripPoseTool");
     await game.step({ frames: 2 });
     const tool = async () => (await rightGrip()).pose_tool!;
-    assert.equal((await tool()).panel.tighten_disabled, null, "the shotgun's mesh is known");
-    const curls = (grip: ResolvedGrip) => grip as { curls?: number[]; trigger_curls?: number[] };
-    const placement = (grip: ResolvedGrip) =>
-      ({ offset: grip.offset, rotation: grip.rotation, hand_rotation: grip.hand_rotation, item_scale: grip.item_scale });
     const tightenLog = () => game.logs().filter((l) => l.includes("SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened="));
-
-    // Trigger: only the trigger pose's index closes, onto the trigger; the
-    // rest is untouched.
     const loose = (await rightGrip()).grip!;
     await pressButton(game, "left", "Slot", unit);
     assert.equal((await tool()).slot, "trigger");
     await pressButton(game, "left", "Tighten", unit);
-    const pulled = (await rightGrip()).grip!;
-    assert.equal((await tool()).staged, true, `staged: ${tightenLog().at(-1)}`);
-    assert.match(tightenLog().at(-1)!, /slot=trigger fingers=\[skip,closed,skip,skip,skip\] contact_mm=\[-,[\d.]+,-,-,-\] elapsed_ms=\d/);
-    assertClose(placement(pulled), placement(loose), 1e-5, "placement kept");
-    assert.deepEqual(curls(pulled).curls, curls(loose).curls, "the rest is kept");
-    const trigger = curls(pulled).trigger_curls!;
-    assert.deepEqual([trigger[0], ...trigger.slice(2)], [curls(loose).curls![0], ...curls(loose).curls!.slice(2)],
-      "the other fingers stay at rest");
-    assert.ok(trigger[1]! > curls(loose).curls![1]! + 0.02, `the index closed: ${trigger[1]}`);
-
-    // Rest: every finger closes from where it was onto the gun; the trigger
-    // pose keeps its index and follows the rest otherwise.
-    await pressButton(game, "left", "Slot", unit);
-    await pressButton(game, "left", "Tighten", unit);
-    const tight = (await rightGrip()).grip!;
-    assert.match(tightenLog().at(-1)!, /slot=rest fingers=\[.*\] contact_mm=\[.*\] elapsed_ms=\d/);
-    assertClose(placement(tight), placement(loose), 1e-5, "placement kept");
-    assert.ok(curls(tight).curls, "curls stay curls");
-    const closed = curls(tight).curls!.filter((c, i) => c > curls(loose).curls![i]! + 0.02).length;
-    assert.ok(closed >= 3, `fingers closed onto the gun: ${curls(tight).curls} (${tightenLog().at(-1)})`);
-    const followed = curls(tight).trigger_curls!;
-    assert.deepEqual([followed[0], ...followed.slice(2)], [curls(tight).curls![0], ...curls(tight).curls!.slice(2)]);
-    assert.equal(followed[1], trigger[1], "the pulled index is kept");
-
-    // Discard returns to the loose grip.
-    await pressButton(game, "left", "Discard", unit);
-    assert.deepEqual(curls((await rightGrip()).grip!).curls, curls(loose).curls);
+    assert.match(tightenLog().at(-1)!,
+      /tightened=false slot=trigger fingers=\[skip,buried,skip,skip,skip\] contact_mm=\[-,-[\d.]+,-,-,-\] elapsed_ms=\d/);
+    assert.equal((await tool()).staged, false, "nothing to stage");
+    assert.deepEqual((await rightGrip()).grip, loose, "the grip is untouched");
+    // Its knuckle is in the gun: fully open does not free it either.
+    await pressButton(game, "left", "Unbury", unit);
+    const unburied = game.logs().filter((l) => l.includes("SHOCK2QUEST_VR_GRIP_POSE_TOOL unburied=")).at(-1)!;
+    assert.match(unburied, /unburied=false slot=trigger fingers=\[skip,buried,skip,skip,skip\] before_mm=\[-,-[\d.]+,-,-,-\] after_mm=\[-,-[\d.]+,-,-,-\]/);
+    assert.deepEqual((await rightGrip()).grip, loose, "the grip is untouched");
   },
 );
 

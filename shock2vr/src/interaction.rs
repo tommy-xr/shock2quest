@@ -1443,7 +1443,8 @@ impl VrInteraction {
             }
             pose_tool::panel::PanelEvent::IndexLess => self.step_trigger_index(false),
             pose_tool::panel::PanelEvent::IndexMore => self.step_trigger_index(true),
-            pose_tool::panel::PanelEvent::Tighten => self.tighten_pose_tool_grip(),
+            pose_tool::panel::PanelEvent::Tighten => self.tighten_pose_tool_grip(false),
+            pose_tool::panel::PanelEvent::Unbury => self.tighten_pose_tool_grip(true),
             pose_tool::panel::PanelEvent::Lock(finger) => {
                 if let Some(tool) = self.pose_tool.as_mut() {
                     tool.toggle_lock(finger);
@@ -1690,11 +1691,14 @@ impl VrInteraction {
         Some((geometry, pose_frame(tool, Some(held))))
     }
 
-    /// Close the slot's unlocked fingers (`GripPoseTool::editable`) onto the item
-    /// from where the grip has them, keeping its placement; staged like any
-    /// edit. The surface is built from the cached mesh on the press.
-    fn tighten_pose_tool_grip(&mut self) {
+    /// Close the slot's unlocked fingers (`GripPoseTool::editable`) onto the
+    /// item from where the grip has them (`GripSurface::tighten`), or with
+    /// `unbury` open those buried in it out (`GripSurface::unbury`), keeping
+    /// its placement; staged like any edit. The surface is built from the
+    /// cached mesh on the press.
+    fn tighten_pose_tool_grip(&mut self, unbury: bool) {
         let start = std::time::Instant::now();
+        let log = if unbury { "unburied" } else { "tightened" };
         let Some(tool) = self.pose_tool.as_ref() else {
             return;
         };
@@ -1712,7 +1716,7 @@ impl VrInteraction {
                 .and_then(|held| held.resolved.clone()),
             self.pose_tool_geometry(),
         ) else {
-            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened=false reason=no_grip");
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL {log}=false reason=no_grip");
             return;
         };
         let surface = match frame {
@@ -1722,38 +1726,42 @@ impl VrInteraction {
             ),
         };
         let Some(surface) = surface else {
-            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened=false reason=no_surface");
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL {log}=false reason=no_surface");
             return;
         };
-        // Tightened as authored, against the glove at authored size.
+        // Moved as authored, against the glove at authored size.
         let personal = crate::world_scale::WorldScale::active().personal();
         let authored = current.clone().rescaled(1.0 / personal);
         let handedness = [Handedness::Left, Handedness::Right][hand];
         let mut slot = self.glove_renderer.borrow_mut();
         let Some(renderer) = slot.as_mut().and_then(|renderer| renderer.as_mut()) else {
-            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened=false reason=no_glove");
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL {log}=false reason=no_glove");
             return;
         };
-        let tightened = surface.tighten(&authored, pressed, fingers, |bones| {
-            renderer.finger_samples(bones, handedness)
-        });
+        let chains = |bones: &_| renderer.finger_chains(bones, handedness);
+        let (moved, fields) = if unbury {
+            let out = surface.unbury(&authored, pressed, fingers, chains);
+            (out.grip, pose_tool::unbury_log(&out.fingers))
+        } else {
+            let out = surface.tighten(&authored, pressed, fingers, chains);
+            (out.grip, pose_tool::tighten_log(&out.fingers))
+        };
         drop(slot);
-        let changed = tightened.grip.fingers != current.fingers;
+        let changed = moved.fingers != current.fingers;
         println!(
-            "SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened={changed} slot={} {} elapsed_ms={:.1}",
+            "SHOCK2QUEST_VR_GRIP_POSE_TOOL {log}={changed} slot={} {fields} elapsed_ms={:.1}",
             if pressed { "trigger" } else { "rest" },
-            pose_tool::tighten_log(&tightened.fingers),
             start.elapsed().as_secs_f64() * 1000.0
         );
         if changed {
             // Only the fingers (and their contacts) change.
             self.stage_edit(
                 crate::vr_grip::ResolvedGrip {
-                    fingers: tightened.grip.fingers,
-                    contacts: tightened.grip.contacts,
+                    fingers: moved.fingers,
+                    contacts: moved.contacts,
                     ..current
                 },
-                "tighten",
+                if unbury { "unbury" } else { "tighten" },
             );
         }
     }
