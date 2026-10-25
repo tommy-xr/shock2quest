@@ -42,9 +42,15 @@ const ALIGN_MORE: Rect = Rect::new(350.0, 124.0, 40.0, 44.0);
 const POSE_HAND: Rect = Rect::new(10.0, 174.0, 186.0, 44.0);
 const SUPPORT_MODE: Rect = Rect::new(204.0, 174.0, 186.0, 44.0);
 const SLOT: Rect = Rect::new(10.0, 224.0, 186.0, 44.0);
-pub(in crate::interaction) const RESET_VIEW: Rect = Rect::new(204.0, 224.0, 186.0, 44.0);
-const SHOW_AIM: Rect = Rect::new(10.0, 274.0, 186.0, 32.0);
-const EXIT: Rect = Rect::new(204.0, 274.0, 186.0, 32.0);
+// Beside the slot, what it offers: the placement toggle at rest, the
+// trigger index steps around their readout when pulled.
+const PLACEMENT: Rect = Rect::new(204.0, 224.0, 186.0, 44.0);
+const INDEX_LESS: Rect = Rect::new(204.0, 224.0, 40.0, 44.0);
+const INDEX: Rect = Rect::new(248.0, 224.0, 98.0, 44.0);
+const INDEX_MORE: Rect = Rect::new(350.0, 224.0, 40.0, 44.0);
+const SHOW_AIM: Rect = Rect::new(10.0, 274.0, 122.0, 32.0);
+pub(in crate::interaction) const RESET_VIEW: Rect = Rect::new(139.0, 274.0, 122.0, 32.0);
+const EXIT: Rect = Rect::new(268.0, 274.0, 122.0, 32.0);
 const LEGEND: Rect = Rect::new(10.0, 314.0, 380.0, 80.0);
 /// A test-held gun aiming within this many degrees of its controller reads
 /// as aligned.
@@ -64,6 +70,11 @@ pub(in crate::interaction) enum PanelEvent {
     SwitchHand,
     SupportMode,
     Slot,
+    /// Whether a rest snapshot keeps the placement (Rest slot).
+    Placement,
+    /// The trigger index a tenth less or more curled (Trigger slot).
+    IndexLess,
+    IndexMore,
     ResetView,
     Exit,
 }
@@ -185,6 +196,12 @@ pub(in crate::interaction) struct PanelView {
     /// The pose a snapshot sets, and whether it can switch or why not.
     pub slot: Slot,
     pub slot_entry: Result<(), String>,
+    /// Whether a rest snapshot keeps the placement, and whether that can
+    /// switch or why not.
+    pub keep_placement: bool,
+    pub placement_entry: Result<(), String>,
+    /// How far the trigger pose curls the index (`None`: no trigger pose).
+    pub trigger_index: Option<f32>,
     /// A snapshot awaits Save or Discard.
     pub staged: bool,
     /// Test holding, and whether it can start or why not.
@@ -238,7 +255,7 @@ pub(in crate::interaction) fn legend(
     );
     let snapshot = match slot {
         Slot::Rest => "snapshot",
-        Slot::Trigger => "snapshot pulled pose",
+        Slot::Trigger => "snapshot pulled index",
     };
     if fingertip {
         return vec![
@@ -316,7 +333,7 @@ pub(in crate::interaction) fn emit(
             .map(|_| ())
             .ok_or_else(|| "align first".to_owned())
     });
-    let buttons = [
+    let mut buttons = vec![
         (SAVE, "Save".to_owned(), PanelEvent::Save, staged.clone()),
         (DISCARD, "Discard".to_owned(), PanelEvent::Discard, staged),
         if view.test_hold {
@@ -376,6 +393,35 @@ pub(in crate::interaction) fn emit(
             PanelEvent::Slot,
             view.slot_entry.clone(),
         ),
+    ];
+    match view.slot {
+        Slot::Rest => buttons.push((
+            PLACEMENT,
+            if view.keep_placement {
+                "Placement: keep"
+            } else {
+                "Placement: capture"
+            }
+            .to_owned(),
+            PanelEvent::Placement,
+            view.placement_entry.clone(),
+        )),
+        Slot::Trigger => {
+            buttons.push((INDEX_LESS, "-".to_owned(), PanelEvent::IndexLess, Ok(())));
+            buttons.push((INDEX_MORE, "+".to_owned(), PanelEvent::IndexMore, Ok(())));
+            // A readout, not a button: no trigger pose reads as the rest.
+            canvas.fill(INDEX, BUTTON_DISABLED);
+            canvas.text_fit(
+                INDEX,
+                &format!("Index +{:.0}%", view.trigger_index.unwrap_or(0.0) * 100.0),
+                FONT,
+                18.0,
+                HAlign::Center,
+                VAlign::Middle,
+            );
+        }
+    }
+    buttons.extend([
         (
             RESET_VIEW,
             "Reset view".to_owned(),
@@ -389,7 +435,7 @@ pub(in crate::interaction) fn emit(
             view.aim.clone(),
         ),
         (EXIT, "Exit".to_owned(), PanelEvent::Exit, Ok(())),
-    ];
+    ]);
     // Only a gun has an aim to show: the toggle is hidden for anything else,
     // as are Align's steps while it cannot act (too narrow to say why).
     let hidden_when_disabled = [
@@ -655,6 +701,9 @@ mod tests {
             support_mode: Err("one-handed".to_owned()),
             slot: Slot::Rest,
             slot_entry: Ok(()),
+            keep_placement: true,
+            placement_entry: Ok(()),
+            trigger_index: None,
             staged: false,
             fingertip: false,
             test_hold: false,
@@ -905,18 +954,74 @@ mod tests {
         assert!(
             shown
                 .iter()
-                .any(|t| t.ends_with("Trigger: snapshot pulled pose")),
+                .any(|t| t.ends_with("Trigger: snapshot pulled index")),
             "{shown:?}"
         );
         trigger.fingertip = true;
         let (canvas, _) = emit(&trigger, None);
-        assert!(texts(&canvas).contains(&"Pinch: snapshot pulled pose".to_owned()));
+        assert!(texts(&canvas).contains(&"Pinch: snapshot pulled index".to_owned()));
         // In support mode it is disabled, saying why.
         let mut support = view(Status::Ready);
         support.slot_entry = Err("primary grip only".to_owned());
         let (canvas, targets) = emit(&support, None);
         assert!(texts(&canvas).contains(&"primary grip only".to_owned()));
         assert_eq!(event_at(&targets, SLOT.center()), None);
+    }
+
+    /// At rest the slot is joined by the placement toggle; pulled, by the
+    /// trigger index steps around their readout.
+    #[test]
+    fn the_slot_offers_placement_at_rest_and_index_steps_when_pulled() {
+        let steps = |targets: &[(Rect, PanelEvent)]| {
+            targets
+                .iter()
+                .any(|(_, e)| matches!(e, PanelEvent::IndexLess | PanelEvent::IndexMore))
+        };
+        let (canvas, targets) = emit(&view(Status::Ready), None);
+        assert!(
+            texts(&canvas).contains(&"Placement: keep".to_owned()),
+            "{:?}",
+            texts(&canvas)
+        );
+        assert_eq!(
+            event_at(&targets, PLACEMENT.center()),
+            Some(PanelEvent::Placement)
+        );
+        assert!(!steps(&targets));
+        let mut capture = view(Status::Ready);
+        capture.keep_placement = false;
+        assert!(texts(&emit(&capture, None).0).contains(&"Placement: capture".to_owned()));
+        let mut support = view(Status::Ready);
+        support.placement_entry = Err("primary grip only".to_owned());
+        assert_eq!(event_at(&emit(&support, None).1, PLACEMENT.center()), None);
+
+        let mut trigger = view(Status::Ready);
+        trigger.slot = Slot::Trigger;
+        trigger.trigger_index = Some(0.4);
+        let (canvas, targets) = emit(&trigger, None);
+        let shown = texts(&canvas);
+        assert!(shown.contains(&"Index +40%".to_owned()), "{shown:?}");
+        assert!(
+            !shown.iter().any(|t| t.starts_with("Placement")),
+            "{shown:?}"
+        );
+        assert_eq!(
+            event_at(&targets, INDEX_LESS.center()),
+            Some(PanelEvent::IndexLess)
+        );
+        assert_eq!(
+            event_at(&targets, INDEX_MORE.center()),
+            Some(PanelEvent::IndexMore)
+        );
+        assert_eq!(event_at(&targets, INDEX.center()), None, "a readout");
+        trigger.trigger_index = None;
+        assert!(texts(&emit(&trigger, None).0).contains(&"Index +0%".to_owned()));
+        // Reset view and Exit share the bottom row with the aim toggle.
+        assert_eq!(
+            event_at(&targets, RESET_VIEW.center()),
+            Some(PanelEvent::ResetView)
+        );
+        assert_eq!(event_at(&targets, EXIT.center()), Some(PanelEvent::Exit));
     }
 
     #[test]
