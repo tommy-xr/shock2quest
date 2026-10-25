@@ -994,7 +994,7 @@ pub(super) fn create_muzzle_flash(
 /// That is why the shot is unconditionally marked `player_fired_projectile`
 /// below, which makes it transparent to the player's own capsule; an AI shot,
 /// being unmarked, still hits the player normally.
-pub(super) fn create_projectile(
+pub(crate) fn create_projectile(
     world: &World,
     entity_id: EntityId,
     projectile_template_id: i32,
