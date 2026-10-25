@@ -12,7 +12,8 @@ pub(super) fn followed_yaw(previous: Option<f32>, observed: f32, frozen: bool, d
         Some(yaw) => {
             let delta = observed - yaw;
             let delta = delta.sin().atan2(delta.cos());
-            yaw + delta * (1.0 - (-dt.clamp(0.0, 0.1) / 0.5).exp())
+            // 0.25 s: a slight delay that still keeps up with a walking turn.
+            yaw + delta * (1.0 - (-dt.clamp(0.0, 0.1) / 0.25).exp())
         }
         None => observed,
     }
