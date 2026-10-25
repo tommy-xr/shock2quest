@@ -64,6 +64,21 @@ pub fn model_mirror(cache: &mut AssetCache, name: &str) -> Option<Matrix4<f32>> 
     Some(left * right.invert()?)
 }
 
+/// `model_mirror` from the name alone, for tools without a GL context to load
+/// the model: a gun reflects across its barrel plane, a melee rig across the
+/// hand's (its contact point lies on that plane). `None` for anything drawn
+/// alike in either hand.
+pub fn named_model_mirror(name: &str) -> Option<Matrix4<f32>> {
+    if !supports_model(name) {
+        return None;
+    }
+    if is_melee(name) {
+        return Some(Handedness::Left.mirror());
+    }
+    let frame = |hand| vr_config::gun_model_frame(name, hand);
+    Some(frame(Handedness::Left) * frame(Handedness::Right).invert()?)
+}
+
 /// Geometry is reflected exactly as the rendered gun. The canonical hash also
 /// includes the authored arms: changing the fit guide invalidates its bake.
 pub fn inputs(
