@@ -361,6 +361,46 @@ test(
   },
 );
 
+test(
+  "grip pose tool: posing a grip-class member saves the class's canonical grip",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    // The psi hypo (psipatch) shares the medpatch grip.
+    const hypo = await holdDebugMug(game, "right", -57);
+    const rightGrip = async () =>
+      (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
+    assert.equal((await rightGrip()).entity_id, hypo.id);
+    await game.input.trigger("ToggleGripPoseTool");
+    await game.step({ frames: 2 });
+    assert.equal(
+      (await rightGrip()).pose_tool?.panel.class, "Shared by 6 models (canonical: medpatch)",
+      "the panel names the class",
+    );
+    const hand = (await game.input.state()).right_hand.position;
+    await game.input.setMany({
+      "right_hand.squeeze": 0,
+      "right_hand.position": [hand[0] + 1, hand[1] - 0.5, hand[2]],
+      "right_hand.joints": trackedHand(hand, await metresPerWorldUnit(game)),
+    });
+    await game.step({ frames: 30 });
+    await game.input.set("left_hand.trigger", 1);
+    await game.step({ frames: 2 });
+    await game.input.set("left_hand.trigger", 0);
+    await game.step({ frames: 2 });
+    const grip = await rightGrip();
+    assert.equal(grip.pose_tool?.staged, true, `staged (${grip.pose_tool?.capture_failure})`);
+    await saveOnPanel(game, "left", await metresPerWorldUnit(game));
+    const saved = JSON.parse(readFileSync(join(data.root, "vr-grip-overrides.json"), "utf8")) as {
+      entries: { model: string; hand: string }[];
+    };
+    assert.deepEqual(saved.entries.map((e) => [e.model, e.hand]), [["medpatch", "right"]]);
+  },
+);
+
 type PoseTool = NonNullable<Awaited<ReturnType<GameServer["info"]>>["player"]["hand_grips"][number]["pose_tool"]>;
 type PanelEvent = NonNullable<PoseTool["panel"]["panel"]>["buttons"][number]["event"];
 const xyz = (p: { x: number; y: number; z: number }): Vec3 => [p.x, p.y, p.z];
