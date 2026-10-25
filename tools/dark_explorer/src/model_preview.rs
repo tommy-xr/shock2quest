@@ -241,33 +241,13 @@ impl ModelPreview {
             self.frame_bounds(center, radius, 0.2);
         }
 
-        egui::CollapsingHeader::new("Lighting")
-            .default_open(self.object_preview.is_none() && !shock2vr::tricorder::is_model(key))
-            .show(ui, |ui| {
-                self.needs_render |= ui
-                    .add(egui::Slider::new(&mut self.ambient, 0.0..=1.0).text("Ambient"))
-                    .changed();
-                for (index, label) in ["Warm key", "Cool fill", "Green rim"].iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        self.needs_render |= ui
-                            .add(
-                                egui::Slider::new(&mut self.light_strengths[index], 0.0..=3.0)
-                                    .text(*label),
-                            )
-                            .changed();
-                        self.needs_render |= ui
-                            .color_edit_button_rgb(&mut self.light_colors[index])
-                            .changed();
-                    });
-                }
-                if ui.button("Reset lighting").clicked() {
-                    self.ambient = 0.5;
-                    self.light_strengths = [0.0; 3];
-                    self.light_colors = [[1.0, 0.55, 0.25], [0.25, 0.55, 1.0], [0.35, 1.0, 0.45]];
-                    self.needs_render = true;
-                }
-                ui.label("Lights stay fixed while you orbit. Unlit materials ignore lighting.");
-            });
+        // The grip editors show lighting in their control pane.
+        if !matches!(scene, PreviewScene::Grip(..)) {
+            self.show_lighting(
+                ui,
+                self.object_preview.is_none() && !shock2vr::tricorder::is_model(key),
+            );
+        }
 
         let available = ui.available_size();
         let size = egui::vec2(available.x.max(1.0), available.y.max(1.0));
@@ -311,6 +291,37 @@ impl ModelPreview {
             ui.painter()
                 .image(target.egui_texture, response.rect, uv, egui::Color32::WHITE);
         }
+    }
+
+    /// The light sliders, colors and reset; lights stay fixed while orbiting.
+    pub fn show_lighting(&mut self, ui: &mut egui::Ui, default_open: bool) {
+        egui::CollapsingHeader::new("Lighting")
+            .default_open(default_open)
+            .show(ui, |ui| {
+                self.needs_render |= ui
+                    .add(egui::Slider::new(&mut self.ambient, 0.0..=1.0).text("Ambient"))
+                    .changed();
+                for (index, label) in ["Warm key", "Cool fill", "Green rim"].iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        self.needs_render |= ui
+                            .add(
+                                egui::Slider::new(&mut self.light_strengths[index], 0.0..=3.0)
+                                    .text(*label),
+                            )
+                            .changed();
+                        self.needs_render |= ui
+                            .color_edit_button_rgb(&mut self.light_colors[index])
+                            .changed();
+                    });
+                }
+                if ui.button("Reset lighting").clicked() {
+                    self.ambient = 0.5;
+                    self.light_strengths = [0.0; 3];
+                    self.light_colors = [[1.0, 0.55, 0.25], [0.25, 0.55, 1.0], [0.35, 1.0, 0.45]];
+                    self.needs_render = true;
+                }
+                ui.label("Lights stay fixed while you orbit. Unlit materials ignore lighting.");
+            });
     }
 
     /// Both grip editing modes share model preparation and camera ordering.

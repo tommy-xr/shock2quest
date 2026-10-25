@@ -203,7 +203,7 @@ impl SupportEditor {
                 "Preview only: this model does not yet support two-hand grabbing in game.",
             );
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
                     enabled && doc.dirty(),
@@ -274,57 +274,64 @@ impl SupportEditor {
                             profile.region = Some(SupportRegion { start: profile.palm_anchor, end });
                         }
                     });
-                    ui.columns(3, |columns| {
-                        columns[0].strong("Palm position on item (cm)");
-                        if let Some(region) = &mut profile.region {
-                            columns[0].small("Region start");
-                            tweak_anchor(&mut columns[0], &mut region.start, primary, model_mirror, item_scale);
-                            columns[0].small("Region end");
-                            tweak_anchor(&mut columns[0], &mut region.end, primary, model_mirror, item_scale);
-                        } else {
-                            tweak_anchor(&mut columns[0], &mut profile.palm_anchor, primary, model_mirror, item_scale);
-                        }
-                        columns[1].strong("Support wrist rotation (degrees)");
-                        for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
-                            let mirror = if primary == Handedness::Left && i > 0 {
-                                -1.0
+                    egui::CollapsingHeader::new("Placement")
+                        .id_salt("support_placement")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.strong("Palm position on item (cm)");
+                            if let Some(region) = &mut profile.region {
+                                ui.small("Region start");
+                                tweak_anchor(ui, &mut region.start, primary, model_mirror, item_scale);
+                                ui.small("Region end");
+                                tweak_anchor(ui, &mut region.end, primary, model_mirror, item_scale);
                             } else {
-                                1.0
-                            };
-                            let mut angle = profile.rotation_degrees[i] * mirror;
-                            if tweak_slider(
-                                &mut columns[1],
-                                axis,
-                                &mut angle,
-                                -180.0..=180.0,
-                                self.rotation_step,
-                                1,
-                            ) {
-                                profile.rotation_degrees[i] = angle * mirror;
+                                tweak_anchor(ui, &mut profile.palm_anchor, primary, model_mirror, item_scale);
                             }
-                        }
-                        columns[2].strong("Support finger curls");
-                        self.curl_editor.edit(model);
-                        self.curl_editor.show_fingers(
-                            &mut columns[2],
-                            &mut profile.fingers,
-                            "Support trigger preview",
-                        );
-                    });
-                    if profile.region.is_some() {
-                        ui.add(egui::Slider::new(&mut self.region_preview, 0.0..=1.0).text("Position along region"));
-                        ui.small("Squeeze selects the nearest point; the contact stays fixed until release.");
-                    }
-                    let units = shock2vr::METERS_PER_WORLD_UNIT * 100.0;
-                    let mut radius = profile.grab_radius * units;
-                    if tweak_slider(ui, "Grab radius (cm)", &mut radius, 0.01*units..=0.15*units, 0.1, 2) {
-                        profile.grab_radius = (radius / units).clamp(0.01,0.15);
-                        profile.release_distance = profile.release_distance.max(profile.grab_radius);
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("Rotation nudge");
-                        ui.add(egui::Slider::new(&mut self.rotation_step, 0.1..=15.0).suffix("°"));
-                    });
+                            ui.strong("Support wrist rotation (degrees)");
+                            for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+                                let mirror = if primary == Handedness::Left && i > 0 {
+                                    -1.0
+                                } else {
+                                    1.0
+                                };
+                                let mut angle = profile.rotation_degrees[i] * mirror;
+                                if tweak_slider(
+                                    ui,
+                                    axis,
+                                    &mut angle,
+                                    -180.0..=180.0,
+                                    self.rotation_step,
+                                    1,
+                                ) {
+                                    profile.rotation_degrees[i] = angle * mirror;
+                                }
+                            }
+                            if profile.region.is_some() {
+                                ui.add(egui::Slider::new(&mut self.region_preview, 0.0..=1.0).text("Position along region"));
+                                ui.small("Squeeze selects the nearest point; the contact stays fixed until release.");
+                            }
+                            let units = shock2vr::METERS_PER_WORLD_UNIT * 100.0;
+                            let mut radius = profile.grab_radius * units;
+                            if tweak_slider(ui, "Grab radius (cm)", &mut radius, 0.01*units..=0.15*units, 0.1, 2) {
+                                profile.grab_radius = (radius / units).clamp(0.01,0.15);
+                                profile.release_distance = profile.release_distance.max(profile.grab_radius);
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Rotation nudge");
+                                ui.add(egui::Slider::new(&mut self.rotation_step, 0.1..=15.0).suffix("°"));
+                            });
+                        });
+                    self.curl_editor.edit(model);
+                    egui::CollapsingHeader::new("Fingers")
+                        .id_salt("support_fingers")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            self.curl_editor.show_fingers(
+                                ui,
+                                &mut profile.fingers,
+                                "Support trigger preview",
+                            );
+                        });
                 },
             );
         }
