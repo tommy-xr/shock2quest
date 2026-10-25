@@ -107,7 +107,7 @@ test(
     assert.ok(distance(bench, spot) < 0.02 / unit, `bench ${bench} vs ${spot}`);
     // The panel, from the same eye: 0.33 m ahead, 0.47 m down, 0.24 m to the
     // free (left) side, tilted to face the eye with no roll; a 0.3 m wide
-    // 400x450 canvas. Button centres from their canvas rects, independent
+    // 400x490 canvas. Button centres from their canvas rects, independent
     // of the code that reports them.
     const panel = (await workbench(game)).tool.panel.panel!;
     const panelCenter = add(eye, add(scale(ahead, 0.33 / unit), add(scale(right, -0.24 / unit), [0, -0.47 / unit, 0])));
@@ -116,8 +116,8 @@ test(
     const panelUp = normalize(sub([0, 1, 0], scale(facing, facing[1])));
     const panelRight = cross(scale(facing, -1), panelUp);
     const onPanel = ([x, y]: [number, number]) =>
-      add(panelCenter, add(scale(panelRight, (x / 400 - 0.5) * 0.3 / unit), scale(panelUp, (0.5 - y / 450) * 0.3375 / unit)));
-    for (const [event, canvasCenter] of [["Exit", [329, 340]], ["ResetView", [200, 340]], ["Placement", [297, 246]], ["Tighten", [200, 296]]] as const) {
+      add(panelCenter, add(scale(panelRight, (x / 400 - 0.5) * 0.3 / unit), scale(panelUp, (0.5 - y / 490) * 0.3675 / unit)));
+    for (const [event, canvasCenter] of [["Exit", [329, 382]], ["ResetView", [200, 382]], ["Placement", [297, 246]], ["Tighten", [200, 296]], ["Lock(0)", [105, 342]], ["Lock(4)", [361, 342]]] as const) {
       const button = xyz(panel.buttons.find((b) => b.event === event)!.center);
       const expected = onPanel([...canvasCenter]);
       assert.ok(distance(button, expected) < 0.005 / unit, `${event} ${button} vs ${expected}`);
@@ -457,7 +457,8 @@ test(
     assert.ok(panelDraws.length > 0, "the panel is drawn");
     assert.equal((await tool()).panel.status, "Pose, then snapshot");
     // Nothing staged: Save and Discard are disabled.
-    assert.deepEqual((await tool()).panel.panel!.buttons.map((b) => b.event), ["SwitchHand", "Slot", "Placement", "Tighten", "ResetView", "Exit"]);
+    assert.deepEqual((await tool()).panel.panel!.buttons.map((b) => b.event),
+      ["SwitchHand", "Slot", "Placement", "Tighten", "ResetView", "Exit", "Lock(0)", "Lock(1)", "Lock(2)", "Lock(3)", "Lock(4)"]);
     const { v, s } = (await tool()).panel.panel!.rotation;
     const panelUp = (metres: number) => scale(quatRotate([v.x, v.y, v.z, s], [0, 1, 0]), metres);
 
@@ -1629,5 +1630,96 @@ test(
     // Discard returns to the loose grip.
     await pressButton(game, "left", "Discard", unit);
     assert.deepEqual(curls((await rightGrip()).grip!).curls, curls(loose).curls);
+  },
+);
+
+/** `triggerHandInMetres` with the thumb curled under too. */
+function curledThumbHandInMetres(): Vec3[] {
+  const joints = triggerHandInMetres();
+  joints[4] = [-0.05, -0.035, -0.06];
+  joints[5] = [-0.04, -0.05, -0.075];
+  return joints;
+}
+
+test(
+  "grip pose tool: locked fingers stay through snapshots and Tighten; a locked index has no trigger edits",
+  { skip: !enabled, timeout: 300_000 },
+  async () => {
+    using _data = isolatedDataRoot([
+      "vr-grip-overrides.json", "saves", "recordings", "settings.json", "user-settings.json",
+    ]);
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    const rightGrip = async () => (await game.info()).player.hand_grips.find((g) => g.hand === "right")!;
+    const gun = await holdShotgun(game);
+    await game.input.set("head.position", [0, 1, 0]);
+    await game.step({ frames: 2 });
+    const unit = await metresPerWorldUnit(game);
+    const open = async () => {
+      await game.input.trigger("ToggleGripPoseTool");
+      await game.step({ frames: 2 });
+    };
+    await open();
+    const tool = async () => (await rightGrip()).pose_tool!;
+    assert.deepEqual((await tool()).panel.locks, [false, false, false, false, false], "opens unlocked");
+    await pressButton(game, "left", "Placement", unit);
+    const controller = (await game.input.state()).right_hand;
+    const { toLocal } = await workbench(game);
+    const bench = (await game.scene.objects({ entityId: gun.id })).objects[0]!.position;
+    const onGun = (hand: Vec3[]) => hand.map((p) => toLocal(add(bench, scale(add(p, [0.1, -0.05, 0.05]), 1 / unit))));
+    const snapshot = async (hand: Vec3[]) => {
+      await game.input.setMany({
+        "right_hand.squeeze": 0,
+        "right_hand.position": [controller.position[0] + 1, controller.position[1] - 0.5, controller.position[2]],
+        "right_hand.joints": onGun(hand),
+      });
+      await aimAway(game, "left");
+      await game.step({ frames: 30 });
+      await click(game, "left");
+      return fingers((await rightGrip()).grip!).bones!;
+    };
+    const thumb = (bones: Bones) => bones.slice(0, 4);
+    const index = (bones: Bones) => bones.slice(4, 9);
+    const moved = (a: Bones, b: Bones) => a.some((q, i) => Math.abs(dot4(quat(q), quat(b[i]!))) < 0.99);
+
+    // Unlocked, a snapshot takes the tracked thumb and index.
+    const flat = await snapshot(handInMetres());
+    // Thumb locked: it keeps the stored bones as the curled hand is captured.
+    await pressButton(game, "left", "Lock(0)", unit);
+    assert.deepEqual((await tool()).panel.locks, [true, false, false, false, false]);
+    const curled = await snapshot(curledThumbHandInMetres());
+    assertSameBones(thumb(curled), thumb(flat), "the locked thumb is kept");
+    assert.ok(moved(index(curled), index(flat)), "the unlocked index is captured");
+    await pressButton(game, "left", "Lock(0)", unit);
+    const unlocked = await snapshot(curledThumbHandInMetres());
+    assert.ok(moved(thumb(unlocked), thumb(flat)), "unlocked, the thumb is captured: the hand differs there");
+
+    // Tighten skips a locked finger.
+    await pressButton(game, "left", "Lock(0)", unit);
+    const tightenLog = () => game.logs().filter((l) => l.includes("SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened="));
+    const before = fingers((await rightGrip()).grip!).bones!;
+    await pressButton(game, "left", "Tighten", unit);
+    assert.match(tightenLog().at(-1)!, /slot=rest fingers=\[skip,/);
+    assertSameBones(thumb(fingers((await rightGrip()).grip!).bones!), thumb(before), "Tighten leaves the thumb");
+
+    // Trigger slot with the index locked: no snapshot, steps or Tighten.
+    await pressButton(game, "left", "Slot", unit);
+    await pressButton(game, "left", "Lock(1)", unit);
+    const panel = (await tool()).panel;
+    assert.equal(panel.index_steps_disabled, "index locked");
+    assert.equal(panel.tighten_disabled, "index locked");
+    const live = panel.panel!.buttons.map((b) => b.event);
+    assert.ok(!live.includes("IndexLess") && !live.includes("IndexMore") && !live.includes("Tighten"), `${live}`);
+    const held = (await rightGrip()).grip!;
+    await snapshot(triggerHandInMetres());
+    assert.equal((await tool()).capture_failure, "index_locked");
+    assert.equal((await tool()).panel.status, "Index locked");
+    assert.deepEqual((await rightGrip()).grip, held, "the grip is unchanged");
+
+    // Locks are editing state: leaving and reopening starts unlocked.
+    await game.input.setMany({ "right_hand.joints": null, "right_hand.position": controller.position });
+    await open();
+    assert.equal((await rightGrip()).pose_tool, null);
+    await open();
+    assert.deepEqual((await tool()).panel.locks, [false, false, false, false, false], "reopens unlocked");
   },
 );

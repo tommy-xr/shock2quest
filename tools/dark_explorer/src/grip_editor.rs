@@ -24,22 +24,44 @@ pub(crate) const POSE_PRESETS: [(&str, [f32; 5]); 6] = [
     ("Thumbs up", [-0.5, 1.0, 1.0, 1.0, 1.0]),
 ];
 
+const FINGER_NAMES: [&str; 5] = ["Thumb", "Index", "Middle", "Ring", "Pinky"];
+
 /// Shared Rest/pressed authoring for primary and support finger poses.
 #[derive(Default)]
 pub(crate) struct CurlPoseEditor {
     /// Editing the trigger-pressed pose rather than the rest.
     pub pressed: bool,
     pub preview: f32,
+    /// Fingers (thumb..pinky) kept as they are: their sliders are disabled,
+    /// presets and Tighten skip them. Editing state of `subject` only.
+    pub locks: [bool; 5],
+    subject: String,
 }
 impl CurlPoseEditor {
-    /// The finger mode and its curls. A VR snapshot shows its estimated curls
-    /// read-only until converted to curls.
+    /// Edit `subject`'s fingers (e.g. a model and hand): another one starts
+    /// unlocked.
+    pub fn edit(&mut self, subject: &str) {
+        if self.subject != subject {
+            self.subject = subject.to_owned();
+            self.locks = [false; 5];
+        }
+    }
+
+    /// The finger locks, mode and curls. A VR snapshot shows its estimated
+    /// curls read-only until converted to curls.
     pub fn show_fingers(
         &mut self,
         ui: &mut egui::Ui,
         fingers: &mut FingerPose,
         preview_label: &str,
     ) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Lock:");
+            for (name, lock) in FINGER_NAMES.into_iter().zip(self.locks.iter_mut()) {
+                ui.checkbox(lock, name)
+                    .on_hover_text("Keep this finger: its sliders, presets and Tighten skip it");
+            }
+        });
         if let FingerPose::Bones { .. } = fingers {
             ui.label("Mode: VR snapshot");
             if ui
@@ -66,7 +88,7 @@ impl CurlPoseEditor {
                     unreachable!("to_curls returns curls")
                 };
                 self.show(ui, &mut curls, &mut trigger_curls, preview_label, false);
-                trigger_index_slider(ui, fingers);
+                ui.add_enabled_ui(!self.locks[1], |ui| trigger_index_slider(ui, fingers));
             }
         }
     }
@@ -100,7 +122,12 @@ impl CurlPoseEditor {
                 if live && ui.button("Customize pressed pose").clicked() {
                     *pressed = Some(*rest);
                 }
-            } else if live && ui.button("Use Rest for both").clicked() {
+            } else if live
+                // It would move a locked finger's pressed pose to its rest.
+                && ui
+                    .add_enabled(!self.locks.contains(&true), egui::Button::new("Use Rest for both"))
+                    .clicked()
+            {
                 *pressed = None;
             }
         }
@@ -110,23 +137,28 @@ impl CurlPoseEditor {
         } else {
             rest
         };
+        let locks = self.locks;
         ui.add_enabled_ui(editable, |ui| {
-            for (name, value) in ["Thumb", "Index", "Middle", "Ring", "Pinky"]
-                .into_iter()
-                .zip(curls.iter_mut())
+            for ((name, value), locked) in FINGER_NAMES.into_iter().zip(curls.iter_mut()).zip(locks)
             {
                 let min = if name == "Thumb" {
                     shock2vr::vr_grip::MIN_THUMB_CURL
                 } else {
                     0.0
                 };
-                tweak_slider(ui, name, value, min..=1.0, 0.02, 2);
+                ui.add_enabled_ui(!locked, |ui| {
+                    tweak_slider(ui, name, value, min..=1.0, 0.02, 2);
+                });
             }
             ui.small("Negative thumb values extend outward beyond the open pose.");
             ui.horizontal_wrapped(|ui| {
                 for (name, values) in POSE_PRESETS {
                     if ui.button(name).clicked() {
-                        *curls = values;
+                        for ((curl, value), locked) in curls.iter_mut().zip(values).zip(locks) {
+                            if !locked {
+                                *curl = value;
+                            }
+                        }
                     }
                 }
             });
@@ -154,33 +186,38 @@ fn trigger_index_slider(ui: &mut egui::Ui, fingers: &mut FingerPose) {
 
 /// "Tighten to surface": close the fingers onto the item from where they
 /// are (`GripSurface::tighten`), keeping the placement: all five at rest,
-/// only the index for the trigger-pressed pose. `None` until clicked; then
-/// what happened, or why it could not.
+/// only the index for the trigger-pressed pose; never a `locked` finger.
+/// `None` until clicked; then what happened, or why it could not.
 fn tighten_button(
     ui: &mut egui::Ui,
     grip: &mut ResolvedGrip,
     pressed: bool,
+    locked: [bool; 5],
     tighten: impl FnOnce(&ResolvedGrip, bool, [bool; 5]) -> Result<shock2vr::vr_grip::Tightened, String>,
 ) -> Option<Result<String, String>> {
-    if !ui
-        .button("Tighten to surface")
+    let fingers = shock2vr::vr_grip::tighten_fingers(pressed, locked);
+    let button = ui.add_enabled(
+        fingers.contains(&true),
+        egui::Button::new("Tighten to surface"),
+    );
+    if !button
         .on_hover_text(if pressed {
             "Close the pressed index onto the item"
         } else {
-            "Close each finger onto the item from where it is"
+            "Close each unlocked finger onto the item from where it is"
         })
+        .on_disabled_hover_text("Its fingers are locked")
         .clicked()
     {
         return None;
     }
-    let fingers = shock2vr::vr_grip::tighten_fingers(pressed);
     Some(tighten(grip, pressed, fingers).map(|tightened| {
         // As in VR: nothing moved, nothing changes (contacts included).
         if tightened.grip.fingers != grip.fingers {
             grip.fingers = tightened.grip.fingers;
             grip.contacts = tightened.grip.contacts;
         }
-        let said: Vec<_> = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+        let said: Vec<_> = FINGER_NAMES
             .into_iter()
             .zip(tightened.fingers)
             .filter(|(_, fit)| *fit != shock2vr::vr_grip::FingerFit::Skipped)
@@ -1307,6 +1344,8 @@ impl GripEditor {
                     *last = entry.grip.rotation;
                 }
                 columns[2].strong("Finger curls");
+                self.curl_editor
+                    .edit(&format!("{}/{}", self.model, self.hand));
                 self.curl_editor.show_fingers(
                     &mut columns[2],
                     &mut entry.grip.fingers,
@@ -1316,6 +1355,7 @@ impl GripEditor {
                     &mut columns[2],
                     &mut entry.grip,
                     self.curl_editor.pressed,
+                    self.curl_editor.locks,
                     |grip, pressed, fingers| {
                         preview.tighten_grip(&key, hand, grip, pressed, fingers)
                     },
@@ -1516,7 +1556,16 @@ pub(crate) mod tests {
 
     /// Draws `show` headlessly and clicks the button labelled `label`;
     /// returns the texts drawn by the frame after the click.
-    pub(crate) fn click_button(label: &str, mut show: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+    pub(crate) fn click_button(label: &str, show: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+        click_nth(label, false, show)
+    }
+
+    /// `click_button` on the last button labelled `label`.
+    fn click_last(label: &str, show: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+        click_nth(label, true, show)
+    }
+
+    fn click_nth(label: &str, last: bool, mut show: impl FnMut(&mut egui::Ui)) -> Vec<String> {
         fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
             fn visit(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
                 match shape {
@@ -1544,12 +1593,16 @@ pub(crate) mod tests {
             };
             texts(&ctx.run_ui(input, |ui| show(ui)).shapes)
         };
-        let at = frame(Vec::new())
-            .into_iter()
-            .find(|(text, _)| text == label)
-            .unwrap_or_else(|| panic!("{label} not drawn"))
-            .1
-            .center();
+        let drawn = frame(Vec::new());
+        let mut labelled = drawn.into_iter().filter(|(text, _)| text == label);
+        let at = if last {
+            labelled.last()
+        } else {
+            labelled.next()
+        }
+        .unwrap_or_else(|| panic!("{label} not drawn"))
+        .1
+        .center();
         let button = |pressed| egui::Event::PointerButton {
             pos: at,
             button: egui::PointerButton::Primary,
@@ -1705,15 +1758,32 @@ pub(crate) mod tests {
         let grip = &mut doc.library.entries[0].grip;
         grip.fingers = FingerPose::curls([0.0; 5]);
         let before = grip.clone();
-        let mut message = None;
-        click_button("Tighten to surface", |ui| {
-            if let Some(said) = tighten_button(ui, grip, false, |grip, pressed, fingers| {
-                Ok(surface.tighten(grip, pressed, fingers, rods))
-            }) {
-                message = Some(said);
-            }
-        });
-        let message = message.expect("clicked").unwrap();
+        let tighten = |grip: &mut ResolvedGrip, locked: [bool; 5]| {
+            let mut message = None;
+            click_button("Tighten to surface", |ui| {
+                if let Some(said) =
+                    tighten_button(ui, grip, false, locked, |grip, pressed, fingers| {
+                        Ok(surface.tighten(grip, pressed, fingers, rods))
+                    })
+                {
+                    message = Some(said);
+                }
+            });
+            message.expect("clicked").unwrap()
+        };
+        // Locked fingers are skipped, the rest close.
+        let mut locked = before.clone();
+        let message = tighten(&mut locked, [true, false, true, false, false]);
+        assert!(message.starts_with("Tightened: Index closed"), "{message}");
+        assert!(
+            !message.contains("Thumb") && !message.contains("Middle"),
+            "{message}"
+        );
+        let curls = *locked.fingers.rest_curls().unwrap();
+        assert_eq!((curls[0], curls[2]), (0.0, 0.0), "{curls:?}");
+        assert!([1, 3, 4].iter().all(|&f| curls[f] > 0.2), "{curls:?}");
+
+        let message = tighten(grip, [false; 5]);
         assert!(message.starts_with("Tightened: Thumb closed"), "{message}");
         let FingerPose::Curls { curls, .. } = grip.fingers else {
             panic!("curls stay curls");
@@ -1729,6 +1799,42 @@ pub(crate) mod tests {
             before,
             "only the fingers change"
         );
+    }
+
+    /// A locked finger's slider, preset and (index) trigger slider leave it
+    /// be; the others still edit; another grip starts unlocked.
+    #[test]
+    fn a_locked_finger_cannot_be_edited_but_the_others_can() {
+        let mut editor = CurlPoseEditor::default();
+        editor.edit("wrench_h/right");
+        let mut fingers = FingerPose::curls([0.5; 5]);
+        // Thumb's "+" is the first drawn.
+        editor.locks[0] = true;
+        click_button("+", |ui| editor.show_fingers(ui, &mut fingers, "Preview"));
+        assert_eq!(fingers, FingerPose::curls([0.5; 5]), "locked thumb");
+        click_button("Closed", |ui| {
+            editor.show_fingers(ui, &mut fingers, "Preview")
+        });
+        assert_eq!(fingers, FingerPose::curls([0.5, 1.0, 1.0, 1.0, 1.0]));
+        editor.locks[0] = false;
+        click_button("+", |ui| editor.show_fingers(ui, &mut fingers, "Preview"));
+        assert_eq!(fingers.rest_curls().unwrap()[0], 0.52, "unlocked");
+
+        // A snapshot's trigger index slider (its last "+") is the index's.
+        let snapshot = FingerPose::curls([0.1, 0.2, 0.4, 0.5, 0.6]).to_bones();
+        let mut bones = snapshot.clone();
+        editor.locks[1] = true;
+        click_last("+", |ui| editor.show_fingers(ui, &mut bones, "Preview"));
+        assert_eq!(bones, snapshot, "locked index");
+        editor.locks[1] = false;
+        click_last("+", |ui| editor.show_fingers(ui, &mut bones, "Preview"));
+        assert_eq!(bones, snapshot.with_trigger_index(0.1));
+
+        editor.locks = [true; 5];
+        editor.edit("wrench_h/right");
+        assert_eq!(editor.locks, [true; 5], "same grip keeps its locks");
+        editor.edit("wrench_h/left");
+        assert_eq!(editor.locks, [false; 5], "another starts unlocked");
     }
 
     #[test]

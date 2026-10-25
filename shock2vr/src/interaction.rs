@@ -1444,6 +1444,12 @@ impl VrInteraction {
             pose_tool::panel::PanelEvent::IndexLess => self.step_trigger_index(false),
             pose_tool::panel::PanelEvent::IndexMore => self.step_trigger_index(true),
             pose_tool::panel::PanelEvent::Tighten => self.tighten_pose_tool_grip(),
+            pose_tool::panel::PanelEvent::Lock(finger) => {
+                if let Some(tool) = self.pose_tool.as_mut() {
+                    tool.toggle_lock(finger);
+                    println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL locks={:?}", tool.locks);
+                }
+            }
             pose_tool::panel::PanelEvent::ResetView => {
                 if let Some(tool) = self.pose_tool.as_mut() {
                     tool.reset_view();
@@ -1648,11 +1654,11 @@ impl VrInteraction {
     /// (a captured index reads as its best fit); staged like any edit.
     fn step_trigger_index(&mut self, more: bool) {
         // The steps are the primary grip's Trigger slot's (support mode
-        // starts at Rest and cannot switch).
+        // starts at Rest and cannot switch), with the index unlocked.
         let Some(tool) = self
             .pose_tool
             .as_ref()
-            .filter(|tool| tool.slot == pose_tool::Slot::Trigger)
+            .filter(|tool| tool.index_step_entry().is_ok())
         else {
             return;
         };
@@ -1684,7 +1690,7 @@ impl VrInteraction {
         Some((geometry, pose_frame(tool, Some(held))))
     }
 
-    /// Close the slot's fingers (`vr_grip::tighten_fingers`) onto the item
+    /// Close the slot's unlocked fingers (`GripPoseTool::editable`) onto the item
     /// from where the grip has them, keeping its placement; staged like any
     /// edit. The surface is built from the cached mesh on the press.
     fn tighten_pose_tool_grip(&mut self) {
@@ -1695,7 +1701,11 @@ impl VrInteraction {
         if tool.tighten_entry().is_err() {
             return;
         }
-        let (hand, pressed) = (tool.hand, tool.slot == pose_tool::Slot::Trigger);
+        let (hand, pressed, fingers) = (
+            tool.hand,
+            tool.slot == pose_tool::Slot::Trigger,
+            tool.editable(),
+        );
         let (Some(current), Some((geometry, frame))) = (
             self.fitted_grips[hand]
                 .as_ref()
@@ -1724,7 +1734,6 @@ impl VrInteraction {
             println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL tightened=false reason=no_glove");
             return;
         };
-        let fingers = crate::vr_grip::tighten_fingers(pressed);
         let tightened = surface.tighten(&authored, pressed, fingers, |bones| {
             renderer.finger_samples(bones, handedness)
         });
@@ -1807,8 +1816,13 @@ impl VrInteraction {
             tool.capture_failure = Some("degenerate_joints".to_owned());
             return false;
         };
+        if let Err(reason) = tool.snapshot_entry() {
+            println!("SHOCK2QUEST_VR_GRIP_POSE_TOOL captured=false reason={reason}");
+            tool.capture_failure = Some(reason.to_owned());
+            return false;
+        }
         let personal = crate::world_scale::WorldScale::active().personal();
-        let fingers = pose_tool::slot_fingers(tool.slot, &current.fingers, fitted.fit.bones);
+        let fingers = tool.snapshot_fingers(&current.fingers, fitted.fit.bones);
         let places = tool.places();
         let (grip, hand_pose) = if !places {
             // Fingers only: the wrist and item stay where the grip has them.
@@ -2086,7 +2100,11 @@ impl VrInteraction {
             position: model.point(tool.pump_travel),
             ..model
         };
+        let profile = self.support_profiles.get(&held.model);
         let posed = glove.ok_or("degenerate_joints").and_then(|(glove, bones)| {
+            let profile = profile.ok_or("invalid_support_pose")?;
+            // Locked fingers keep the support pose's.
+            let bones = tool.with_locked(&profile.fingers, bones);
             let pose = SupportProfile::captured_pose(
                 [Handedness::Left, Handedness::Right][tool.hand],
                 model,
@@ -2100,9 +2118,9 @@ impl VrInteraction {
                 },
             )
             .ok_or("degenerate_joints")?;
-            self.support_profiles
-                .get(&held.model)
-                .is_some_and(|profile| profile.with_pose(&pose).is_valid())
+            profile
+                .with_pose(&pose)
+                .is_valid()
                 .then_some(pose)
                 .ok_or("invalid_support_pose")
         });
@@ -2157,11 +2175,11 @@ impl VrInteraction {
 
     /// The support glove the workbench draws in support mode: the item's
     /// support profile (a staged capture included) placed against the grip
-    /// hand's glove, as play places it.
+    /// hand's glove, as play places it, and its fingers.
     fn pose_tool_support_glove(
         &self,
         tool: &pose_tool::GripPoseTool,
-    ) -> Option<(GripPose, crate::hand_pose::HandShape)> {
+    ) -> Option<(GripPose, &crate::vr_grip::FingerPose)> {
         let held = self.fitted_grips[tool.hand].as_ref()?;
         let grip = held.resolved.as_ref()?;
         let profile = self.support_profiles.get(&held.model)?;
@@ -2175,7 +2193,7 @@ impl VrInteraction {
             profile.anchor_in_frame(primary, held.model_mirror?) * grip.item_scale
                 + tool.pump_travel,
         );
-        Some((pose, profile.fingers.hand_shape_at(0.0)))
+        Some((pose, &profile.fingers))
     }
 }
 
@@ -4385,7 +4403,7 @@ mod tests {
                 .unwrap()
                 .resolved
                 .as_ref();
-            tool.kept_glove(index, glove, grip)
+            tool.snapshot_glove(index, glove, grip.map(|grip| &grip.fingers))
                 .map_or((glove.palm(), None), |(at, fingers)| (at, Some(fingers)))
         };
 
@@ -4457,6 +4475,182 @@ mod tests {
         interaction.pose_tool.as_mut().unwrap().set_support(true);
         let support = interaction.pose_tool.as_ref().unwrap().posing();
         assert_eq!(drawn(&interaction, support, &glove).1, None);
+    }
+
+    /// Locked fingers keep their stored bones through a snapshot: at rest
+    /// (placing the glove or not) only the unlocked take the tracked hand's;
+    /// in the Trigger slot an unlocked index is captured, and a locked one
+    /// refuses the snapshot and the Index steps, leaving the grip be.
+    #[test]
+    fn a_snapshot_keeps_each_locked_fingers_stored_bones() {
+        use crate::vr_grip::{FingerPose, with_fingers, with_index};
+        let dir = crate::test_support::TempDir::new("pose-locks");
+        let mut interaction = staged_workbench(dir.path().join("o.json"));
+        interaction.pose_tool.as_mut().unwrap().staged = None;
+        let world = World::new();
+        let grip = |interaction: &VrInteraction| {
+            interaction.fitted_grips[1]
+                .as_ref()
+                .unwrap()
+                .resolved
+                .clone()
+                .unwrap()
+        };
+        fn tool(interaction: &mut VrInteraction) -> &mut pose_tool::GripPoseTool {
+            interaction.pose_tool.as_mut().unwrap()
+        }
+        let before = grip(&interaction);
+        let stored = before.fingers.rest_bones();
+        let locked = [true, false, true, false, false];
+        tool(&mut interaction).toggle_lock(0);
+        tool(&mut interaction).toggle_lock(2);
+
+        // Placing the glove (the default): it moves, the locked fingers don't.
+        let fist = tracked_glove(1.0);
+        assert_ne!(
+            with_fingers(&fist.fit.bones, &stored, locked),
+            fist.fit.bones
+        );
+        assert!(interaction.capture_grip(&world, Some(&fist)));
+        let placed = grip(&interaction);
+        assert_eq!(
+            placed.fingers.rest_bones(),
+            with_fingers(&fist.fit.bones, &stored, locked)
+        );
+        assert!((placed.offset - before.offset).magnitude() > 1e-3, "placed");
+        // Fingers only.
+        tool(&mut interaction).keep_placement = true;
+        let open = tracked_glove(0.0);
+        assert!(interaction.capture_grip(&world, Some(&open)));
+        let kept = grip(&interaction);
+        assert_eq!(
+            kept.fingers.rest_bones(),
+            with_fingers(&open.fit.bones, &stored, locked)
+        );
+        assert_eq!(kept.offset, placed.offset);
+
+        // Trigger slot, index unlocked: the pulled index over the rest.
+        assert!(tool(&mut interaction).toggle_slot());
+        assert!(interaction.capture_grip(&world, Some(&fist)));
+        let rest = kept.fingers.rest_bones();
+        let pulled = grip(&interaction);
+        assert_eq!(
+            pulled.fingers,
+            FingerPose::Bones {
+                bones: rest,
+                trigger_bones: Some(with_index(&rest, &fist.fit.bones)),
+            }
+        );
+        // Index locked: neither a snapshot nor a step changes it.
+        tool(&mut interaction).toggle_lock(1);
+        assert!(!interaction.capture_grip(&world, Some(&open)));
+        assert_eq!(
+            interaction
+                .pose_tool
+                .as_ref()
+                .unwrap()
+                .capture_failure
+                .as_deref(),
+            Some("index_locked")
+        );
+        interaction.step_trigger_index(false);
+        assert_eq!(grip(&interaction), pulled);
+        tool(&mut interaction).toggle_lock(1);
+        interaction.step_trigger_index(false);
+        assert_ne!(grip(&interaction), pulled, "unlocked, it steps");
+    }
+
+    /// The live posing glove shows each locked finger as the posed pose
+    /// stores it, the rest live: on the tracked palm when a snapshot places
+    /// the glove, else at the stored glove; in support mode, the support
+    /// pose's fingers.
+    #[test]
+    fn the_live_glove_shows_locked_fingers_as_stored() {
+        use crate::vr_grip::with_fingers;
+        let dir = crate::test_support::TempDir::new("pose-locks-live");
+        let mut interaction = staged_workbench(dir.path().join("o.json"));
+        interaction.pose_tool.as_mut().unwrap().staged = None;
+        let stored = interaction.fitted_grips[1]
+            .as_ref()
+            .unwrap()
+            .resolved
+            .as_ref()
+            .unwrap()
+            .fingers
+            .clone();
+        let glove = tracked_glove(1.0);
+        let index = [false, true, false, false, false];
+        let tool = interaction.pose_tool.as_mut().unwrap();
+        let posing = tool.posing();
+        assert!(
+            tool.snapshot_glove(posing, &glove, Some(&stored)).is_none(),
+            "nothing locked and placing: drawn as tracked"
+        );
+        tool.toggle_lock(1);
+        let (at, fingers) = tool.snapshot_glove(posing, &glove, Some(&stored)).unwrap();
+        assert_eq!(
+            (at.position, at.rotation),
+            (glove.palm().position, glove.palm().rotation)
+        );
+        let live = with_fingers(&glove.fit.bones, &stored.rest_bones(), index);
+        assert_eq!(fingers.rest_bones(), live);
+        assert!(
+            tool.snapshot_glove(1 - posing, &glove, Some(&stored))
+                .is_none(),
+            "the free hand is drawn as tracked"
+        );
+        tool.keep_placement = true;
+        let (at, fingers) = tool.snapshot_glove(posing, &glove, Some(&stored)).unwrap();
+        assert_eq!(at.position, tool.hand_pose.position);
+        assert_eq!(fingers.rest_bones(), live);
+
+        let support = interaction.support_profiles["wrench_h"].fingers.clone();
+        let tool = interaction.pose_tool.as_mut().unwrap();
+        tool.set_support(true);
+        tool.toggle_lock(1);
+        let (at, fingers) = tool
+            .snapshot_glove(tool.posing(), &glove, Some(&support))
+            .unwrap();
+        assert_eq!(
+            at.position,
+            glove.palm().position,
+            "a support snapshot places"
+        );
+        assert_eq!(
+            fingers.rest_bones(),
+            with_fingers(&glove.fit.bones, &support.rest_bones(), index)
+        );
+    }
+
+    /// A support snapshot keeps a locked finger as the support pose had it.
+    #[test]
+    fn a_support_snapshot_keeps_locked_fingers_as_the_support_pose_had_them() {
+        use cgmath::Rotation3;
+        let dir = crate::test_support::TempDir::new("pose-locks-support");
+        let mut interaction = staged_workbench(dir.path().join("o.json"));
+        let tool = interaction.pose_tool.as_mut().unwrap();
+        tool.staged = None;
+        tool.support_mode = Ok(());
+        interaction.toggle_support_mode();
+        let authored = interaction.support_profiles["wrench_h"]
+            .fingers
+            .rest_bones();
+        interaction.pose_tool.as_mut().unwrap().toggle_lock(0);
+        let glove = GripPose {
+            position: vec3(0.03, 1.25, -0.02),
+            rotation: Quaternion::from_angle_z(cgmath::Deg(80.0)),
+        };
+        let bones = crate::vr_grip::FingerPose::curls([0.8; 5]).rest_bones();
+        let locked = [true, false, false, false, false];
+        let expected = crate::vr_grip::with_fingers(&bones, &authored, locked);
+        assert_ne!(expected, bones);
+        assert!(interaction.capture_support(Some((glove, bones))));
+        assert_eq!(
+            interaction.support_profiles["wrench_h"]
+                .fingers
+                .rest_bones(),
+            expected
+        );
     }
 
     /// The Index steps set the trigger pose to the rest with the index a

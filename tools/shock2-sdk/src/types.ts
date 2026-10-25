@@ -1501,8 +1501,14 @@ export interface HandGrip {
       /** How far the trigger pose curls the index from rest toward a fist
        * (0..1), null with no trigger pose. */
       trigger_index: number | null;
+      /** Why the Index steps are disabled (not the Trigger slot, or the
+       * index locked). */
+      index_steps_disabled: string | null;
       /** Why Tighten (close the slot's fingers onto the item) is disabled. */
       tighten_disabled: string | null;
+      /** Which fingers (thumb..little) are locked: kept as stored by the
+       * live glove, snapshots and Tighten. */
+      locks: [boolean, boolean, boolean, boolean, boolean];
       hover: { x: number; y: number } | null;
       panel: {
         center: ResolvedGrip["offset"];
@@ -1510,7 +1516,7 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "AlignLess" | "AlignMore" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "Placement" | "IndexLess" | "IndexMore" | "Tighten" | "ResetView" | "Exit";
+          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "AlignLess" | "AlignMore" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "Placement" | "IndexLess" | "IndexMore" | "Tighten" | `Lock(${0 | 1 | 2 | 3 | 4})` | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;
