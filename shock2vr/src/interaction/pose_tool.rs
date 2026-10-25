@@ -27,7 +27,7 @@ use crate::hand_capture::{HandFit, HandJoints};
 use crate::hand_glove::{GloveRenderer, HandLight};
 use crate::hand_pose::{FingerBones, HandShape, Pose};
 use crate::vr_config::Handedness;
-use crate::vr_grip::{BakedGripEntry, FingerPose, GripOverrides, ResolvedGrip};
+use crate::vr_grip::{BakedGripEntry, FingerPose, GripClasses, GripOverrides, ResolvedGrip};
 use crate::vr_support::{GripPose, SupportPose};
 pub(super) use crate::weapon_muzzle::AimLines;
 
@@ -301,6 +301,9 @@ pub(super) struct GripPoseTool {
     squeezed: bool,
     /// The free thumbstick was seen centred in hand since last out of it.
     stick_armed: bool,
+    /// The held item's grip class (member count, canonical model) when its
+    /// grip is shared: a save poses every member.
+    pub class: Option<(usize, String)>,
     /// Recent posing-hand frames, each with the time since the one before
     /// (zero for the oldest), spanning the steady window.
     recent: VecDeque<(HandJoints, f32)>,
@@ -425,6 +428,7 @@ impl GripPoseTool {
             turning: None,
             squeezed: true,
             stick_armed: false,
+            class: None,
             recent: VecDeque::new(),
             // Entered "already pressed": a trigger or pinch held as the
             // workbench opens must be let go before it acts.
@@ -858,6 +862,7 @@ impl GripPoseTool {
             "index_steps_disabled": view.index_steps.err(),
             "tighten_disabled": view.tighten.err(),
             "locks": self.locks,
+            "class": view.class.as_ref().map(|class| panel::class_lines(class).join(" ")),
             "hover": self.hover,
             "panel": placed,
             // The bench's view turn about its pivot (world space).
@@ -903,6 +908,7 @@ impl GripPoseTool {
             locks: self.locks,
             staged: self.staged.is_some(),
             fingertip: self.fingertip,
+            class: self.class.clone(),
         }
     }
 
@@ -1642,9 +1648,16 @@ pub(super) fn pose_offset(a: GripPose, b: GripPose) -> (f32, f32) {
     )
 }
 
-/// Write `entry` into the overrides file, replacing its model and hand.
-pub(super) fn save_override(path: &Path, entry: &BakedGripEntry) -> std::io::Result<()> {
-    edit_overrides(path, |overrides| overrides.replace_grip(entry.clone()))
+/// Write `entry` into the overrides file, replacing its model's class (in
+/// `classes`) and hand.
+pub(super) fn save_override(
+    path: &Path,
+    entry: &BakedGripEntry,
+    classes: &GripClasses,
+) -> std::io::Result<()> {
+    edit_overrides(path, |overrides| {
+        overrides.replace_grip(entry.clone(), classes)
+    })
 }
 
 /// Write a captured support pose into the overrides file, replacing its
@@ -2930,9 +2943,9 @@ mod tests {
     fn saving_replaces_only_that_model_and_hand() {
         let dir = crate::test_support::TempDir::new("pose-tool");
         let path = dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
-        save_override(&path, &entry("left", 0.8)).unwrap();
-        save_override(&path, &entry("right", 0.8)).unwrap();
-        save_override(&path, &entry("left", 1.5)).unwrap();
+        save_override(&path, &entry("left", 0.8), &GripClasses::default()).unwrap();
+        save_override(&path, &entry("right", 0.8), &GripClasses::default()).unwrap();
+        save_override(&path, &entry("left", 1.5), &GripClasses::default()).unwrap();
         let library = GripOverrides::load(&path).unwrap().grips;
         assert_eq!(library.entries.len(), 2);
         assert_eq!(library.lookup("mug", "left").unwrap().item_scale, 1.5);
@@ -2948,10 +2961,10 @@ mod tests {
             rotation_degrees: [0.0; 3],
             fingers: crate::vr_grip::FingerPose::curls([0.5; 5]).to_bones(),
         };
-        save_override(&path, &entry("right", 0.8)).unwrap();
+        save_override(&path, &entry("right", 0.8), &GripClasses::default()).unwrap();
         save_support_override(&path, "sg_h", &pose(-0.4)).unwrap();
         save_support_override(&path, "sg_h", &pose(-0.5)).unwrap();
-        save_override(&path, &entry("left", 0.8)).unwrap();
+        save_override(&path, &entry("left", 0.8), &GripClasses::default()).unwrap();
         let saved = GripOverrides::load(&path).unwrap();
         assert_eq!(saved.grips.entries.len(), 2);
         assert_eq!(saved.support.len(), 1);
@@ -2963,7 +2976,7 @@ mod tests {
         let dir = crate::test_support::TempDir::new("pose-tool-corrupt");
         let path = dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
         std::fs::write(&path, "{ hand edited, oops").unwrap();
-        assert!(save_override(&path, &entry("left", 0.8)).is_err());
+        assert!(save_override(&path, &entry("left", 0.8), &GripClasses::default()).is_err());
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "{ hand edited, oops"
@@ -2976,7 +2989,7 @@ mod tests {
     fn saving_keeps_an_entry_this_build_cannot_read() {
         let dir = crate::test_support::TempDir::new("pose-tool-unread");
         let path = dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
-        save_override(&path, &entry("right", 0.8)).unwrap();
+        save_override(&path, &entry("right", 0.8), &GripClasses::default()).unwrap();
         let mut file: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let unread = serde_json::json!({"model": "mug", "hand": "right", "grip": "newer"});
@@ -2987,12 +3000,43 @@ mod tests {
                 serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
             file["entries"].as_array().unwrap().clone()
         };
-        save_override(&path, &entry("left", 0.8)).unwrap();
+        save_override(&path, &entry("left", 0.8), &GripClasses::default()).unwrap();
         assert_eq!(saved().len(), 3);
         assert!(saved().contains(&unread));
-        save_override(&path, &entry("right", 1.5)).unwrap();
+        save_override(&path, &entry("right", 1.5), &GripClasses::default()).unwrap();
         assert_eq!(saved().len(), 2);
         assert!(!saved().contains(&unread));
         assert_eq!(GripOverrides::load(&path).unwrap().grips.entries.len(), 2);
+    }
+
+    /// A class has one headset grip per hand: saving it under the canonical
+    /// model replaces one saved, readable or not, under any member.
+    #[test]
+    fn saving_a_class_replaces_every_members_entry_for_that_hand() {
+        let dir = crate::test_support::TempDir::new("pose-tool-class");
+        let path = dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
+        let classes =
+            GripClasses::parse(r#"{"version": 1, "classes": [["mug", "mug2", "mug3"]]}"#).unwrap();
+        let member = |model: &str, hand, scale| BakedGripEntry {
+            model: model.into(),
+            ..entry(hand, scale)
+        };
+        save_override(&path, &member("mug2", "right", 0.8), &classes).unwrap();
+        save_override(&path, &member("mug3", "left", 0.8), &classes).unwrap();
+        let mut file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let unread = serde_json::json!({"model": "mug3", "hand": "right", "grip": "newer"});
+        file["entries"].as_array_mut().unwrap().push(unread.clone());
+        std::fs::write(&path, file.to_string()).unwrap();
+        save_override(&path, &member("mug", "right", 1.5), &classes).unwrap();
+        let file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let keys: Vec<_> = file["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| (e["model"].as_str().unwrap(), e["hand"].as_str().unwrap()))
+            .collect();
+        assert_eq!(keys, [("mug3", "left"), ("mug", "right")]);
     }
 }

@@ -6,7 +6,10 @@ use eframe::egui;
 use shock2vr::{
     Handedness,
     scenes::debug_interactions::INTERACTION_FIXTURES,
-    vr_grip::{BakedGripEntry, FingerPose, GRIP_RESOURCES, GripHints, GripLibrary, ResolvedGrip},
+    vr_grip::{
+        BakedGripEntry, FingerPose, GRIP_CLASSES_FILE, GRIP_RESOURCES, GripClasses, GripHints,
+        GripLibrary, ResolvedGrip,
+    },
     weapon_muzzle::MuzzleFallback,
 };
 use std::{
@@ -259,19 +262,37 @@ pub fn default_library_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/vr-grips.json")
 }
 
-/// Each override replaces the pose the runtime would pick for its model and
-/// hand (keeping that entry's provenance), or joins the pickup library. A
-/// glove weapon posed for one hand only also replaces the other hand's,
-/// mirrored, as play holds it before the overrides are cleared.
-fn merge_overrides(libraries: &mut [GripLibrary], overrides: GripLibrary) -> Result<(), String> {
-    let posed = |model: &str, hand: &str| {
-        overrides
-            .entries
+/// Each override, keyed by its model's class's canonical model (in
+/// `classes`), replaces the pose the runtime would pick for that model and
+/// hand (keeping that entry's provenance), or joins the pickup library. Of
+/// two overrides for one class and hand, the later wins. A glove weapon posed
+/// for one hand only also replaces the other hand's, mirrored, as play holds
+/// it before the overrides are cleared.
+fn merge_overrides(
+    libraries: &mut [GripLibrary],
+    overrides: GripLibrary,
+    classes: &GripClasses,
+) -> Result<(), String> {
+    let mut canonical: Vec<BakedGripEntry> = Vec::new();
+    for mut entry in overrides.entries {
+        let model = classes.canonical(&entry.model).to_owned();
+        if let Some(index) = canonical
             .iter()
-            .any(|e| e.model == model && e.hand == hand)
-    };
+            .position(|e| e.model == model && e.hand == entry.hand)
+        {
+            let earlier = canonical.remove(index);
+            println!(
+                "warning: {} and {} share the {model} grip; keeping the later {} pose ({})",
+                earlier.model, entry.model, entry.hand, entry.model
+            );
+        }
+        entry.model = model;
+        canonical.push(entry);
+    }
+    let posed =
+        |model: &str, hand: &str| canonical.iter().any(|e| e.model == model && e.hand == hand);
     let mut merges = Vec::new();
-    for entry in &overrides.entries {
+    for entry in &canonical {
         merges.push(entry.clone());
         let (other, other_name) = match entry.hand.as_str() {
             "left" => (Handedness::Right, "right"),
@@ -295,7 +316,7 @@ fn merge_overrides(libraries: &mut [GripLibrary], overrides: GripLibrary) -> Res
             library
                 .entries
                 .iter_mut()
-                .find(|e| e.model == entry.model && e.hand == entry.hand)
+                .find(|e| classes.canonical(&e.model) == entry.model && e.hand == entry.hand)
         });
         match existing {
             Some(target) => transfer_grip(&entry.grip, target, None)?,
@@ -334,7 +355,7 @@ fn merge_override_file_into(path: PathBuf, dir: &std::path::Path) -> Result<(), 
         .map(|name| GripDocument::load(dir.join(name)))
         .collect::<Result<Vec<_>, _>>()?;
     let mut libraries: Vec<_> = docs.iter().map(|doc| doc.library.clone()).collect();
-    merge_overrides(&mut libraries, overrides)?;
+    merge_overrides(&mut libraries, overrides, &classes_in(dir)?)?;
     // Merged in memory before anything is written, so a bad pose writes
     // nothing.
     let support_doc =
@@ -363,6 +384,26 @@ fn merge_override_file_into(path: PathBuf, dir: &std::path::Path) -> Result<(), 
         support.len()
     );
     Ok(())
+}
+
+/// Names a grip class (canonical model first), so an author knows an edit
+/// applies to all of it.
+pub(crate) fn class_label(members: &[String]) -> String {
+    format!(
+        "Shared by {} models (canonical: {})",
+        members.len(),
+        members[0]
+    )
+}
+
+/// The grip classes beside the resources in `dir`: none if there is no
+/// classes file, an error if it is invalid.
+fn classes_in(dir: &std::path::Path) -> Result<GripClasses, String> {
+    match std::fs::read_to_string(dir.join(GRIP_CLASSES_FILE)) {
+        Ok(text) => GripClasses::parse(&text).map_err(|e| format!("{GRIP_CLASSES_FILE}: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(GripClasses::default()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// A version 1 library of valid grips, one per model and hand.
@@ -584,6 +625,9 @@ pub struct GripEditor {
     /// whether the preview draws its aim.
     muzzle: Option<MuzzleFallback>,
     show_aim: bool,
+    /// `model` is always its class's canonical model, whose entry is the
+    /// class's grip.
+    classes: GripClasses,
 }
 
 impl GripEditor {
@@ -618,6 +662,15 @@ impl GripEditor {
         } else {
             default_library_path()
         };
+        let assets = default_library_path().parent().unwrap().to_owned();
+        let (classes, message) = match classes_in(&assets) {
+            Ok(classes) => (classes, String::new()),
+            Err(error) => (
+                GripClasses::default(),
+                format!("Grip classes ignored: {error}"),
+            ),
+        };
+        let model = model.unwrap_or_else(|| "mug".into());
         Self {
             mode: VrSetupMode::Hands,
             holster_editor: crate::holster_editor::HolsterEditor::new(None, None),
@@ -628,14 +681,14 @@ impl GripEditor {
             clipboard: None,
             document: GripDocument::load(path.unwrap_or(default_path)),
             hints,
-            model: model.unwrap_or_else(|| "mug".into()),
+            model: classes.canonical(&model).to_owned(),
             hand,
             search: String::new(),
             view,
             camera_pending: true,
             validated: None,
             hashes: None,
-            message: String::new(),
+            message,
             family: None,
             rotation_edit: None,
             rotation_step: 5.0,
@@ -647,16 +700,18 @@ impl GripEditor {
             fitting_model: String::new(),
             muzzle: None,
             show_aim: true,
+            classes,
         }
     }
 
     pub fn open_model(&mut self, key: &str) {
         self.mode = VrSetupMode::Hands;
-        self.model = std::path::Path::new(key)
+        let name = std::path::Path::new(key)
             .file_stem()
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase();
+        self.model = self.classes.canonical(&name).to_owned();
         if shock2vr::vr_weapon_grip::supports_model(&self.model) {
             if let (Ok(doc), Ok(defaults)) = (
                 &mut self.document,
@@ -987,7 +1042,7 @@ impl GripEditor {
                     continue;
                 }
                 if ui.selectable_label(self.model == model, text).clicked() {
-                    self.model = model.to_owned();
+                    self.model = self.classes.canonical(model).to_owned();
                     self.prepare_missing = true;
                     self.validated = None;
                     self.camera_pending = true;
@@ -1114,6 +1169,10 @@ impl GripEditor {
         let mut request_fit = false;
         let doc = self.document.as_mut().unwrap();
         ui.heading(format!("{} — grip override", self.model));
+        if let Some(members) = self.classes.members(&self.model) {
+            ui.label(class_label(members))
+                .on_hover_text(format!("Edits apply to: {}", members.join(", ")));
+        }
         if shock2vr::tricorder::is_model(&self.model) {
             self.support_mode = false;
             ui.label("Phone grip: support the back and curl fingers around an edge. The green rear lens emits along -Z. Save, then restart the game to load both hand poses.");
@@ -1981,7 +2040,7 @@ pub(crate) mod tests {
         let mut added = replaced.clone();
         added.model = "new_item".into();
         overrides.entries = vec![replaced, weapon, added];
-        merge_overrides(&mut libraries, overrides).unwrap();
+        merge_overrides(&mut libraries, overrides, &GripClasses::default()).unwrap();
 
         let pickup = &libraries[0].entries[0];
         assert_eq!(pickup.grip.item_scale, 0.5);
@@ -2009,7 +2068,12 @@ pub(crate) mod tests {
         overrides.grips.entries.push(entry.clone());
         std::fs::write(&path, serde_json::to_vec(&overrides).unwrap()).unwrap();
         let mut libraries = vec![doc.library.clone()];
-        merge_overrides(&mut libraries, GripDocument::load(path).unwrap().library).unwrap();
+        merge_overrides(
+            &mut libraries,
+            GripDocument::load(path).unwrap().library,
+            &GripClasses::default(),
+        )
+        .unwrap();
         let merged = libraries[0]
             .entries
             .iter()
@@ -2108,7 +2172,7 @@ pub(crate) mod tests {
             ],
             ..Default::default()
         };
-        merge_overrides(&mut libraries, overrides).unwrap();
+        merge_overrides(&mut libraries, overrides, &GripClasses::default()).unwrap();
         // The shotgun's left hand takes the right pose mirrored, as play does.
         let mirror = shock2vr::vr_weapon_grip::named_model_mirror("sg_h").unwrap();
         let expected = shotgun.grip.mirrored(mirror).unwrap();
@@ -2125,6 +2189,70 @@ pub(crate) mod tests {
             entry(&libraries, "wrench_h", "left").grip.offset,
             wrench_left.grip.offset
         );
+    }
+
+    /// Opening any member of a shipped class edits its canonical model's
+    /// grip, which the pane names with the class.
+    #[test]
+    fn opening_a_class_member_edits_the_class_grip() {
+        let mut editor = GripEditor::new(
+            None,
+            Some("chemif3".into()),
+            "right".into(),
+            "front".into(),
+            false,
+            None,
+        );
+        assert_eq!(editor.model, "chemif");
+        editor.open_model("obj/ba.bin");
+        assert_eq!(editor.model, "as");
+        let members = editor.classes.members("as").unwrap();
+        assert_eq!(class_label(members), "Shared by 19 models (canonical: as)");
+        editor.open_model("mug.bin");
+        assert_eq!(editor.model, "mug");
+    }
+
+    /// A pose saved under any member of a class merges into the canonical
+    /// model's entry; of two members' poses for one hand, the later wins.
+    #[test]
+    fn merging_keys_overrides_by_their_classes_canonical_model() {
+        let (_dir, doc) = document();
+        let classes =
+            GripClasses::parse(r#"{"version": 1, "classes": [["chemif", "chemif2", "chemif3"]]}"#)
+                .unwrap();
+        let shipped = doc
+            .library
+            .entries
+            .iter()
+            .find(|e| e.model == "chemif" && e.hand == "right")
+            .unwrap()
+            .clone();
+        let posed = |model: &str, dx: f32| {
+            let mut entry = BakedGripEntry {
+                model: model.into(),
+                ..shipped.clone()
+            };
+            entry.grip.offset.x += dx;
+            entry
+        };
+        let mut libraries = vec![doc.library.clone()];
+        let overrides = GripLibrary {
+            entries: vec![posed("chemif2", 0.01), posed("chemif3", 0.02)],
+            ..Default::default()
+        };
+        merge_overrides(&mut libraries, overrides, &classes).unwrap();
+        let entries = &libraries[0].entries;
+        assert_eq!(
+            entries.len(),
+            doc.library.entries.len(),
+            "no member entries"
+        );
+        let right = entries
+            .iter()
+            .find(|e| e.model == "chemif" && e.hand == "right")
+            .unwrap();
+        assert_eq!(right.grip.offset.x, shipped.grip.offset.x + 0.02);
+        assert!(right.authored);
     }
 
     fn curls_mut(grip: &mut ResolvedGrip) -> (&mut [f32; 5], &mut Option<[f32; 5]>) {

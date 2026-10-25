@@ -1816,18 +1816,24 @@ pub struct GripLibrary {
     /// How many leading entries came from the headset overrides (`prepend`).
     #[serde(skip)]
     pub headset: usize,
+    /// Every model is looked up, and every entry matched, by its class's
+    /// canonical model: one grip holds the whole class.
+    #[serde(skip)]
+    pub classes: GripClasses,
 }
 
 impl GripLibrary {
-    /// Prepared poses are selected by model identity and hand. Fit fingerprints
-    /// and solver revisions are provenance, never runtime eligibility gates.
+    /// Prepared poses are selected by model identity (its class's) and hand.
+    /// Fit fingerprints and solver revisions are provenance, never runtime
+    /// eligibility gates.
     pub fn lookup(&self, model: &str, hand: &str) -> Option<&ResolvedGrip> {
         if self.version != 1 {
             return None;
         }
+        let model = self.classes.canonical(model);
         self.entries
             .iter()
-            .find(|entry| entry.model == model && entry.hand == hand && entry.grip.is_valid())
+            .find(|entry| self.holds(entry, model, hand) && entry.grip.is_valid())
             .map(|entry| &entry.grip)
     }
 
@@ -1853,12 +1859,13 @@ impl GripLibrary {
             return None;
         }
         let other = hand.other();
+        let model = self.classes.canonical(model);
         let (headset, shipped) = self.entries.split_at(self.headset.min(self.entries.len()));
         [headset, shipped].into_iter().find_map(|source| {
             let find = |hand| {
                 source
                     .iter()
-                    .find(|e| e.model == model && e.hand == name(hand) && e.grip.is_valid())
+                    .find(|e| self.holds(e, model, name(hand)) && e.grip.is_valid())
                     .map(|e| &e.grip)
             };
             find(hand)
@@ -1888,14 +1895,11 @@ impl GripLibrary {
             .or_else(|| self.lookup_for(model, hand, None))
     }
 
-    /// Remove the first entry for `model` and `hand` (a staged one: staging
-    /// prepends).
+    /// Remove the first entry for `model`'s class and `hand` (a staged one:
+    /// staging prepends).
     pub fn remove_first(&mut self, model: &str, hand: &str) {
-        if let Some(index) = self
-            .entries
-            .iter()
-            .position(|e| e.model == model && e.hand == hand)
-        {
+        let model = self.classes.canonical(model);
+        if let Some(index) = self.entries.iter().position(|e| self.holds(e, model, hand)) {
             self.entries.remove(index);
             if index < self.headset {
                 self.headset -= 1;
@@ -1903,13 +1907,13 @@ impl GripLibrary {
         }
     }
 
-    /// Make `entry` the only headset entry for its model and hand, as a save
-    /// leaves the overrides file.
+    /// Make `entry` the only headset entry for its model's class and hand, as
+    /// a save leaves the overrides file.
     pub fn replace_headset(&mut self, entry: BakedGripEntry) {
+        let model = self.classes.canonical(&entry.model).to_owned();
         let mut index = 0;
         while index < self.headset {
-            let e = &self.entries[index];
-            if e.model == entry.model && e.hand == entry.hand {
+            if self.holds(&self.entries[index], &model, &entry.hand) {
                 self.entries.remove(index);
                 self.headset -= 1;
             } else {
@@ -1935,7 +1939,86 @@ pub const GRIP_RESOURCES: [&str; 4] = [
     "vr-magazine-grips.json",
 ];
 
+/// Models that share geometry, and so share one grip.
+pub const GRIP_CLASSES_FILE: &str = "vr-grip-classes.json";
+
+/// Grip classes: each is a list of models with the same geometry, whose first
+/// (canonical) model's grip entry holds them all. A model outside every class
+/// is its own canonical model.
+#[derive(Clone, Default, Debug)]
+pub struct GripClasses {
+    classes: Vec<Vec<String>>,
+    /// Each member's class index.
+    index: std::collections::HashMap<String, usize>,
+}
+
+impl GripClasses {
+    /// A version 1 classes file. A model in two classes (or twice in one) or
+    /// a class of fewer than two models makes the whole file invalid.
+    pub fn parse(text: &str) -> Result<GripClasses, String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct File {
+            version: u32,
+            classes: Vec<Vec<String>>,
+        }
+        let file: File = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if file.version != 1 {
+            return Err(format!("version_{}", file.version));
+        }
+        let mut index = std::collections::HashMap::new();
+        for (i, class) in file.classes.iter().enumerate() {
+            if class.len() < 2 {
+                return Err(format!("class {i} has fewer than two models"));
+            }
+            for model in class {
+                if index.insert(model.clone(), i).is_some() {
+                    return Err(format!("{model} is in more than one class"));
+                }
+            }
+        }
+        Ok(GripClasses {
+            classes: file.classes,
+            index,
+        })
+    }
+
+    /// `parse`, logging the outcome; a missing or invalid file is no classes.
+    /// Logs to stdout: the Quest runtime has no tracing subscriber.
+    pub fn load(text: Option<&str>) -> GripClasses {
+        match text.map(Self::parse) {
+            Some(Ok(classes)) => {
+                println!(
+                    "SHOCK2QUEST_VR_GRIP_CLASSES classes={}",
+                    classes.classes.len()
+                );
+                classes
+            }
+            Some(Err(error)) => {
+                println!("SHOCK2QUEST_VR_GRIP_CLASSES ignored=\"{error}\"");
+                GripClasses::default()
+            }
+            None => GripClasses::default(),
+        }
+    }
+
+    /// The model whose grip entry `model` uses: its class's first.
+    pub fn canonical<'a>(&'a self, model: &'a str) -> &'a str {
+        self.members(model).map_or(model, |class| &class[0])
+    }
+
+    /// `model`'s class, canonical model first, if it is in one.
+    pub fn members(&self, model: &str) -> Option<&[String]> {
+        self.index.get(model).map(|&i| &self.classes[i][..])
+    }
+}
+
 impl GripLibrary {
+    /// Whether `entry` is the grip for `model` (already canonical) and `hand`.
+    fn holds(&self, entry: &BakedGripEntry, model: &str, hand: &str) -> bool {
+        entry.hand == hand && self.classes.canonical(&entry.model) == model
+    }
+
     /// Put `overrides` ahead of every entry; `lookup` takes the first match.
     pub fn prepend(&mut self, overrides: GripLibrary) {
         self.headset += overrides.entries.len();
@@ -2034,14 +2117,19 @@ impl GripOverrides {
         Ok(overrides)
     }
 
-    /// Replace `model`/`hand`'s grip: the readable entry and any unread one.
-    pub fn replace_grip(&mut self, entry: BakedGripEntry) {
-        let (model, hand) = (entry.model.as_str(), entry.hand.as_str());
-        self.unread
-            .entries
-            .retain(|raw| raw["model"] != model || raw["hand"] != hand);
+    /// Replace the grip of `entry`'s model's class (in `classes`) and hand:
+    /// the readable entries and any unread ones.
+    pub fn replace_grip(&mut self, entry: BakedGripEntry, classes: &GripClasses) {
+        let model = classes.canonical(&entry.model);
+        let hand = entry.hand.as_str();
+        self.unread.entries.retain(|raw| {
+            raw["hand"] != hand
+                || raw["model"]
+                    .as_str()
+                    .is_none_or(|m| classes.canonical(m) != model)
+        });
         let entries = &mut self.grips.entries;
-        entries.retain(|e| e.model != model || e.hand != hand);
+        entries.retain(|e| e.hand != hand || classes.canonical(&e.model) != model);
         entries.push(entry);
     }
 
@@ -2083,6 +2171,7 @@ impl Default for GripLibrary {
             solver_revision: SOLVER_REVISION,
             entries: Vec::new(),
             headset: 0,
+            classes: GripClasses::default(),
         }
     }
 }
@@ -2762,7 +2851,7 @@ mod tests {
                 hints_hash: "old-hints".into(),
                 grip: grip.clone(),
             }],
-            headset: 0,
+            ..Default::default()
         };
         assert_eq!(library.lookup("mug", "right"), Some(&grip));
         assert!(library.lookup("mug", "left").is_none());
@@ -3162,6 +3251,106 @@ mod tests {
             offset(library.select("sg_h", Handedness::Left, true)),
             Some((1.0, false))
         );
+    }
+
+    fn classes(json: &str) -> GripClasses {
+        GripClasses::parse(json).unwrap()
+    }
+
+    fn classed_library() -> GripLibrary {
+        GripLibrary {
+            entries: vec![entry("chemif", "right", 1.0), entry("mug", "right", 2.0)],
+            classes: classes(r#"{"version": 1, "classes": [["chemif", "chemif2", "chemif3"]]}"#),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_class_member_takes_its_canonical_models_grip() {
+        let library = classed_library();
+        let x = |model| library.lookup(model, "right").map(|g| g.offset.x);
+        assert_eq!(x("chemif2"), Some(1.0));
+        assert_eq!(x("chemif3"), Some(1.0));
+        assert_eq!(
+            library
+                .lookup_for("chemif2", Handedness::Right, None)
+                .map(|(g, _)| g.offset.x),
+            Some(1.0)
+        );
+        // Outside any class, nothing changes.
+        assert_eq!(x("mug"), Some(2.0));
+        assert_eq!(x("chemil"), None);
+        assert_eq!(library.lookup("chemif2", "left"), None);
+    }
+
+    #[test]
+    fn a_headset_pose_saved_for_a_member_wins_for_the_whole_class() {
+        let mut library = classed_library();
+        library.prepend(GripLibrary {
+            entries: vec![entry("chemif3", "right", 7.0)],
+            ..Default::default()
+        });
+        for model in ["chemif", "chemif2", "chemif3"] {
+            assert_eq!(library.lookup(model, "right").unwrap().offset.x, 7.0);
+        }
+        assert_eq!(library.lookup("mug", "right").unwrap().offset.x, 2.0);
+        // One headset entry per class and hand.
+        library.replace_headset(entry("chemif2", "right", 8.0));
+        assert_eq!(library.headset, 1);
+        assert_eq!(library.lookup("chemif", "right").unwrap().offset.x, 8.0);
+        library.remove_first("chemif3", "right");
+        assert_eq!(library.headset, 0);
+        assert_eq!(library.lookup("chemif3", "right").unwrap().offset.x, 1.0);
+    }
+
+    #[test]
+    fn an_invalid_classes_file_is_rejected() {
+        for bad in [
+            r#"{"version": 1, "classes": [["a", "b"], ["c", "a"]]}"#,
+            r#"{"version": 1, "classes": [["a", "a"]]}"#,
+            r#"{"version": 1, "classes": [["a"]]}"#,
+            r#"{"version": 1, "classes": [[]]}"#,
+            r#"{"version": 2, "classes": [["a", "b"]]}"#,
+            r#"{"version": 1, "classes": [["a", "b"]], "extra": 1}"#,
+            "not json",
+        ] {
+            assert!(GripClasses::parse(bad).is_err(), "{bad}");
+            assert_eq!(GripClasses::load(Some(bad)).canonical("b"), "b", "{bad}");
+        }
+        assert_eq!(GripClasses::load(None).canonical("b"), "b");
+        let ok = classes(r#"{"version": 1, "classes": [["a", "b", "c"], ["d", "e"]]}"#);
+        assert_eq!(ok.canonical("c"), "a");
+        assert_eq!(ok.canonical("e"), "d");
+        assert_eq!(ok.canonical("f"), "f");
+        assert_eq!(
+            ok.members("b"),
+            Some(&["a", "b", "c"].map(String::from)[..])
+        );
+        assert_eq!(ok.members("f"), None);
+    }
+
+    /// Each class has one shipped grip, its canonical model's: a member's
+    /// own entry would never be picked.
+    #[test]
+    fn shipped_classes_are_valid_and_only_their_canonical_models_have_grips() {
+        let path = format!(
+            "{}/../assets/{GRIP_CLASSES_FILE}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let classes = GripClasses::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for name in GRIP_RESOURCES {
+            let path = format!("{}/../assets/{name}", env!("CARGO_MANIFEST_DIR"));
+            let library: GripLibrary =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            for entry in &library.entries {
+                assert_eq!(
+                    classes.canonical(&entry.model),
+                    entry.model,
+                    "{name}: {} is not its class's canonical model",
+                    entry.model
+                );
+            }
+        }
     }
 
     fn metres(m: f32) -> f32 {
