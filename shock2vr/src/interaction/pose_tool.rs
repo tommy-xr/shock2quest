@@ -152,8 +152,9 @@ pub(super) struct GripPoseTool {
     pub hand_pose: GripPose,
     /// Whether the workbench has been placed in front of the player.
     pub placed: bool,
-    /// World-space joints of each tracked hand this frame, drawn as gloves.
-    pub tracked: [Option<HandJoints>; 2],
+    /// Each tracked hand's glove, fitted once this frame (world space; the
+    /// posing hand's in the unturned bench), drawn live.
+    pub gloves: [Option<TrackedGlove>; 2],
     /// Averaged posing-hand joints awaiting capture.
     pub capture: Option<HandJoints>,
     /// A capture shown live but not yet saved.
@@ -212,6 +213,9 @@ pub(super) struct GripPoseTool {
     /// The held item's muzzle (model space) if gameplay knows its barrel:
     /// captures keep its aim, and Align aim sets it.
     pub muzzle: Option<crate::weapon_muzzle::MuzzleFallback>,
+    /// The item's pump travel as frozen on the bench (scaled model space,
+    /// zero for no pump): play puts the support palm at its anchor plus this.
+    pub pump_travel: Vector3<f32>,
     /// While test-holding a gun with its controller tracked, where it fires
     /// and where the controller aims.
     pub aim: Option<AimLines>,
@@ -308,7 +312,7 @@ impl GripPoseTool {
             holder: hand,
             hand_pose,
             placed: false,
-            tracked: [None, None],
+            gloves: [None, None],
             capture: None,
             staged: None,
             last_save_error: None,
@@ -336,6 +340,7 @@ impl GripPoseTool {
             fingertip: false,
             test_hold: None,
             muzzle: None,
+            pump_travel: Vector3::new(0.0, 0.0, 0.0),
             aim: None,
             turn: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             turning: None,
@@ -850,7 +855,6 @@ impl GripPoseTool {
             }
         }
         self.requested = requested;
-        self.tracked = tracked;
     }
 
     /// Thumbstick y grows or shrinks the item (`item_scale` as drawn) while
@@ -1051,11 +1055,8 @@ pub(super) fn render(
     let mut objs = Vec::new();
     let mut posed = Vec::new();
     let mut posing_tracked = false;
-    for (index, joints) in tool.tracked.iter().enumerate() {
-        let Some(joints) = joints else { continue };
-        let Some(glove) = tracked_glove(renderer, joints, handedness(index)) else {
-            continue;
-        };
+    for (index, glove) in tool.gloves.iter().enumerate() {
+        let Some(glove) = glove else { continue };
         let drawn = renderer.render_hand(
             glove.fit.position,
             glove.fit.rotation,
@@ -1064,7 +1065,7 @@ pub(super) fn render(
             0.0,
             false,
             None,
-            Some((HandShape::Pose(glove.pose), 1.0)),
+            Some((HandShape::Pose(glove.pose.clone()), 1.0)),
             HandLight::Off,
             lights.clone(),
         );
@@ -1313,11 +1314,7 @@ pub(super) fn captured_grip(
 
 /// Write `entry` into the overrides file, replacing its model and hand.
 pub(super) fn save_override(path: &Path, entry: &BakedGripEntry) -> std::io::Result<()> {
-    edit_overrides(path, |overrides| {
-        let entries = &mut overrides.grips.entries;
-        entries.retain(|e| e.model != entry.model || e.hand != entry.hand);
-        entries.push(entry.clone());
-    })
+    edit_overrides(path, |overrides| overrides.replace_grip(entry.clone()))
 }
 
 /// Write a captured support pose into the overrides file, replacing its
@@ -1328,6 +1325,7 @@ pub(super) fn save_support_override(
     pose: &SupportPose,
 ) -> std::io::Result<()> {
     edit_overrides(path, |overrides| {
+        overrides.unread.support.remove(model);
         overrides.support.insert(model.to_owned(), pose.clone());
     })
 }
@@ -1336,16 +1334,13 @@ pub(super) fn save_support_override(
 /// cannot be read is left alone rather than replaced.
 fn edit_overrides(path: &Path, edit: impl FnOnce(&mut GripOverrides)) -> std::io::Result<()> {
     let mut overrides = match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str::<GripOverrides>(&text)
-            .ok()
-            .filter(|overrides| overrides.grips.version == 1)
-            .ok_or_else(|| std::io::Error::other("unreadable overrides file"))?,
+        Ok(text) => GripOverrides::parse(&text)
+            .map_err(|_| std::io::Error::other("unreadable overrides file"))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => GripOverrides::default(),
         Err(error) => return Err(error),
     };
     edit(&mut overrides);
-    let mut bytes = serde_json::to_vec_pretty(&overrides)?;
-    bytes.push(b'\n');
+    let bytes = overrides.to_json()?;
     // Write then rename, so an interrupted save never leaves a torn file.
     let staged = path.with_extension("json.tmp");
     std::fs::write(&staged, bytes)?;
@@ -2332,5 +2327,31 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "{ hand edited, oops"
         );
+    }
+
+    /// One unreadable entry neither blocks a save nor is lost by it, unless
+    /// the save replaces its model and hand.
+    #[test]
+    fn saving_keeps_an_entry_this_build_cannot_read() {
+        let dir = crate::test_support::TempDir::new("pose-tool-unread");
+        let path = dir.path().join(crate::vr_grip::GRIP_OVERRIDES_FILE);
+        save_override(&path, &entry("right", 0.8)).unwrap();
+        let mut file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let unread = serde_json::json!({"model": "mug", "hand": "right", "grip": "newer"});
+        file["entries"].as_array_mut().unwrap().push(unread.clone());
+        std::fs::write(&path, file.to_string()).unwrap();
+        let saved = || -> Vec<serde_json::Value> {
+            let file: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            file["entries"].as_array().unwrap().clone()
+        };
+        save_override(&path, &entry("left", 0.8)).unwrap();
+        assert_eq!(saved().len(), 3);
+        assert!(saved().contains(&unread));
+        save_override(&path, &entry("right", 1.5)).unwrap();
+        assert_eq!(saved().len(), 2);
+        assert!(!saved().contains(&unread));
+        assert_eq!(GripOverrides::load(&path).unwrap().grips.entries.len(), 2);
     }
 }
