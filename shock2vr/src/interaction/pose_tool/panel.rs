@@ -36,7 +36,9 @@ const STATUS: Rect = Rect::new(10.0, 32.0, 380.0, 34.0);
 const SAVE: Rect = Rect::new(10.0, 74.0, 186.0, 44.0);
 const DISCARD: Rect = Rect::new(204.0, 74.0, 186.0, 44.0);
 const TEST_HOLD: Rect = Rect::new(10.0, 124.0, 186.0, 44.0);
-const ALIGN_AIM: Rect = Rect::new(204.0, 124.0, 186.0, 44.0);
+const ALIGN_LESS: Rect = Rect::new(204.0, 124.0, 40.0, 44.0);
+const ALIGN_AIM: Rect = Rect::new(248.0, 124.0, 98.0, 44.0);
+const ALIGN_MORE: Rect = Rect::new(350.0, 124.0, 40.0, 44.0);
 const POSE_HAND: Rect = Rect::new(10.0, 174.0, 186.0, 44.0);
 const SUPPORT_MODE: Rect = Rect::new(204.0, 174.0, 186.0, 44.0);
 const SLOT: Rect = Rect::new(10.0, 224.0, 186.0, 44.0);
@@ -54,7 +56,10 @@ pub(in crate::interaction) enum PanelEvent {
     Save,
     Discard,
     TestHold,
+    /// Align fully; the steps move it a tenth less or more.
     AlignAim,
+    AlignLess,
+    AlignMore,
     ShowAim,
     SwitchHand,
     SupportMode,
@@ -185,8 +190,9 @@ pub(in crate::interaction) struct PanelView {
     /// Test holding, and whether it can start or why not.
     pub test_hold: bool,
     pub test_hold_entry: Result<(), String>,
-    /// Whether Align aim can act, or why not.
+    /// Whether Align aim can act, or why not, and how far it is turned.
     pub align: Result<(), String>,
+    pub align_amount: Option<f32>,
     /// Whether the aim toggle can act or why not, whether it is on, and
     /// the aim error of the lines drawn this frame.
     pub aim: Result<(), String>,
@@ -304,6 +310,12 @@ pub(in crate::interaction) fn emit(
     } else {
         Err("nothing staged".to_owned())
     };
+    // The steps move a turn on Align's arc; a kept turn off it needs Align first.
+    let steps = view.align.clone().and_then(|()| {
+        view.align_amount
+            .map(|_| ())
+            .ok_or_else(|| "align first".to_owned())
+    });
     let buttons = [
         (SAVE, "Save".to_owned(), PanelEvent::Save, staged.clone()),
         (DISCARD, "Discard".to_owned(), PanelEvent::Discard, staged),
@@ -323,11 +335,20 @@ pub(in crate::interaction) fn emit(
             )
         },
         (
+            ALIGN_LESS,
+            "-".to_owned(),
+            PanelEvent::AlignLess,
+            steps.clone(),
+        ),
+        (
             ALIGN_AIM,
-            "Align aim".to_owned(),
+            view.align_amount.map_or("Align".to_owned(), |amount| {
+                format!("Align {:.0}%", amount * 100.0)
+            }),
             PanelEvent::AlignAim,
             view.align.clone(),
         ),
+        (ALIGN_MORE, "+".to_owned(), PanelEvent::AlignMore, steps),
         (
             POSE_HAND,
             format!("Pose: {}", hand_name(view.posing.other())),
@@ -369,10 +390,16 @@ pub(in crate::interaction) fn emit(
         ),
         (EXIT, "Exit".to_owned(), PanelEvent::Exit, Ok(())),
     ];
-    // Only a gun has an aim to show: the toggle is hidden for anything else.
+    // Only a gun has an aim to show: the toggle is hidden for anything else,
+    // as are Align's steps while it cannot act (too narrow to say why).
+    let hidden_when_disabled = [
+        PanelEvent::ShowAim,
+        PanelEvent::AlignLess,
+        PanelEvent::AlignMore,
+    ];
     let shown = buttons
         .into_iter()
-        .filter(|(_, _, event, enabled)| *event != PanelEvent::ShowAim || enabled.is_ok());
+        .filter(|(_, _, event, enabled)| !hidden_when_disabled.contains(event) || enabled.is_ok());
     for (rect, label, event, enabled) in shown {
         let color = match &enabled {
             Err(_) => BUTTON_DISABLED,
@@ -632,7 +659,8 @@ mod tests {
             fingertip: false,
             test_hold: false,
             test_hold_entry: Err("snapshot first".to_owned()),
-            align: Err("test hold first".to_owned()),
+            align: Err("no barrel".to_owned()),
+            align_amount: None,
             aim: Err("no barrel".to_owned()),
             show_aim: true,
             aim_error_deg: None,
@@ -796,28 +824,48 @@ mod tests {
     }
 
     #[test]
-    fn test_hold_needs_a_snapshot_and_align_needs_a_test_held_gun() {
+    fn test_hold_needs_a_snapshot_and_align_needs_a_gun() {
         let (canvas, targets) = emit(&view(Status::Ready), None);
         let shown = texts(&canvas);
         assert!(shown.contains(&"snapshot first".to_owned()));
-        assert!(shown.contains(&"test hold first".to_owned()));
+        assert!(shown.contains(&"no barrel".to_owned()));
+        assert!(
+            !shown.contains(&"+".to_owned()),
+            "no steps without a barrel"
+        );
         assert_eq!(event_at(&targets, TEST_HOLD.center()), None);
         assert_eq!(event_at(&targets, ALIGN_AIM.center()), None);
+        assert_eq!(event_at(&targets, ALIGN_MORE.center()), None);
         let mut holding = view(Status::Unsaved);
         holding.test_hold = true;
         holding.test_hold_entry = Err("snapshot first".to_owned());
         holding.align = Ok(());
+        holding.align_amount = Some(0.7);
         let (canvas, targets) = emit(&holding, None);
-        assert!(texts(&canvas).contains(&"End test hold".to_owned()));
+        let shown = texts(&canvas);
+        assert!(shown.contains(&"End test hold".to_owned()));
+        assert!(shown.contains(&"Align 70%".to_owned()), "{shown:?}");
         assert_eq!(
             event_at(&targets, TEST_HOLD.center()),
             Some(PanelEvent::TestHold),
             "ending test hold is always allowed"
         );
+        for (rect, event) in [
+            (ALIGN_LESS, PanelEvent::AlignLess),
+            (ALIGN_AIM, PanelEvent::AlignAim),
+            (ALIGN_MORE, PanelEvent::AlignMore),
+        ] {
+            assert_eq!(event_at(&targets, rect.center()), Some(event));
+        }
+        // A kept turn off Align's arc: Align, but no steps from it.
+        holding.align_amount = None;
+        let (canvas, targets) = emit(&holding, None);
+        assert!(texts(&canvas).contains(&"Align".to_owned()));
         assert_eq!(
             event_at(&targets, ALIGN_AIM.center()),
             Some(PanelEvent::AlignAim)
         );
+        assert_eq!(event_at(&targets, ALIGN_LESS.center()), None);
     }
 
     #[test]

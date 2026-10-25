@@ -1250,8 +1250,9 @@ fn support_region_overlay(
     )
 }
 
-/// A grip's aim in the grip preview, whose origin is the controller's grip
-/// frame (where the glove is drawn): `AimLines` exactly as play computes it.
+/// A grip's aim in the grip preview, whose origin is the glove's frame: the
+/// controller is turned back off it by the grip's glove turn. `AimLines`
+/// exactly as play computes it.
 pub(crate) fn grip_aim(grip: &ResolvedGrip, muzzle: MuzzleFallback) -> AimLines {
     use shock2vr::vr_support::GripPose;
     AimLines::new(
@@ -1261,10 +1262,10 @@ pub(crate) fn grip_aim(grip: &ResolvedGrip, muzzle: MuzzleFallback) -> AimLines 
         },
         grip.item_scale,
         muzzle,
-        GripPose {
+        grip.controller_pose(GripPose {
             position: vec3(0.0, 0.0, 0.0),
             rotation: Quaternion::one(),
-        },
+        }),
     )
 }
 

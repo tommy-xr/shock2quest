@@ -26,7 +26,7 @@ use crate::hand_pose::{FingerBones, HandShape, Pose};
 use crate::vr_config::Handedness;
 use crate::vr_grip::{BakedGripEntry, FingerPose, GripOverrides, ResolvedGrip};
 use crate::vr_support::{GripPose, SupportPose};
-pub(super) use crate::weapon_muzzle::{AimLines, CONTROLLER_AIM};
+pub(super) use crate::weapon_muzzle::AimLines;
 
 // Distances below are physical (metres): tracked hands, the glove and the
 // held item keep their real size at any world scale. `world` converts.
@@ -208,17 +208,20 @@ pub(super) struct GripPoseTool {
     fingertip: bool,
     /// Test hold: the posing hand's controller holds the item as play does.
     pub test_hold: Option<TestHold>,
-    /// The held item's muzzle (model space) if gameplay knows its barrel:
-    /// captures keep its aim, and Align aim sets it.
+    /// The held item's muzzle (model space) if gameplay knows its barrel,
+    /// which Align aim turns the glove to fire down the controller.
     pub muzzle: Option<crate::weapon_muzzle::MuzzleFallback>,
+    /// How far the grip's glove is turned toward that (0..=1, `None` for no
+    /// barrel), which Align's steps move.
+    pub align_amount: Option<f32>,
     /// The item's pump travel as frozen on the bench (scaled model space,
     /// zero for no pump): play puts the support palm at its anchor plus this.
     pub pump_travel: Vector3<f32>,
     /// Whether a gun's aim is shown (off hides its lines and readouts, test
     /// hold's too), and while it is, where the gun fires and where its
     /// controller aims (unturned bench, or test-held with the controller
-    /// tracked): on the bench, the glove's grip frame is where the
-    /// controller would be.
+    /// tracked): on the bench, the controller is where the glove's would be
+    /// (`ResolvedGrip::controller_pose`).
     pub show_aim: bool,
     pub aim: Option<AimLines>,
     /// How the bench is turned for viewing about `pivot`, and while the
@@ -309,6 +312,7 @@ impl GripPoseTool {
             fingertip: false,
             test_hold: None,
             muzzle: None,
+            align_amount: None,
             pump_travel: Vector3::new(0.0, 0.0, 0.0),
             show_aim: true,
             aim: None,
@@ -383,10 +387,10 @@ impl GripPoseTool {
         }
     }
 
-    /// Whether Align aim can act, or why not: on a test-held gun.
+    /// Whether Align aim can act, or why not: on a gun's primary grip.
     pub fn align_entry(&self) -> Result<(), String> {
-        if self.test_hold.is_none() {
-            Err("test hold first".to_owned())
+        if self.support {
+            Err("primary grip only".to_owned())
         } else if self.muzzle.is_none() {
             Err("no barrel".to_owned())
         } else {
@@ -449,12 +453,12 @@ impl GripPoseTool {
         true
     }
 
-    /// Where the posing glove holds the item: on the bench, or in test hold
-    /// at its controller once tracked.
-    pub fn holding(&self) -> GripPose {
+    /// Where the posing glove holds the item with `grip`: on the bench, or
+    /// in test hold where its controller draws it once tracked.
+    pub fn holding(&self, grip: &ResolvedGrip) -> GripPose {
         self.test_hold
             .and_then(|hold| hold.controller)
-            .unwrap_or(self.hand_pose)
+            .map_or(self.hand_pose, |controller| grip.glove_pose(controller))
     }
 
     /// The item is at its controller, off the (turnable) bench.
@@ -628,6 +632,7 @@ impl GripPoseTool {
             test_hold: self.test_hold.is_some(),
             test_hold_entry: self.test_hold_entry(),
             align: self.align_entry(),
+            align_amount: self.align_amount,
             aim: self.aim_entry(),
             show_aim: self.show_aim,
             aim_error_deg: self.aim.map(|aim| aim.error_deg),
@@ -1063,7 +1068,7 @@ pub(super) fn render(
     }
     let held = grip.map(|grip| {
         let trigger = tool.preview_trigger();
-        (tool.holding(), grip.fingers.hand_shape_at(trigger))
+        (tool.holding(grip), grip.fingers.hand_shape_at(trigger))
     });
     let (posed_glove, frozen) = if tool.support {
         (support, held)
@@ -1174,8 +1179,8 @@ pub(super) fn render_panel(
 }
 
 /// A gun's two aim lines (`AimLines`): where it fires, from its muzzle, and
-/// where its controller aims, from the controller (on the bench, its glove's
-/// grip frame). Drawn turned with the bench.
+/// where its controller aims, from the controller (on the bench, where the
+/// glove's would be). Drawn turned with the bench.
 pub(super) fn render_aim(tool: &GripPoseTool) -> Vec<SceneObject> {
     let Some(aim) = tool.aim else {
         return Vec::new();
@@ -1212,7 +1217,8 @@ pub(super) fn render_aim(tool: &GripPoseTool) -> Vec<SceneObject> {
     lines
 }
 
-/// Where a grip puts its item for a hand pose (as `fit_held_items` places it).
+/// Where a grip puts its item for a glove pose (`ResolvedGrip::glove_pose`
+/// of the controller, as `fit_held_items` places it).
 pub(super) fn item_pose(hand: GripPose, grip: &ResolvedGrip, contact: Vector3<f32>) -> GripPose {
     let offset = grip.offset + grip.rotation.rotate_vector(contact * grip.item_scale);
     GripPose {
@@ -1236,31 +1242,6 @@ pub(super) fn hand_for_item(
     }
 }
 
-/// Which way `grip`'s item fires in hand space, given its barrel (item
-/// space, `weapon_muzzle`'s axis).
-pub(super) fn firing_direction(grip: &ResolvedGrip, barrel: Vector3<f32>) -> Vector3<f32> {
-    grip.rotation.rotate_vector(barrel).normalize()
-}
-
-/// `grip` turned about the hand's origin so its item fires along `target`
-/// (hand space). The turn is the shortest one, which has no twist about the
-/// firing direction: the item's roll about its barrel is kept, as are where
-/// on the item the hand sits, its fingers and the item's scale.
-pub(super) fn aimed(
-    grip: ResolvedGrip,
-    barrel: Vector3<f32>,
-    target: Vector3<f32>,
-) -> ResolvedGrip {
-    let turn = Quaternion::from_arc(firing_direction(&grip, barrel), target.normalize(), None);
-    // The item's origin (offset plus its contact term) turns about the hand;
-    // the contact term turns with the rotation, so only the offset is left.
-    ResolvedGrip {
-        offset: turn.rotate_vector(grip.offset),
-        rotation: (turn * grip.rotation).normalize(),
-        ..grip
-    }
-}
-
 /// The grip that holds the item (`item`, drawn at `item_scale` about
 /// `contact`) where the glove fitted over a tracked hand (`fit`) holds it,
 /// and the hand pose that draws that glove. The grip is in authored units
@@ -1275,7 +1256,7 @@ pub(super) fn captured_grip(
     personal: f32,
 ) -> (ResolvedGrip, GripPose) {
     let to_hand = fit.rotation.invert();
-    // The item in the controller-grip frame that draws the glove.
+    // The item in the frame that draws the glove.
     let origin = to_hand.rotate_vector(item.position - fit.position);
     let rotation = (to_hand * item.rotation).normalize();
     let grip = ResolvedGrip {
@@ -1284,6 +1265,7 @@ pub(super) fn captured_grip(
         // The item origin, less the per-item contact placement adds.
         offset: origin - rotation.rotate_vector(contact * item_scale),
         rotation,
+        hand_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
         fingers: crate::vr_grip::FingerPose::Bones {
             bones: fit.bones,
             trigger_bones: None,
@@ -1357,6 +1339,7 @@ mod tests {
             pose_family: "captured".into(),
             offset: vec3(0.1, -0.2, 0.3),
             rotation: Quaternion::from_angle_y(Deg(30.0)),
+            hand_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             fingers: FingerPose::curls([0.5; 5]),
             contacts: [None; 5],
             anchor: [0.0; 3],
@@ -1383,59 +1366,80 @@ mod tests {
         a.normalize().dot(b.normalize()).abs() > 1.0 - 1e-6
     }
 
-    /// Where the hand's origin is in the item's frame (no contact offset).
-    fn hand_on_item(grip: &ResolvedGrip) -> cgmath::Vector3<f32> {
-        grip.rotation.invert().rotate_vector(-grip.offset)
-    }
-
+    /// Aligning turns only the glove off the controller, by a share of the
+    /// shortest arc that reads back: the hand keeps its place on the item, and
+    /// play holds the item at controller · turn · grip.
     #[test]
-    fn a_capture_keeps_the_previous_grips_aim_and_takes_its_roll_position_and_fingers() {
-        let previous = grip();
-        let barrel = firing_direction(&previous, BARREL);
-        // The mimed hand: rolled 30 degrees about the barrel, then swung 28
-        // degrees off it (about an axis across the barrel), as a wrist held
-        // without the controller is.
-        let roll = Quaternion::from_axis_angle(barrel, Deg(30.0));
-        let across = barrel.cross(Vector3::unit_y()).normalize();
-        let swing = Quaternion::from_axis_angle(across, Deg(28.0));
-        let captured = ResolvedGrip {
-            offset: vec3(-0.05, 0.02, 0.07),
-            rotation: swing * roll * previous.rotation,
-            fingers: FingerPose::curls([0.9; 5]),
-            ..grip()
-        };
-        assert!(
-            firing_direction(&captured, BARREL).angle(barrel) > Deg(27.0).into(),
-            "the capture aims off the previous grip"
-        );
-        let kept = aimed(captured.clone(), BARREL, barrel);
-        let error = Deg::from(firing_direction(&kept, BARREL).angle(barrel)).0;
-        assert!(
-            error < 1e-3,
-            "fires as the previous grip did: {error} deg off"
-        );
-        assert!(
-            same_rotation(kept.rotation, roll * previous.rotation),
-            "with the capture's roll about the barrel"
-        );
-        assert!(
-            (hand_on_item(&kept) - hand_on_item(&captured)).magnitude() < 1e-5,
-            "the hand sits where it was captured on the item"
-        );
-        assert_eq!(kept.fingers, captured.fingers);
-        assert_eq!(kept.item_scale, captured.item_scale);
-    }
-
-    #[test]
-    fn aligning_aims_the_barrel_down_the_controller() {
+    fn aligning_turns_the_glove_so_the_barrel_fires_down_the_controller() {
+        use crate::weapon_muzzle::{aim_error_deg, aim_turn};
         let skewed = ResolvedGrip {
             rotation: Quaternion::from_angle_y(Deg(28.2)) * Quaternion::from_angle_x(Deg(2.4)),
             ..grip()
         };
-        let aligned = aimed(skewed.clone(), BARREL, CONTROLLER_AIM);
-        let error = Deg::from(firing_direction(&aligned, BARREL).angle(CONTROLLER_AIM)).0;
-        assert!(error < 1e-3, "{error} deg off the controller");
-        assert!((hand_on_item(&aligned) - hand_on_item(&skewed)).magnitude() < 1e-5);
+        let before = aim_error_deg(skewed.rotation, BARREL);
+        assert!(before > 25.0, "{before}");
+        let controller = GripPose {
+            position: vec3(1.0, 2.0, 3.0),
+            rotation: Quaternion::from_angle_z(Deg(35.0)) * Quaternion::from_angle_x(Deg(-20.0)),
+        };
+        for (amount, expected) in [(0.0, before), (0.5, before * 0.5), (1.0, 0.0)] {
+            let aligned = ResolvedGrip {
+                hand_rotation: aim_turn(skewed.rotation, BARREL, amount),
+                ..skewed.clone()
+            };
+            let error = aim_error_deg(aligned.hand_rotation * aligned.rotation, BARREL);
+            assert!(
+                (error - expected).abs() < 1e-2,
+                "{amount}: {error} vs {expected}"
+            );
+            // The hand on the gun is untouched: the glove holds the item as before.
+            assert_eq!(
+                (aligned.offset, aligned.rotation, &aligned.fingers),
+                (skewed.offset, skewed.rotation, &skewed.fingers)
+            );
+            let glove = aligned.glove_pose(controller);
+            let item = item_pose(glove, &aligned, vec3(0.0, 0.0, 0.0));
+            let origin = controller.position
+                + (controller.rotation * aligned.hand_rotation).rotate_vector(aligned.offset);
+            assert!((item.position - origin).magnitude() < 1e-5);
+            let read = crate::weapon_muzzle::aim_turn_amount(
+                aligned.rotation,
+                BARREL,
+                aligned.hand_rotation,
+            );
+            assert!(
+                (read.unwrap() - amount).abs() < 1e-3,
+                "{read:?} vs {amount}"
+            );
+            assert!(same_rotation(
+                item.rotation,
+                controller.rotation * aligned.hand_rotation * aligned.rotation
+            ));
+            let back = aligned.controller_pose(glove);
+            assert!(same_rotation(back.rotation, controller.rotation));
+            // Firing in play reads as the bench does.
+            let lines = AimLines::new(
+                item,
+                1.0,
+                crate::weapon_muzzle::MuzzleFallback {
+                    point: cgmath::Point3::new(0.0, 0.0, 0.0),
+                    axis: BARREL,
+                },
+                controller,
+            );
+            assert!((lines.error_deg - expected).abs() < 1e-2);
+        }
+        assert_eq!(
+            aim_turn(skewed.rotation, BARREL, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            "no turn is exactly none, so it is not saved"
+        );
+        // A turn kept from another grip is off this one's arc: no share of it.
+        let other = Quaternion::from_angle_x(Deg(15.0));
+        assert_eq!(
+            crate::weapon_muzzle::aim_turn_amount(skewed.rotation, BARREL, other),
+            None
+        );
     }
 
     #[test]
@@ -1588,7 +1592,7 @@ mod tests {
         tool.viewer = vec3(0.0, 0.0, 5.0);
         assert!(tool.toggle_test_hold());
         assert_eq!(
-            tool.holding().position,
+            tool.holding(&grip()).position,
             tool.hand_pose.position,
             "on the bench until tracked"
         );
@@ -1601,13 +1605,13 @@ mod tests {
             .as_mut()
             .unwrap()
             .follow(Some(controller), 0.0);
-        assert_eq!(tool.holding().position, controller.position);
+        assert_eq!(tool.holding(&grip()).position, controller.position);
         assert_eq!(tool.turn_matrix(), Matrix4::from_scale(1.0), "unturned");
         assert!(tool.views().is_none());
         // Lost: it stays where the controller last was.
         tool.test_hold.as_mut().unwrap().follow(None, 0.0);
         assert!(!tool.test_hold.unwrap().tracked);
-        assert_eq!(tool.holding().position, controller.position);
+        assert_eq!(tool.holding(&grip()).position, controller.position);
         let status = tool.panel_view().status.text();
         assert_eq!(status, "Pick up the Right controller");
     }

@@ -1276,13 +1276,14 @@ impl GripEditor {
             ui.label(&self.message);
         }
         ui.small("Drag sliders or click values to type. Ball is a cupped starting pose; adjust curls to the item. Unsaved drafts stay when switching models.");
-        if let Some(muzzle) = self.muzzle {
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.show_aim, "Show aim");
-                if self.show_aim {
-                    ui.label(aim_readout(&entry.grip, muzzle));
-                }
-            });
+        if let Some(muzzle) = self.muzzle
+            && ui
+                .add_enabled_ui(!busy, |ui| {
+                    aim_controls(ui, &mut self.show_aim, &mut entry.grip, muzzle)
+                })
+                .inner
+        {
+            entry.authored = true;
         }
         // Build first, then select the requested camera so the initial model
         // framing cannot overwrite it. show() keeps the same camera on edits.
@@ -1346,6 +1347,57 @@ impl GripEditor {
 fn aim_readout(grip: &ResolvedGrip, muzzle: MuzzleFallback) -> String {
     let deg = crate::model_preview::grip_aim(grip, muzzle).error_deg;
     format!("Fires {deg:.1}° off the controller's aim (orange: fires, cyan: aims)")
+}
+
+/// A gun's aim: the toggle and readout, then Align, which turns the glove
+/// off the controller (`hand_rotation`) by the slider's share of the way to
+/// firing straight, as the VR workbench does; the hand's hold on the gun is
+/// untouched. Whether the grip changed.
+fn aim_controls(
+    ui: &mut egui::Ui,
+    show_aim: &mut bool,
+    grip: &mut ResolvedGrip,
+    muzzle: MuzzleFallback,
+) -> bool {
+    use cgmath::One;
+    use shock2vr::weapon_muzzle::{aim_turn, aim_turn_amount, turn_deg};
+    let mut amount = None;
+    ui.horizontal(|ui| {
+        ui.checkbox(show_aim, "Show aim");
+        if *show_aim {
+            ui.label(aim_readout(grip, muzzle));
+        }
+    });
+    ui.horizontal(|ui| {
+        if ui.button("Align aim").clicked() {
+            amount = Some(1.0);
+        }
+        // A turn kept off Align's arc (from an earlier grip) has no share:
+        // the slider starts it over from none.
+        let along = aim_turn_amount(grip.rotation, muzzle.axis, grip.hand_rotation);
+        let mut percent = along.unwrap_or(0.0) * 100.0;
+        if ui
+            .add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix("%"))
+            .changed()
+        {
+            amount = Some(percent / 100.0);
+        }
+        if !grip.hand_rotation.is_one() {
+            let off_arc = if along.is_none() { ", off the aim" } else { "" };
+            ui.label(format!(
+                "Hand turned {:.1}°{off_arc}",
+                turn_deg(grip.hand_rotation)
+            ));
+            if ui.button("Clear hand rotation").clicked() {
+                amount = Some(0.0);
+            }
+        }
+    });
+    let Some(amount) = amount else {
+        return false;
+    };
+    grip.hand_rotation = aim_turn(grip.rotation, muzzle.axis, amount);
+    true
 }
 
 /// Each value offers a coarse slider, small nudges, and optional exact entry.
@@ -1476,6 +1528,48 @@ pub(crate) mod tests {
                 .rotation
                 .rotate_vector(muzzle.point.to_vec() * turned.item_scale);
         assert!((aim.muzzle - tip).magnitude() < 1e-6);
+    }
+
+    /// Align turns only the glove off the controller, so the readout goes to
+    /// 0 with the hand's hold on the gun untouched; clearing turns it back.
+    #[test]
+    fn align_aim_turns_the_glove_so_the_readout_reads_straight() {
+        use cgmath::{Rotation3, point3, vec3};
+        let library: GripLibrary =
+            serde_json::from_str(include_str!("../../../assets/vr-weapon-grips.json")).unwrap();
+        let shipped = library.lookup("sg_h", "right").unwrap();
+        let muzzle = MuzzleFallback {
+            point: point3(-1.2, 0.1, 0.0),
+            axis: vec3(-1.0, 0.0, 0.0),
+        };
+        let mut grip = ResolvedGrip {
+            rotation: Quaternion::from_angle_y(Deg(15.0)) * shipped.rotation,
+            ..shipped.clone()
+        };
+        let before = grip.clone();
+        let mut show = true;
+        let drawn = click_button("Align aim", |ui| {
+            aim_controls(ui, &mut show, &mut grip, muzzle);
+        });
+        assert_ne!(grip.hand_rotation, before.hand_rotation);
+        assert_eq!(
+            ResolvedGrip {
+                hand_rotation: before.hand_rotation,
+                ..grip.clone()
+            },
+            before,
+            "only the glove turns"
+        );
+        assert!(
+            aim_readout(&grip, muzzle).starts_with("Fires 0.0°"),
+            "{}",
+            aim_readout(&grip, muzzle)
+        );
+        assert!(drawn.iter().any(|t| t == "Hand turned 15.0°"), "{drawn:?}");
+        click_button("Clear hand rotation", |ui| {
+            aim_controls(ui, &mut show, &mut grip, muzzle);
+        });
+        assert_eq!(grip, before);
     }
 
     #[test]

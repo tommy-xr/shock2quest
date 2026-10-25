@@ -881,9 +881,6 @@ for (const [name, template, inPlane] of [["shotgun", -19, [1, 1, 0]], ["wrench",
       if (right.muzzle) {
         near(left.muzzle!, mirrorX(right.muzzle), "muzzle");
         near(left.fires!, mirrorX(right.fires!), "firing direction");
-        // Kept aim: it fires down the left controller as the right one does.
-        const off = (Math.acos(Math.min(1, -left.fires![2])) * 180) / Math.PI;
-        assert.ok(off < 1, `shots leave ${off} deg off the left controller`);
         // And the free right hand still supports it.
         await attachSupportHand(game, "left");
         const support = (await game.info()).player.hand_grips.find((g) => g.hand === "left")!.support;
@@ -944,9 +941,6 @@ test(
       entries: { model: string; hand: string; grip: ResolvedGrip }[];
     };
     assert.deepEqual(saved.entries.map((e) => [e.model, e.hand]), [["sg_h", "left"]]);
-    // The capture kept the mirrored grip's aim: in the left frame the
-    // barrel still runs along -X, down the controller.
-    assert.ok(aimOff(saved.entries[0]!.grip) < 0.1, `left capture aim ${aimOff(saved.entries[0]!.grip)}`);
 
     // In play the left hand takes its own saved pose.
     await game.input.setMany({
@@ -1138,14 +1132,16 @@ const yaw = (degrees: number): Quat => {
   return [0, Math.sin(half), 0, Math.cos(half)];
 };
 /** Degrees between where a shotgun grip fires (`sg_h`'s barrel is model -X)
- * and the controller's aim (-Z), both in the hand's frame. */
+ * and the controller's aim (-Z), in the controller's frame: the glove's turn
+ * off it included. */
 const aimOff = (grip: ResolvedGrip): number => {
-  const barrel = quatRotate(quat(grip.rotation), [-1, 0, 0]);
+  const turn: Quat = grip.hand_rotation ? quat(grip.hand_rotation) : [0, 0, 0, 1];
+  const barrel = quatRotate(quatMultiply(turn, quat(grip.rotation)), [-1, 0, 0]);
   return (Math.acos(Math.max(-1, Math.min(1, -barrel[2]))) * 180) / Math.PI;
 };
 
 test(
-  "grip pose tool: a gun capture keeps its aim; test hold shows it and Align aim fires it down the controller",
+  "grip pose tool: a gun capture keeps the hand where it was; Align aim turns the glove to fire down the controller",
   { skip: !enabled, timeout: 300_000 },
   async () => {
     using data = isolatedDataRoot([
@@ -1186,10 +1182,11 @@ test(
     await game.step({ frames: 2 });
     const tool = async () => (await rightGrip()).pose_tool!;
     assert.equal((await tool()).panel.test_hold_disabled, "snapshot first");
-    assert.equal((await tool()).panel.align_disabled, "test hold first");
+    assert.equal((await tool()).panel.align_disabled, null, "a gun aligns on the bench");
+    assert.equal((await tool()).align_amount, 0);
 
-    // On the bench the aim shows by default, from the glove's grip frame:
-    // what play would fire with this grip. The panel's toggle hides it.
+    // On the bench the aim shows by default, from where the glove puts the
+    // controller: what play would fire with this grip. The toggle hides it.
     const aimDraws = async () =>
       (await game.scene.objects()).objects.filter((o) => o.source === "grip_workbench_aim").length;
     assert.equal((await tool()).panel.show_aim, true);
@@ -1222,8 +1219,12 @@ test(
     const captured = (await rightGrip()).grip!;
     assert.equal((await tool()).staged, true, `staged (${(await tool()).capture_failure})`);
     assert.ok("bones" in captured, "the capture's fingers apply");
-    assert.ok(Math.abs(aimOff(captured) - 20) < 0.05,
-      `the capture keeps the previous grip's aim: ${aimOff(captured)} deg`);
+    // The capture is the tracked hand as it held the gun, aim and all: no
+    // longer the previous grip's 20 degrees.
+    const capturedOff = aimOff(captured);
+    assert.ok(Math.abs(capturedOff - 20) > 1, `the capture takes the hand's own aim: ${capturedOff} deg`);
+    assert.equal(captured.hand_rotation, undefined, "no glove turn to keep");
+    assert.ok(Math.abs((await tool()).aim_error_deg! - capturedOff) < 0.05, "the bench reads it");
     assert.ok(distance(xyz(captured.offset), xyz(skewed.offset)) > 1e-3, "and takes the hand's position");
 
     // X test-holds it: the right controller holds the gun as play would.
@@ -1232,7 +1233,7 @@ test(
     await game.step({ frames: 2 });
     let posed = await tool();
     assert.deepEqual(posed.test_hold, { tracked: true });
-    assert.ok(Math.abs(posed.aim_error_deg! - 20) < 0.05, `aim error ${posed.aim_error_deg}`);
+    assert.ok(Math.abs(posed.aim_error_deg! - capturedOff) < 0.05, `aim error ${posed.aim_error_deg}`);
     assert.equal(posed.panel.status, `Aim off by ${posed.aim_error_deg!.toFixed(1)} deg`);
     const aimLines = (await game.scene.objects()).objects.filter((o) => o.source === "grip_workbench_aim");
     assert.equal(aimLines.length, 4, "two lines, halo and core each");
@@ -1246,19 +1247,37 @@ test(
     await game.input.set("right_hand.tracked", 1);
     await game.step({ frames: 2 });
 
-    // Align aim fires it down the controller.
-    await aimAtButton(game, "left", "AlignAim", unit);
-    await game.step({ frames: 1 });
-    await click(game, "left");
+    // Align aim turns the glove off the controller so the gun fires down it;
+    // the hand's hold on the gun is untouched.
+    const pressPanel = async (button: "AlignAim" | "AlignLess" | "AlignMore") => {
+      await aimAtButton(game, "left", button, unit);
+      await game.step({ frames: 1 });
+      await click(game, "left");
+    };
+    await pressPanel("AlignAim");
     posed = await tool();
     assert.ok(posed.aim_error_deg! < 0.05, `aligned: ${posed.aim_error_deg}`);
-    assert.ok(aimOff((await rightGrip()).grip!) < 0.05);
+    assert.ok(Math.abs(posed.align_amount! - 1) < 1e-3, `${posed.align_amount}`);
+    const aligned = (await rightGrip()).grip!;
+    assert.ok(aimOff(aligned) < 0.05);
+    assert.ok(aligned.hand_rotation, "the glove is turned");
+    assertClose(aligned.rotation, captured.rotation, 1e-5, "the hand holds the gun as captured");
+    assertClose(aligned.offset, captured.offset, 1e-5, "where it was captured");
     assert.equal(posed.staged, true);
+    // A step back leaves a tenth of the error; a step on aligns it again.
+    await pressPanel("AlignLess");
+    posed = await tool();
+    assert.ok(Math.abs(posed.align_amount! - 0.9) < 1e-3, `${posed.align_amount}`);
+    assert.ok(Math.abs(posed.aim_error_deg! - capturedOff * 0.1) < 0.1,
+      `90%: ${posed.aim_error_deg} of ${capturedOff}`);
+    await pressPanel("AlignMore");
+    assert.ok((await tool()).aim_error_deg! < 0.05);
     await saveOnPanel(game, "left", unit);
     assert.equal((await tool()).saved, true);
     const saved = JSON.parse(readFileSync(path, "utf8")) as { entries: { model: string; hand: string; grip: ResolvedGrip }[] };
     assert.deepEqual(saved.entries.map((e) => [e.model, e.hand]), [["sg_h", "right"]]);
     assert.ok(aimOff(saved.entries[0]!.grip) < 0.05, "saved aligned");
+    assert.ok(saved.entries[0]!.grip.hand_rotation, "with its glove turn");
 
     // Leave, drop it and pick it up again: in play it fires down the controller.
     await game.input.trigger("ToggleGripPoseTool");

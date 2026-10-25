@@ -1420,7 +1420,7 @@ export interface WaitForOptions {
 
 /** Diagnostics from the same resolved pose used by gameplay and rendering. */
 export interface HandGrip {
-  /** Visible fitted mesh bounds in controller-local space, excluding the glove. */
+  /** Visible fitted mesh bounds in the glove's frame (the grip's offset and rotation), excluding the glove. */
   item_bounds: [Vec3, Vec3] | null;
   /** Manual Explorer override; solver contact samples do not validate this pose. */
   authored: boolean;
@@ -1443,7 +1443,7 @@ export interface HandGrip {
   finger_curls: FingerCurls | null;
   /** The finger bones drawn at `visual_trigger` (bone grips; null for curls). */
   finger_bones: ResolvedGrip["rotation"][] | null;
-  /** Glove pose following a physical melee body; null uses raw tracked pose. */
+  /** Where the held hand's glove is drawn when not at its tracked pose: following a physical body, or its controller turned by the grip's `hand_rotation`; null uses the raw tracked pose. */
   glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
   /** The grip pose tool posing this hand: an unsaved capture is applied
    * live (`staged`) until saved; a failed save stays staged.
@@ -1471,10 +1471,13 @@ export interface HandGrip {
     /** Test hold: the posing hand's controller holds the item as play
      * would; `tracked` false leaves it where that controller was last seen. */
     test_hold: { tracked: boolean } | null;
-    /** While a gun's aim is shown (on the bench from its glove's grip frame,
-     * or test-held with its controller tracked): degrees between where it
-     * fires and where the controller aims. */
+    /** While a gun's aim is shown (on the bench from where its glove puts
+     * the controller, or test-held with its controller tracked): degrees
+     * between where it fires and where the controller aims. */
     aim_error_deg: number | null;
+    /** A gun's glove turn as a share (0..1) of Align aim's full turn; null
+     * for no barrel. */
+    align_amount: number | null;
     /** The workbench's control panel: its status line, why "Pose: <other
      * hand>" is disabled (null when enabled), the pointer on it in canvas
      * pixels, and where it and each enabled button are (world space). */
@@ -1498,7 +1501,7 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "ResetView" | "Exit";
+          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "AlignLess" | "AlignMore" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;
@@ -1579,6 +1582,8 @@ export type ResolvedGrip = {
   pose_family: string;
   offset: {x:number;y:number;z:number};
   rotation: {s:number;v:{x:number;y:number;z:number}};
+  /** The glove's turn off its controller; absent for none. */
+  hand_rotation?: {s:number;v:{x:number;y:number;z:number}};
   contacts: (Vec3 | null)[];
   anchor: Vec3;
   score: number;

@@ -85,7 +85,7 @@ impl VrInteraction {
             } * grip.item_scale;
             let profile = profile();
             let anchor = profile.anchor_in_frame(handedness, mirror) * grip.item_scale;
-            let pose = poses[primary];
+            let pose = grip.glove_pose(poses[primary]);
             let rotation = pose.rotation.normalize() * grip.rotation;
             let model = held.physical_model_pose(world).unwrap_or(GripPose {
                 position: pose.point(rigs[primary].palm_in_world())
