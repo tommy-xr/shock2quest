@@ -2013,12 +2013,9 @@ impl VrInteraction {
                     entry.grip.item_scale =
                         grip.item_scale / crate::world_scale::WorldScale::active().personal();
                 }
-                let classes = self
-                    .grip_library
-                    .as_ref()
-                    .map(|library| library.classes.clone())
-                    .unwrap_or_default();
-                pose_tool::save_override(&tool.overrides_path, entry, &classes).map(|()| {
+                let none = crate::vr_grip::GripClasses::default();
+                let classes = self.grip_library.as_ref().map_or(&none, |l| &l.classes);
+                pose_tool::save_override(&tool.overrides_path, entry, classes).map(|()| {
                     // Keep the in-memory library in step with the file: one
                     // headset entry per model and hand, at the saved scale.
                     if let Some(library) = self.grip_library.as_mut() {
@@ -2481,6 +2478,13 @@ impl PlayerInteraction for VrInteraction {
                     .entries
                     .extend(magazines.entries);
             }
+            // Before the overrides: their entries are keyed by class on prepend.
+            self.grip_library.as_mut().unwrap().classes = crate::vr_grip::GripClasses::load(
+                assets
+                    .get_opt(&TEXT_IMPORTER, crate::vr_grip::GRIP_CLASSES_FILE)
+                    .as_deref()
+                    .map(String::as_str),
+            );
             // Read from the data root directly: a loose file there is shadowed
             // by the bundled assets when going through the asset cache.
             if let Some(overrides) = crate::vr_grip::GripOverrides::load(
@@ -2489,12 +2493,6 @@ impl PlayerInteraction for VrInteraction {
                 self.grip_library.as_mut().unwrap().prepend(overrides.grips);
                 crate::vr_support::apply_overrides(&mut self.support_profiles, &overrides.support);
             }
-            self.grip_library.as_mut().unwrap().classes = crate::vr_grip::GripClasses::load(
-                assets
-                    .get_opt(&TEXT_IMPORTER, crate::vr_grip::GRIP_CLASSES_FILE)
-                    .as_deref()
-                    .map(String::as_str),
-            );
             self.grip_hints = assets
                 .get_opt(&TEXT_IMPORTER, "astra-vr-grip-hints.json")
                 .and_then(|text| serde_json::from_str(&text).ok())
@@ -2678,14 +2676,13 @@ impl PlayerInteraction for VrInteraction {
                 println!(
                     "SHOCK2QUEST_VR_GRIP model={model} hand={hand_name} source={source} elapsed_ms={solve_ms:.3}"
                 );
+                let library = self.grip_library.as_ref().unwrap();
                 if resolved.is_none() {
-                    let matching = self
-                        .grip_library
-                        .as_ref()
-                        .unwrap()
+                    let key = library.classes.canonical(&model);
+                    let matching = library
                         .entries
                         .iter()
-                        .filter(|e| e.model == model && e.hand == hand_name)
+                        .filter(|e| e.model == key && e.hand == hand_name)
                         .count();
                     println!(
                         "SHOCK2QUEST_VR_GRIP_REJECT model={model} hand={hand_name} matching_entries={matching} reason=missing_or_invalid_pose"
@@ -2693,13 +2690,13 @@ impl PlayerInteraction for VrInteraction {
                 }
                 let authored = !bake
                     && resolved.is_some()
-                    && self.grip_library.as_ref().unwrap().entries.iter().any(|e| {
+                    && library.entries.iter().any(|e| {
                         let mut expected = e.grip.clone();
                         let key = if let Some(magazine) = magazine.as_ref() {
                             expected.item_scale = magazine.item_scale;
                             crate::vr_magazine::grip_model(&magazine.source).unwrap_or(&model)
                         } else {
-                            &model
+                            library.classes.canonical(&model)
                         };
                         e.model == key
                             && e.hand == hand_name
@@ -3224,8 +3221,7 @@ impl PlayerInteraction for VrInteraction {
         let class = self
             .grip_library
             .as_ref()
-            .and_then(|library| library.classes.members(&held.model))
-            .map(|members| (members.len(), members[0].clone()));
+            .and_then(|library| library.classes.label(&held.model));
         self.support = None;
         self.slide = None;
         self.pose_tool_pulses.clear();

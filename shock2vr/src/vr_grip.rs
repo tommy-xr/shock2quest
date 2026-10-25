@@ -1823,9 +1823,9 @@ pub struct GripLibrary {
 }
 
 impl GripLibrary {
-    /// Prepared poses are selected by model identity (its class's) and hand.
-    /// Fit fingerprints and solver revisions are provenance, never runtime
-    /// eligibility gates.
+    /// Prepared poses are selected by model identity (its class's canonical
+    /// model) and hand. Fit fingerprints and solver revisions are provenance,
+    /// never runtime eligibility gates.
     pub fn lookup(&self, model: &str, hand: &str) -> Option<&ResolvedGrip> {
         if self.version != 1 {
             return None;
@@ -1833,7 +1833,7 @@ impl GripLibrary {
         let model = self.classes.canonical(model);
         self.entries
             .iter()
-            .find(|entry| self.holds(entry, model, hand) && entry.grip.is_valid())
+            .find(|entry| entry.model == model && entry.hand == hand && entry.grip.is_valid())
             .map(|entry| &entry.grip)
     }
 
@@ -1865,7 +1865,7 @@ impl GripLibrary {
             let find = |hand| {
                 source
                     .iter()
-                    .find(|e| self.holds(e, model, name(hand)) && e.grip.is_valid())
+                    .find(|e| e.model == model && e.hand == name(hand) && e.grip.is_valid())
                     .map(|e| &e.grip)
             };
             find(hand)
@@ -1899,7 +1899,11 @@ impl GripLibrary {
     /// staging prepends).
     pub fn remove_first(&mut self, model: &str, hand: &str) {
         let model = self.classes.canonical(model);
-        if let Some(index) = self.entries.iter().position(|e| self.holds(e, model, hand)) {
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|e| e.model == model && e.hand == hand)
+        {
             self.entries.remove(index);
             if index < self.headset {
                 self.headset -= 1;
@@ -1913,7 +1917,8 @@ impl GripLibrary {
         let model = self.classes.canonical(&entry.model).to_owned();
         let mut index = 0;
         while index < self.headset {
-            if self.holds(&self.entries[index], &model, &entry.hand) {
+            let e = &self.entries[index];
+            if e.model == model && e.hand == entry.hand {
                 self.entries.remove(index);
                 self.headset -= 1;
             } else {
@@ -2011,18 +2016,49 @@ impl GripClasses {
     pub fn members(&self, model: &str) -> Option<&[String]> {
         self.index.get(model).map(|&i| &self.classes[i][..])
     }
+
+    /// How a pose tool names `model`'s shared grip, as two lines, if it is
+    /// in a class: ["Shared by 6 models", "(canonical: medpatch)"].
+    pub fn label(&self, model: &str) -> Option<[String; 2]> {
+        self.members(model).map(|members| {
+            [
+                format!("Shared by {} models", members.len()),
+                format!("(canonical: {})", members[0]),
+            ]
+        })
+    }
+
+    /// `entries` keyed by their class's canonical model, one per model and
+    /// hand: of two entries for one (say two members posed on an older
+    /// build), the later wins, and the earlier is logged.
+    pub fn canonicalize(&self, entries: Vec<BakedGripEntry>) -> Vec<BakedGripEntry> {
+        let mut kept: Vec<(String, BakedGripEntry)> = Vec::with_capacity(entries.len());
+        for mut entry in entries {
+            let canonical = self.canonical(&entry.model).to_owned();
+            let posed = std::mem::replace(&mut entry.model, canonical);
+            if let Some(i) = kept
+                .iter()
+                .position(|(_, e)| e.model == entry.model && e.hand == entry.hand)
+            {
+                let (earlier, _) = kept.remove(i);
+                println!(
+                    "SHOCK2QUEST_VR_GRIP_CLASSES replaced={earlier} by={posed} hand={} class={}",
+                    entry.hand, entry.model
+                );
+            }
+            kept.push((posed, entry));
+        }
+        kept.into_iter().map(|(_, entry)| entry).collect()
+    }
 }
 
 impl GripLibrary {
-    /// Whether `entry` is the grip for `model` (already canonical) and `hand`.
-    fn holds(&self, entry: &BakedGripEntry, model: &str, hand: &str) -> bool {
-        entry.hand == hand && self.classes.canonical(&entry.model) == model
-    }
-
-    /// Put `overrides` ahead of every entry; `lookup` takes the first match.
+    /// Put `overrides` ahead of every entry, keyed by canonical model
+    /// (`GripClasses::canonicalize`); `lookup` takes the first match.
     pub fn prepend(&mut self, overrides: GripLibrary) {
-        self.headset += overrides.entries.len();
-        self.entries.splice(0..0, overrides.entries);
+        let entries = self.classes.canonicalize(overrides.entries);
+        self.headset += entries.len();
+        self.entries.splice(0..0, entries);
     }
 }
 
@@ -3301,6 +3337,29 @@ mod tests {
         library.remove_first("chemif3", "right");
         assert_eq!(library.headset, 0);
         assert_eq!(library.lookup("chemif3", "right").unwrap().offset.x, 1.0);
+        // Two members posed for one hand (an older build's file): the later
+        // wins, as merge-grips keeps it.
+        library.prepend(GripLibrary {
+            entries: vec![
+                entry("chemif2", "right", 5.0),
+                entry("chemif3", "right", 6.0),
+            ],
+            ..Default::default()
+        });
+        assert_eq!(library.headset, 1);
+        assert_eq!(library.entries[0].model, "chemif");
+        assert_eq!(library.lookup("chemif2", "right").unwrap().offset.x, 6.0);
+    }
+
+    /// Only the canonical model's entry is the class's grip: a stale entry
+    /// under another member (say after reordering the class) never shadows
+    /// it.
+    #[test]
+    fn a_shipped_entry_under_a_non_canonical_member_is_ignored() {
+        let mut library = classed_library();
+        library.entries.insert(0, entry("chemif2", "right", 9.0));
+        assert_eq!(library.lookup("chemif2", "right").unwrap().offset.x, 1.0);
+        assert_eq!(library.lookup("chemif", "right").unwrap().offset.x, 1.0);
     }
 
     #[test]
@@ -3327,6 +3386,11 @@ mod tests {
             Some(&["a", "b", "c"].map(String::from)[..])
         );
         assert_eq!(ok.members("f"), None);
+        assert_eq!(
+            ok.label("c").unwrap().join(" "),
+            "Shared by 3 models (canonical: a)"
+        );
+        assert_eq!(ok.label("f"), None);
     }
 
     /// Each class has one shipped grip, its canonical model's: a member's

@@ -301,9 +301,10 @@ pub(super) struct GripPoseTool {
     squeezed: bool,
     /// The free thumbstick was seen centred in hand since last out of it.
     stick_armed: bool,
-    /// The held item's grip class (member count, canonical model) when its
-    /// grip is shared: a save poses every member.
-    pub class: Option<(usize, String)>,
+    /// The held item's grip class as the panel names it
+    /// (`GripClasses::label`) when its grip is shared: a save poses every
+    /// member.
+    pub class: Option<[String; 2]>,
     /// Recent posing-hand frames, each with the time since the one before
     /// (zero for the oldest), spanning the steady window.
     recent: VecDeque<(HandJoints, f32)>,
@@ -862,7 +863,7 @@ impl GripPoseTool {
             "index_steps_disabled": view.index_steps.err(),
             "tighten_disabled": view.tighten.err(),
             "locks": self.locks,
-            "class": view.class.as_ref().map(|class| panel::class_lines(class).join(" ")),
+            "class": view.class.as_ref().map(|lines| lines.join(" ")),
             "hover": self.hover,
             "panel": placed,
             // The bench's view turn about its pivot (world space).

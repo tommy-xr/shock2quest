@@ -262,33 +262,18 @@ pub fn default_library_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/vr-grips.json")
 }
 
-/// Each override, keyed by its model's class's canonical model (in
-/// `classes`), replaces the pose the runtime would pick for that model and
-/// hand (keeping that entry's provenance), or joins the pickup library. Of
-/// two overrides for one class and hand, the later wins. A glove weapon posed
-/// for one hand only also replaces the other hand's, mirrored, as play holds
-/// it before the overrides are cleared.
+/// Each override, keyed by its class's canonical model as the runtime keys
+/// it (`GripClasses::canonicalize`: of two members' poses for one hand, the
+/// later wins), replaces the pose the runtime would pick for that model and
+/// hand (keeping that entry's provenance), or joins the pickup library. A
+/// glove weapon posed for one hand only also replaces the other hand's,
+/// mirrored, as play holds it before the overrides are cleared.
 fn merge_overrides(
     libraries: &mut [GripLibrary],
     overrides: GripLibrary,
     classes: &GripClasses,
 ) -> Result<(), String> {
-    let mut canonical: Vec<BakedGripEntry> = Vec::new();
-    for mut entry in overrides.entries {
-        let model = classes.canonical(&entry.model).to_owned();
-        if let Some(index) = canonical
-            .iter()
-            .position(|e| e.model == model && e.hand == entry.hand)
-        {
-            let earlier = canonical.remove(index);
-            println!(
-                "warning: {} and {} share the {model} grip; keeping the later {} pose ({})",
-                earlier.model, entry.model, entry.hand, entry.model
-            );
-        }
-        entry.model = model;
-        canonical.push(entry);
-    }
+    let canonical = classes.canonicalize(overrides.entries);
     let posed =
         |model: &str, hand: &str| canonical.iter().any(|e| e.model == model && e.hand == hand);
     let mut merges = Vec::new();
@@ -316,7 +301,7 @@ fn merge_overrides(
             library
                 .entries
                 .iter_mut()
-                .find(|e| classes.canonical(&e.model) == entry.model && e.hand == entry.hand)
+                .find(|e| e.model == entry.model && e.hand == entry.hand)
         });
         match existing {
             Some(target) => transfer_grip(&entry.grip, target, None)?,
@@ -384,16 +369,6 @@ fn merge_override_file_into(path: PathBuf, dir: &std::path::Path) -> Result<(), 
         support.len()
     );
     Ok(())
-}
-
-/// Names a grip class (canonical model first), so an author knows an edit
-/// applies to all of it.
-pub(crate) fn class_label(members: &[String]) -> String {
-    format!(
-        "Shared by {} models (canonical: {})",
-        members.len(),
-        members[0]
-    )
 }
 
 /// The grip classes beside the resources in `dir`: none if there is no
@@ -1031,13 +1006,19 @@ impl GripEditor {
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
             for model in models {
+                // A class's row also names (and searches) its other members.
                 let labels = INTERACTION_FIXTURES
                     .iter()
-                    .filter(|f| f.model == model)
+                    .filter(|f| self.classes.canonical(&f.model.to_lowercase()) == model)
                     .map(|f| f.label)
                     .collect::<Vec<_>>()
                     .join(", ");
-                let text = format!("{model}  {labels}");
+                let members = self
+                    .classes
+                    .members(model)
+                    .map(|members| format!("  [{}]", members[1..].join(" ")))
+                    .unwrap_or_default();
+                let text = format!("{model}  {labels}{members}");
                 if !text.to_lowercase().contains(&self.search.to_lowercase()) {
                     continue;
                 }
@@ -1169,8 +1150,12 @@ impl GripEditor {
         let mut request_fit = false;
         let doc = self.document.as_mut().unwrap();
         ui.heading(format!("{} — grip override", self.model));
-        if let Some(members) = self.classes.members(&self.model) {
-            ui.label(class_label(members))
+        // Names the class, so an author knows an edit applies to all of it.
+        if let (Some(label), Some(members)) = (
+            self.classes.label(&self.model),
+            self.classes.members(&self.model),
+        ) {
+            ui.label(label.join(" "))
                 .on_hover_text(format!("Edits apply to: {}", members.join(", ")));
         }
         if shock2vr::tricorder::is_model(&self.model) {
@@ -2206,8 +2191,10 @@ pub(crate) mod tests {
         assert_eq!(editor.model, "chemif");
         editor.open_model("obj/ba.bin");
         assert_eq!(editor.model, "as");
-        let members = editor.classes.members("as").unwrap();
-        assert_eq!(class_label(members), "Shared by 19 models (canonical: as)");
+        assert_eq!(
+            editor.classes.label("ba").unwrap().join(" "),
+            "Shared by 19 models (canonical: as)"
+        );
         editor.open_model("mug.bin");
         assert_eq!(editor.model, "mug");
     }

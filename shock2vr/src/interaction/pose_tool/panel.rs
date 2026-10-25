@@ -35,8 +35,9 @@ const LOCKED: [u8; 3] = [150, 108, 24];
 const LOCKED_HOVER: [u8; 3] = [190, 140, 40];
 
 const TITLE: Rect = Rect::new(10.0, 4.0, 380.0, 26.0);
-/// A shared grip's note, right-aligned in the title row's free right half.
-const CLASS: Rect = Rect::new(200.0, 4.0, 190.0, 26.0);
+/// A shared grip's note, in the aim toggle's slot (`SHOW_AIM`): the title
+/// row's inner corner sits under the bench's extra views.
+const CLASS: Rect = SHOW_AIM;
 const STATUS: Rect = Rect::new(10.0, 32.0, 380.0, 34.0);
 const SAVE: Rect = Rect::new(10.0, 74.0, 186.0, 44.0);
 const DISCARD: Rect = Rect::new(204.0, 74.0, 186.0, 44.0);
@@ -250,17 +251,9 @@ pub(in crate::interaction) struct PanelView {
     /// The free hand is tracked with no controller in it: it taps the
     /// buttons and pinches to snapshot.
     pub fingertip: bool,
-    /// The item's grip class (member count, canonical model) if its grip is
+    /// The item's grip class note (`GripClasses::label`) if its grip is
     /// shared, so the author knows a save poses them all.
-    pub class: Option<(usize, String)>,
-}
-
-/// A shared grip's two-line note, beside the title.
-pub(in crate::interaction) fn class_lines((count, canonical): &(usize, String)) -> [String; 2] {
-    [
-        format!("Shared by {count} models"),
-        format!("(canonical: {canonical})"),
-    ]
+    pub class: Option<[String; 2]>,
 }
 
 /// The aim toggle's label: off, or on with the drawn lines' error (none
@@ -343,13 +336,8 @@ pub(in crate::interaction) fn emit(
     let mut canvas = UiCanvas::new(CANVAS);
     let mut targets = Vec::new();
     canvas.fill(Rect::new(0.0, 0.0, CANVAS.x, CANVAS.y), BACKGROUND);
-    // A shared grip's note takes the title row's right half.
-    let title = match view.class {
-        Some(_) => Rect::new(TITLE.x, TITLE.y, CLASS.x - TITLE.x, TITLE.h),
-        None => TITLE,
-    };
     canvas.text_fit(
-        title,
+        TITLE,
         &format!(
             "{}: {} hand",
             match (view.support, view.slot) {
@@ -364,8 +352,10 @@ pub(in crate::interaction) fn emit(
         HAlign::Left,
         VAlign::Middle,
     );
-    if let Some(class) = &view.class {
-        for (i, line) in class_lines(class).iter().enumerate() {
+    // A shared grip's note takes the aim toggle's slot, free for anything
+    // but a gun (no grip class holds one).
+    if let (Some(class), Err(_)) = (&view.class, &view.aim) {
+        for (i, line) in class.iter().enumerate() {
             canvas.text_fit(
                 Rect::new(
                     CLASS.x,
@@ -376,7 +366,7 @@ pub(in crate::interaction) fn emit(
                 line,
                 FONT,
                 12.0,
-                HAlign::Right,
+                HAlign::Left,
                 VAlign::Middle,
             );
         }
@@ -831,22 +821,20 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_grip_names_its_class_beside_the_title() {
+    fn a_shared_grip_names_its_class_in_the_free_aim_slot() {
         let mut shared = view(Status::Ready);
         let (canvas, _) = emit(&shared, None);
         assert!(!texts(&canvas).iter().any(|t| t.starts_with("Shared")));
-        shared.class = Some((6, "medpatch".to_owned()));
+        shared.class = Some(["Shared by 6 models".into(), "(canonical: medpatch)".into()]);
         let (canvas, _) = emit(&shared, None);
-        let texts = texts(&canvas);
-        assert!(
-            texts.contains(&"Shared by 6 models".to_owned()),
-            "{texts:?}"
-        );
-        assert!(
-            texts.contains(&"(canonical: medpatch)".to_owned()),
-            "{texts:?}"
-        );
-        assert!(texts.contains(&"Grip pose: Right hand".to_owned()));
+        let shown = texts(&canvas);
+        for line in ["Shared by 6 models", "(canonical: medpatch)"] {
+            assert!(shown.contains(&line.to_owned()), "{shown:?}");
+        }
+        // A gun's aim toggle keeps its slot.
+        shared.aim = Ok(());
+        let (canvas, _) = emit(&shared, None);
+        assert!(!texts(&canvas).iter().any(|t| t.starts_with("Shared")));
     }
 
     #[test]
