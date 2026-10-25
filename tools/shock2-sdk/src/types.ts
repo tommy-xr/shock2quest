@@ -1471,8 +1471,9 @@ export interface HandGrip {
     /** Test hold: the posing hand's controller holds the item as play
      * would; `tracked` false leaves it where that controller was last seen. */
     test_hold: { tracked: boolean } | null;
-    /** While test-holding a gun with its controller tracked: degrees between
-     * where it fires and where the controller aims. */
+    /** While a gun's aim is shown (on the bench from its glove's grip frame,
+     * or test-held with its controller tracked): degrees between where it
+     * fires and where the controller aims. */
     aim_error_deg: number | null;
     /** The workbench's control panel: its status line, why "Pose: <other
      * hand>" is disabled (null when enabled), the pointer on it in canvas
@@ -1485,6 +1486,9 @@ export interface HandGrip {
       /** Why Test hold cannot start, and why Align aim is disabled. */
       test_hold_disabled: string | null;
       align_disabled: string | null;
+      /** Why the aim toggle is hidden (no barrel), and whether it is on. */
+      aim_disabled: string | null;
+      show_aim: boolean;
       /** Why the Rest/Trigger slot button is disabled. */
       slot_disabled: string | null;
       hover: { x: number; y: number } | null;
@@ -1494,7 +1498,7 @@ export interface HandGrip {
         normal: ResolvedGrip["offset"];
         size: { x: number; y: number };
         buttons: {
-          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "SwitchHand" | "SupportMode" | "Slot" | "ResetView" | "Exit";
+          event: "Save" | "Discard" | "TestHold" | "AlignAim" | "ShowAim" | "SwitchHand" | "SupportMode" | "Slot" | "ResetView" | "Exit";
           center: ResolvedGrip["offset"];
         }[];
       } | null;

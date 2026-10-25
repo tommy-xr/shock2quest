@@ -128,7 +128,7 @@ mod vr_weapon_action;
 mod weapon_attachments;
 pub mod weapon_installation;
 pub mod weapon_modification;
-mod weapon_muzzle;
+pub mod weapon_muzzle;
 pub mod weapon_recoil;
 pub mod weapon_repair;
 mod weapon_requirements;
