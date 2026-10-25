@@ -1,5 +1,6 @@
 //! PDA list: every collected email and audio log, per deck, as the retail
-//! LOGS MFD shows them. Selecting an entry opens the shared media reader,
+//! LOGS MFD shows them, plus the deck's objective notes as a read-only
+//! checklist. Selecting an email or log opens the shared media reader,
 //! whose return button comes back here. Rects are the retail PDA overlay's,
 //! relative to the left MFD panel, and resolved once on the shared canvas.
 use crate::{
@@ -10,11 +11,30 @@ use crate::{
 use cgmath::Vector2;
 use engine::assets::asset_cache::AssetCache;
 use shipyard::{UniqueView, World};
+use std::collections::HashMap;
 
 const PANEL: Rect = Rect::new(2.0, 124.0, 188.0, 296.0);
 const VISIBLE_ROWS: usize = 9;
 const ROW_TOP: f32 = 36.0;
 const ROW_DY: f32 = 24.0;
+const LIST_X: f32 = 22.0;
+const LIST_W: f32 = 130.0;
+const LINE_H: f32 = 12.0;
+/// Notes page 6 rows of up to 3 wrapped lines; the 16x24 checkbox sits 12 px
+/// left of the list and the text 2 px past it.
+const NOTE_ROWS: usize = 6;
+const NOTE_DY: f32 = 36.0;
+const NOTE_LINES: usize = 3;
+const NOTE_BOX: Rect = Rect::new(LIST_X - 12.0, 0.0, 16.0, 24.0);
+const NOTE_TEXT_X: f32 = NOTE_BOX.x + NOTE_BOX.w + 2.0;
+const NOTE_TEXT_W: f32 = LIST_W - 5.0;
+
+/// The tabs along the bottom: kind, art stem, x, label.
+const TABS: [(PdaKind, &str, f32, &str); 3] = [
+    (PdaKind::Email, "pemail", 12.0, "pda_tab_email"),
+    (PdaKind::Log, "plogs", 53.0, "pda_tab_logs"),
+    (PdaKind::Note, "pnotes", 94.0, "pda_tab_notes"),
+];
 
 /// What a pointer press on the list asks its owner to do.
 #[derive(Debug, PartialEq, Eq)]
@@ -22,6 +42,12 @@ pub(super) enum PdaAction {
     None,
     Close,
     Open(PdaEntry),
+}
+
+#[derive(Debug, PartialEq)]
+struct NoteRow {
+    checked: bool,
+    lines: Vec<String>,
 }
 
 #[derive(Default)]
@@ -32,6 +58,7 @@ pub(super) struct PdaList {
     offset: usize,
     decks: Vec<u32>,
     rows: Vec<(u32, String)>,
+    notes: Vec<NoteRow>,
     header: String,
     deck_name: String,
 }
@@ -60,11 +87,13 @@ impl PdaList {
         };
         self.decks = quests.pda_decks();
         let entries = quests.pda_entries(self.kind, self.deck);
+        let notes = quests.pda_notes(self.deck);
         drop(quests);
         let misc = assets.get(&dark::importers::STRINGS_IMPORTER, "misc.str");
         let (base, prefix, fallback) = match self.kind {
             PdaKind::Email => ("levelbase0", "emailname", "Emails: Deck %d"),
             PdaKind::Log => ("levelbase1", "logname", "Logs: Deck %d"),
+            PdaKind::Note => ("levelbase2", "", "Notes: Deck %d"),
         };
         self.header = misc
             .get(base)
@@ -74,6 +103,16 @@ impl PdaList {
             .get(&format!("level{}", self.deck.saturating_sub(1)))
             .cloned()
             .unwrap_or_default();
+        if self.kind == PdaKind::Note {
+            let strings = assets.get_opt(&dark::importers::STRINGS_IMPORTER, "notes.str");
+            self.rows.clear();
+            self.notes = note_rows(self.deck, notes, strings.as_deref(), |text| {
+                crate::scripts::gui::PanelText::wrap(world, text, NOTE_TEXT_W)
+            });
+            self.offset = self.offset.min(self.max_offset());
+            return;
+        }
+        self.notes.clear();
         let level = assets.get_opt(
             &dark::importers::STRINGS_IMPORTER,
             &format!("level{:02}.str", self.deck),
@@ -92,8 +131,24 @@ impl PdaList {
         self.offset = self.offset.min(self.max_offset());
     }
 
+    fn len(&self) -> usize {
+        if self.kind == PdaKind::Note {
+            self.notes.len()
+        } else {
+            self.rows.len()
+        }
+    }
+
+    fn page_rows(&self) -> usize {
+        if self.kind == PdaKind::Note {
+            NOTE_ROWS
+        } else {
+            VISIBLE_ROWS
+        }
+    }
+
     fn max_offset(&self) -> usize {
-        self.rows.len().saturating_sub(VISIBLE_ROWS)
+        self.len().saturating_sub(self.page_rows())
     }
 
     /// Retail's deck arrows wrap through the decks that hold anything.
@@ -128,20 +183,17 @@ impl PdaList {
         else {
             return PdaAction::None;
         };
+        if let Some((kind, ..)) = TABS.iter().find(|tab| tab.3 == label) {
+            self.kind = *kind;
+            self.offset = 0;
+            return PdaAction::None;
+        }
         match label.as_str() {
             "utility_close" => return PdaAction::Close,
             "pda_deck_previous" => self.step_deck(false),
             "pda_deck_next" => self.step_deck(true),
             "pda_scroll_up" => self.offset = self.offset.saturating_sub(1),
             "pda_scroll_down" => self.offset = (self.offset + 1).min(self.max_offset()),
-            "pda_tab_email" | "pda_tab_logs" => {
-                self.kind = if label == "pda_tab_email" {
-                    PdaKind::Email
-                } else {
-                    PdaKind::Log
-                };
-                self.offset = 0;
-            }
             _ => {
                 if let Some((index, _)) = label
                     .strip_prefix("pda_entry:")
@@ -220,14 +272,15 @@ impl PdaList {
             Some(&self.deck_name),
             "pda_header".into(),
         );
-        if self.rows.is_empty() {
+        if self.len() == 0 {
             let empty = match self.kind {
                 PdaKind::Email => "No collected emails.",
                 PdaKind::Log => "No collected logs.",
+                PdaKind::Note => "No notes.",
             };
             add(
                 "text",
-                Rect::new(22.0, ROW_TOP, 130.0, 12.0),
+                Rect::new(LIST_X, ROW_TOP, LIST_W, LINE_H),
                 None,
                 Some(empty),
                 "utility_text".into(),
@@ -255,8 +308,45 @@ impl PdaList {
                 .take(2)
                 .enumerate()
             {
-                let rect = Rect::new(22.0, y + line as f32 * 12.0, 130.0, 12.0);
+                let rect = Rect::new(LIST_X, y + line as f32 * LINE_H, LIST_W, LINE_H);
                 add("text", rect, None, Some(text.trim()), "utility_text".into());
+            }
+        }
+        // Notes are not buttons: the checklist is read-only.
+        for (row, note) in self
+            .notes
+            .iter()
+            .enumerate()
+            .skip(self.offset)
+            .take(NOTE_ROWS)
+        {
+            let y = ROW_TOP + (row - self.offset) as f32 * NOTE_DY;
+            let checkbox = Rect { y, ..NOTE_BOX };
+            add(
+                "image",
+                checkbox,
+                Some("iface/notebox.pcx"),
+                None,
+                format!("pda_note:{row}"),
+            );
+            if note.checked {
+                add(
+                    "image",
+                    checkbox,
+                    Some("iface/notechek.pcx"),
+                    None,
+                    format!("pda_note_checked:{row}"),
+                );
+            }
+            for (line, text) in note.lines.iter().enumerate() {
+                let rect = Rect::new(NOTE_TEXT_X, y + line as f32 * LINE_H, NOTE_TEXT_W, LINE_H);
+                add(
+                    "text",
+                    rect,
+                    None,
+                    Some(text),
+                    format!("pda_note_text:{row}"),
+                );
             }
         }
         add(
@@ -273,10 +363,7 @@ impl PdaList {
             None,
             "pda_scroll_down".into(),
         );
-        for (kind, art, x, label) in [
-            (PdaKind::Email, "pemail", 12.0, "pda_tab_email"),
-            (PdaKind::Log, "plogs", 53.0, "pda_tab_logs"),
-        ] {
+        for (kind, art, x, label) in TABS {
             // The `1` art is the pressed state; retail draws it on the active tab.
             let state = if kind == self.kind { 1 } else { 0 };
             let texture = format!("iface/{art}{state}.pcx");
@@ -313,9 +400,36 @@ impl PdaList {
     }
 }
 
+/// A deck's notes in retail's order - notes.str `NoteOrder_<deck>_<n>`
+/// ascending, a missing order first - each wrapped to `NOTE_LINES` lines.
+fn note_rows(
+    deck: u32,
+    mut notes: Vec<(u32, bool)>,
+    strings: Option<&HashMap<String, String>>,
+    wrap: impl Fn(&str) -> Vec<String>,
+) -> Vec<NoteRow> {
+    let lookup = |key: String| strings.and_then(|strings| strings.get(&key));
+    notes.sort_by_key(|(n, _)| {
+        lookup(format!("noteorder_{deck}_{n}"))
+            .and_then(|order| order.trim().parse::<i32>().ok())
+            .unwrap_or(0)
+    });
+    notes
+        .into_iter()
+        .map(|(n, checked)| {
+            let text = lookup(format!("note_{deck}_{n}"))
+                .map_or_else(|| format!("#{n}"), |text| text.replace("\\n", "\n"));
+            let mut lines = wrap(text.trim());
+            lines.truncate(NOTE_LINES);
+            NoteRow { checked, lines }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dark::properties::QuestBitValue;
 
     fn quests(logs: &[(u32, u32)]) -> QuestInfo {
         let mut quests = QuestInfo::new();
@@ -327,13 +441,40 @@ mod tests {
 
     fn list(kind: PdaKind, deck: u32, quests: &QuestInfo) -> PdaList {
         let mut list = PdaList::open(kind, deck, None, quests);
-        list.decks = quests.pda_decks();
-        list.rows = quests
-            .pda_entries(list.kind, list.deck)
-            .into_iter()
-            .map(|index| (index, format!("SENDER\nre: entry {index}\n")))
-            .collect();
+        fill(&mut list, quests);
         list
+    }
+
+    /// `refresh` without the asset cache: one row set for the current tab.
+    fn fill(list: &mut PdaList, quests: &QuestInfo) {
+        list.decks = quests.pda_decks();
+        list.rows.clear();
+        list.notes.clear();
+        if list.kind == PdaKind::Note {
+            let notes = quests.pda_notes(list.deck);
+            list.notes = note_rows(list.deck, notes, None, |text| vec![text.to_owned()]);
+        } else {
+            list.rows = quests
+                .pda_entries(list.kind, list.deck)
+                .into_iter()
+                .map(|index| (index, format!("SENDER\nre: entry {index}\n")))
+                .collect();
+        }
+    }
+
+    fn notes(bits: &[(&str, QuestBitValue)]) -> QuestInfo {
+        let mut quests = QuestInfo::new();
+        for (name, value) in bits {
+            quests.set_quest_bit_value(name, *value);
+        }
+        quests
+    }
+
+    fn textures(list: &PdaList) -> Vec<String> {
+        list.elements()
+            .into_iter()
+            .filter_map(|e| e.texture)
+            .collect()
     }
 
     fn press(list: &mut PdaList, label: &str) -> PdaAction {
@@ -390,6 +531,164 @@ mod tests {
                 .any(|e| e.texture.as_deref() == Some("iface/pemail1.pcx")),
             "active tab draws its pressed art"
         );
+    }
+
+    /// NoteOrder sorts ascending with a missing order first (retail's 0), and
+    /// each note keeps at most three wrapped lines.
+    #[test]
+    fn notes_sort_by_note_order_and_wrap_to_three_lines() {
+        let strings: HashMap<String, String> = [
+            ("note_2_4", "The code for Cryo A is 45100."),
+            ("noteorder_2_4", "203"),
+            ("note_2_2", "Get through a secure airlock."),
+            ("noteorder_2_2", "202"),
+            ("note_2_9", "one two three four five"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        let words = |text: &str| text.split(' ').map(str::to_owned).collect();
+
+        let rows = note_rows(
+            2,
+            vec![(2, false), (4, true), (9, false)],
+            Some(&strings),
+            words,
+        );
+
+        assert_eq!(
+            rows,
+            vec![
+                NoteRow {
+                    checked: false,
+                    lines: vec!["one".into(), "two".into(), "three".into()],
+                },
+                NoteRow {
+                    checked: false,
+                    lines: words("Get through a secure airlock.")
+                        .into_iter()
+                        .take(3)
+                        .collect(),
+                },
+                NoteRow {
+                    checked: true,
+                    lines: words("The code for Cryo A is 45100.")
+                        .into_iter()
+                        .take(3)
+                        .collect(),
+                },
+            ]
+        );
+    }
+
+    /// The notes tab draws its pressed art, a box per visible note with the
+    /// check over completed ones, and no clickable rows.
+    #[test]
+    fn notes_tab_shows_a_read_only_checklist() {
+        let quests = notes(&[
+            ("Note_2_6", QuestBitValue::INCOMPLETE),
+            ("Note_2_9", QuestBitValue::COMPLETE),
+        ]);
+        let mut list = list(PdaKind::Log, 2, &quests);
+        assert!(
+            list.elements()
+                .iter()
+                .any(|e| e.text.as_deref() == Some("No collected logs."))
+        );
+
+        press(&mut list, "pda_tab_notes");
+        assert_eq!(list.kind, PdaKind::Note);
+        fill(&mut list, &quests);
+        let textures = textures(&list);
+        assert!(textures.contains(&"iface/pnotes1.pcx".to_owned()));
+        assert!(textures.contains(&"iface/plogs0.pcx".to_owned()));
+        assert_eq!(
+            textures
+                .iter()
+                .filter(|t| *t == "iface/notebox.pcx")
+                .count(),
+            2
+        );
+        assert_eq!(
+            textures
+                .iter()
+                .filter(|t| *t == "iface/notechek.pcx")
+                .count(),
+            1
+        );
+        let elements = list.elements();
+        let text = |row: usize| {
+            elements
+                .iter()
+                .find(|e| e.label.as_deref() == Some(&format!("pda_note_text:{row}")))
+                .and_then(|e| e.text.clone())
+        };
+        assert_eq!(text(0).as_deref(), Some("#6"));
+        assert_eq!(text(1).as_deref(), Some("#9"));
+        assert!(!elements.iter().any(|e| {
+            e.label
+                .as_deref()
+                .is_some_and(|l| l.starts_with("pda_entry:"))
+        }));
+        let note = elements
+            .iter()
+            .find(|e| e.label.as_deref() == Some("pda_note:0"))
+            .unwrap();
+        let checkbox_to_text = text_rect(&elements, "pda_note_text:0")[0] - note.rect[0];
+        assert_eq!(
+            checkbox_to_text, 18.0,
+            "text starts 2 px past the 16 px box"
+        );
+        assert_eq!(
+            list.update(Vector2::new(note.rect[0] + 2.0, note.rect[1] + 2.0), true),
+            PdaAction::None
+        );
+
+        let empty = notes(&[("Note_2_6", QuestBitValue::UNKNOWN)]);
+        let mut list = self::list(PdaKind::Note, 2, &empty);
+        fill(&mut list, &empty);
+        assert!(
+            list.elements()
+                .iter()
+                .any(|e| e.text.as_deref() == Some("No notes."))
+        );
+    }
+
+    fn text_rect(elements: &[DebugUiElement], label: &str) -> [f32; 4] {
+        elements
+            .iter()
+            .find(|e| e.label.as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("{label} is drawn"))
+            .rect
+    }
+
+    /// A deck holding only notes is still a deck-arrow stop, and notes page
+    /// a six-row window.
+    #[test]
+    fn note_only_decks_cycle_and_notes_scroll_six_rows() {
+        let mut quests = QuestInfo::new();
+        for n in 1..=8 {
+            quests.set_quest_bit_value(&format!("Note_5_{n}"), QuestBitValue::INCOMPLETE);
+        }
+        quests.collect_log(2, 1);
+        let mut list = list(PdaKind::Note, 2, &quests);
+
+        press(&mut list, "pda_deck_next");
+        assert_eq!(list.deck, 5);
+        fill(&mut list, &quests);
+        assert_eq!(
+            textures(&list)
+                .iter()
+                .filter(|t| *t == "iface/notebox.pcx")
+                .count(),
+            6
+        );
+        for _ in 0..5 {
+            press(&mut list, "pda_scroll_down");
+        }
+        assert_eq!(list.offset, 2, "stops on the last full page");
+        press(&mut list, "pda_deck_next");
+        assert_eq!(list.deck, 2, "wraps back past the note-only deck");
     }
 
     /// Returning from an entry past the first page keeps it on screen.

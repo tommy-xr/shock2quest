@@ -10214,6 +10214,8 @@ impl MissionCore {
         let prefix = match kind {
             PdaKind::Email => "email",
             PdaKind::Log => "log",
+            // Notes are a checklist with no reader.
+            PdaKind::Note => return false,
         };
         let level_file = format!("level{deck:02}.str");
         let Some(strings) = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, &level_file)
@@ -13172,6 +13174,7 @@ impl MissionCore {
                             email: index,
                             force: true,
                         }),
+                        PdaKind::Note => {}
                     }
                 }
 

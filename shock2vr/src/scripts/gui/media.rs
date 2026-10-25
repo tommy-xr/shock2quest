@@ -72,6 +72,8 @@ pub(crate) fn reader_prop_log(entry: PdaEntry) -> PropLog {
     let (email, log) = match entry.kind {
         PdaKind::Log => (LOG_UNSET, entry.index),
         PdaKind::Email => (entry.index, LOG_UNSET),
+        // Notes have no reader; nothing asks to open one.
+        PdaKind::Note => (LOG_UNSET, LOG_UNSET),
     };
     PropLog {
         deck: entry.deck,
