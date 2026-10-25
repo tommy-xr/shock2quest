@@ -237,6 +237,36 @@ trigger, squeeze, the raw face buttons, `MenuButton`, `crouch` as a left stick
 click); tracking channels are not. The format and mapping are documented in
 `src/clip-inputs.ts`.
 
+## Simulated floor-relative VR tracking
+
+`head.position` and the hand-position channels are pawn-local world units, not
+a calibrated headset. To exercise Quest's physical crouch, launch with
+`debugFlags: ["--vr"]` and opt in with a complete rig in **floor-relative
+meters** (+Y up, -Z forward):
+
+```ts
+await game.input.setTracking({
+  enabled: true,
+  head_position: [0, 1.7, 0],
+  left_hand_position: [-0.2, 1.4, -0.3],
+  right_hand_position: [0.2, 1.4, -0.3],
+});
+await game.step({ frames: 3 }); // standing calibration
+await game.input.setTracking({ head_position: [0, 1.0, 0] });
+await game.step({ frames: 10 }); // physically crouched
+console.log(await game.input.tracking());
+```
+
+Same over HTTP: `GET/POST /v1/control/tracking`; later patches may set any
+subset. While enabled these poses replace the position channels and hand
+`world_target`s; rotations, buttons, sticks and explicit `crouch` (ORed with the
+physical request) still come from `/v1/control/input`. It runs Quest's
+`VrCrouchDetector` and `TrackingTransform`, so gripping freezes detection and
+a refused stand-up under a low ceiling keeps head and hands crouched together.
+`position_tracked: false` simulates head-tracking loss (last pose and stance
+hold); `reset: true` forgets calibration; `enabled: false` turns it off. The
+stage offset is zero. Flat runtimes reject tracking patches.
+
 ## Notes
 
 - The full e2e and reliability commands check for the required 25th Anniversary
