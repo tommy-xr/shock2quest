@@ -382,6 +382,8 @@ pub mod render_source {
     pub const GRIP_WORKBENCH_PANEL: &str = "grip_workbench_panel";
     /// The beams of the controllers in hand while the workbench is open.
     pub const GRIP_WORKBENCH_POINTER: &str = "grip_workbench_pointer";
+    /// A test-held gun's firing and controller-aim lines.
+    pub const GRIP_WORKBENCH_AIM: &str = "grip_workbench_aim";
 }
 
 /// A tag that records only which render path produced an object.
