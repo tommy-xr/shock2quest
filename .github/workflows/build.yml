@@ -91,7 +91,7 @@ jobs:
       # TODO: Fix dark_viewer Windows compatibility and include it everywhere.
       - name: Build all (Unix)
         if: runner.os != 'Windows'
-        run: cargo build --verbose --release -p engine -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command
+        run: cargo build --verbose --release -p engine -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command -p dark_explorer
         env:
           RUSTFLAGS: "-D warnings"
       - name: Run all tests (Unix)
@@ -102,7 +102,7 @@ jobs:
 
       - name: Build all (Windows)
         if: runner.os == 'Windows'
-        run: cargo build --verbose --release -p engine -p desktop_runtime -p dark_query -p debug_runtime -p debug_command
+        run: cargo build --verbose --release -p engine -p desktop_runtime -p dark_query -p debug_runtime -p debug_command -p dark_explorer
         env:
           RUSTFLAGS: "-D warnings"
       - name: Run all tests (Windows)
@@ -118,7 +118,7 @@ jobs:
         run: |
           exe=""
           if [ "$RUNNER_OS" = Windows ]; then exe=.exe; fi
-          tar -czf "$RUNNER_TEMP/runtime.tar.gz" -C target/release "debug_runtime$exe" "dark_query$exe"
+          tar -czf "$RUNNER_TEMP/runtime.tar.gz" -C target/release "debug_runtime$exe" "dark_query$exe" "dark_explorer$exe"
       - uses: actions/upload-artifact@v4
         with:
           name: shock2quest-runtime-${{ runner.os }}-${{ github.sha }}
