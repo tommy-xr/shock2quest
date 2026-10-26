@@ -110,3 +110,19 @@ jobs:
         run: cargo test --verbose --release --no-default-features -p shock2vr -p engine -p desktop_runtime -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
+
+      # Lets local e2e runs and captures use this commit's runtime instead of a
+      # per-checkout build. Tarred because artifact zips drop the executable bit.
+      - name: Package runtime binaries
+        shell: bash
+        run: |
+          exe=""
+          if [ "$RUNNER_OS" = Windows ]; then exe=.exe; fi
+          tar -czf "$RUNNER_TEMP/runtime.tar.gz" -C target/release "debug_runtime$exe" "dark_query$exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shock2quest-runtime-${{ runner.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
