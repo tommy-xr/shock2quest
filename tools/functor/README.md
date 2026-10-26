@@ -4,6 +4,9 @@ A [Functor](https://github.com/tommy-xr/functor) project that decodes System Sho
 
 ```sh
 mkdir -p tools/functor/ss2 && cp Data/res/obj/CRATE01.BIN tools/functor/ss2/model.bin  # gitignored
+# or a character playing a clip:
+cp Data/res/mesh/GRUNT_P.BIN tools/functor/ss2/model.bin && cp Data/res/mesh/GRUNT_P.CAL tools/functor/ss2/model.cal
+cp Data/motiondb.bin Data/res/motions/ogpbzwkl_.mc tools/functor/ss2/
 functor -d tools/functor run native                          # view it
 functor -d tools/functor export -o tools/functor/crate.stl     # print it (60 mm tall)
 functor -d tools/functor test                             # decoder tests (no game files)
