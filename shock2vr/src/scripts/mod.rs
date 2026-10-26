@@ -49,6 +49,7 @@ mod hazard_objects;
 pub mod healing_item;
 mod homing;
 pub(crate) mod impact_sound;
+mod info_computer;
 mod mini_game_cart;
 mod shodan_head;
 pub(crate) mod shodan_shot;
@@ -211,6 +212,7 @@ use self::{
     frob_qb::FrobQB,
     goo_projectile::GooProjectile,
     impact_sound::HeldItemImpactSound,
+    info_computer::InfoComputer,
     internal_collision_type::InternalCollisionType,
     internal_explosion::InternalExplosion,
     internal_keycard_script::KeyCardScript,
@@ -1536,7 +1538,7 @@ impl ScriptWorld {
             "creaturecontainer" => gui_script(Box::new(ContainerGui::loot_creature())),
             "chemical" => Box::new(ChemicalScript::new()),
             "chooseservice" => Box::new(ChooseServiceScript::new()),
-            "infocomputer" => Box::new(UnimplementedScript::new(&script_name)),
+            "infocomputer" => Box::new(InfoComputer),
             "reducepsi" => Box::new(ReducePsi::new()),
             "replicatorscript" => gui_script(Box::new(ReplicatorGui)),
             "researchablescript" | "researchableusescript" => Box::new(CompositeScript::new(vec![

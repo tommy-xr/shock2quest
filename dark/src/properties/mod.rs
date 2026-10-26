@@ -301,6 +301,11 @@ pub struct PropCombineType(pub String);
 #[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
 pub struct PropMiniGames(pub u32);
 
+/// `P$HelpText`: the help topics an info terminal unlocks, as a bitmask (bit
+/// `i` is `infocomp.str` `HelpName{i+1}`). Each shipped terminal sets one bit.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropHelpText(pub u32);
+
 /// The version of a piece of software (`P$SoftLevel`, 1..=3). Authored on the
 /// `Softs` base archetype as 1 and overridden by the V2/V3 archetypes, so a
 /// V1 soft inherits the base value. Read by the `AutoInstallSoft` script.
@@ -2013,6 +2018,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$HelpText",
+            |reader, _len| read_u32(reader),
+            PropHelpText,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$SoftType",
             |reader, _len| read_i32(reader),
             PropSoftType,
@@ -3593,6 +3604,30 @@ mod tests {
                 .unwrap()
                 .0,
             0x1398
+        );
+    }
+
+    #[test]
+    fn help_text_is_registered_as_a_four_byte_bitfield() {
+        let (definitions, _, _) = get::<Cursor<Vec<u8>>>();
+        let definition = definitions
+            .into_iter()
+            .find(|property| property.name() == "P$HelpText")
+            .expect("info terminals must parse their help-topic bitmask");
+        let mut cursor = Cursor::new((1_u32 << 25).to_le_bytes().to_vec());
+        let property = definition.read(&mut cursor, 4);
+        assert_eq!(cursor.position(), 4);
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        property.initialize(&mut world, entity);
+        assert_eq!(
+            world
+                .borrow::<View<PropHelpText>>()
+                .unwrap()
+                .get(entity)
+                .unwrap()
+                .0,
+            1 << 25
         );
     }
 

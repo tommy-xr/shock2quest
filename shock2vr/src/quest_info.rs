@@ -89,6 +89,11 @@ pub struct QuestInfo {
     /// `LOGTIMES` sort). `#[serde(default)]` keeps pre-collection saves loadable.
     #[serde(default)]
     collected_logs: Vec<CollectedLog>,
+    /// Help topics unlocked at info terminals, in unlock order. Topic `i` is
+    /// `P$HelpText` bit `i`: `infocomp.str` `HelpName{i+1}` / `HelpText{i+1}`.
+    /// `#[serde(default)]` keeps older saves loadable.
+    #[serde(default)]
+    help_topics: Vec<u32>,
     /// Automap locations the player has explored, per mission (lowercase level
     /// file name -> ordered location set). The original's mission-scoped
     /// `EXPLORED[64]` file-var; keyed per mission here so deck re-entry keeps
@@ -127,6 +132,7 @@ impl QuestInfo {
             key_cards: Vec::new(),
             player_stats: PlayerStats::new(),
             collected_logs: Vec::new(),
+            help_topics: Vec::new(),
             explored_maps: HashMap::new(),
             research: ResearchState::default(),
             horde_battle: Default::default(),
@@ -220,6 +226,23 @@ impl QuestInfo {
         self.collected_logs
             .iter()
             .any(|c| c.deck == deck && c.log == log)
+    }
+
+    /// Unlocked help topics, oldest first.
+    pub fn help_topics(&self) -> &[u32] {
+        &self.help_topics
+    }
+
+    /// Unlock every topic set in an info terminal's `P$HelpText` mask, keeping
+    /// first-unlock order. Returns the topic the terminal shows - its lowest
+    /// set bit, whether or not it was already unlocked - or `None` for `0`.
+    pub fn unlock_help(&mut self, bits: u32) -> Option<u32> {
+        for topic in (0..u32::BITS).filter(|topic| bits & (1 << topic) != 0) {
+            if !self.help_topics.contains(&topic) {
+                self.help_topics.push(topic);
+            }
+        }
+        (bits != 0).then(|| bits.trailing_zeros())
     }
 
     /// The player's collected audio logs, in pickup order.
@@ -573,6 +596,31 @@ mod log_tests {
         quest_info.collect_log(2, 1);
         assert_eq!(quest_info.pda_decks(), vec![2, 5]);
         assert_eq!(quest_info.pda_default_view(), Some((PdaKind::Log, 2)));
+    }
+
+    #[test]
+    fn help_unlocks_keep_first_unlock_order_and_show_the_lowest_bit() {
+        let mut quests = QuestInfo::new();
+        assert_eq!(quests.unlock_help(1 << 7), Some(7));
+        assert_eq!(quests.unlock_help((1 << 2) | (1 << 9)), Some(2));
+        // Re-frobbing a terminal shows its topic again without reordering.
+        assert_eq!(quests.unlock_help(1 << 7), Some(7));
+        assert_eq!(quests.help_topics(), &[7, 2, 9]);
+    }
+
+    #[test]
+    fn an_empty_help_mask_unlocks_nothing() {
+        let mut quests = QuestInfo::new();
+        assert_eq!(quests.unlock_help(0), None);
+        assert!(quests.help_topics().is_empty());
+    }
+
+    #[test]
+    fn saves_without_help_topics_still_load() {
+        let mut json = serde_json::to_value(QuestInfo::new()).unwrap();
+        json.as_object_mut().unwrap().remove("help_topics");
+        let restored: QuestInfo = serde_json::from_value(json).expect("older save shape loads");
+        assert!(restored.help_topics().is_empty());
     }
 
     /// Saves written before read tracking restore their logs as unread.

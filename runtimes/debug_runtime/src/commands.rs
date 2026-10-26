@@ -644,6 +644,8 @@ pub struct QuestBitEntry {
 pub struct QuestBitsResult {
     pub quests: Vec<QuestBitEntry>,
     pub count: usize,
+    /// Help topics unlocked at info terminals, in unlock order.
+    pub help_topics: Vec<u32>,
 }
 
 /// Flat-mode UI state snapshot (`GET /v1/ui`): "shooter" or "use", plus the

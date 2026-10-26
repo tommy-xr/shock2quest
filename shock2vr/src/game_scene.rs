@@ -1132,6 +1132,11 @@ pub trait DebuggableScene {
         Vec::new()
     }
 
+    /// Help topics unlocked at info terminals, in unlock order.
+    fn help_topics(&self) -> Vec<u32> {
+        Vec::new()
+    }
+
     /// Set a quest bit (objective flag) - for test setup / skipping ahead.
     /// `value` is "unknown", "incomplete", or "complete". Default: unsupported.
     fn set_quest_bit(&mut self, _name: &str, _value: &str) -> Result<(), String> {

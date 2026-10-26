@@ -158,6 +158,8 @@ fn restore_newly_parsed_authored_data(
     restore_missing_component!(PropResearchTime);
     restore_missing_component!(PropRotatingDoor);
     restore_missing_component!(PropDoorTimer);
+    // Without it an info terminal from an older save falls back to the map.
+    restore_missing_component!(dark::properties::PropHelpText);
 
     let authored_spawn_points = {
         let authored_links = authored_world.borrow::<View<Links>>().unwrap();
@@ -249,6 +251,28 @@ mod tests {
         let props = world.borrow::<View<PropSlayResult>>().unwrap();
         assert_eq!(props.get(missing).unwrap().0, 1);
         assert_eq!(props.get(mortal).unwrap().0, 0);
+    }
+
+    #[test]
+    fn info_terminal_saved_before_help_text_was_parsed_keeps_its_topic() {
+        use dark::properties::PropHelpText;
+        let mut authored = SystemShock2EntityInfo::empty();
+        authored
+            .entity_to_properties
+            .insert(178, vec![Arc::new(Box::new(PropHelpText(1)))]);
+        let mut level = SystemShock2EntityInfo::empty();
+        level.entity_to_properties.insert(178, vec![]);
+        let mut world = World::new();
+        let terminal = world.add_entity(());
+        restore_newly_parsed_authored_data(
+            &authored,
+            &level,
+            &HashMap::new(),
+            &HashMap::from([(178, WrappedEntityId(terminal))]),
+            &mut world,
+        );
+        let help = world.borrow::<View<PropHelpText>>().unwrap();
+        assert_eq!(help.get(terminal).unwrap().0, 1);
     }
 
     #[test]

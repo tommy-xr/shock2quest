@@ -594,6 +594,12 @@ pub enum Effect {
     /// VR and in scenes without a map panel.
     ToggleMap,
 
+    /// Unlock the help topics in an info terminal's `P$HelpText` mask
+    /// (persisted in `QuestInfo`, in unlock order).
+    UnlockHelp {
+        bits: u32,
+    },
+
     /// Mark an automap location as explored for the current mission (persisted
     /// in `QuestInfo`, the original's mission-scoped `EXPLORED[64]` file-var).
     /// Emitted by `CoreRoom` when the player enters a room whose room object

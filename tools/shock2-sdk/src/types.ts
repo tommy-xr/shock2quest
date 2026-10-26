@@ -1082,6 +1082,8 @@ export interface QuestBitEntry {
 export interface QuestBitsResult {
   quests: QuestBitEntry[];
   count: number;
+  /** Help topics unlocked at info terminals, in unlock order (topic `i` = `P$HelpText` bit `i`). */
+  help_topics: number[];
 }
 
 export interface InventoryItem {
