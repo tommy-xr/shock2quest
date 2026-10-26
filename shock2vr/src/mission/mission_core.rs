@@ -13207,6 +13207,12 @@ impl MissionCore {
                         .refresh(&self.world, asset_cache, &self.entity_info);
                 }
 
+                Effect::UnlockHelp { bits } => {
+                    if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
+                        quests.unlock_help(bits);
+                    }
+                }
+
                 Effect::ToggleMap => {
                     // VR uses this host while the cyber interface is active.
                     if game_options.presentation_mode == crate::PresentationMode::Flat
@@ -23064,6 +23070,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             }
         }
         state
+    }
+
+    fn help_topics(&self) -> Vec<u32> {
+        let quests = self.world.borrow::<UniqueView<QuestInfo>>().unwrap();
+        quests.help_topics().to_vec()
     }
 
     fn quest_bits(&self) -> Vec<crate::game_scene::DebugQuestBit> {

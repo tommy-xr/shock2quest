@@ -1744,6 +1744,10 @@ fn process_command(
             }
         }
         RuntimeCommand::GetQuestBits { reply } => {
+            let help_topics = game
+                .debug_scene()
+                .map(|scene| scene.help_topics())
+                .unwrap_or_default();
             let quests: Vec<commands::QuestBitEntry> = game
                 .debug_scene()
                 .map(|scene| {
@@ -1761,6 +1765,7 @@ fn process_command(
             let result = commands::QuestBitsResult {
                 count: quests.len(),
                 quests,
+                help_topics,
             };
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send quest bits - receiver dropped");
