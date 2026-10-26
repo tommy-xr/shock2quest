@@ -29,12 +29,29 @@ pub struct CollectedLog {
     pub read: bool,
 }
 
-/// A PDA list tab. Retail's PDA also has Notes and Help tabs.
+/// A PDA list tab. Retail's PDA also has a Help tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PdaKind {
     Email,
     #[default]
     Log,
+    /// Per-deck objectives (quest bits `Note_<deck>_<n>`); a read-only checklist.
+    Note,
+}
+
+/// Objective slots per deck: `Note_<deck>_1` ..= `Note_<deck>_32`.
+const NOTES_PER_DECK: u32 = 32;
+
+/// A note bit's checklist state: 1 an open objective, 2 a completed one; any
+/// other value keeps it off the list.
+fn note_checked(value: QuestBitValue) -> Option<bool> {
+    if value == QuestBitValue::INCOMPLETE {
+        Some(false)
+    } else if value == QuestBitValue::COMPLETE {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 /// One PDA entry: an email or audio log, keyed like the string tables
@@ -281,21 +298,49 @@ impl QuestInfo {
                 emails.sort_unstable();
                 emails
             }
+            // Index order; the list orders notes by `NoteOrder` from notes.str.
+            PdaKind::Note => self.pda_notes(deck).into_iter().map(|(n, _)| n).collect(),
         }
     }
 
-    /// Decks with any email or log, ascending: the PDA's deck arrows cycle these.
+    /// One deck's visible notes as `(index, checked)`, in index order.
+    pub fn pda_notes(&self, deck: u32) -> Vec<(u32, bool)> {
+        (1..=NOTES_PER_DECK)
+            .filter_map(|n| {
+                note_checked(self.read_quest_bit_value(&format!("note_{deck}_{n}")))
+                    .map(|checked| (n, checked))
+            })
+            .collect()
+    }
+
+    /// Decks with a visible note, parsed back from the `note_<deck>_<n>` bits.
+    fn note_decks(&self) -> impl Iterator<Item = u32> + '_ {
+        self.quest_bit_values.iter().filter_map(|(name, value)| {
+            note_checked(*value)?;
+            let (deck, n) = name.strip_prefix("note_")?.split_once('_')?;
+            let (deck, n): (u32, u32) = (deck.parse().ok()?, n.parse().ok()?);
+            // Only the exact names `pda_notes` reads: `note_05_3` is not deck 5.
+            ((1..=NOTES_PER_DECK).contains(&n) && *name == format!("note_{deck}_{n}"))
+                .then_some(deck)
+        })
+    }
+
+    /// Decks with any email, log or note, ascending: the PDA's deck arrows
+    /// cycle these. Retail skipped note-only decks; listing them keeps every
+    /// objective reachable.
     pub fn pda_decks(&self) -> Vec<u32> {
         let decks: BTreeSet<u32> = self
             .collected_logs
             .iter()
             .map(|entry| entry.deck)
             .chain(self.collected_emails().map(|(deck, _)| deck))
+            .chain(self.note_decks())
             .collect();
         decks.into_iter().collect()
     }
 
-    /// Where the PDA opens: the newest log's deck, else the latest email deck.
+    /// Where the PDA opens: the newest log's deck, else the latest email deck,
+    /// else the latest deck with notes.
     pub fn pda_default_view(&self) -> Option<(PdaKind, u32)> {
         self.collected_logs
             .last()
@@ -306,6 +351,7 @@ impl QuestInfo {
                     .max()
                     .map(|deck| (PdaKind::Email, deck))
             })
+            .or_else(|| self.note_decks().max().map(|deck| (PdaKind::Note, deck)))
     }
 
     /// The player's persistent character sheet.
@@ -503,6 +549,30 @@ mod log_tests {
         emails_only.mark_email_as_played(&crate::util::get_email_sound_file(1, 2));
         assert_eq!(emails_only.pda_default_view(), Some((PdaKind::Email, 1)));
         assert_eq!(QuestInfo::new().pda_default_view(), None);
+    }
+
+    /// `Note_<deck>_<n>` = 1 lists an open objective, 2 a checked one; unset,
+    /// 0, other values and slots past 32 stay hidden. A deck with only notes
+    /// still gets a deck-arrow stop.
+    #[test]
+    fn note_bits_list_open_and_checked_objectives_per_deck() {
+        let mut quest_info = QuestInfo::new();
+        quest_info.set_quest_bit_value("Note_5_3", QuestBitValue::COMPLETE);
+        quest_info.set_quest_bit_value("note_5_1", QuestBitValue::INCOMPLETE);
+        quest_info.set_quest_bit_value("Note_5_2", QuestBitValue::UNKNOWN);
+        quest_info.set_quest_bit_value("Note_5_33", QuestBitValue::INCOMPLETE);
+        quest_info.set_quest_bit_value("Note_6_1", QuestBitValue::UNKNOWN);
+        quest_info.set_quest_bit_value("Note_7_1", QuestBitValue::all());
+        quest_info.set_quest_bit_value("Note_08_1", QuestBitValue::INCOMPLETE);
+
+        assert_eq!(quest_info.pda_notes(5), vec![(1, false), (3, true)]);
+        assert_eq!(quest_info.pda_notes(6), vec![]);
+        assert_eq!(quest_info.pda_decks(), vec![5]);
+        assert_eq!(quest_info.pda_default_view(), Some((PdaKind::Note, 5)));
+
+        quest_info.collect_log(2, 1);
+        assert_eq!(quest_info.pda_decks(), vec![2, 5]);
+        assert_eq!(quest_info.pda_default_view(), Some((PdaKind::Log, 2)));
     }
 
     /// Saves written before read tracking restore their logs as unread.
