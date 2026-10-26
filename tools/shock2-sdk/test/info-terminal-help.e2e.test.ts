@@ -1,16 +1,38 @@
 // Using a medsci1 info terminal unlocks the help topic in its `P$HelpText`
-// mask. Negative-first: the InfoComputer script did nothing, so no topic was
-// ever unlocked.
+// mask, in a fresh mission and in a release save written before that property
+// was parsed. Negative-first: with InfoComputer unregistered no topic unlocks,
+// and without the save backfill the release-save terminal opens the map.
 import assert from "node:assert/strict";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
-import { GameServer } from "../src/index.js";
+import { gunzipSync } from "node:zlib";
+import { GameServer, findRepoRoot } from "../src/index.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
 
-for (const vr of [false, true]) {
-  test(`info terminal unlocks its help topic (${vr ? "VR" : "flat"})`, {
+const cases = [
+  { name: "flat", vr: false },
+  { name: "VR", vr: true },
+  { name: "v0.0.3 save", vr: false, save: "v0.0.3/medsci1-kit" },
+];
+
+for (const { name, vr, save } of cases) {
+  test(`info terminal unlocks its help topic (${name})`, {
     skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000,
-  }, async () => {
+  }, async (t) => {
     await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: vr ? ["--vr"] : [] });
+    if (save) {
+      const assetRoot = process.env.DARK_ASSET_PATH;
+      assert.ok(assetRoot, "DARK_ASSET_PATH selects the save directory");
+      mkdirSync(join(assetRoot, "saves"), { recursive: true });
+      const saveName = `info_terminal_help_${Date.now()}`;
+      const savePath = join(assetRoot, "saves", `${saveName}.sav`);
+      const fixture = join(findRepoRoot(process.cwd())!, "shock2vr", "tests", "fixtures", "saves", `${save}.sav.gz`);
+      writeFileSync(savePath, gunzipSync(readFileSync(fixture)));
+      t.after(() => rmSync(savePath, { force: true }));
+      const loaded = await game.load(saveName);
+      assert.ok(loaded.success, `load failed: ${loaded.message}`);
+    }
     await game.step({ frames: 10 });
     // Mission object 178 carries P$HelpText = 1: topic 0.
     const { entities } = await game.entities.list({ filter: "Info Comp", limit: 50 });

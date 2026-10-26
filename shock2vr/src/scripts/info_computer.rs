@@ -8,7 +8,7 @@ use super::{Effect, MessagePayload, Script, script_util::play_environmental_soun
 
 /// A TriOptimum information terminal. Using one plays its activate schema and
 /// unlocks the help topics in its `P$HelpText` mask; a terminal with no topics
-/// opens the map instead.
+/// toggles the map instead, as the MAP utility button does.
 pub struct InfoComputer;
 
 impl Script for InfoComputer {
