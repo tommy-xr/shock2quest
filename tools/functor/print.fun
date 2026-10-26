@@ -30,9 +30,12 @@ let character: Option.t<character> =
       if File.exists("ss2/motiondb.bin") && File.exists(clipFile)
       then Option.Some(Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes(clipFile), clipName) |> Binary.require)
       else Option.None in
+    let cal =
+      if File.exists("ss2/model.cal") then File.bytes("ss2/model.cal")
+      else Binary.invalid("ss2/model.bin is a character: copy its skeleton (the .CAL beside it) to ss2/model.cal") in
     Option.Some({
       rig: Lgmm.rig(Decode.run(Lgmm.model, data) |> Binary.require,
-        Decode.run(Cal.skeleton, File.bytes("ss2/model.cal")) |> Binary.require),
+        Decode.run(Cal.skeleton, cal) |> Binary.require),
       clip: clip
     })
 
@@ -61,12 +64,13 @@ let mouseWheel = PartViewer.mouseWheel
 // Mesh space (Z up) to scene space (Y up), as Mesh.toScene draws it.
 let toScene = (v: Vec3.t) => Vec3.make(Vec3.x(v), Vec3.z(v), 0.0 - Vec3.y(v))
 
+// Framing for the animated view, from the printed pose.
+let lo = toScene(Mesh.bounds(mesh).min)
+let hi = toScene(Mesh.bounds(mesh).max)
+let center = Vec3.scale(0.5, Vec3.add(lo, hi))
+let size = Vec3.distance(lo, hi)
+
 let animate = (c: character, m, tts: float) =>
-  let b = Mesh.bounds(mesh) in
-  let lo = toScene(b.min) in
-  let hi = toScene(b.max) in
-  let center = Vec3.scale(0.5, Vec3.add(lo, hi)) in
-  let size = Vec3.distance(lo, hi) in
   Frame.createLit(
     OrbitCamera.camera(m.orbit, center, size),
     Scene.group([

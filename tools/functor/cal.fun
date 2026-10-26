@@ -47,7 +47,9 @@ let at = (k: float, xs: List<'a>, fallback: 'a): 'a => Option.defaultValue(fallb
 let bonesOf = (torsos: List<torso>, limbs: List<limb>): List<bone> =>
   let fromTorsos =
     List.concatMap((t: torso) =>
-      let parentJoint = if t.parent < 0.0 then -1.0 else (at(t.parent, torsos, t)).joint in
+      let parentJoint =
+        if t.parent < 0.0 then -1.0
+        else Option.defaultValue(-1.0, List.nth(t.parent, torsos) |> Option.map((p: torso) => p.joint)) in
       List.append(
         List.indexedMap((k, j) =>
           let o = at(k, t.offsets, [0.0, 0.0, 0.0]) in
@@ -94,24 +96,9 @@ let chains = (s: skeleton): List<List<bone>> =>
       match walked with
       | (_, chain) => chain)
 
-// Every joint's transform for one pose (see `globalOf`), from precomputed chains.
+// Every joint's transform in the model for one pose: `root` (the clip's
+// vertical bob), then each bone from the root down, followed by
+// `animate(joint)` (identity at rest).
 let globals = (chainsOf: List<List<bone>>, root: Affine.t, animate: (float) => Affine.t): List<Affine.t> =>
   List.map((chain) =>
     List.fold((m, b: bone) => Affine.compose(m, Affine.compose(b.local, animate(b.joint))), root, chain), chainsOf)
-
-// Each joint's transform in the model: `root` (the clip's vertical bob), then
-// its ancestors' transforms from the root down, each followed by
-// `animate(joint)` (identity at rest), then its own.
-let globalOf = (s: skeleton, root: Affine.t, animate: (float) => Affine.t, joint: float): Affine.t =>
-  let walked =
-    List.range(List.length(s.bones))
-      |> List.fold((walk, step) =>
-        match walk with
-        | (at, chain) =>
-          match bone(s, at) with
-          | Option.Some(b) =>
-            if List.length(chain) > List.length(s.bones) then walk
-            else (b.parent, List.append(chain, [Affine.compose(b.local, animate(b.joint))]))
-          | Option.None => walk, (joint, [])) in
-  match walked with
-  | (_, chain) => List.fold((m, local) => Affine.compose(m, local), root, chain)

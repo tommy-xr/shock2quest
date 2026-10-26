@@ -81,11 +81,14 @@ let bindings = (m: model): List<binding> =>
   let byRun =
     List.map((r: run) =>
       let seg = Option.defaultValue({ joint: 0.0, stretchy: false }, List.nth(r.segment, m.segments)) in
-      let joint = if seg.joint < 0.0 || seg.joint >= 40.0 then 0.0 else seg.joint in
-      let blends = seg.stretchy && r.weightAt + r.count <= List.length(m.weights) in
+      // A joint outside the skeleton binds rigidly to joint 0.
+      let valid = seg.joint >= 0.0 && seg.joint < 40.0 in
+      let joint = if valid then seg.joint else 0.0 in
+      let blends = valid && seg.stretchy && r.weightAt + r.count <= List.length(m.weights) in
       (r, joint, blends), m.runs) in
   List.indexedMap((v, p) =>
-    match List.find((entry) => match entry with | (r, _, _) => v >= r.start && v < r.start + r.count, byRun) with
+    // Runs partition the vertices; where they overlap, the last wins (as in the game).
+    match List.find((entry) => match entry with | (r, _, _) => v >= r.start && v < r.start + r.count, List.reverse(byRun)) with
     | Option.Some(entry) =>
       (match entry with
        | (r, joint, blends) =>
@@ -130,14 +133,11 @@ let poseRig = (r: rig, root: Affine.t, animate: (float) => Affine.t): Mesh.t =>
       List.zip(r.model.positions, r.bindings)) in
   Mesh.fromPolygons(Bytes.fromF32le(List.flatten(posed)), r.model.triangles)
 
-let pose = (m: model, skel: Cal.skeleton, root: Affine.t, animate: (float) => Affine.t): Mesh.t =>
-  poseRig(rig(m, skel), root, animate)
-
 // A character's mesh at rest (a T-pose), or where decoding failed.
 let rest = (mesh: Bytes.t, cal: Bytes.t): Result.t<Mesh.t, Binary.error> =>
   Decode.run(model, mesh)
     |> Result.bind((m: model) =>
-      Decode.run(Cal.skeleton, cal) |> Result.map((s: Cal.skeleton) => pose(m, s, Affine.identity, (j) => Affine.identity)))
+      Decode.run(Cal.skeleton, cal) |> Result.map((s: Cal.skeleton) => poseRig(rig(m, s), Affine.identity, (j) => Affine.identity)))
 
 // A character's mesh in `clip` at `seconds` (looping).
 let posed = (mesh: Bytes.t, cal: Bytes.t, clip: Motion.clip, seconds: float): Result.t<Mesh.t, Binary.error> =>
@@ -146,4 +146,4 @@ let posed = (mesh: Bytes.t, cal: Bytes.t, clip: Motion.clip, seconds: float): Re
       Decode.run(Cal.skeleton, cal)
         |> Result.map((s: Cal.skeleton) =>
           let p = Motion.sample(clip, seconds) in
-          pose(m, s, p.root, p.animate)))
+          poseRig(rig(m, s), p.root, p.animate)))

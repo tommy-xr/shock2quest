@@ -23,7 +23,11 @@ expect not have(standing)
   || (let clip = Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes("ss2/ogpstd_.mc"), "ogpstd") |> Binary.require in
       let skel = Decode.run(Cal.skeleton, File.bytes("ss2/hybrid.cal")) |> Binary.require in
       let p = Motion.sample(clip, 0.0) in
-      let joint = (j) => Affine.offset(Cal.globalOf(skel, p.root, p.animate, j)) in
+      let joints = Cal.globals(Cal.chains(skel), p.root, p.animate) in
+      let joint = (j) => Affine.offset(Option.defaultValue(Affine.identity, List.nth(j, joints))) in
+      let posed = Lgmm.posed(File.bytes("ss2/hybrid.bin"), File.bytes("ss2/hybrid.cal"), clip, 0.0) |> Binary.require in
+      let b = bounds(posed) in
       clip.motion.frames == 43.0
         && near(joint(19.0), [0.7125, 0.0920, 3.4325])
-        && near(joint(0.0), [0.9357, 0.3809, -4.0218]))
+        && near(joint(0.0), [0.9357, 0.3809, -4.0218])
+        && near([Affine.n(2.0, b), Affine.n(5.0, b)], [-4.2535, 3.3984]))

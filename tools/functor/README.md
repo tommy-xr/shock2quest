@@ -9,8 +9,12 @@ functor -d tools/functor export -o tools/functor/crate.stl     # print it (60 mm
 functor -d tools/functor test                             # decoder tests (no game files)
 ```
 
-- `lgmd.fun` — the decoder: header, vertices, polygons and the sub-object tree, posed at rest (each part's vertices moved by its parents' transforms, then its own). Positions stay in Dark's native Z-up axes.
-- `fixture.fun` — a synthetic LGMD cube with a rotated, lifted child part, written with `Encode`, and `expect`s against it.
-- `print.fun` — the part: `ss2/model.bin` if present, else the synthetic cube. Change `height` in it for flat objects (it scales the Z extent).
+- `lgmd.fun` — static objects (`LGMD`): header, vertices, polygons and the sub-object tree, posed at rest.
+- `lgmm.fun` + `cal.fun` — characters (`LGMM` mesh + `.cal` skeleton): joint-local vertices skinned rigidly or blended ("stretchy" elbows and knees); a `rig` precomputes everything that doesn't change per frame.
+- `motion.fun` — animation: `motiondb.bin` (each motion's frames, rate and track→joint map) and `.mc` clips, sampled with slerp; the root bobs vertically.
+- `affine.fun` — shared 3×4 transform math.
+- `print.fun` — the entry: `ss2/model.bin` (object, or character with `ss2/model.cal`, playing `clipName` when `ss2/motiondb.bin` and the clip are there), else a synthetic cube. The viewer reuses Functor's `PartViewer` controls; a character animates via `Mesh.toScene`. Export prints the pose at `seconds`.
+- `fixture.fun` — synthetic object, character, skeleton, motion database and clip, written with `Encode`, and their `expect`s (no game files).
+- `realdata.fun` — checks against the real pipe hybrid when `ss2/hybrid.{bin,cal}`, `ss2/motiondb.bin` and `ss2/ogpstd_.mc` are present (values from shock2quest's own pipeline); pass vacuously otherwise.
 
-Every object in the shipped `obj/` set (1,444, all version 4) decodes; single-part models match their headers' bounding boxes. Articulated models' header boxes are motion envelopes, so they don't — their rest pose follows the game's math (each part's matrix, as stored, transposed: Dark keeps rotation columns), checked by the fixture's turned and lifted parts.
+Every object in the shipped `obj/` set (1,444, all version 4) decodes; single-part models match their headers' bounding boxes. The pipe hybrid's rest pose and `ogpstd` frame 0 match shock2quest's pipeline to 1e-3. Playing a clip costs ~4.4 ms/frame in a release build (posing runs in Functor).

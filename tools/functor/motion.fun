@@ -47,9 +47,10 @@ let database =
                   |> Decode.andThen((names) =>
                     Decode.u32le
                       |> Decode.andThen((stuff) =>
-                        Decode.skipThen(24.0 * stuff + 4.0,
-                          Decode.field("motions", Decode.list(size, mps))
-                            |> Decode.map((motions) => List.zip(motions, names))))))))
+                        Decode.skipThen(24.0 * stuff, Decode.u32le)
+                          |> Decode.andThen((count) =>
+                            Decode.field("motions", Decode.list(count, mps))
+                              |> Decode.map((motions) => List.zip(motions, names))))))))
 
 // A motion's record by name (case-insensitive).
 let find = (db: Bytes.t, motionName: string): Result.t<motion, Binary.error> =>
@@ -92,11 +93,12 @@ let slerp = (a: List<float>, b0: List<float>, t: float): List<float> =>
   let len = Math.sqrt(dot(mix, mix)) in
   if len == 0.0 then mix else List.map((x) => x / len, mix)
 
-// The rotation a stored quaternion applies: its conjugate's (zero = identity).
+// A stored quaternion, with an all-zero one meaning identity (as the game reads it).
+let unit = (q: List<float>): List<float> => if dot(q, q) <= 0.0000001 then [1.0, 0.0, 0.0, 0.0] else q
+
+// The rotation a stored quaternion applies: its conjugate's.
 let rotation = (q: List<float>): Affine.t =>
-  if dot(q, q) == 0.0
-  then Affine.identity
-  else Affine.quaternion(Affine.n(0.0, q), 0.0 - Affine.n(1.0, q), 0.0 - Affine.n(2.0, q), 0.0 - Affine.n(3.0, q))
+  Affine.quaternion(Affine.n(0.0, q), 0.0 - Affine.n(1.0, q), 0.0 - Affine.n(2.0, q), 0.0 - Affine.n(3.0, q))
 
 // The pose at `seconds`, looping: frames interpolate (the last towards the
 // first); the root bobs vertically only; a joint takes its last track.
@@ -110,9 +112,9 @@ let sample = (c: clip, seconds: float): pose =>
   let z = rootZ(f) + (rootZ(next) - rootZ(f)) * a in
   let rotations =
     List.map((track) =>
-      let q0 = Option.defaultValue([0.0, 0.0, 0.0, 0.0], List.nth(f, track)) in
-      let q1 = Option.defaultValue(q0, List.nth(next, track)) in
-      if dot(q0, q0) == 0.0 then Affine.identity else rotation(slerp(q0, q1, a)), c.tracks) in
+      let q0 = unit(Option.defaultValue([0.0, 0.0, 0.0, 0.0], List.nth(f, track))) in
+      let q1 = unit(Option.defaultValue(q0, List.nth(next, track))) in
+      rotation(slerp(q0, q1, a)), c.tracks) in
   // Track k (k ≥ 1) drives joint `joints[k]`; later tracks win.
   let driven = List.zip(rotations, List.drop(1.0, c.motion.joints)) in
   let perJoint =
