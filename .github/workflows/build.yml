@@ -94,15 +94,28 @@ jobs:
         run: cargo build --verbose --release -p engine -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command -p dark_explorer
         env:
           RUSTFLAGS: "-D warnings"
-      - name: Run all tests (Unix)
-        if: runner.os != 'Windows'
-        run: cargo test --verbose --release -p shock2vr -p engine -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command
-        env:
-          RUSTFLAGS: "-D warnings"
 
       - name: Build all (Windows)
         if: runner.os == 'Windows'
         run: cargo build --verbose --release -p engine -p desktop_runtime -p dark_query -p debug_runtime -p debug_command -p dark_explorer
+        env:
+          RUSTFLAGS: "-D warnings"
+
+      # Lets local e2e runs and captures use this commit's runtime instead of a
+      # per-checkout build. Tarred because artifact zips drop the executable bit;
+      # written to a relative path because GNU tar reads `D:` as a remote host.
+      # Packaged before the tests, which rebuild some binaries with other features.
+      # The macOS binary needs `brew install ffmpeg@6`.
+      - name: Package runtime binaries
+        shell: bash
+        run: |
+          exe=""
+          if [ "$RUNNER_OS" = Windows ]; then exe=.exe; fi
+          tar -czf runtime.tar.gz -C target/release "debug_runtime$exe" "dark_query$exe" "dark_explorer$exe"
+
+      - name: Run all tests (Unix)
+        if: runner.os != 'Windows'
+        run: cargo test --verbose --release -p shock2vr -p engine -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
       - name: Run all tests (Windows)
@@ -111,15 +124,6 @@ jobs:
         env:
           RUSTFLAGS: "-D warnings"
 
-      # Lets local e2e runs and captures use this commit's runtime instead of a
-      # per-checkout build. Tarred because artifact zips drop the executable bit;
-      # written to a relative path because GNU tar reads `D:` as a remote host.
-      - name: Package runtime binaries
-        shell: bash
-        run: |
-          exe=""
-          if [ "$RUNNER_OS" = Windows ]; then exe=.exe; fi
-          tar -czf runtime.tar.gz -C target/release "debug_runtime$exe" "dark_query$exe" "dark_explorer$exe"
       - uses: actions/upload-artifact@v4
         with:
           name: shock2quest-runtime-${{ runner.os }}-${{ github.sha }}
