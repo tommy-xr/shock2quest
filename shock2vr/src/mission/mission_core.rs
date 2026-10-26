@@ -10196,8 +10196,8 @@ impl MissionCore {
         self.make_un_physical(entity_id);
     }
 
-    /// Resolve an audio log's reader strings from `level<deck>.str` and cache
-    /// them on the supplied `MediaGui` host. Returns true only when a real
+    /// Resolve a PDA entry's reader strings from its table (`level<deck>.str`,
+    /// or `infocomp.str` for help) and cache them on the supplied `MediaGui` host. Returns true only when a real
     /// transcript was found, so callers never mark a log read or play audio
     /// after opening an empty backdrop.
     ///
@@ -10210,16 +10210,12 @@ impl MissionCore {
         entry: PdaEntry,
         asset_cache: &mut AssetCache,
     ) -> bool {
-        let PdaEntry { kind, deck, index } = entry;
-        let prefix = match kind {
-            PdaKind::Email => "email",
-            PdaKind::Log => "log",
-            // Notes are a checklist with no reader.
-            PdaKind::Note => return false,
+        let PdaEntry { deck, index, .. } = entry;
+        // Notes are a checklist with no reader.
+        let Some((table, prefix, number)) = entry.strings() else {
+            return false;
         };
-        let level_file = format!("level{deck:02}.str");
-        let Some(strings) = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, &level_file)
-        else {
+        let Some(strings) = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, &table) else {
             return false;
         };
         // The .str values carry literal backslash-n escapes ("AMANPOUR
@@ -10227,7 +10223,7 @@ impl MissionCore {
         // the reader never draws "\n".
         let get = |field: &str| {
             strings
-                .get(&format!("{prefix}{field}{index}"))
+                .get(&format!("{prefix}{field}{number}"))
                 .map(|s| s.replace("\\n", "\n"))
         };
         let data = crate::runtime_props::RuntimePropLogData {
@@ -13153,28 +13149,13 @@ impl MissionCore {
 
                     // Only after a localized reader is bound to the active
                     // presentation do read state and audio advance together.
-                    let PdaEntry { deck, index, .. } = entry;
-                    match entry.kind {
-                        PdaKind::Log => {
-                            if let Ok(mut quest_info) =
-                                self.world.borrow::<UniqueViewMut<QuestInfo>>()
-                            {
-                                quest_info.mark_log_read(deck, index);
-                            }
-                            effects.push_front(Effect::PlaySound {
-                                handle: AudioHandle::new(),
-                                source: None,
-                                name: format!("LOG{deck:02}{index:02}"),
-                                spatial: false,
-                            });
-                        }
-                        // Retail replays an email's audio each time it is read.
-                        PdaKind::Email => effects.push_front(Effect::PlayEmail {
-                            deck,
-                            email: index,
-                            force: true,
-                        }),
-                        PdaKind::Note => {}
+                    if entry.kind == PdaKind::Log
+                        && let Ok(mut quest_info) = self.world.borrow::<UniqueViewMut<QuestInfo>>()
+                    {
+                        quest_info.mark_log_read(entry.deck, entry.index);
+                    }
+                    if let Some(audio) = crate::scripts::gui::reader_audio(entry) {
+                        effects.push_front(audio);
                     }
                 }
 
@@ -13208,8 +13189,23 @@ impl MissionCore {
                 }
 
                 Effect::UnlockHelp { bits } => {
-                    if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
-                        quests.unlock_help(bits);
+                    // The terminal then shows its topic, already unlocked or not,
+                    // in the same reader a PDA pick opens.
+                    let read = self
+                        .world
+                        .borrow::<UniqueViewMut<QuestInfo>>()
+                        .ok()
+                        .and_then(|mut quests| {
+                            let index = quests.unlock_help(bits)?;
+                            let deck = quests.pda_default_view().map_or(1, |(_, deck)| deck);
+                            Some(PdaEntry {
+                                kind: PdaKind::Help,
+                                deck,
+                                index,
+                            })
+                        });
+                    if let Some(entry) = read {
+                        effects.push_front(Effect::ReadPdaEntry(entry));
                     }
                 }
 

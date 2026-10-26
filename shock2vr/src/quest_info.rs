@@ -29,7 +29,7 @@ pub struct CollectedLog {
     pub read: bool,
 }
 
-/// A PDA list tab. Retail's PDA also has a Help tab.
+/// A PDA list tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PdaKind {
     Email,
@@ -37,6 +37,8 @@ pub enum PdaKind {
     Log,
     /// Per-deck objectives (quest bits `Note_<deck>_<n>`); a read-only checklist.
     Note,
+    /// Help topics unlocked at info terminals; global, not per deck.
+    Help,
 }
 
 /// Objective slots per deck: `Note_<deck>_1` ..= `Note_<deck>_32`.
@@ -55,12 +57,28 @@ fn note_checked(value: QuestBitValue) -> Option<bool> {
 }
 
 /// One PDA entry: an email or audio log, keyed like the string tables
-/// (`level<deck>.str` `EmailName<index>` / `LogName<index>`).
+/// (`level<deck>.str` `EmailName<index>` / `LogName<index>`), or a help topic
+/// (`index` = its `P$HelpText` bit; `deck` is just the deck the list returns to).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PdaEntry {
     pub kind: PdaKind,
     pub deck: u32,
     pub index: u32,
+}
+
+impl PdaEntry {
+    /// The entry's string table, key prefix and number: its strings are
+    /// `<prefix><field><number>`, e.g. `level02.str` `LogName20`, or
+    /// `infocomp.str` `HelpText1` for topic 0. Notes have no reader strings.
+    pub fn strings(&self) -> Option<(String, &'static str, u32)> {
+        let level = || format!("level{:02}.str", self.deck);
+        match self.kind {
+            PdaKind::Email => Some((level(), "email", self.index)),
+            PdaKind::Log => Some((level(), "log", self.index)),
+            PdaKind::Help => Some(("infocomp.str".into(), "help", self.index + 1)),
+            PdaKind::Note => None,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Unique, Clone, Debug)]
@@ -303,7 +321,8 @@ impl QuestInfo {
     }
 
     /// One deck's PDA list, oldest first like retail. Logs keep pickup order;
-    /// emails keep no receipt time, so they list in index (story) order.
+    /// emails keep no receipt time, so they list in index (story) order. Help
+    /// topics are the same on every deck, in unlock order.
     pub fn pda_entries(&self, kind: PdaKind, deck: u32) -> Vec<u32> {
         match kind {
             PdaKind::Log => self
@@ -323,6 +342,7 @@ impl QuestInfo {
             }
             // Index order; the list orders notes by `NoteOrder` from notes.str.
             PdaKind::Note => self.pda_notes(deck).into_iter().map(|(n, _)| n).collect(),
+            PdaKind::Help => self.help_topics.clone(),
         }
     }
 
