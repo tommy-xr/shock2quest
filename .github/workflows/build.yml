@@ -112,17 +112,18 @@ jobs:
           RUSTFLAGS: "-D warnings"
 
       # Lets local e2e runs and captures use this commit's runtime instead of a
-      # per-checkout build. Tarred because artifact zips drop the executable bit.
+      # per-checkout build. Tarred because artifact zips drop the executable bit;
+      # written to a relative path because GNU tar reads `D:` as a remote host.
       - name: Package runtime binaries
         shell: bash
         run: |
           exe=""
           if [ "$RUNNER_OS" = Windows ]; then exe=.exe; fi
-          tar -czf "$RUNNER_TEMP/runtime.tar.gz" -C target/release "debug_runtime$exe" "dark_query$exe" "dark_explorer$exe"
+          tar -czf runtime.tar.gz -C target/release "debug_runtime$exe" "dark_query$exe" "dark_explorer$exe"
       - uses: actions/upload-artifact@v4
         with:
           name: shock2quest-runtime-${{ runner.os }}-${{ github.sha }}
-          path: ${{ runner.temp }}/runtime.tar.gz
+          path: runtime.tar.gz
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
