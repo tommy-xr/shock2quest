@@ -3,10 +3,10 @@
 A [Functor](https://github.com/tommy-xr/functor) project that decodes System Shock 2 static object meshes (`.bin` files starting `LGMD`) in Functor itself and turns them into printable solids.
 
 ```sh
-mkdir -p tools/print/ss2 && cp Data/res/obj/CRATE01.BIN tools/print/ss2/model.bin  # gitignored
-functor -d tools/print run native                          # view it
-functor -d tools/print export -o tools/print/crate.stl     # print it (60 mm tall)
-functor -d tools/print test                             # decoder tests (no game files)
+mkdir -p tools/functor/ss2 && cp Data/res/obj/CRATE01.BIN tools/functor/ss2/model.bin  # gitignored
+functor -d tools/functor run native                          # view it
+functor -d tools/functor export -o tools/functor/crate.stl     # print it (60 mm tall)
+functor -d tools/functor test                             # decoder tests (no game files)
 ```
 
 - `lgmd.fun` — the decoder: header, vertices, polygons and the sub-object tree, posed at rest (each part's vertices moved by its parents' transforms, then its own). Positions stay in Dark's native Z-up axes.
