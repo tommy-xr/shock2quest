@@ -136,3 +136,18 @@ expect Result.map(Mesh.triangleCount, character) == Result.Ok(2.0)
 // Joint 1's vertices sit 2 up; nothing goes below joint 0.
 expect (character |> Result.map((m) => [Vec3.z(Mesh.bounds(m).min), Vec3.z(Mesh.bounds(m).max)])) == Result.Ok([0.0, 2.0])
 expect (Decode.run(Cal.skeleton, characterSkeleton) |> Result.map((s: Cal.skeleton) => List.map((b: Cal.bone) => [b.joint, b.parent], s.bones))) == Result.Ok([[0.0, -1.0], [1.0, 0.0]])
+
+// A two-frame clip driving joint 1 from identity to 180° about Z, its root
+// rising from 0 to 1: halfway is 90° and 0.5 up.
+let twoFrames: Motion.clip = {
+  motion: { frames: 2.0, fps: 2.0, joints: [0.0, 1.0] },
+  root: [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+  tracks: [[[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]]
+}
+
+let halfway = Motion.sample(twoFrames, 0.25)
+
+expect Affine.offset(halfway.root) == [0.0, 0.0, 0.5]
+// The stored quaternion's conjugate: +90° stored → -90° applied, so +X → -Y.
+expect (Affine.apply(halfway.animate(1.0), [1.0, 0.0, 0.0]) |> List.map((x) => Math.round(x * 1000.0) / 1000.0)) == [0.0, -1.0, 0.0]
+expect Affine.apply(halfway.animate(0.0), [1.0, 0.0, 0.0]) == [1.0, 0.0, 0.0]

@@ -94,11 +94,11 @@ let bindings = (m: model): List<binding> =>
          else rigid(joint))
     | Option.None => rigid(0.0), m.positions)
 
-// The mesh posed on `skel`, each joint's motion given by `animate` (identity at
-// rest): rigid vertices move with their joint; blending ones mix its rotation
-// with the parent's, pivoting at the joint.
-let pose = (m: model, skel: Cal.skeleton, animate: (float) => Affine.t): Mesh.t =>
-  let joints = List.range(40.0) |> List.map((j) => Cal.globalOf(skel, animate, j)) in
+// The mesh posed on `skel`: `root` moves the whole skeleton and `animate`
+// turns each joint (both identity at rest). Rigid vertices move with their
+// joint; blending ones mix its rotation with the parent's, pivoting at the joint.
+let pose = (m: model, skel: Cal.skeleton, root: Affine.t, animate: (float) => Affine.t): Mesh.t =>
+  let joints = List.range(40.0) |> List.map((j) => Cal.globalOf(skel, root, animate, j)) in
   let global = (j: float) => Option.defaultValue(Affine.identity, List.nth(j, joints)) in
   let parentOf = (j: float) =>
     match Cal.bone(skel, j) with
@@ -121,4 +121,13 @@ let pose = (m: model, skel: Cal.skeleton, animate: (float) => Affine.t): Mesh.t 
 let rest = (mesh: Bytes.t, cal: Bytes.t): Result.t<Mesh.t, Binary.error> =>
   Decode.run(model, mesh)
     |> Result.bind((m: model) =>
-      Decode.run(Cal.skeleton, cal) |> Result.map((s: Cal.skeleton) => pose(m, s, (j) => Affine.identity)))
+      Decode.run(Cal.skeleton, cal) |> Result.map((s: Cal.skeleton) => pose(m, s, Affine.identity, (j) => Affine.identity)))
+
+// A character's mesh in `clip` at `seconds` (looping).
+let posed = (mesh: Bytes.t, cal: Bytes.t, clip: Motion.clip, seconds: float): Result.t<Mesh.t, Binary.error> =>
+  Decode.run(model, mesh)
+    |> Result.bind((m: model) =>
+      Decode.run(Cal.skeleton, cal)
+        |> Result.map((s: Cal.skeleton) =>
+          let p = Motion.sample(clip, seconds) in
+          pose(m, s, p.root, p.animate)))

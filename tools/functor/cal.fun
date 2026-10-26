@@ -77,9 +77,10 @@ let skeleton =
 // The first bone for a joint, as the game looks bones up.
 let bone = (s: skeleton, joint: float): Option.t<bone> => List.find((b: bone) => b.joint == joint, s.bones)
 
-// Each joint's transform in the model: its ancestors' transforms from the root
-// down, each followed by `animate(joint)` (identity at rest), then its own.
-let globalOf = (s: skeleton, animate: (float) => Affine.t, joint: float): Affine.t =>
+// Each joint's transform in the model: `root` (the clip's vertical bob), then
+// its ancestors' transforms from the root down, each followed by
+// `animate(joint)` (identity at rest), then its own.
+let globalOf = (s: skeleton, root: Affine.t, animate: (float) => Affine.t, joint: float): Affine.t =>
   let walked =
     List.range(List.length(s.bones))
       |> List.fold((walk, step) =>
@@ -91,4 +92,4 @@ let globalOf = (s: skeleton, animate: (float) => Affine.t, joint: float): Affine
             else (b.parent, List.append(chain, [Affine.compose(b.local, animate(b.joint))]))
           | Option.None => walk, (joint, [])) in
   match walked with
-  | (_, chain) => List.fold((m, local) => Affine.compose(m, local), Affine.identity, chain)
+  | (_, chain) => List.fold((m, local) => Affine.compose(m, local), root, chain)
