@@ -1,11 +1,11 @@
 // A synthetic LGMD file, written with `Encode`, to test `Lgmd` without game
 // files: a unit cube whose top four vertices are a child sub-object turned 90°
-// about Z and lifted 2.
+// about X (y → z, z → -y) and moved (0, 1, 2) — every face stays planar.
 
 let header = (version: float) =>
   Encode.sequence([
     Encode.latin1("LGMD"), Encode.u32le(version),
-    Encode.zeros(52.0),                                    // name, radii, bounds
+    Encode.zeros(52.0),                                    // name, radii, bounds, centre
     Encode.u16le(6.0), Encode.u16le(8.0), Encode.u16le(0.0), // polygons, vertices, params
     Encode.u8(0.0), Encode.u8(0.0), Encode.u8(0.0), Encode.u8(2.0), // materials … objects
     Encode.bytes(Bytes.fromU32le([122.0, 578.0, 578.0, 578.0, 308.0, 578.0, 578.0, 404.0, 578.0, 578.0])),
@@ -32,24 +32,48 @@ let corners =
   List.range(8.0)
     |> List.concatMap((i) => [Math.mod(i, 2.0), Math.mod(Math.floor(i / 2.0), 2.0), Math.floor(i / 4.0)])
 
-let cube = (version: float): Bytes.t =>
+// Rotation columns, then translation — Dark's layout.
+let turned = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 1.0, 2.0]
+
+let faces = [
+  [0.0, 2.0, 3.0, 1.0], [4.0, 5.0, 7.0, 6.0], [0.0, 1.0, 5.0, 4.0],
+  [2.0, 6.0, 7.0, 3.0], [0.0, 4.0, 6.0, 2.0], [1.0, 3.0, 7.0, 5.0]
+]
+
+let zeroMatrix = List.range(12.0) |> List.map((i) => 0.0)
+
+// The cube with the root and child parts' transforms, the child's vertex
+// count, and the corners and faces given.
+let cubeRooted = (version: float, points: List<float>, root: List<float>, child: List<float>, childCount: float, quads: List<List<float>>): Bytes.t =>
   Encode.run(Encode.sequence([
     header(version),
-    subObject(List.range(12.0) |> List.map((i) => 0.0), 1.0, -1.0, 0.0, 4.0),
-    subObject([0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0], -1.0, -1.0, 4.0, 4.0),
-    Encode.bytes(Bytes.fromF32le(corners)),
-    Encode.sequence([
-      quad([0.0, 2.0, 3.0, 1.0]), quad([4.0, 5.0, 7.0, 6.0]), quad([0.0, 1.0, 5.0, 4.0]),
-      quad([2.0, 6.0, 7.0, 3.0]), quad([0.0, 4.0, 6.0, 2.0]), quad([1.0, 3.0, 7.0, 5.0])
-    ])
+    subObject(root, 1.0, -1.0, 0.0, 4.0),
+    subObject(child, -1.0, -1.0, 4.0, childCount),
+    Encode.bytes(Bytes.fromF32le(points)),
+    Encode.list(quad, quads)
   ]))
+
+let cubeWith = (version: float, points: List<float>, child: List<float>, childCount: float, quads: List<List<float>>): Bytes.t =>
+  cubeRooted(version, points, zeroMatrix, child, childCount, quads)
+
+let cube = (version: float): Bytes.t => cubeWith(version, corners, turned, 4.0, faces)
+
+// The whole model lifted 5 by the root: the child composes after it, so the
+// top lands at z = 5 + 3 (the other order would swing it to y = -5).
+let lifted = cubeRooted(4.0, corners, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0], turned, 4.0, faces)
+
+// The top corners stored at z = 0 (on the bottom ones), lifted to 1 by the child.
+let flatTop =
+  cubeWith(4.0, List.indexedMap((k, v) => if Math.mod(k, 3.0) == 2.0 then 0.0 else v, corners),
+    [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0], 4.0, faces)
 
 let decoded = Lgmd.mesh(cube(4.0))
 
 expect Bytes.length(cube(4.0)) == 578.0
 expect Result.map(Mesh.triangleCount, decoded) == Result.Ok(12.0)
-// The top turned 90° (x' = -y) and lifted to z = 1 + 2.
-expect (decoded |> Result.map((m) => Vec3.x(Mesh.bounds(m).min))) == Result.Ok(-1.0)
+// Top corners (x, y, 1) → (x, 0, 2 + y): y stays within 0..1 (the transposed
+// matrix would push it to 2) and z reaches 3.
+expect (decoded |> Result.map((m) => Vec3.y(Mesh.bounds(m).max))) == Result.Ok(1.0)
 expect (decoded |> Result.map((m) => Vec3.z(Mesh.bounds(m).max))) == Result.Ok(3.0)
 expect (Decode.run(Lgmd.model, cube(4.0)) |> Result.map((m: Lgmd.model) => Lgmd.parents(m.parts))) == Result.Ok([-1.0, 0.0])
 
@@ -58,6 +82,12 @@ let failure = (data: Bytes.t): string =>
   | Result.Error(e) => Binary.describe(e)
   | Result.Ok(_) => "decoded"
 
-expect failure(cube(6.0)) == "at byte 4: LGMD version 6 isn't supported (3 and 4 are)"
+expect failure(cube(7.0)) == "at byte 4: LGMD version 7 isn't supported (3 to 6 are)"
+expect (Lgmd.mesh(lifted) |> Result.map((m) => [Vec3.y(Mesh.bounds(m).min), Vec3.z(Mesh.bounds(m).max)])) == Result.Ok([0.0, 8.0])
 expect failure(Bytes.fromLatin1("LGMM and more")) == "header at byte 4: not an LGMD object mesh (starts with \"LGMM\")"
 expect Text.contains("polygons", failure(Binary.require(Bytes.slice(0.0, 500.0, cube(4.0)))))
+// Corners that only separate once posed keep their faces.
+expect Result.map(Mesh.triangleCount, Lgmd.mesh(flatTop)) == Result.Ok(12.0)
+// Bad indices and ranges are decode errors, not crashes.
+expect Text.contains("polygons[0]", failure(cubeWith(4.0, corners, turned, 4.0, List.append(List.drop(1.0, faces), [[0.0, 1.0, 9.0, 4.0]]))))
+expect Text.contains("past the end", failure(cubeWith(4.0, corners, turned, 5.0, faces)))

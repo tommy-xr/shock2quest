@@ -4,7 +4,7 @@
 // used as stored.
 //
 //   let part = File.bytes("ss2/model.bin") |> Lgmd.mesh |> Binary.require
-//     |> Solid.fromMesh({ height: 80.0, nozzle: 0.4 })
+//     |> Solid.fromMesh({ height: 60.0, nozzle: 0.4 })
 
 type counts = { version: float, polygons: float, vertices: float, objects: float }
 type header = { counts: counts, objectsAt: float, verticesAt: float, polygonsAt: float }
@@ -20,7 +20,7 @@ type affine = {
 // next sibling (-1 for none), and the vertices it owns.
 type part = { local: affine, child: float, next: float, start: float, count: float }
 
-type model = { header: header, positions: Bytes.t, polygons: List<List<float>>, parts: List<part> }
+type model = { header: header, positions: List<List<float>>, polygons: List<List<float>>, parts: List<part> }
 
 let identity: affine = {
   a: 1.0, b: 0.0, c: 0.0, x: 0.0,
@@ -57,8 +57,9 @@ let header =
 
 type polygonPrefix = { kind: float, count: float }
 
-// One polygon's vertex indices, skipping its normals, UVs and trailer.
-let polygon = (version: float): Decode.t<List<float>> =>
+// One polygon's vertex indices (each below `vertices`), skipping its normals,
+// UVs and trailer.
+let polygon = (version: float, vertices: float): Decode.t<List<float>> =>
   Decode.map2(
     (kind, count): polygonPrefix => { kind: kind, count: count },
     Decode.skipThen(4.0, Decode.u8),
@@ -68,7 +69,9 @@ let polygon = (version: float): Decode.t<List<float>> =>
         |> Decode.andThen((ids: List<float>) =>
           let uvs = if Math.mod(p.kind, 4.0) == 3.0 then 2.0 * p.count else 0.0 in
           let tail = if version >= 4.0 then 1.0 else 0.0 in
-          Decode.skipThen(2.0 * p.count + uvs + tail, Decode.succeed(ids))))
+          if List.any((i) => i >= vertices, ids)
+          then Decode.fail("a polygon uses a vertex past the end of the vertex list")
+          else Decode.skipThen(2.0 * p.count + uvs + tail, Decode.succeed(ids))))
 
 // Dark stores rotation columns, then the translation; all zeros = identity.
 let affineOf = (v: List<float>): affine =>
@@ -96,15 +99,25 @@ let part =
 let model =
   Decode.field("header", header)
     |> Decode.andThen((h: header) =>
-      if h.counts.version < 3.0 || h.counts.version > 4.0
-      then Decode.fail(Text.join("", ["LGMD version ", Text.fromFloat(h.counts.version), " isn't supported (3 and 4 are)"]))
+      if h.counts.version < 3.0 || h.counts.version > 6.0
+      then Decode.fail(Text.join("", ["LGMD version ", Text.fromFloat(h.counts.version), " isn't supported (3 to 6 are)"]))
       else
         Decode.map3(
           (positions, polygons, parts): model =>
-            { header: h, positions: positions, polygons: polygons, parts: parts },
-          Decode.field("vertices", Decode.at(h.verticesAt, Decode.bytes(12.0 * h.counts.vertices))),
-          Decode.field("polygons", Decode.at(h.polygonsAt, Decode.list(h.counts.polygons, polygon(h.counts.version)))),
-          Decode.field("parts", Decode.at(h.objectsAt, Decode.list(h.counts.objects, part)))))
+            // Points and lines (under 3 corners) have no surface.
+            { header: h, positions: positions, parts: parts,
+              polygons: List.filter((ids) => List.length(ids) >= 3.0, polygons) },
+          Decode.field("vertices",
+            Decode.at(h.verticesAt, Decode.list(h.counts.vertices, Decode.list(3.0, Decode.f32le)))),
+          Decode.field("polygons",
+            Decode.at(h.polygonsAt,
+              Decode.list(h.counts.polygons, polygon(h.counts.version, h.counts.vertices)))),
+          Decode.field("parts",
+            Decode.at(h.objectsAt, Decode.list(h.counts.objects, part))
+              |> Decode.andThen((parts: List<part>) =>
+                if List.any((p: part) => p.start + p.count > h.counts.vertices, parts)
+                then Decode.fail("a part owns vertices past the end of the vertex list")
+                else Decode.succeed(parts)))))
 
 // `outer` after `inner`.
 let compose = (outer: affine, inner: affine): affine => {
@@ -143,11 +156,12 @@ let siblings = (parts: List<part>, first: float): List<float> =>
 
 // Each sub-object's parent index, -1 for roots.
 let parents = (parts: List<part>): List<float> =>
+  let children = List.map((q: part) => siblings(parts, q.child), parts) in
   List.indexedMap((j, p: part) =>
-    List.indexedMap((i, q: part) => (i, List.any((k) => k == j, siblings(parts, q.child))), parts)
+    List.indexedMap((i, kids) => (i, List.any((k) => k == j, kids)), children)
       |> List.fold((found, pair) =>
         match pair with
-        | (i, isChild) => if isChild then i else found, -1.0), parts)
+        | (i, isChild) => if isChild && found < 0.0 then i else found, -1.0), parts)
 
 // Each sub-object's rest pose in the model: its ancestors' transforms from the
 // root down, then its own.
@@ -166,18 +180,25 @@ let worlds = (parts: List<part>): List<affine> =>
     match walked with
     | (_, chain) => List.fold((m, local) => compose(m, local), identity, chain), parts)
 
-// The model's triangles, each sub-object's vertices moved to its rest pose.
+let apply = (m: affine, v: List<float>): List<float> =>
+  let n = (k: float) => Option.defaultValue(0.0, List.nth(k, v)) in
+  [ m.a * n(0.0) + m.b * n(1.0) + m.c * n(2.0) + m.x,
+    m.d * n(0.0) + m.e * n(1.0) + m.f * n(2.0) + m.y,
+    m.g * n(0.0) + m.h * n(1.0) + m.i * n(2.0) + m.z ]
+
+// The model's triangles, each vertex moved to its rest pose first (by the
+// first part that owns it, else the root, as the game does) — corners that
+// only separate once posed must not be merged as degenerate.
 let pose = (m: model): Mesh.t =>
-  let base = Mesh.fromPolygons(m.positions, m.polygons) in
-  let poses = worlds(m.parts) in
-  List.indexedMap((j, p: part) => (p, j), m.parts)
-    |> List.fold((mesh, pair) =>
-      match pair with
-      | (p, j) =>
-        match List.nth(j, poses) with
-        | Option.Some(w) =>
-          if p.count > 0.0 then Mesh.transformVertices(p.start, p.count, rows(w), mesh) else mesh
-        | Option.None => mesh, base)
+  let all = worlds(m.parts) in
+  let poses = List.zip(all, m.parts) in
+  let root = Option.defaultValue(identity, List.nth(0.0, all)) in
+  let posed =
+    List.indexedMap((i, v: List<float>) =>
+      match List.find((pair) => match pair with | (p, w) => i >= p.start && i < p.start + p.count, poses) with
+      | Option.Some(pair) => (match pair with | (_, w) => apply(w, v))
+      | Option.None => apply(root, v), m.positions) in
+  Mesh.fromPolygons(Bytes.fromF32le(List.flatten(posed)), m.polygons)
 
 // An LGMD file's mesh at rest, or where decoding failed.
 let mesh = (data: Bytes.t): Result.t<Mesh.t, Binary.error> =>
