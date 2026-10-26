@@ -94,16 +94,29 @@ let bindings = (m: model): List<binding> =>
          else rigid(joint))
     | Option.None => rigid(0.0), m.positions)
 
-// The mesh posed on `skel`: `root` moves the whole skeleton and `animate`
-// turns each joint (both identity at rest). Rigid vertices move with their
-// joint; blending ones mix its rotation with the parent's, pivoting at the joint.
-let pose = (m: model, skel: Cal.skeleton, root: Affine.t, animate: (float) => Affine.t): Mesh.t =>
-  let joints = List.range(40.0) |> List.map((j) => Cal.globalOf(skel, root, animate, j)) in
+// Everything about posing that doesn't change between frames: each vertex's
+// binding, each joint's bone chain and its parent's index.
+type rig = { model: model, chains: List<List<Cal.bone>>, bindings: List<binding>, parents: List<float> }
+
+let rig = (m: model, skel: Cal.skeleton): rig => {
+  model: m,
+  chains: Cal.chains(skel),
+  bindings: bindings(m),
+  parents:
+    List.range(40.0)
+      |> List.map((j) =>
+        match Cal.bone(skel, j) with
+        | Option.Some(b) => if b.parent < 0.0 then j else b.parent
+        | Option.None => j)
+}
+
+// The rig posed: `root` moves the whole skeleton and `animate` turns each joint
+// (both identity at rest). Rigid vertices move with their joint; blending ones
+// mix its rotation with the parent's, pivoting at the joint.
+let poseRig = (r: rig, root: Affine.t, animate: (float) => Affine.t): Mesh.t =>
+  let joints = Cal.globals(r.chains, root, animate) in
   let global = (j: float) => Option.defaultValue(Affine.identity, List.nth(j, joints)) in
-  let parentOf = (j: float) =>
-    match Cal.bone(skel, j) with
-    | Option.Some(b) => if b.parent < 0.0 then j else b.parent
-    | Option.None => j in
+  let parentOf = (j: float) => Option.defaultValue(j, List.nth(j, r.parents)) in
   let posed =
     List.map((pair) =>
       match pair with
@@ -114,8 +127,11 @@ let pose = (m: model, skel: Cal.skeleton, root: Affine.t, animate: (float) => Af
           Affine.add(Affine.offset(global(b.joint)),
             Affine.add(Affine.scale(w, Affine.rotate(global(b.joint), v)),
               Affine.scale(1.0 - w, Affine.rotate(global(parentOf(b.joint)), v)))),
-      List.zip(m.positions, bindings(m))) in
-  Mesh.fromPolygons(Bytes.fromF32le(List.flatten(posed)), m.triangles)
+      List.zip(r.model.positions, r.bindings)) in
+  Mesh.fromPolygons(Bytes.fromF32le(List.flatten(posed)), r.model.triangles)
+
+let pose = (m: model, skel: Cal.skeleton, root: Affine.t, animate: (float) => Affine.t): Mesh.t =>
+  poseRig(rig(m, skel), root, animate)
 
 // A character's mesh at rest (a T-pose), or where decoding failed.
 let rest = (mesh: Bytes.t, cal: Bytes.t): Result.t<Mesh.t, Binary.error> =>

@@ -115,6 +115,8 @@ let sample = (c: clip, seconds: float): pose =>
       if dot(q0, q0) == 0.0 then Affine.identity else rotation(slerp(q0, q1, a)), c.tracks) in
   // Track k (k ≥ 1) drives joint `joints[k]`; later tracks win.
   let driven = List.zip(rotations, List.drop(1.0, c.motion.joints)) in
+  let perJoint =
+    List.range(40.0)
+      |> List.map((j) => List.fold((m, pair) => match pair with | (joint, r) => if joint == j then r else m, Affine.identity, driven)) in
   { root: Affine.translation(0.0, 0.0, z),
-    animate: (j) =>
-      List.fold((m, pair) => match pair with | (joint, r) => if joint == j then r else m, Affine.identity, driven) }
+    animate: (j) => Option.defaultValue(Affine.identity, List.nth(j, perJoint)) }
