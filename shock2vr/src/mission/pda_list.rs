@@ -135,13 +135,13 @@ impl PdaList {
         self.rows = entries
             .into_iter()
             .map(|index| {
-                let name = entry(index)
-                    .strings()
-                    .and_then(|(_, prefix, number)| {
-                        strings.as_ref()?.get(&format!("{prefix}name{number}"))
-                    })
+                // Numbered as the table keys it: help topic 0 is `HelpName1`.
+                let (_, prefix, number) = entry(index).strings().unwrap_or_default();
+                let name = strings
+                    .as_ref()
+                    .and_then(|strings| strings.get(&format!("{prefix}name{number}")))
                     .map(|name| name.replace("\\n", "\n"))
-                    .unwrap_or_else(|| format!("#{index}"));
+                    .unwrap_or_else(|| format!("#{number}"));
                 (index, name)
             })
             .collect();

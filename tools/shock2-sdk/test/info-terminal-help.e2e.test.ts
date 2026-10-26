@@ -148,4 +148,11 @@ test("tricorder scan of an info terminal opens its help on the device", {
   const after = await game.ui.state();
   assert.equal(after.active_panel, null, "return closes the reader");
   assertHelpList(after.utilities);
+
+  // Focus scanning (the default) must not rescan the terminal over the list.
+  await game.devParams.set("vr_mfd_focus_scan", 1);
+  await game.step({ frames: 60 });
+  const settled = await game.ui.state();
+  assert.equal(settled.active_panel, null, "the list stays up under the device's gaze");
+  assertHelpList(settled.utilities);
 });

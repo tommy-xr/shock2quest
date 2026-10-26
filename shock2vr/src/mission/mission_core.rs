@@ -7787,11 +7787,16 @@ impl MissionCore {
             });
             let focus_mode = crate::dev_params::get_bool(crate::dev_params::VR_MFD_FOCUS_SCAN);
             // Keep an active connection (and its paid minigame) when the arm
-            // wanders across a target. Closing rearms dwell; trigger scans stay explicit.
+            // wanders across a target, and keep the PDA list being read (a help
+            // topic returns to it while the device still faces the terminal).
+            // Closing rearms dwell; trigger scans stay explicit.
             let focused = self.device_scanner.focus(
-                (self.flat_ui.device && focus_mode && self.flat_ui.active_panel().is_none())
-                    .then(|| hit.map(|(entity, ..)| entity))
-                    .flatten(),
+                (self.flat_ui.device
+                    && focus_mode
+                    && self.flat_ui.active_panel().is_none()
+                    && !self.flat_ui.utilities.is_logs())
+                .then(|| hit.map(|(entity, ..)| entity))
+                .flatten(),
                 tick.elapsed.as_secs_f32(),
             );
             let requested = if trigger_edge {

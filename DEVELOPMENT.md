@@ -1692,8 +1692,8 @@ Opening a machine does not purchase anything. Scanning or frobbing an info
 terminal unlocks its help topic and opens it in the same place (PDA Help tab).
 Keypads retain their in-world UI.
 Scanned machine panels on the handheld tricorder stay connected within 8 metres
-of the player. An open machine panel suspends automatic focus scanning so arm
-movement cannot replace it; the holding-hand trigger can explicitly scan another
+of the player. An open machine panel or PDA list suspends automatic focus
+scanning so arm movement cannot replace it; the holding-hand trigger can explicitly scan another
 target. Automatic scanning resumes when the panel closes. Ordinary
 cyber-interface panels retain their walk-away range.
 
