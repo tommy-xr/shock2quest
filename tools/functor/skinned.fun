@@ -9,7 +9,7 @@
 // Native (Z up) to scene (Y up): (x, y, z) → (x, z, -y), as Mesh.toScene turns it.
 let up = (p: List<float>): List<float> => [Affine.n(0.0, p), Affine.n(2.0, p), 0.0 - Affine.n(1.0, p)]
 
-let vec = (p: List<float>): Vec3.t => Vec3.make(Affine.n(0.0, p), Affine.n(2.0, p), 0.0 - Affine.n(1.0, p))
+let vec = (p: List<float>): Vec3.t => let u = up(p) in Vec3.make(Affine.n(0.0, u), Affine.n(1.0, u), Affine.n(2.0, u))
 
 // A packed normal: three signed 10-bit fields (bits 31-22, 21-12, 11-2), / 256.
 let s10 = (f: float): float => if f >= 512.0 then f - 1024.0 else f
@@ -53,6 +53,9 @@ let data = (mesh: Bytes.t, r: Lgmm.rig, clips: List<(string, Motion.clip)>): Res
       let chainOf = (j: float) => Option.defaultValue([], List.nth(j, r.chains)) in
       // SS2 joints with a bone, parents first.
       let ids = List.range(40.0) |> List.filter((j) => List.length(chainOf(j)) > 0.0) |> List.sortBy((j) => List.length(chainOf(j))) in
+      // A vertex on a joint without a bone, or a blend whose parent has none,
+      // follows palette joint 0 / rigidly here (Lgmm uses the root bob); the
+      // shipped characters have neither.
       let slot = (j: float) => Option.defaultValue(0.0, indexOf(j, ids)) in
       let parentSlot = (j: float) =>
         let p = Option.defaultValue(j, List.nth(j, r.parents)) in
@@ -94,7 +97,8 @@ let data = (mesh: Bytes.t, r: Lgmm.rig, clips: List<(string, Motion.clip)>): Res
       let bound = List.zip(r.model.positions, r.bindings) in
       {
         positions: Bytes.fromF32le(List.concatMap((p) => match p with | (b, v) => up(Affine.apply(restOf(b.joint), v)), bound)),
-        normals: Bytes.fromF32le(List.concatMap((p) => match p with | (b, n) => up(Affine.rotate(restOf(b.joint), n)), List.zip(ns, r.bindings))),
+        // Bind normals are the stored ones: rest poses don't rotate.
+        normals: Bytes.fromF32le(List.concatMap(up, ns)),
         uvs: Bytes.fromF32le([]),
         joints: Bytes.fromU8(List.concatMap((b: Lgmm.binding) =>
           if blended(b) then [slot(b.joint), helperSlot(b.joint), slot(b.joint), slot(b.joint)]
@@ -116,5 +120,5 @@ let deviation = (m: Model.t, anim: Anim.t, points: List<List<float>>): float =>
   match Decode.run(Decode.list(List.length(expected), Decode.f32le), posed) with
   | Result.Ok(actual) =>
     if Bytes.length(posed) != 4.0 * List.length(expected) then 1000000.0
-    else List.zip(actual, expected) |> List.fold((d, p) => match p with | (a, b) => Math.max(d, Math.abs(a - b)), 0.0)
+    else List.zip(actual, expected) |> List.map((p) => match p with | (a, b) => Math.abs(a - b)) |> List.maximum |> Option.defaultValue(0.0)
   | Result.Error(_) => 1000000.0

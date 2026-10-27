@@ -274,6 +274,8 @@ let skinnedOff = (seconds: float, expected: float): float =>
   | Result.Error(_) => 1.0
 
 expect (skinned |> Result.map((pair) => match pair with | (_, m) => (Model.inspect(m)).joints)) == Result.Ok(["joint0", "joint1", "joint1.blend"])
+expect Decode.run(Skinned.normals, characterMesh) == Result.Ok(List.map((k) => [0.0, 0.0, 1.0], List.range(6.0)))
+expect Skinned.normal(1073741824.0) == [1.0, 0.0, 0.0]
 expect skinnedOff(0.0, 0.0) < 0.0001
 expect skinnedOff(0.3, 0.3) < 0.0001
 // The last frame interpolating back to the first.

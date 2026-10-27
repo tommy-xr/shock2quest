@@ -1,6 +1,6 @@
 // A crowd of GPU-skinned pipe hybrids: `count` in a grid, each on its own
 // playhead blending two of its clips, so every figure is posed independently
-// every frame. Shadows are on. Uses ss2/hybrid.{bin,cal}, ss2/motiondb.bin and
+// every frame. Shadows are on (the engine's shadow map covers the near rows). Uses ss2/hybrid.{bin,cal}, ss2/motiondb.bin and
 // each clip's .mc (see README).
 //
 //   functor -d tools/functor run native --entry crowd
