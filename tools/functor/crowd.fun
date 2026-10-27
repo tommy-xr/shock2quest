@@ -27,7 +27,7 @@ let hybrid =
   Skinned.data(mesh, r, List.map((n) => (n, clipOf(n)), clipNames)) |> Binary.require |> Model.skinned
 
 // Feet: soles sit about 4.25 below the root.
-let spacing = 6.0
+let spacing = 5.0
 let ground = 0.0 - 4.25
 
 let columns = Math.ceil(Math.sqrt(count))
@@ -62,8 +62,8 @@ let extent = Math.max(columns, rows) * spacing
 
 let camera =
   Camera3D.lookAt(
-    Vec3.make(0.0, 4.0 + extent * 0.5, 0.0 - (8.0 + extent)),
-    Vec3.make(0.0, 0.0, (rows - 1.0) * spacing / 2.0))
+    Vec3.make(0.0, 4.0 + extent * 0.6, 0.0 - extent * 0.6),
+    Vec3.make(0.0, ground, (rows - 1.0) * spacing / 2.0))
 
 let draw = (model, tts: float) =>
   Frame.createLit(
