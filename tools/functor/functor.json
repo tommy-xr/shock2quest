@@ -1,5 +1,8 @@
 {
   "language": "functor-lang",
-  "entry": "print.fun",
+  "entries": {
+    "client": "print.fun",
+    "crowd": "crowd.fun"
+  },
   "cursor": "visible"
 }

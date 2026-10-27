@@ -58,3 +58,43 @@ expect not have(moving)
         && pinned(step, 3.0, [[0.2034, -0.0692, -4.3332], [2.7345, -3.1202, -0.3832], [1.3792, -0.3667, 3.2450]])
         && pinned(walk, 5.0, [[-0.7474, -0.0180, -4.4203], [2.9725, -2.6329, -0.8665], [1.4373, -0.2332, 3.1814]])
         && pinned(walk, 8.0, [[-2.0629, -0.2480, -3.9182], [3.3499, -1.5721, -1.2631], [1.4933, 0.0758, 3.1569]]))
+
+// The GPU-skinned hybrid posed like `Lgmm` (same vertices, same order) within
+// 1e-4, at whole frames, between frames, and wrapping from the last frame.
+let clipNames = ["ogpstd", "ogpbzwkl", "ogpidle1"]
+let animated = List.append(List.map((n) => Text.join("", ["ss2/", n, "_.mc"]), clipNames), List.append(["ss2/motiondb.bin"], hybrid))
+
+let clips: List<(string, Motion.clip)> =
+  if not have(animated) then []
+  else List.map((n) => (n, Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes(Text.join("", ["ss2/", n, "_.mc"])), n) |> Binary.require), clipNames)
+
+// The rig and its model.
+let skinned: Option.t<(Lgmm.rig, Model.t)> =
+  if not have(animated) then Option.None
+  else
+    let r = Lgmm.rig(Decode.run(Lgmm.model, File.bytes("ss2/hybrid.bin")) |> Binary.require,
+      Decode.run(Cal.skeleton, File.bytes("ss2/hybrid.cal")) |> Binary.require) in
+    Option.Some((r, Skinned.data(File.bytes("ss2/hybrid.bin"), r, clips) |> Binary.require |> Model.skinned))
+
+// The largest difference in `clipName` at `frame` (fractional between frames);
+// 0 without the files.
+let off = (clipName: string, frame: float): float =>
+  match skinned with
+  | Option.None => 0.0
+  | Option.Some(pair) =>
+    match List.find((c) => match c with | (n, _) => n == clipName, clips) with
+    | Option.None => 1.0
+    | Option.Some(found) =>
+      match pair with
+      | (r, m) =>
+        (match found with
+         | (_, clip) =>
+           let seconds = frame / clip.motion.fps in
+           let p = Motion.sample(clip, seconds) in
+           Skinned.deviation(m, Anim.clip(clipName, seconds), Lgmm.points(r, p.root, p.animate)))
+
+expect off("ogpstd", 0.0) < 0.0001
+expect off("ogpbzwkl", 5.0) < 0.0001
+expect off("ogpidle1", 50.0) < 0.0001
+expect off("ogpidle1", 50.37) < 0.0001
+expect off("ogpbzwkl", 7.5) < 0.0001
