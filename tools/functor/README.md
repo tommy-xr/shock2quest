@@ -8,7 +8,7 @@ mkdir -p tools/functor/ss2 && cp Data/res/obj/CRATE01.BIN tools/functor/ss2/mode
 cp Data/res/mesh/GRUNT_P.BIN tools/functor/ss2/model.bin && cp Data/res/mesh/GRUNT_P.CAL tools/functor/ss2/model.cal
 cp Data/motiondb.bin Data/res/motions/ogpbzwk{l,r}_.mc tools/functor/ss2/
 functor -d tools/functor run native                          # view it
-functor -d tools/functor run native --entry crowd            # 100 hybrids (ss2/hybrid.*, motiondb, ogpbzwkl/ogpidle1/ogpstd clips)
+functor -d tools/functor run native --entry crowd            # 100 hybrids (ss2/hybrid.*, motiondb, ogpbzwk{l,r}/ogpstd clips)
 functor -d tools/functor export -o tools/functor/crate.stl     # print it (60 mm tall)
 functor -d tools/functor test                             # decoder tests (no game files)
 ```

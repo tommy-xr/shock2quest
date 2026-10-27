@@ -10,9 +10,12 @@
 
 let count = 100.0
 
-let clipNames = ["ogpbzwkl", "ogpidle1", "ogpstd"]
+// Clips that loop: "walk" is the stride pair `ogpbzwkl` + `ogpbzwkr` (either
+// alone snaps at its seam); one-shot gestures like `ogpidle1` would too.
+let clipNames = ["walk", "ogpstd"]
 
-let files = List.append(List.map((n) => Text.join("", ["ss2/", n, "_.mc"]), clipNames), ["ss2/hybrid.bin", "ss2/hybrid.cal", "ss2/motiondb.bin"])
+let files = List.append(List.map((n) => Text.join("", ["ss2/", n, "_.mc"]), ["ogpbzwkl", "ogpbzwkr", "ogpstd"]),
+  ["ss2/hybrid.bin", "ss2/hybrid.cal", "ss2/motiondb.bin"])
 
 // Without the game files, the synthetic character from fixture.fun stands in.
 let real = List.all((p) => File.exists(p), files)
@@ -20,9 +23,12 @@ let real = List.all((p) => File.exists(p), files)
 let hybrid =
   let mesh = if real then File.bytes("ss2/hybrid.bin") else Fixture.characterMesh in
   let cal = if real then File.bytes("ss2/hybrid.cal") else Fixture.characterSkeleton in
+  let load = (n: string): Motion.clip =>
+    Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes(Text.join("", ["ss2/", n, "_.mc"])), n) |> Binary.require in
   let clipOf = (n: string): Motion.clip =>
-    if real then Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes(Text.join("", ["ss2/", n, "_.mc"])), n) |> Binary.require
-    else Fixture.twisting in
+    if not real then Fixture.twisting
+    else if n == "walk" then Motion.join(load("ogpbzwkl"), load("ogpbzwkr")) |> Binary.require
+    else load(n) in
   let r = Lgmm.rig(Decode.run(Lgmm.model, mesh) |> Binary.require, Decode.run(Cal.skeleton, cal) |> Binary.require) in
   Skinned.data(mesh, r, List.map((n) => (n, clipOf(n)), clipNames)) |> Binary.require |> Model.skinned
 

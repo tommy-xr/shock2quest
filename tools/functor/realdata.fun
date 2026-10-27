@@ -62,11 +62,12 @@ expect not have(moving)
 // The GPU-skinned hybrid posed like `Lgmm` (same vertices, same order) within
 // 1e-4, at whole frames, between frames, and wrapping from the last frame.
 let clipNames = ["ogpstd", "ogpbzwkl", "ogpidle1"]
-let animated = List.append(List.map((n) => Text.join("", ["ss2/", n, "_.mc"]), clipNames), List.append(["ss2/motiondb.bin"], hybrid))
+let animated = List.append(List.map((n) => Text.join("", ["ss2/", n, "_.mc"]), List.append(["ogpbzwkr"], clipNames)), List.append(["ss2/motiondb.bin"], hybrid))
 
 let clips: List<(string, Motion.clip)> =
   if not have(animated) then []
-  else List.map((n) => (n, Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes(Text.join("", ["ss2/", n, "_.mc"])), n) |> Binary.require), clipNames)
+  else
+    List.append([("walk", Motion.join(motionOf("ogpbzwkl"), motionOf("ogpbzwkr")) |> Binary.require)], List.map((n) => (n, motionOf(n)), clipNames))
 
 // The rig and its model.
 let skinned: Option.t<(Lgmm.rig, Model.t)> =
@@ -98,3 +99,6 @@ expect off("ogpbzwkl", 5.0) < 0.0001
 expect off("ogpidle1", 50.0) < 0.0001
 expect off("ogpidle1", 50.37) < 0.0001
 expect off("ogpbzwkl", 7.5) < 0.0001
+// The joined walk across its inner seam (ogpbzwkl into ogpbzwkr) and its wrap.
+expect off("walk", 7.5) < 0.0001
+expect off("walk", 16.5) < 0.0001
