@@ -3,20 +3,21 @@
 // so game files stay out of the repo); without one, a synthetic cube shows.
 //
 //   mkdir -p tools/functor/ss2 && cp Data/res/obj/CRATE01.BIN tools/functor/ss2/model.bin
-//   # or a character: its mesh, skeleton, the motion database and a clip
+//   # or a character: its mesh, skeleton, the motion database and clips
 //   cp Data/res/mesh/GRUNT_P.BIN tools/functor/ss2/model.bin
 //   cp Data/res/mesh/GRUNT_P.CAL tools/functor/ss2/model.cal
-//   cp Data/motiondb.bin Data/res/motions/ogpbzwkl_.mc tools/functor/ss2/
+//   cp Data/motiondb.bin Data/res/motions/ogpbzwk{l,r}_.mc tools/functor/ss2/
 //   functor -d tools/functor run native                         # view it
 //   functor -d tools/functor export -o tools/functor/part.stl   # print it
 
 let model = Path.of("ss2/model.bin")
 
-// A character plays this clip (looping); it prints posed at `seconds`.
-let clipName = "ogpbzwkl"
+// A character plays these clips in turn, looping (a walk is two half-step
+// clips; either alone snaps at its seam); it prints posed at `seconds`.
+let clipNames = ["ogpbzwkl", "ogpbzwkr"]
 let seconds = 0.0
 
-let clipFile = Text.join("", ["ss2/", clipName, "_.mc"])
+let clipFile = (n: string) => Text.join("", ["ss2/", n, "_.mc"])
 
 let data = if File.exists(model) then File.bytes(model) else Fixture.cube(4.0)
 
@@ -27,8 +28,11 @@ let character: Option.t<character> =
   then Option.None
   else
     let clip =
-      if File.exists("ss2/motiondb.bin") && File.exists(clipFile)
-      then Option.Some(Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes(clipFile), clipName) |> Binary.require)
+      if File.exists("ss2/motiondb.bin") && List.all((n) => File.exists(clipFile(n)), clipNames)
+      then
+        let clips = List.map((n) => Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes(clipFile(n)), n) |> Binary.require, clipNames) in
+        List.head(clips)
+          |> Option.map((first) => List.fold((joined, next) => Motion.join(joined, next) |> Binary.require, first, List.drop(1.0, clips)))
       else Option.None in
     let cal =
       if File.exists("ss2/model.cal") then File.bytes("ss2/model.cal")

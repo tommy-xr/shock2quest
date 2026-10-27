@@ -157,6 +157,23 @@ expect Affine.apply(halfway.animate(0.0), [1.0, 0.0, 0.0]) == [1.0, 0.0, 0.0]
 let fromZero = Motion.sample({ twoFrames with tracks: [[[0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]] }, 0.25)
 expect (Affine.apply(fromZero.animate(1.0), [1.0, 0.0, 0.0]) |> List.map((x) => Math.round(x * 1000.0) / 1000.0)) == [0.0, -1.0, 0.0]
 
+// Joined with a clip that holds joint 1 at 180° about Z and the root at 2: four
+// frames; frame 2 is the second clip's first (+X → -X, root z 2), and the last
+// interpolates back towards the first clip's frame 0.
+let holding: Motion.clip = { twoFrames with root: [[0.0, 0.0, 2.0], [0.0, 0.0, 2.0]], tracks: [[[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]]] }
+let joined = Motion.join(twoFrames, holding) |> Binary.require
+// Root z, then where joint 1 turns +X.
+let at = (seconds: float) =>
+  let p = Motion.sample(joined, seconds) in
+  List.append(Affine.apply(p.animate(1.0), [1.0, 0.0, 0.0]) |> List.map((x) => Math.round(x * 1000.0) / 1000.0),
+    [Affine.n(2.0, Affine.offset(p.root))])
+
+expect joined.motion.frames == 4.0
+expect at(1.0) == [2.0, -1.0, 0.0, 0.0]
+expect at(1.75) == [1.0, 0.0, -1.0, 0.0]
+expect Result.isError(Motion.join(twoFrames, { holding with motion: { frames: 2.0, fps: 2.0, joints: [0.0, 2.0] } }))
+expect Result.isError(Motion.join(twoFrames, { holding with motion: { frames: 2.0, fps: 3.0, joints: [0.0, 1.0] } }))
+
 // Blending, posed: `twoFrames` turns joint 1 by -90° about Z and lifts the root
 // 0.5. Vertex 4 (weight 1) follows joint 1 to (0, -1, 2.5); vertex 5 (weight 0)
 // keeps the parent's rotation at (0, 1, 2.5). Reversed weights would give y 0..1.

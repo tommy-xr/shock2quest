@@ -73,6 +73,21 @@ let clipOf = (m: motion): Decode.t<clip> =>
 let clip = (db: Bytes.t, mc: Bytes.t, motionName: string): Result.t<clip, Binary.error> =>
   find(db, motionName) |> Result.bind((m: motion) => Decode.run(clipOf(m), mc))
 
+// Two clips played back to back as one. Few SS2 clips loop on their own: a walk
+// alternates two half-step clips (`ogpbzwkl`, `ogpbzwkr`), so a looping walk
+// joins them. Both must drive the same joints at the same rate. Each keeps its
+// own root heights, as the game poses them (the bob steps ~0.1 at a seam).
+let join = (a: clip, b: clip): Result.t<clip, Binary.error> =>
+  if a.motion.joints != b.motion.joints || a.motion.fps != b.motion.fps
+  then Result.Error({ offset: 0.0, path: [], message: "joined clips must drive the same joints at the same rate" })
+  else
+    let m = a.motion in
+    Result.Ok({
+      motion: { m with frames: m.frames + b.motion.frames },
+      root: List.append(b.root, a.root),
+      tracks: List.zip(b.tracks, a.tracks) |> List.map((p) => match p with | (x, y) => List.append(y, x))
+    })
+
 let dot = (a: List<float>, b: List<float>): float =>
   List.zip(b, a) |> List.fold((s, p) => match p with | (x, y) => s + x * y, 0.0)
 
