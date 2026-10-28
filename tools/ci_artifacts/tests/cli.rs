@@ -18,7 +18,7 @@ with (root / 'calls').open('a') as f: f.write(json.dumps(a) + '\n')
 sha = '0123456789abcdef0123456789abcdef01234567'
 docs = 'fedcba9876543210fedcba9876543210fedcba98'
 api = {'repos/{owner}/{repo}/commits/docs': docs,
-       'repos/{owner}/{repo}/commits?sha=' + docs + '&per_page=30': docs + '\n' + sha,
+       'repos/{owner}/{repo}/commits?sha=' + docs + '&per_page=31': docs + '\n' + sha,
        'repos/{owner}/{repo}/compare/' + sha + '...' + docs: os.environ.get('CI_TEST_CHANGED', 'README.md')}
 if a[:3] == ['pr', 'view', '7']:
     print(json.dumps({'headRefOid': sha, 'headRefName': 'feat/x'}))

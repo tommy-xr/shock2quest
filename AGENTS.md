@@ -755,7 +755,7 @@ For faster development, the project includes convenient cargo aliases (defined i
 - `cargo dbgr` - Debug runtime with HTTP control (shorthand for `cargo run -p debug_runtime --`)
 - `cargo dbgc` - Debug command client (shorthand for `cargo run -p debug_command --`)
 - `cargo bn` - Benchmark CLI (shorthand for `cargo run -p bench --`; `bench` collides with the built-in cargo command)
-- `cargo dxr` / `cargo dqr` / `cargo dbgrr` - `dx` / `dq` / `dbgr` from the binaries CI built for a PR or ref, with no local build (`cargo dxr 1234 ui`; needs `gh`). `cargo ci 1234` prints that `debug_runtime`'s path. Refs resolve on GitHub, so push first; CI keeps builds 7 days. A flag right after the target goes to the tool, so pass the binary's own flags after `--` (`cargo dbgrr 1234 -- --mission earth.mis`)
+- `cargo dxr` / `cargo dqr` / `cargo dbgrr` - `dx` / `dq` / `dbgr` from the binaries CI built for a PR or ref, with no local build (`cargo dxr 1234 ui`; needs `gh`). `cargo ci 1234` prints that `debug_runtime`'s path. Only the build is remote: `assets/` (grips, belt, holsters) and tests come from your checkout, so check out the PR when it changes them. Refs resolve on GitHub, so push first; CI keeps builds 7 days. A flag right after the target goes to the tool, so pass the binary's own flags after `--` (`cargo dbgrr 1234 -- --mission earth.mis`)
 
 Example usage:
 ```bash

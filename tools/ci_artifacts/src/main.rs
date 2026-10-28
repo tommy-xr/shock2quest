@@ -27,8 +27,17 @@ fn main() -> Result<()> {
         return Ok(());
     };
     let exe = runtime.with_file_name(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
-    let status = Command::new(&exe).args(&cli.args).status()?;
-    std::process::exit(status.code().unwrap_or(1));
+    let mut command = Command::new(&exe);
+    command.args(&cli.args);
+    // Replace this process, so signals and the pid reach the binary itself.
+    #[cfg(unix)]
+    let error = std::os::unix::process::CommandExt::exec(&mut command);
+    #[cfg(not(unix))]
+    let error = match command.status() {
+        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Err(error) => error,
+    };
+    Err(error).with_context(|| format!("could not run {}", exe.display()))
 }
 
 /// Uploaded by `.github/workflows/build.yml` for each `runner.os`.
@@ -65,7 +74,7 @@ fn built_commit(sha: &str) -> Result<(String, Vec<BuildRun>)> {
     }
     let history = gh(&[
         "api",
-        &format!("repos/{{owner}}/{{repo}}/commits?sha={sha}&per_page=30"),
+        &format!("repos/{{owner}}/{{repo}}/commits?sha={sha}&per_page=31"),
         "--jq",
         ".[].sha",
     ])?;

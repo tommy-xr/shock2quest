@@ -125,6 +125,10 @@ pub fn cached(
         let _ = std::fs::remove_dir_all(&staging);
         return Err(error);
     }
+    // A cache the OS temp cleanup partly purged would block the rename.
+    if cache.is_dir() && !path.is_file() {
+        let _ = std::fs::remove_dir_all(&cache);
+    }
     // A concurrent run may have published first; keep its copy.
     if std::fs::rename(&staging, &cache).is_err() {
         let _ = std::fs::remove_dir_all(&staging);
