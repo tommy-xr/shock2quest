@@ -1,7 +1,7 @@
 // A crowd of GPU-skinned pipe hybrids: `count` in a grid, each on its own
 // playhead blending two of its clips, so every figure is posed independently
 // every frame. Shadows are on (the engine's shadow map covers the near rows). Uses ss2/hybrid.{bin,cal}, ss2/motiondb.bin and
-// each clip's .mc (see README).
+// each clip's .mc, textured with ss2/og_pipe02.gif when present (see README).
 //
 //   functor -d tools/functor run native --entry crowd
 //
@@ -30,7 +30,9 @@ let hybrid =
     else if n == "walk" then Motion.join(load("ogpbzwkl"), load("ogpbzwkr")) |> Binary.require
     else load(n) in
   let r = Lgmm.rig(Decode.run(Lgmm.model, mesh) |> Binary.require, Decode.run(Cal.skeleton, cal) |> Binary.require) in
-  Skinned.data(mesh, r, List.map((n) => (n, clipOf(n)), clipNames)) |> Binary.require |> Model.skinned
+  let d = Skinned.data(mesh, r, List.map((n) => (n, clipOf(n)), clipNames)) |> Binary.require in
+  // One texture load, shared by every figure.
+  Model.skinned({ d with texture: if real then Skinned.texture(mesh) else Option.None })
 
 // Feet: soles sit about 4.25 below the root.
 let spacing = 5.0

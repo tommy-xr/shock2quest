@@ -7,6 +7,7 @@
 //   cp Data/res/mesh/GRUNT_P.BIN tools/functor/ss2/model.bin
 //   cp Data/res/mesh/GRUNT_P.CAL tools/functor/ss2/model.cal
 //   cp Data/motiondb.bin Data/res/motions/ogpbzwk{l,r}_.mc tools/functor/ss2/
+//   cp Data/res/mesh/txt16/og_pipe02.gif tools/functor/ss2/       # its texture
 //   functor -d tools/functor run native                         # view it
 //   functor -d tools/functor export -o tools/functor/part.stl   # print it
 
@@ -59,13 +60,15 @@ let mesh =
 let part = mesh |> Solid.fromMesh({ height: 60.0, nozzle: 0.4 })
 
 // The character as a GPU-skinned model (built once): the viewer plays its
-// joined clips on it (named after them), at rest without them.
+// joined clips on it (named after them), at rest without them. Textured when
+// its texture is in ss2/ (see README).
 let clipName = Text.join("+", clipNames)
 
 let skinned: Option.t<Model.t> =
   character
     |> Option.map((c: character) =>
-      Skinned.data(data, c.rig, Option.toList(Option.map((clip) => (clipName, clip), c.clip))) |> Binary.require |> Model.skinned)
+      let d = Skinned.data(data, c.rig, Option.toList(Option.map((clip) => (clipName, clip), c.clip))) |> Binary.require in
+      Model.skinned({ d with texture: Skinned.texture(data) }))
 
 let playing = Option.isSome(Option.bind((c: character) => c.clip, character))
 

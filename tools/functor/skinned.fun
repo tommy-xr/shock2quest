@@ -19,13 +19,28 @@ let normal = (u: float): List<float> =>
    s10(Math.mod(Math.floor(u / 4096.0), 1024.0)) / 256.0,
    s10(Math.mod(Math.floor(u / 4.0), 1024.0)) / 256.0]
 
-// Each vertex's normal, from the 12-byte uv + normal records (offset at byte 60).
-let normals =
+// One `item` per vertex from its 12-byte record (offset at byte 60): f32 u,
+// f32 v, packed normal.
+let records = (what: string, item) =>
   Decode.map2((count, at) => (count, at), Lgmm.at16(26.0), Lgmm.at32(60.0))
     |> Decode.andThen((header) =>
       match header with
-      | (count, at) =>
-        Decode.field("normals", Decode.at(at, Decode.list(count, Decode.skipThen(8.0, Decode.u32le) |> Decode.map(normal)))))
+      | (count, at) => Decode.field(what, Decode.at(at, Decode.list(count, item))))
+
+let normals = records("normals", Decode.skipThen(8.0, Decode.u32le) |> Decode.map(normal))
+
+// Each vertex's (u, v) as stored: the game samples them as is, and so does
+// Functor (0, 0 is the image's top-left in both), so no flip.
+let uvs = records("uvs", Decode.list(2.0, Decode.f32le) |> Decode.andThen((uv) => Decode.skipThen(4.0, Decode.succeed(uv))))
+
+// The mesh's texture once copied into ss2/ under its lowercased name (e.g.
+// ss2/og_pipe02.gif), else none: the model draws white.
+let texture = (mesh: Bytes.t): Option.t<Asset.Texture> =>
+  match Decode.run(Lgmm.textureName, mesh) with
+  | Result.Ok(n) =>
+    let path = Text.join("", ["ss2/", Text.toLower(n)]) in
+    if File.exists(path) then Option.Some(Asset.texture(path)) else Option.None
+  | Result.Error(_) => Option.None
 
 let name = (j: float): string => Text.join("", ["joint", Text.fromFloat(j)])
 
@@ -46,10 +61,13 @@ let key = (q0: List<float>): List<float> =>
   let q = Motion.unit(q0) in
   [0.0 - Affine.n(1.0, q), 0.0 - Affine.n(3.0, q), Affine.n(2.0, q), Affine.n(0.0, q)]
 
-// The model data for a rig, its mesh's bytes (for normals) and named clips.
+// The model data for a rig, its mesh's bytes (for uvs and normals) and named
+// clips. Untextured: set `texture` (see `texture`) to sample one.
 let data = (mesh: Bytes.t, r: Lgmm.rig, clips: List<(string, Motion.clip)>): Result.t<Model.data, Binary.error> =>
-  Decode.run(normals, mesh)
-    |> Result.map((ns: List<List<float>>) =>
+  Decode.run(Decode.map2((ns, ts) => (ns, ts), normals, uvs), mesh)
+    |> Result.map((vertexData) =>
+      match vertexData with
+      | (ns, ts) =>
       let chainOf = (j: float) => Option.defaultValue([], List.nth(j, r.chains)) in
       // SS2 joints with a bone, parents first.
       let ids = List.range(40.0) |> List.filter((j) => List.length(chainOf(j)) > 0.0) |> List.sortBy((j) => List.length(chainOf(j))) in
@@ -99,7 +117,7 @@ let data = (mesh: Bytes.t, r: Lgmm.rig, clips: List<(string, Motion.clip)>): Res
         positions: Bytes.fromF32le(List.concatMap((p) => match p with | (b, v) => up(Affine.apply(restOf(b.joint), v)), bound)),
         // Bind normals are the stored ones: rest poses don't rotate.
         normals: Bytes.fromF32le(List.concatMap(up, ns)),
-        uvs: Bytes.fromF32le([]),
+        uvs: Bytes.fromF32le(List.flatten(ts)),
         joints: Bytes.fromU8(List.concatMap((b: Lgmm.binding) =>
           if blended(b) then [slot(b.joint), helperSlot(b.joint), slot(b.joint), slot(b.joint)]
           else [slot(b.joint), slot(b.joint), slot(b.joint), slot(b.joint)], r.bindings)),
