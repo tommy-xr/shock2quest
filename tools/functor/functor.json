@@ -4,8 +4,5 @@
     "client": "print.fun",
     "crowd": "crowd.fun"
   },
-  "cursor": "visible",
-  "external": {
-    "ss2/": "System Shock 2's data/res (the remaster's sshock2.kpf!data/res/), mapped in functor.local.json"
-  }
+  "cursor": "visible"
 }

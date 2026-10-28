@@ -2,10 +2,10 @@
 
 A [Functor](https://github.com/tommy-xr/functor) project that decodes System Shock 2 static object meshes (`.bin` files starting `LGMD`) in Functor itself and turns them into printable solids.
 
-Game files never enter the repo. `ss2/` is an external prefix (`functor.json`): map it to the game's `data/res` in a gitignored `tools/functor/functor.local.json`, either inside the 25th Anniversary remaster's archive (read in place, no extraction) or a folder with the same layout (`mesh/GRUNT_P.BIN`, `motions/ogpstd_.mc`, `mschema/motiondb.bin`, `mesh/txt16/og_pipe02.gif`, `obj/CRATE01.BIN`, …):
+Game files never enter the repo. `files.fun` declares `ss2/` external in `config` (`Config.external("ss2/", Source.mount("ss2"))`): map the `ss2` mount to the game's `data/res` once per machine in `~/.config/functor/mounts.json` (or pass `--mount ss2=PATH`), either inside the 25th Anniversary remaster's archive (read in place, no extraction) or a folder with the same layout (`mesh/GRUNT_P.BIN`, `motions/ogpstd_.mc`, `mschema/motiondb.bin`, `mesh/txt16/og_pipe02.gif`, `obj/CRATE01.BIN`, …):
 
 ```json
-{ "external": { "ss2/": "~/ss2-25th/sshock2.kpf!data/res/" } }
+{ "ss2": "~/ss2-25th/sshock2.kpf!data/res/" }
 ```
 
 ```sh
@@ -21,6 +21,7 @@ functor -d tools/functor test                             # decoder tests (no ga
 - `motion.fun` — animation: `motiondb.bin` (each motion's frames, rate and track→joint map) and `.mc` clips, sampled with slerp; the root bobs vertically. `join` plays clips back to back: most SS2 clips aren't loops (a walk is two half-step clips), so looping one alone snaps at its seam.
 - `skinned.fun` — a character as `Model.skinned` data (Y up), so the GPU skins it and `Anim` plays and blends its clips: SS2 joints become a parents-first palette, each blending joint gets a never-animated helper bone (its parent's rotation at its pivot), and clip keys are the conjugated quaternions with the root's vertical bob. `texture` finds the mesh's texture in `ss2/mesh/txt16/` by its first material's name, lowercased (`og_pipe02.gif`); uvs pass through unflipped, as shock2quest's loader does. One texture per model: a mesh with several materials (the assassins' visors, the bots' guns) draws every triangle with the first.
 - `affine.fun` — shared 3×4 transform math.
+- `files.fun` — the `config` both entries share: `ss2/` is external, from the `ss2` mount.
 - `print.fun` — the entry: `model` (object, or character with its `skeleton`, playing `clipNames` in turn when `ss2/mschema/motiondb.bin` and the clips are there), else a synthetic cube. The viewer reuses Functor's `PartViewer` controls; a character plays its clips as a skinned model (`Scene.modelOf`). Export prints the pose at `seconds`.
 - `crowd.fun` — the `crowd` entry: `count` hybrids, each blending two clips at its own phase (the synthetic character without the game files).
 - `fixture.fun` — synthetic object, character, skeleton, motion database and clip, written with `Encode`, and their `expect`s (no game files), including the skinned model against `Lgmm`.
