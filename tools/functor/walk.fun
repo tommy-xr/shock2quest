@@ -12,12 +12,8 @@
 // walkable up to a 0.7 normal (45.6°), snapping down a step, eyes 2.6 ft above
 // the centre, 11 ft/s forward, 0.7× sideways and 0.5× back.
 
-let mission = "ss2data/medsci1.mis"
-// Without the mission (no `ss2data` mount, or a headset still fetching it) a
-// plain floor stands in, and the panel says why.
-let loaded = if File.exists(mission) then World.load(File.bytes(mission))
-             else Result.Error(Decode.failure(0.0, "ss2data/medsci1.mis isn't there: map the ss2data mount (see README)"))
-let level = Result.defaultValue(World.placeholder, loaded)
+let loaded = Level.loaded
+let level = Level.level
 
 let ft = World.metresPerFoot
 let radius = 1.2 * ft
