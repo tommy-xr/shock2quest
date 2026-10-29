@@ -13,7 +13,11 @@
 // the centre, 11 ft/s forward, 0.7× sideways and 0.5× back.
 
 let mission = "ss2data/medsci1.mis"
-let level = World.load(File.bytes(mission)) |> Binary.require
+// Without the mission (no `ss2data` mount, or a headset still fetching it) a
+// plain floor stands in, and the panel says why.
+let loaded = if File.exists(mission) then World.load(File.bytes(mission))
+             else Result.Error(Decode.failure(0.0, "ss2data/medsci1.mis isn't there: map the ss2data mount (see README)"))
+let level = Result.defaultValue(World.placeholder, loaded)
 
 let ft = World.metresPerFoot
 let radius = 1.2 * ft
@@ -119,6 +123,7 @@ let draw = (model, tts) =>
 let ui = (model) =>
   let p = Physics.position(playerTag) in
   Ui.column([
+    Ui.text(match loaded with | Result.Ok(_) => "medsci1" | Result.Error(e) => Binary.describe(e)),
     Ui.text(Text.join("", ["grounded  ", if Physics.grounded(playerTag) then "yes" else "no"])),
     Ui.text(Text.join("", ["position  ", Text.fixed(p.x, 2.0), ", ", Text.fixed(p.y, 2.0), ", ", Text.fixed(p.z, 2.0)])),
   ])

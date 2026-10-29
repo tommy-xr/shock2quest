@@ -151,3 +151,14 @@ let load = (data: Bytes.t): Result.t<level, Binary.error> =>
                lightmapBytes: List.fold((a, c: Mis.cell) => a + List.fold((s, l: Mis.lightmap) => s + 2.0 * l.width * l.height * (Bits.popcount(l.layers) + 1.0), 0.0, c.lights), 0.0, cells),
                triangles: List.length(triangles) / 3.0,
                textures: Map.size(used) } })))))
+
+// A 20 m floor at y = 0 with its start on it, for when the mission isn't
+// there (unmapped, or on a headset still fetching it).
+let placeholder: level =
+  let positions = Bytes.fromF32le([-10.0, 0.0, -10.0, -10.0, 0.0, 10.0, 10.0, 0.0, 10.0, 10.0, 0.0, -10.0]) in
+  let triangles = Bytes.fromU32le([0.0, 1.0, 2.0, 0.0, 2.0, 3.0]) in
+  { model: Model.static({ positions: positions, normals: Bytes.fromF32le(List.flatten(List.map((i) => [0.0, 1.0, 0.0], List.range(4.0)))),
+                          uvs: Bytes.zeros(0.0), uvs2: Bytes.zeros(0.0), triangles: triangles, groups: [], lightmap: Option.None }),
+    shape: Physics.trimesh({ positions: positions, triangles: triangles }),
+    start: { position: [0.0, 0.0, 1.0 / metresPerFoot], heading: 0.0 }, ambient: 1.0,
+    stats: { cells: 0.0, vertices: 0.0, renderPolygons: 0.0, lightmapBytes: 0.0, triangles: 2.0, textures: 0.0 } }
