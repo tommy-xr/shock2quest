@@ -31,11 +31,9 @@ let gravity = 32.0 * ft
 let playerTag = Physics.tag("player")
 let levelTag = Physics.tag("level")
 
-let toVec = (p: List<float>) => Vec3.make(World.n(0.0, p), World.n(1.0, p), World.n(2.0, p))
-
 // The player factory, in scene space. Its heading turns from Dark's +X
 // (scene +X) counter-clockwise; camera yaw 0 looks down +Z.
-let marker = toVec(World.toScene(ft, level.start.position))
+let marker = Skinned.vec(Affine.scale(ft, level.start.position))
 let startYaw = level.start.heading + Math.pi / 2.0
 
 let physics = (model) =>
@@ -50,7 +48,7 @@ let physics = (model) =>
 // level isn't in the physics world yet (moves see the last step's bodies),
 // so the player holds still and `tick` looks for the floor each step.
 let init = { yaw: startYaw, pitch: 0.0, vy: 0.0, walk: 0.0, strafe: 0.0, turn: 0.0, look: 0.0,
-             headYaw: 0.0, snap: 0.0, snapHeld: false, dragX: -1.0, dragY: -1.0, placed: false, frames: 0.0 }
+             headYaw: 0.0, snap: 0.0, snapHeld: false, dragX: -1.0, dragY: -1.0, placed: false }
 
 let held = (k, snap) => snap.heldKeys |> List.any((h) => h == k)
 let axis = (neg, pos, snap) =>
@@ -58,11 +56,12 @@ let axis = (neg, pos, snap) =>
 let deadzone = (v) => if Math.abs(v) < 0.15 then 0.0 else v
 let unit = (v) => Math.clamp(-1.0, 1.0, v)
 
-// The head's turn about +Y from the rig's forward (-Z), left positive.
-let yawOf = (q: Input.quaternion) =>
-  let fx = 0.0 - 2.0 * (q.x * q.z + q.w * q.y) in
-  let fz = 0.0 - (1.0 - 2.0 * (q.x * q.x + q.y * q.y)) in
-  Math.atan2(0.0 - fx, 0.0 - fz)
+// The head's turn about +Y from the rig's forward (-Z), left positive: the
+// rotated +Z axis's heading. Looking nearly straight up or down it has none,
+// so `previous` stands.
+let yawOf = (previous: float, q: Input.quaternion) =>
+  let m = Affine.quaternion(q.w, q.x, q.y, q.z) in
+  if m.c * m.c + m.i * m.i < 0.04 then previous else Math.atan2(m.c, m.i)
 
 let sampledInput = (model, snap: Input.snapshot) =>
   let m = snap.mouse in
@@ -82,18 +81,17 @@ let sampledInput = (model, snap: Input.snapshot) =>
     let turnNow = Math.abs(flick) > 0.7 && not model.snapHeld in
     { keys with
       walk: unit(keys.walk + deadzone(stick.y)), strafe: unit(keys.strafe + deadzone(stick.x)),
-      headYaw: Option.defaultValue(0.0, Option.map((h: Input.pose) => yawOf(h.orientation), xr.head)),
+      headYaw: Option.defaultValue(0.0, Option.map((h: Input.pose) => yawOf(model.headYaw, h.orientation), xr.head)),
       snap: if turnNow then 0.0 - Math.sign(flick) * Math.pi / 6.0 else 0.0,
       snapHeld: Math.abs(flick) > 0.3 && (model.snapHeld || turnNow) }
 
 let tick = (model, dt, tts) =>
-  let frames = model.frames + 1.0 in
   if not model.placed then
     let down = Physics.castExcluding(playerTag, marker, Vec3.make(0.0, -1.0, 0.0), 20.0) in
     if down.hit then
       let feet = Vec3.make(Vec3.x(marker), down.y + halfHeight + offset + 0.01, Vec3.z(marker)) in
-      ({ model with placed: true, frames: frames }, Physics.teleport(playerTag, feet))
-    else ({ model with frames: frames }, Effect.none())
+      ({ model with placed: true }, Physics.teleport(playerTag, feet))
+    else (model, Effect.none())
   else
     let grounded = Physics.grounded(playerTag) in
     let yaw = model.yaw + model.turn * turnRate * dt + model.snap in
@@ -105,7 +103,7 @@ let tick = (model, dt, tts) =>
     let vx = forward * Math.sin(heading) - side * Math.cos(heading) in
     let vz = forward * Math.cos(heading) + side * Math.sin(heading) in
     let vy = (if grounded && model.vy <= 0.0 then 0.0 else model.vy) - gravity * dt in
-    ({ model with yaw: yaw, pitch: pitch, vy: vy, snap: 0.0, frames: frames },
+    ({ model with yaw: yaw, pitch: pitch, vy: vy, snap: 0.0 },
      Physics.move(playerTag, Vec3.make(vx * dt, vy * dt, vz * dt)))
 
 let eye = (model) =>

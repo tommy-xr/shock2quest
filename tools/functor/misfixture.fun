@@ -5,6 +5,8 @@
 
 let chunkHeader = 24.0
 
+let named = (size: float, name: string) => Encode.sequence([Encode.latin1(name), Encode.zeros(size - Text.length(name))])
+
 // A chunk file: each chunk's 24-byte header (unread) and data, then the table
 // of contents the first u32 points at.
 let chunkFile = (chunks: List<(string, Bytes.t)>) =>
@@ -18,9 +20,7 @@ let chunkFile = (chunks: List<(string, Bytes.t)>) =>
       entries |> List.concatMap((e) => match e with | (_, _, data) => [Encode.zeros(chunkHeader), Encode.bytes(data)]),
       [Encode.u32le(List.length(entries))],
       entries |> List.concatMap((e) => match e with
-        | (name, at, data) => [Encode.latin1(name), Encode.zeros(12.0 - Text.length(name)), Encode.u32le(at), Encode.u32le(Bytes.length(data))])])))
-
-let named = (size: float, name: string) => Encode.sequence([Encode.latin1(name), Encode.zeros(size - Text.length(name))])
+        | (name, at, data) => [named(12.0, name), Encode.u32le(at), Encode.u32le(Bytes.length(data))])])))
 
 // A 1 ft square at z = 0 (Dark feet), texture axes 4 units a foot.
 let cell = Encode.sequence([
@@ -74,8 +74,8 @@ expect (match World.load(mission) with
 // The square's vertices: scene positions (x, z, -y) in metres, texture uvs in
 // 64-texel tiles (a 64-texel stand-in: the texture file isn't there), and
 // lightmap uvs on texel centres, mapped into the atlas rect (here its lower right quarter).
-let built = World.build([{ width: 64.0, height: 64.0, texture: Option.None }, { width: 64.0, height: 64.0, texture: Option.None }],
-  Option.defaultValue({ index: 0.0, cell: Option.defaultValue({ vertices: [], polygons: [], texturing: [], indices: [], lights: [], lightmaps: [] }, List.head(cells)),
+let built = World.build([World.blank, World.blank],
+  Option.defaultValue({ cell: Option.defaultValue({ vertices: [], polygons: [], texturing: [], indices: [], lights: [], lightmaps: [] }, List.head(cells)),
                         polygon: 0.0, texturing: { axisU: [], axisV: [], u: 0.0, v: 0.0, texture: 0.0, origin: 0.0 },
                         light: { u: 0.0, v: 0.0, width: 1.0, height: 1.0, layers: 0.0 }, lightmap: Bytes.zeros(2.0) },
     List.head(World.facesOf(cells))),
@@ -85,6 +85,18 @@ expect near(built.uvs, [0.0, 0.0, 0.25, 0.0, 0.25, 0.25, 0.0, 0.25])
 expect near(built.uvs2, [0.625, 0.625, 0.875, 0.625, 0.875, 0.875, 0.625, 0.875])
 // The normal is -(axisU × axisV), as shock2quest takes it: these axes give -Y.
 expect near(built.normals, [0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0])
+
+// Skewed axes, the origin at the polygon's second vertex, and texture and
+// lightmap offsets: the general case of the texturing math (values from
+// shock2quest's formulas).
+let skewed = World.build([World.blank, { width: 128.0, height: 64.0, texture: Option.None }],
+  { cell: { vertices: [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]], polygons: [],
+            texturing: [], indices: [[0.0, 1.0, 2.0, 3.0]], lights: [], lightmaps: [] },
+    polygon: 0.0, texturing: { axisU: [4.0, 0.0, 0.0], axisV: [2.0, 4.0, 0.0], u: 1024.0, v: 2048.0, texture: 1.0, origin: 1.0 },
+    light: { u: -2.0, v: 2.0, width: 4.0, height: 3.0, layers: 0.0 }, lightmap: Bytes.zeros(24.0) },
+  { x: 0.0, y: 0.0, u0: 0.0, v0: 0.0, u1: 1.0, v1: 1.0 })
+expect near(skewed.uvs, [0.0, 0.5, 0.125, 0.5, 0.0625, 0.75, -0.0625, 0.75])
+expect near(skewed.uvs2, [0.625, 0.166667, 0.875, 0.166667, 0.75, 0.5, 0.5, 0.5])
 
 // A 3×2 PCX: row 0 is a run of three index-1 pixels (0xC3 0x01), row 1 is
 // 0, 2, 0xC1 (an index ≥ 0xC0 needs a run of one); 4-byte rows.
@@ -96,3 +108,6 @@ let pcx = Encode.run(Encode.sequence([
   Encode.u8(12.0), Encode.bytes(Bytes.fromU8(palette))]))
 expect (Pcx.decode(pcx) |> Result.map((img) => (img.width, img.height, Bytes.equals(img.pixels,
   Bytes.fromU8([1.0, 254.0, 7.0, 1.0, 254.0, 7.0, 1.0, 254.0, 7.0, 0.0, 255.0, 7.0, 2.0, 253.0, 7.0, 193.0, 62.0, 7.0]))))) == Result.Ok((3.0, 2.0, true))
+// Cut short, it is an error (not too few pixels).
+expect Result.isError(Pcx.decode(Encode.run(Encode.sequence([Encode.bytes(Bytes.slice(0.0, 130.0, pcx) |> Binary.require),
+  Encode.u8(12.0), Encode.bytes(Bytes.fromU8(palette))]))))

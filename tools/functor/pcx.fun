@@ -15,8 +15,8 @@ let header =
       | (magic, bits, box, planes, stride) =>
         if magic != 10.0 || bits != 8.0 || planes != 1.0
         then Decode.fail("not an 8-bit, one-plane PCX")
-        else Decode.succeed({ width: Mis.n(2.0, box) - Mis.n(0.0, box) + 1.0,
-                              height: Mis.n(3.0, box) - Mis.n(1.0, box) + 1.0, stride: stride }))
+        else Decode.succeed({ width: Affine.n(2.0, box) - Affine.n(0.0, box) + 1.0,
+                              height: Affine.n(3.0, box) - Affine.n(1.0, box) + 1.0, stride: stride }))
 
 // The run-length bytes after the 128-byte header, as palette indices: a byte
 // ≥ 0xC0 repeats the next one (its low 6 bits) times. Each RGB triple is a
@@ -35,10 +35,13 @@ let decode = (data: Bytes.t): Result.t<image, Binary.error> =>
                else if b >= 192.0 then (b - 192.0, [])
                else (0.0, [colour(b)])),
            0.0)
-        |> Result.map((acc) => match acc with
+        |> Result.bind((acc) => match acc with
           | (_, runs) =>
             let indexed = List.flatten(runs) in
-            // Rows are `stride` bytes; keep `width` of each.
-            let rows = if h.stride == h.width then List.take(h.width * h.height, indexed)
-                       else List.range(h.height) |> List.concatMap((y) => List.take(h.width, List.drop(y * h.stride, indexed))) in
-            { width: h.width, height: h.height, pixels: Bytes.concat(rows) }))
+            if h.stride < h.width || List.length(indexed) < h.stride * h.height
+            then Result.Error(Decode.failure(128.0, "PCX pixel data is shorter than its rows"))
+            else
+              // Rows are `stride` bytes; keep `width` of each.
+              let rows = if h.stride == h.width then List.take(h.width * h.height, indexed)
+                         else List.range(h.height) |> List.concatMap((y) => List.take(h.width, List.drop(y * h.stride, indexed))) in
+              Result.Ok({ width: h.width, height: h.height, pixels: Bytes.concat(rows) })))

@@ -3,50 +3,54 @@
 // (x, z, -y) metres (Y up, as `Skinned` turns characters). Polygons are
 // fan-triangulated and grouped by texture (one draw each); every rendered
 // polygon's base lightmap goes into one atlas. The sky (texture 249) is left
-// out, as shock2quest leaves it out.
+// out, as shock2quest leaves it out, and so is water (medsci1 has none).
 //
 //   let level = World.load(File.bytes("ss2data/medsci1.mis")) |> Binary.require
 
 let metresPerFoot = 0.3048
-let sky = 249.0
+// Textures 247 and 248 are water surfaces and 249 the sky: none is in the
+// texture list, and none is drawn or collides here.
+let water = 247.0
 
-let n = Mis.n
+let n = Affine.n
 let dot = (a: List<float>, b: List<float>): float => n(0.0, a) * n(0.0, b) + n(1.0, a) * n(1.0, b) + n(2.0, a) * n(2.0, b)
 let sub = (a: List<float>, b: List<float>): List<float> => [n(0.0, a) - n(0.0, b), n(1.0, a) - n(1.0, b), n(2.0, a) - n(2.0, b)]
 let cross = (a: List<float>, b: List<float>): List<float> =>
   [n(1.0, a) * n(2.0, b) - n(2.0, a) * n(1.0, b), n(2.0, a) * n(0.0, b) - n(0.0, a) * n(2.0, b),
    n(0.0, a) * n(1.0, b) - n(1.0, a) * n(0.0, b)]
 
-// Dark axes to scene axes; `scale` is metres per foot for points, 1 for directions.
-let toScene = (scale: float, p: List<float>): List<float> => [n(0.0, p) * scale, n(2.0, p) * scale, 0.0 - n(1.0, p) * scale]
+// Dark axes (Z up, feet) to scene axes (Y up, metres).
+let toScene = (p: List<float>): List<float> => Affine.scale(metresPerFoot, Skinned.up(p))
 
 // A base texture: what the texturing math needs (its size) and what draws.
 type surface = { width: float, height: float, texture: Option.t<Asset.Texture> }
+
+// No texture: drawn white, textured as if 64 texels square.
+let blank: surface = { width: 64.0, height: 64.0, texture: Option.None }
 
 // `ss2/fam/<family>/<name>.pcx`, matched ignoring case (see `files.fun`).
 let texturePath = (t: Mis.texture): string => Text.join("", ["ss2/fam/", t.family, "/", t.name, ".pcx"])
 
 let surfaceOf = (t: Mis.texture): surface =>
   let path = texturePath(t) in
-  if t.name == "null" || not File.exists(path) then { width: 64.0, height: 64.0, texture: Option.None }
+  if t.name == "null" || not File.exists(path) then blank
   else
     match Pcx.decode(File.bytes(path)) with
     | Result.Ok(image) =>
       { width: image.width, height: image.height,
         texture: Option.Some(Texture.fromPixels({ width: image.width, height: image.height, format: Texture.Rgb8,
                                                   colorSpace: Texture.Srgb, pixels: image.pixels })) }
-    | Result.Error(_) => { width: 64.0, height: 64.0, texture: Option.None }
+    | Result.Error(_) => blank
 
 // One rendered polygon, with what its vertices need.
-type face = { index: float, cell: Mis.cell, polygon: float, texturing: Mis.texturing, light: Mis.lightmap, lightmap: Bytes.t }
+type face = { cell: Mis.cell, polygon: float, texturing: Mis.texturing, light: Mis.lightmap, lightmap: Bytes.t }
 
 let facesOf = (cells: List<Mis.cell>): List<face> =>
   cells
     |> List.concatMap((c: Mis.cell) =>
       List.zip(c.lights, c.texturing) |> List.indexedMap((i, pair) => match pair with
-        | (t, l) => { index: 0.0, cell: c, polygon: i, texturing: t, light: l,
+        | (t, l) => { cell: c, polygon: i, texturing: t, light: l,
                       lightmap: Option.defaultValue(Bytes.zeros(2.0), List.nth(i, c.lightmaps)) }))
-    |> List.indexedMap((i, f: face) => { f with index: i })
 
 // A face's vertices as plain floats: scene position, normal, texture uv and
 // atlas uv per vertex, in its polygon's order.
@@ -61,7 +65,7 @@ let build = (surfaces: List<surface>, f: face, rect: Texture.rect): built =>
   let ids = Option.defaultValue([], List.nth(f.polygon, f.cell.indices)) in
   let vertex = (k: float) => Option.defaultValue([0.0, 0.0, 0.0], List.nth(n(k, ids), f.cell.vertices)) in
   let origin = vertex(t.origin) in
-  let size = Option.defaultValue({ width: 64.0, height: 64.0, texture: Option.None }, List.nth(t.texture, surfaces)) in
+  let size = Option.defaultValue(blank, List.nth(t.texture, surfaces)) in
   let mu = dot(t.axisU, t.axisU) in
   let mv = dot(t.axisV, t.axisV) in
   let uv = dot(t.axisU, t.axisV) in
@@ -71,7 +75,7 @@ let build = (surfaces: List<surface>, f: face, rect: Texture.rect): built =>
     let pv = dot(t.axisV, d) in
     if Math.abs(uv) < 0.0001 then (pu / mu, pv / mv)
     else (corr * (pu * mv - pv * uv), corr * (pv * mu - pu * uv)) in
-  let normal = toScene(1.0, cross(t.axisV, t.axisU)) in
+  let normal = Skinned.up(cross(t.axisV, t.axisU)) in
   let len = Math.sqrt(dot(normal, normal)) in
   let unitNormal = List.map((x) => x / Math.max(len, 0.000001), normal) in
   let corners = ids |> List.indexedMap((k, _) =>
@@ -80,7 +84,7 @@ let build = (surfaces: List<surface>, f: face, rect: Texture.rect): built =>
     | (pu, pv) =>
       let lu = (4.0 * pu + 0.5 - f.light.u + t.u / 1024.0) / f.light.width in
       let lv = (4.0 * pv + 0.5 - f.light.v + t.v / 1024.0) / f.light.height in
-      { p: toScene(metresPerFoot, p),
+      { p: toScene(p),
         uv: [(pu + t.u / 4096.0) / (size.width / 64.0), (pv + t.v / 4096.0) / (size.height / 64.0)],
         uv2: [rect.u0 + Math.clamp01(lu) * (rect.u1 - rect.u0), rect.v0 + Math.clamp01(lv) * (rect.v1 - rect.v0)] }) in
   { texture: t.texture, count: List.length(ids),
@@ -102,15 +106,15 @@ let load = (data: Bytes.t): Result.t<level, Binary.error> =>
     let faces = facesOf(cells) in
     let used = faces |> List.fold((m, f: face) => Map.insert(f.texturing.texture, true, m), Map.empty()) in
     let surfaces = textures |> List.indexedMap((i, t) =>
-      if Map.member(i, used) then surfaceOf(t) else { width: 64.0, height: 64.0, texture: Option.None }) in
+      if Map.member(i, used) then surfaceOf(t) else blank) in
     let atlas = Texture.atlas({
       images: faces |> List.map((f: face) =>
         { pixels: { width: f.light.width, height: f.light.height, format: Texture.Rgb555le, colorSpace: Texture.Srgb,
                     pixels: f.lightmap }, layers: [] }),
       padding: 1.0, maxSize: 4096.0 }) in
     let drawn = faces |> List.zip(atlas.rects)
-      |> List.filter((pair) => match pair with | (f, _) => f.texturing.texture != sky)
-      |> List.sortBy((pair) => match pair with | (f, _) => f.texturing.texture * 100000.0 + f.index) in
+      |> List.filter((pair) => match pair with | (f, _) => f.texturing.texture < water)
+      |> List.sortBy((pair) => match pair with | (f, _) => f.texturing.texture) in
     let builts = drawn |> List.map((pair) => match pair with | (f, r) => build(surfaces, f, r)) in
     // Fan triangles, counter-clockwise from inside the cell (Dark winds its
     // polygons the other way).

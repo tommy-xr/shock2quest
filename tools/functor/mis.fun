@@ -10,16 +10,9 @@
 // A chunk: where its data starts (past the 24-byte header) and how long it is.
 type chunk = { name: string, offset: float, length: float }
 
-// A NUL-padded name of `size` bytes.
-let paddedName = (size: float): Decode.t<string> =>
-  Decode.bytes(size) |> Decode.andThen((b: Bytes.t) =>
-    let used = List.range(size) |> List.fold((n, i) =>
-      if n < 0.0 && Bytes.u8(i, b) == Result.Ok(0.0) then i else n, -1.0) in
-    Decode.succeed(Bytes.latin1(0.0, if used < 0.0 then size else used, b) |> Binary.require))
-
 let entry =
   Decode.map3((n, o, l): chunk => { name: n, offset: o + 24.0, length: l },
-    paddedName(12.0), Decode.u32le, Decode.u32le)
+    Motion.name(12.0), Decode.u32le, Decode.u32le)
 
 // The table of contents sits where the first u32 says.
 let toc =
@@ -31,7 +24,7 @@ let find = (name: string, chunks: List<chunk>): Result.t<chunk, Binary.error> =>
   | Option.Some(c) => Result.Ok(c)
   | Option.None => Result.Error(Decode.failure(0.0, Text.join("", ["no ", name, " chunk"])))
 
-let vec3 = Decode.map3((x, y, z) => [x, y, z], Decode.f32le, Decode.f32le, Decode.f32le)
+let vec3 = Cal.vec3
 
 // A polygon: its vertex count and, for a portal, the cell it leads to.
 type polygon = { count: float, target: float }
@@ -63,16 +56,14 @@ let lightmapInfo =
 type cell = { vertices: List<List<float>>, polygons: List<polygon>, texturing: List<texturing>,
               indices: List<List<float>>, lights: List<lightmap>, lightmaps: List<Bytes.t> }
 
-let n = (k: float, xs: List<float>): float => Option.defaultValue(0.0, List.nth(k, xs))
-
 let cell: Decode.t<cell> =
   Decode.list(7.0, Decode.u8) |> Decode.andThen((h) =>
   Decode.skipThen(6.0, Decode.u8) |> Decode.andThen((animated) =>
-  Decode.skipThen(17.0, Decode.list(n(0.0, h), vec3)) |> Decode.andThen((vertices) =>
-  Decode.list(n(1.0, h), polygon) |> Decode.andThen((polygons) =>
-  Decode.list(n(2.0, h), texturing) |> Decode.andThen((tex) =>
+  Decode.skipThen(17.0, Decode.list(Affine.n(0.0, h), vec3)) |> Decode.andThen((vertices) =>
+  Decode.list(Affine.n(1.0, h), polygon) |> Decode.andThen((polygons) =>
+  Decode.list(Affine.n(2.0, h), texturing) |> Decode.andThen((tex) =>
   Decode.skipThen(4.0, Decode.sequence(List.map((p: polygon) => Decode.list(p.count, Decode.u8), polygons))) |> Decode.andThen((ids) =>
-  Decode.skipThen(16.0 * n(4.0, h) + 2.0 * animated, Decode.list(n(2.0, h), lightmapInfo)) |> Decode.andThen((lights) =>
+  Decode.skipThen(16.0 * Affine.n(4.0, h) + 2.0 * animated, Decode.list(Affine.n(2.0, h), lightmapInfo)) |> Decode.andThen((lights) =>
   Decode.sequence(List.map((l: lightmap) =>
       let size = 2.0 * l.width * l.height in
       Decode.bytes(size) |> Decode.andThen((base) => Decode.skipThen(size * Bits.popcount(l.layers), Decode.succeed(base))),
@@ -95,10 +86,10 @@ let textures = (chunks: List<chunk>, data: Bytes.t): Result.t<List<texture>, Bin
       Decode.map2((count, families) => (count, families), Decode.u32le, Decode.u32le)
         |> Decode.andThen((counts) => match counts with
           | (count, families) =>
-            Decode.list(families, paddedName(16.0)) |> Decode.andThen((names) =>
+            Decode.list(families, Motion.name(16.0)) |> Decode.andThen((names) =>
               Decode.list(count, Decode.map2((f, name): texture =>
                   { family: if f > 0.0 then Option.defaultValue("", List.nth(f - 1.0, names)) else "", name: name },
-                Decode.skipThen(1.0, Decode.u8), Decode.skipThen(2.0, paddedName(16.0))))))), data))
+                Decode.skipThen(1.0, Decode.u8), Decode.skipThen(2.0, Motion.name(16.0))))))), data))
 
 // RENDPARAMS: the mission's ambient light (a minimum surface brightness).
 let ambient = (chunks: List<chunk>, data: Bytes.t): Result.t<float, Binary.error> =>
