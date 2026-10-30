@@ -18,13 +18,13 @@ let files = List.append(List.map((n) => Text.join("", ["ss2/", n, "_.mc"]), ["og
   ["ss2/hybrid.bin", "ss2/hybrid.cal", "ss2/motiondb.bin"])
 
 // Without the game files, the synthetic character from fixture.fun stands in.
-let real = List.all((p) => File.exists(p), files)
+let real = List.all((p) => File.exists(Path.of(p)), files)
 
 let hybrid =
-  let mesh = if real then File.bytes("ss2/hybrid.bin") else Fixture.characterMesh in
-  let cal = if real then File.bytes("ss2/hybrid.cal") else Fixture.characterSkeleton in
+  let mesh = if real then File.bytes(Path.of("ss2/hybrid.bin")) else Fixture.characterMesh in
+  let cal = if real then File.bytes(Path.of("ss2/hybrid.cal")) else Fixture.characterSkeleton in
   let load = (n: string): Motion.clip =>
-    Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes(Text.join("", ["ss2/", n, "_.mc"])), n) |> Binary.require in
+    Motion.clip(File.bytes(Path.of("ss2/motiondb.bin")), File.bytes(Path.of(Text.join("", ["ss2/", n, "_.mc"]))), n) |> Binary.require in
   let clipOf = (n: string): Motion.clip =>
     if not real then Fixture.twisting
     else if n == "walk" then Motion.join(load("ogpbzwkl"), load("ogpbzwkr")) |> Binary.require

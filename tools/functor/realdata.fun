@@ -73,9 +73,9 @@ let clips: List<(string, Motion.clip)> =
 let skinned: Option.t<(Lgmm.rig, Model.t)> =
   if not have(animated) then Option.None
   else
-    let r = Lgmm.rig(Decode.run(Lgmm.model, File.bytes("ss2/hybrid.bin")) |> Binary.require,
-      Decode.run(Cal.skeleton, File.bytes("ss2/hybrid.cal")) |> Binary.require) in
-    Option.Some((r, Skinned.data(File.bytes("ss2/hybrid.bin"), r, clips) |> Binary.require |> Model.skinned))
+    let r = Lgmm.rig(Decode.run(Lgmm.model, File.bytes(Path.of("ss2/hybrid.bin"))) |> Binary.require,
+      Decode.run(Cal.skeleton, File.bytes(Path.of("ss2/hybrid.cal"))) |> Binary.require) in
+    Option.Some((r, Skinned.data(File.bytes(Path.of("ss2/hybrid.bin")), r, clips) |> Binary.require |> Model.skinned))
 
 // The largest difference in `clipName` at `frame` (fractional between frames);
 // 0 without the files.

@@ -109,7 +109,8 @@ let data = (mesh: Bytes.t, r: Lgmm.rig, clips: List<(string, Motion.clip)>): Res
         skeleton: List.append(
           List.map((j) => bone(Text.join("", [name(j), ".blend"]), j), helpers),
           List.map((j) => bone(name(j), j), ids)),
-        clips: List.map(clipOf, clips)
+        clips: List.map(clipOf, clips),
+        texture: Option.None
       })
 
 // The largest coordinate difference between `m` posed by `anim` and `points`
