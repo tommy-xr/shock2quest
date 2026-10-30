@@ -74,6 +74,21 @@ let model =
                 Decode.field("runs", Decode.at(o.smatsegsAt, Decode.list(c.smatsegs, run))),
                 Decode.field("weights", Decode.at(o.weightsAt, Decode.list(c.weights, Decode.f32le))))))
 
+// The first material's texture file name (char[16], NUL-padded), e.g.
+// "og_pipe02.gif". Triangles pick a material by index, so a mesh with more
+// than one draws them all with this one's texture here.
+let textureName =
+  Decode.map2((count, at) => (count, at), at8(22.0), at32(40.0))
+    |> Decode.andThen((header) =>
+      match header with
+      | (count, at) =>
+        if count < 1.0 then Decode.fail("no materials")
+        else
+          Decode.field("materials", Decode.at(at, Decode.list(16.0, Decode.u8)))
+            |> Decode.andThen((name: List<float>) =>
+              let length = List.indexedMap((k, c) => if c == 0.0 then k else 16.0, name) |> List.minimum |> Option.defaultValue(16.0) in
+              Decode.at(at, Decode.latin1(length))))
+
 let rigid = (joint: float): binding => { joint: joint, blend: Option.None }
 
 // Each vertex's binding, from the run that owns it (joint 0 when none does).

@@ -98,10 +98,10 @@ expect Text.contains("past the end", failure(cubeWith(4.0, corners, turned, 5.0,
 let characterMesh =
   Encode.run(Encode.sequence([
     Encode.latin1("LGMM"), Encode.u32le(2.0), Encode.zeros(13.0),
-    Encode.u8(2.0), Encode.u8(0.0), Encode.u8(2.0),               // segments, materials, runs
+    Encode.u8(2.0), Encode.u8(1.0), Encode.u8(2.0),               // segments, materials, runs
     Encode.u16le(2.0), Encode.u16le(6.0), Encode.u16le(3.0), Encode.u16le(0.0),
     // remap, segments, materials, runs, triangles, normals, vertices, uvs, weights
-    Encode.bytes(Bytes.fromU32le([72.0, 72.0, 112.0, 112.0, 144.0, 176.0, 176.0, 260.0, 248.0])),
+    Encode.bytes(Bytes.fromU32le([72.0, 72.0, 332.0, 112.0, 144.0, 176.0, 176.0, 260.0, 248.0])),
     Encode.zeros(4.0),
     // Segments @72: joint 0 rigid, joint 1 stretchy.
     Encode.zeros(4.0), Encode.i8(0.0), Encode.zeros(2.0), Encode.u8(0.0), Encode.zeros(12.0),
@@ -116,8 +116,10 @@ let characterMesh =
     Encode.bytes(Bytes.fromF32le([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
                                   0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])),
     Encode.bytes(Bytes.fromF32le([1.0, 1.0, 0.0])),
-    // UVs and packed normals @260: every normal +Z (1024 = z field 256).
-    Encode.list((v) => Encode.sequence([Encode.zeros(8.0), Encode.u32le(1024.0)]), List.range(6.0))
+    // UVs (k / 8, 1 - k / 8) and packed normals @260: every normal +Z (1024 = z field 256).
+    Encode.list((v) => Encode.sequence([Encode.bytes(Bytes.fromF32le([v / 8.0, 1.0 - v / 8.0])), Encode.u32le(1024.0)]), List.range(6.0)),
+    // One 56-byte material @332: its NUL-padded texture name, then fields the decoder skips.
+    Encode.latin1("Skin.gif"), Encode.zeros(48.0)
   ]))
 
 // One torso (joint 0, no fixed joints) and one limb: joint 1, 2 up from 0.
@@ -276,6 +278,14 @@ let skinnedOff = (seconds: float, expected: float): float =>
 expect (skinned |> Result.map((pair) => match pair with | (_, m) => (Model.inspect(m)).joints)) == Result.Ok(["joint0", "joint1", "joint1.blend"])
 expect Decode.run(Skinned.normals, characterMesh) == Result.Ok(List.map((k) => [0.0, 0.0, 1.0], List.range(6.0)))
 expect Skinned.normal(1073741824.0) == [1.0, 0.0, 0.0]
+expect Decode.run(Skinned.uvs, characterMesh) == Result.Ok(List.map((k) => [k / 8.0, 1.0 - k / 8.0], List.range(6.0)))
+expect Decode.run(Lgmm.textureName, characterMesh) == Result.Ok("Skin.gif")
+// Without ss2/skin.gif the model stays untextured.
+expect Option.isNone(Skinned.texture(characterMesh))
+// The uvs are complete, so a texture validates (the file loads only to draw).
+expect (skinned |> Result.map((pair) => match pair with | (r, _) =>
+  let d = Skinned.data(characterMesh, r, []) |> Binary.require in
+  (Model.inspect(Model.skinned({ d with texture: Option.Some(Asset.texture("ss2/skin.gif")) }))).vertices)) == Result.Ok(6.0)
 expect skinnedOff(0.0, 0.0) < 0.0001
 expect skinnedOff(0.3, 0.3) < 0.0001
 // The last frame interpolating back to the first.
