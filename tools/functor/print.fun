@@ -58,6 +58,17 @@ let mesh =
 
 let part = mesh |> Solid.fromMesh({ height: 60.0, nozzle: 0.4 })
 
+// The character as a GPU-skinned model (built once): the viewer plays its
+// joined clips on it (named after them), at rest without them.
+let clipName = Text.join("+", clipNames)
+
+let skinned: Option.t<Model.t> =
+  character
+    |> Option.map((c: character) =>
+      Skinned.data(data, c.rig, Option.toList(Option.map((clip) => (clipName, clip), c.clip))) |> Binary.require |> Model.skinned)
+
+let playing = Option.isSome(Option.bind((c: character) => c.clip, character))
+
 // The viewer: PartViewer's camera and controls; a character animates.
 let init = PartViewer.init
 let tick = PartViewer.tick
@@ -65,7 +76,7 @@ let mouseMove = PartViewer.mouseMove
 let mouseButton = PartViewer.mouseButton
 let mouseWheel = PartViewer.mouseWheel
 
-// Mesh space (Z up) to scene space (Y up), as Mesh.toScene draws it.
+// Mesh space (Z up) to scene space (Y up), as the skinned model is built.
 let toScene = (v: Vec3.t) => Vec3.make(Vec3.x(v), Vec3.z(v), 0.0 - Vec3.y(v))
 
 // Framing for the animated view, from the printed pose.
@@ -74,7 +85,7 @@ let hi = toScene(Mesh.bounds(mesh).max)
 let center = Vec3.scale(0.5, Vec3.add(lo, hi))
 let size = Vec3.distance(lo, hi)
 
-let animate = (c: character, m, tts: float) =>
+let animate = (model: Model.t, m, tts: float) =>
   Frame.createLit(
     OrbitCamera.camera(m.orbit, center, size),
     Scene.group([
@@ -82,7 +93,7 @@ let animate = (c: character, m, tts: float) =>
         |> Scene.scale(size * 4.0)
         |> Scene.translate(Vec3.make(Vec3.x(center), Vec3.y(lo), Vec3.z(center)))
         |> Scene.lit(Color.rgb(0.55, 0.56, 0.6)),
-      Mesh.toScene(posedAt(c, tts)) |> Scene.lit(Color.rgb(0.25, 0.5, 0.85)),
+      Scene.modelOf(model) |> Scene.animate(if playing then Anim.clip(clipName, tts) else Anim.rest()),
     ]),
     [
       Light.ambient(Color.rgb(0.18, 0.18, 0.22)),
@@ -91,6 +102,6 @@ let animate = (c: character, m, tts: float) =>
     ])
 
 let draw = (m, tts: float) =>
-  match character with
-  | Option.Some(c) => animate(c, m, tts)
+  match skinned with
+  | Option.Some(model) => animate(model, m, tts)
   | Option.None => PartViewer.draw(part, m, tts)

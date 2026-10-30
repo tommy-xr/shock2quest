@@ -101,7 +101,7 @@ let characterMesh =
     Encode.u8(2.0), Encode.u8(0.0), Encode.u8(2.0),               // segments, materials, runs
     Encode.u16le(2.0), Encode.u16le(6.0), Encode.u16le(3.0), Encode.u16le(0.0),
     // remap, segments, materials, runs, triangles, normals, vertices, uvs, weights
-    Encode.bytes(Bytes.fromU32le([72.0, 72.0, 112.0, 112.0, 144.0, 176.0, 176.0, 248.0, 248.0])),
+    Encode.bytes(Bytes.fromU32le([72.0, 72.0, 112.0, 112.0, 144.0, 176.0, 176.0, 260.0, 248.0])),
     Encode.zeros(4.0),
     // Segments @72: joint 0 rigid, joint 1 stretchy.
     Encode.zeros(4.0), Encode.i8(0.0), Encode.zeros(2.0), Encode.u8(0.0), Encode.zeros(12.0),
@@ -115,7 +115,9 @@ let characterMesh =
     // Vertices @176 (each relative to its joint), then 3 weights @248.
     Encode.bytes(Bytes.fromF32le([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
                                   0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])),
-    Encode.bytes(Bytes.fromF32le([1.0, 1.0, 0.0]))
+    Encode.bytes(Bytes.fromF32le([1.0, 1.0, 0.0])),
+    // UVs and packed normals @260: every normal +Z (1024 = z field 256).
+    Encode.list((v) => Encode.sequence([Encode.zeros(8.0), Encode.u32le(1024.0)]), List.range(6.0))
   ]))
 
 // One torso (joint 0, no fixed joints) and one limb: joint 1, 2 up from 0.
@@ -239,3 +241,44 @@ expect (decodedClip |> Result.map((c: Motion.clip) =>
     [Affine.n(2.0, Affine.offset(p.root))])))
   == Result.Ok([1.0, 0.0, -1.0, 0.0])
 expect Result.isError(Motion.clip(database(motionData), testClip, "missing"))
+
+// The synthetic character as a GPU-skinned model, posed like `Lgmm` within
+// 1e-4. Its clip turns both joints (joint 0 about X, from an all-zero
+// quaternion; joint 1 about Z) while the root bobs, so the root, the chain and
+// the blend helper bone all move.
+let twisting: Motion.clip = {
+  motion: { frames: 3.0, fps: 2.0, joints: [0.0, 0.0, 1.0] },
+  root: [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 0.5]],
+  tracks: [
+    [[0.0, 0.0, 0.0, 0.0], [0.92387953, 0.38268343, 0.0, 0.0], [0.70710678, 0.70710678, 0.0, 0.0]],
+    [[1.0, 0.0, 0.0, 0.0], [0.70710678, 0.0, 0.0, 0.70710678], [0.5, 0.0, 0.0, 0.8660254]]
+  ]
+}
+
+let skinned =
+  Decode.run(Lgmm.model, characterMesh)
+    |> Result.bind((m: Lgmm.model) =>
+      Decode.run(Cal.skeleton, characterSkeleton)
+        |> Result.bind((s: Cal.skeleton) =>
+          let r = Lgmm.rig(m, s) in
+          Skinned.data(characterMesh, r, [("twisting", twisting)]) |> Result.map((d) => (r, Model.skinned(d)))))
+
+// How far the model at `seconds` of `twisting` is from `Lgmm` at `expected`.
+let skinnedOff = (seconds: float, expected: float): float =>
+  match skinned with
+  | Result.Ok(pair) =>
+    (match pair with
+     | (r, m) =>
+       let p = Motion.sample(twisting, expected) in
+       Skinned.deviation(m, Anim.clip("twisting", seconds), Lgmm.points(r, p.root, p.animate)))
+  | Result.Error(_) => 1.0
+
+expect (skinned |> Result.map((pair) => match pair with | (_, m) => (Model.inspect(m)).joints)) == Result.Ok(["joint0", "joint1", "joint1.blend"])
+expect Decode.run(Skinned.normals, characterMesh) == Result.Ok(List.map((k) => [0.0, 0.0, 1.0], List.range(6.0)))
+expect Skinned.normal(1073741824.0) == [1.0, 0.0, 0.0]
+expect skinnedOff(0.0, 0.0) < 0.0001
+expect skinnedOff(0.3, 0.3) < 0.0001
+// The last frame interpolating back to the first.
+expect skinnedOff(1.2, 1.2) < 0.0001
+// The check sees a wrong pose.
+expect skinnedOff(0.3, 0.8) > 0.1
