@@ -556,6 +556,17 @@ mod tests {
         assert!(opens_panel(&world, creature));
     }
 
+    /// A scanned info terminal is frobbed: it unlocks and shows its help topic.
+    #[test]
+    fn scanning_an_info_terminal_opens_its_help() {
+        let mut world = shipyard::World::new();
+        let terminal = world.add_entity(dark::properties::PropScripts {
+            scripts: vec!["InfoComputer".into()],
+            inherits: false,
+        });
+        assert!(opens_panel(&world, terminal));
+    }
+
     #[test]
     fn gamepig_board_fills_the_tricorder_screen_and_is_not_frobbed() {
         use crate::gui::Gui;
@@ -710,6 +721,7 @@ pub fn opens_panel(world: &shipyard::World, entity: shipyard::EntityId) -> bool 
             "HackableCrate",
             "ResearchableScript",
             "Chemical",
+            "InfoComputer",
         ]
         .iter()
         .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))

@@ -1,4 +1,4 @@
-//! Audio-log / email reader MFD.
+//! Audio-log / email / help-topic reader MFD.
 //!
 //! The shared flat/VR reader panel matching the original game's email/log
 //! overlay: a `LOG.PCX` backdrop with sender portrait, deck icon, header and a
@@ -67,20 +67,42 @@ pub enum MediaGuiMsg {
 }
 
 /// The `PropLog` the reader is bound with for `entry`: an email sets `email`
-/// and leaves `log` unset, an audio log the reverse. [`shown_entry`] reads it back.
+/// and leaves `log` unset, an audio log the reverse, and a help topic sets
+/// `video` (retail's fourth PDA slot) to topic + 1. [`shown_entry`] reads it back.
 pub(crate) fn reader_prop_log(entry: PdaEntry) -> PropLog {
-    let (email, log) = match entry.kind {
-        PdaKind::Log => (LOG_UNSET, entry.index),
-        PdaKind::Email => (entry.index, LOG_UNSET),
+    let (email, log, video) = match entry.kind {
+        PdaKind::Log => (LOG_UNSET, entry.index, 0),
+        PdaKind::Email => (entry.index, LOG_UNSET, 0),
+        PdaKind::Help => (LOG_UNSET, LOG_UNSET, entry.index + 1),
         // Notes have no reader; nothing asks to open one.
-        PdaKind::Note => (LOG_UNSET, LOG_UNSET),
+        PdaKind::Note => (LOG_UNSET, LOG_UNSET, 0),
     };
     PropLog {
         deck: entry.deck,
         email,
         log,
         note: 0,
-        video: 0,
+        video,
+    }
+}
+
+/// The sound reading `entry` starts: its recording, or the email's voice
+/// (replayed on every read, like retail). Help text is silent.
+pub(crate) fn reader_audio(entry: PdaEntry) -> Option<Effect> {
+    let PdaEntry { kind, deck, index } = entry;
+    match kind {
+        PdaKind::Log => Some(Effect::PlaySound {
+            handle: engine::audio::AudioHandle::new(),
+            source: None,
+            name: format!("LOG{deck:02}{index:02}"),
+            spatial: false,
+        }),
+        PdaKind::Email => Some(Effect::PlayEmail {
+            deck,
+            email: index,
+            force: true,
+        }),
+        PdaKind::Help | PdaKind::Note => None,
     }
 }
 
@@ -92,6 +114,8 @@ fn shown_entry(world: &World, entity_id: EntityId) -> Option<PdaEntry> {
         (PdaKind::Log, log.log)
     } else if log.email != LOG_UNSET {
         (PdaKind::Email, log.email)
+    } else if log.video > 0 {
+        (PdaKind::Help, log.video - 1)
     } else {
         return None;
     };
@@ -203,13 +227,11 @@ fn page_lines(world: &World) -> usize {
     (TEXT_H / PanelText::line_height(world)).floor().max(1.0) as usize
 }
 
-/// Retail's reader frame per entry kind: `EMAIL.PCX` or `LOG.PCX`.
+/// Retail's reader frame per entry kind: `EMAIL.PCX`, `HELP.PCX` or `LOG.PCX`.
 fn backdrop(world: &World, entity_id: EntityId) -> &'static str {
-    match shown_entry(world, entity_id) {
-        Some(PdaEntry {
-            kind: PdaKind::Email,
-            ..
-        }) => "iface/email.pcx",
+    match shown_entry(world, entity_id).map(|entry| entry.kind) {
+        Some(PdaKind::Email) => "iface/email.pcx",
+        Some(PdaKind::Help) => "iface/help.pcx",
         _ => "iface/log.pcx",
     }
 }
@@ -686,6 +708,37 @@ mod tests {
         );
         assert_eq!(backdrop(&world, email), "iface/email.pcx");
         assert_eq!(backdrop(&world, audio), "iface/log.pcx");
+    }
+
+    /// A help topic reads on the HELP.PCX frame with no audio, and its
+    /// return button goes back to the Help tab on that topic.
+    #[test]
+    fn help_topics_read_silently_on_the_help_frame_and_return_to_help() {
+        let mut world = World::new();
+        let topic = PdaEntry {
+            kind: PdaKind::Help,
+            deck: 2,
+            index: 0,
+        };
+        let reader = world.add_entity(reader_prop_log(topic));
+        let returned = MediaGui
+            .handle_msg(
+                reader,
+                &world,
+                &MediaGuiState::default(),
+                &MediaGuiMsg::Return,
+            )
+            .1;
+        assert!(matches!(returned, Effect::ReturnToPda(entry) if entry == topic));
+        assert_eq!(backdrop(&world, reader), "iface/help.pcx");
+        assert!(reader_audio(topic).is_none());
+        assert!(
+            reader_audio(PdaEntry {
+                kind: PdaKind::Log,
+                ..topic
+            })
+            .is_some()
+        );
     }
 
     /// Discs whose `log` field is the 33 "not set" sentinel (an empty bitmask -

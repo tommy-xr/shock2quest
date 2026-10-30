@@ -1,7 +1,7 @@
 //! PDA list: every collected email and audio log, per deck, as the retail
-//! LOGS MFD shows them, plus the deck's objective notes as a read-only
-//! checklist. Selecting an email or log opens the shared media reader,
-//! whose return button comes back here. Rects are the retail PDA overlay's,
+//! LOGS MFD shows them, the deck's objective notes as a read-only checklist,
+//! and the help topics unlocked at info terminals. Selecting an email, log or
+//! topic opens the shared media reader, whose return button comes back here. Rects are the retail PDA overlay's,
 //! relative to the left MFD panel, and resolved once on the shared canvas.
 use crate::{
     game_scene::DebugUiElement,
@@ -30,10 +30,11 @@ const NOTE_TEXT_X: f32 = NOTE_BOX.x + NOTE_BOX.w + 2.0;
 const NOTE_TEXT_W: f32 = LIST_W - 5.0;
 
 /// The tabs along the bottom: kind, art stem, x, label.
-const TABS: [(PdaKind, &str, f32, &str); 3] = [
+const TABS: [(PdaKind, &str, f32, &str); 4] = [
     (PdaKind::Email, "pemail", 12.0, "pda_tab_email"),
     (PdaKind::Log, "plogs", 53.0, "pda_tab_logs"),
     (PdaKind::Note, "pnotes", 94.0, "pda_tab_notes"),
+    (PdaKind::Help, "pvideo", 135.0, "pda_tab_help"),
 ];
 
 /// What a pointer press on the list asks its owner to do.
@@ -93,19 +94,24 @@ impl PdaList {
         };
         drop(quests);
         let misc = assets.get(&dark::importers::STRINGS_IMPORTER, "misc.str");
-        let (base, prefix, fallback) = match self.kind {
-            PdaKind::Email => ("levelbase0", "emailname", "Emails: Deck %d"),
-            PdaKind::Log => ("levelbase1", "logname", "Logs: Deck %d"),
-            PdaKind::Note => ("levelbase2", "", "Notes: Deck %d"),
+        let (base, fallback) = match self.kind {
+            PdaKind::Email => ("levelbase0", "Emails: Deck %d"),
+            PdaKind::Log => ("levelbase1", "Logs: Deck %d"),
+            PdaKind::Note => ("levelbase2", "Notes: Deck %d"),
+            PdaKind::Help => ("levelbase3", "Help Text"),
         };
         self.header = misc
             .get(base)
             .map_or(fallback, String::as_str)
             .replace("%d", &self.deck.to_string());
-        self.deck_name = misc
-            .get(&format!("level{}", self.deck.saturating_sub(1)))
-            .cloned()
-            .unwrap_or_default();
+        // Help is not per deck, so retail names no deck under its header.
+        self.deck_name = if self.kind == PdaKind::Help {
+            String::new()
+        } else {
+            misc.get(&format!("level{}", self.deck.saturating_sub(1)))
+                .cloned()
+                .unwrap_or_default()
+        };
         if self.kind == PdaKind::Note {
             let strings = assets.get_opt(&dark::importers::STRINGS_IMPORTER, "notes.str");
             self.rows.clear();
@@ -116,18 +122,26 @@ impl PdaList {
             return;
         }
         self.notes.clear();
-        let level = assets.get_opt(
-            &dark::importers::STRINGS_IMPORTER,
-            &format!("level{:02}.str", self.deck),
-        );
+        let entry = |index| PdaEntry {
+            kind: self.kind,
+            deck: self.deck,
+            index,
+        };
+        // Every row of a tab shares one table.
+        let table = entry(0).strings();
+        let strings = table
+            .as_ref()
+            .and_then(|(file, ..)| assets.get_opt(&dark::importers::STRINGS_IMPORTER, file));
         self.rows = entries
             .into_iter()
             .map(|index| {
-                let name = level
+                // Numbered as the table keys it: help topic 0 is `HelpName1`.
+                let (_, prefix, number) = entry(index).strings().unwrap_or_default();
+                let name = strings
                     .as_ref()
-                    .and_then(|strings| strings.get(&format!("{prefix}{index}")))
+                    .and_then(|strings| strings.get(&format!("{prefix}name{number}")))
                     .map(|name| name.replace("\\n", "\n"))
-                    .unwrap_or_else(|| format!("#{index}"));
+                    .unwrap_or_else(|| format!("#{number}"));
                 (index, name)
             })
             .collect();
@@ -280,6 +294,7 @@ impl PdaList {
                 PdaKind::Email => "No collected emails.",
                 PdaKind::Log => "No collected logs.",
                 PdaKind::Note => "No notes.",
+                PdaKind::Help => "No help topics.",
             };
             add(
                 "text",
@@ -304,7 +319,8 @@ impl PdaList {
                 Some(name),
                 format!("pda_entry:{row}"),
             );
-            // Names are two authored lines: sender + date, then subject.
+            // Email/log names are two authored lines: sender + date, then
+            // subject; a help topic's is one.
             for (line, text) in name
                 .lines()
                 .filter(|l| !l.trim().is_empty())
@@ -689,6 +705,73 @@ mod tests {
         assert_eq!(list.offset, 2, "stops on the last full page");
         press(&mut list, "pda_deck_next");
         assert_eq!(list.deck, 2, "wraps back past the note-only deck");
+    }
+
+    /// The Help tab lists unlocked topics oldest first on any deck, under a
+    /// header with no deck line, and a row opens that topic.
+    #[test]
+    fn help_tab_lists_topics_in_unlock_order_and_opens_one() {
+        let mut quests = quests(&[(2, 1), (4, 1)]);
+        quests.unlock_help(1 << 7);
+        quests.unlock_help(1);
+        let mut list = list(PdaKind::Log, 2, &quests);
+
+        press(&mut list, "pda_tab_help");
+        assert_eq!(list.kind, PdaKind::Help);
+        fill(&mut list, &quests);
+        assert!(textures(&list).contains(&"iface/pvideo1.pcx".to_owned()));
+        assert_eq!(
+            list.rows
+                .iter()
+                .map(|(topic, _)| *topic)
+                .collect::<Vec<_>>(),
+            vec![7, 0]
+        );
+        press(&mut list, "pda_deck_next");
+        fill(&mut list, &quests);
+        assert_eq!(
+            list.rows
+                .iter()
+                .map(|(topic, _)| *topic)
+                .collect::<Vec<_>>(),
+            vec![7, 0],
+            "help is not per deck"
+        );
+        assert_eq!(
+            press(&mut list, "pda_entry:1"),
+            PdaAction::Open(PdaEntry {
+                kind: PdaKind::Help,
+                deck: 4,
+                index: 0
+            })
+        );
+
+        let empty = QuestInfo::new();
+        let mut list = self::list(PdaKind::Help, 1, &empty);
+        fill(&mut list, &empty);
+        assert!(
+            list.elements()
+                .iter()
+                .any(|e| e.text.as_deref() == Some("No help topics."))
+        );
+    }
+
+    /// A help row's name is `infocomp.str` `HelpName{topic+1}`; the reader's
+    /// body is `HelpText{topic+1}`.
+    #[test]
+    fn help_strings_key_topic_bits_one_based() {
+        let topic = PdaEntry {
+            kind: PdaKind::Help,
+            deck: 3,
+            index: 0,
+        };
+        assert_eq!(topic.strings(), Some(("infocomp.str".into(), "help", 1)));
+        let log = PdaEntry {
+            kind: PdaKind::Log,
+            deck: 2,
+            index: 20,
+        };
+        assert_eq!(log.strings(), Some(("level02.str".into(), "log", 20)));
     }
 
     /// Returning from an entry past the first page keeps it on screen.
