@@ -5,7 +5,7 @@
 // polygon's base lightmap goes into one atlas. The sky (texture 249) is left
 // out, as shock2quest leaves it out, and so is water (medsci1 has none).
 //
-//   let level = World.load(File.bytes("ss2data/medsci1.mis")) |> Binary.require
+//   let level = World.load(File.bytes(Path.of("ss2data/medsci1.mis"))) |> Binary.require
 
 let metresPerFoot = 0.3048
 // Textures 247 and 248 are water surfaces and 249 the sky: none is in the
@@ -29,7 +29,7 @@ type surface = { width: float, height: float, texture: Option.t<Asset.Texture> }
 let blank: surface = { width: 64.0, height: 64.0, texture: Option.None }
 
 // `ss2/fam/<family>/<name>.pcx`, matched ignoring case (see `files.fun`).
-let texturePath = (t: Mis.texture): string => Text.join("", ["ss2/fam/", t.family, "/", t.name, ".pcx"])
+let texturePath = (t: Mis.texture): Path.t => Path.of(Text.join("", ["ss2/fam/", t.family, "/", t.name, ".pcx"]))
 
 let surfaceOf = (t: Mis.texture): surface =>
   let path = texturePath(t) in

@@ -4,7 +4,7 @@
 // level (`RENDPARAMS`) and the player start (`L$PlayerFac` → `P$Position`).
 // Positions stay in Dark's axes and feet; `World` turns them into a scene.
 //
-//   let m = File.bytes("ss2data/medsci1.mis")
+//   let m = "ss2data/medsci1.mis" |> Path.of |> File.bytes
 //   let cells = Mis.cells(m) |> Binary.require
 
 // A chunk: where its data starts (past the 24-byte header) and how long it is.

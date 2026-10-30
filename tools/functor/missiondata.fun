@@ -2,7 +2,7 @@
 // rep counts cross-checked against a separate walk of the same bytes, and the
 // player factory shock2quest starts at. Without the file these pass vacuously.
 
-let medsci1 = "ss2data/medsci1.mis"
+let medsci1 = Path.of("ss2data/medsci1.mis")
 
 expect not File.exists(medsci1)
   || (World.load(File.bytes(medsci1)) |> Result.map((l: World.level) => (l.stats, l.start)))

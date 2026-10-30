@@ -1,7 +1,7 @@
 // Pcx — 8-bit palettized PCX images (SS2's world textures), decoded in
 // Functor to RGB8 pixels for `Texture.fromPixels`, row 0 first.
 //
-//   let image = File.bytes("ss2/fam/medsci_1/wall.pcx") |> Pcx.decode |> Binary.require
+//   let image = "ss2/fam/medsci_1/wall.pcx" |> Path.of |> File.bytes |> Pcx.decode |> Binary.require
 
 type image = { width: float, height: float, pixels: Bytes.t }
 
