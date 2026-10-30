@@ -3,7 +3,7 @@
 // posed at rest. Dark's native axes are Z up, like a print, so positions are
 // used as stored.
 //
-//   let part = File.bytes("ss2/model.bin") |> Lgmd.mesh |> Binary.require
+//   let part = "ss2/model.bin" |> Path.of |> File.bytes |> Lgmd.mesh |> Binary.require
 //     |> Solid.fromMesh({ height: 60.0, nozzle: 0.4 })
 
 type counts = { version: float, polygons: float, vertices: float, objects: float }

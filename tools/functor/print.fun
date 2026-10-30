@@ -5,7 +5,7 @@
 //   functor -d tools/functor run native                         # view it
 //   functor -d tools/functor export -o tools/functor/crate.stl    # print it
 
-let model = "ss2/model.bin"
+let model = Path.of("ss2/model.bin")
 
 let source = if File.exists(model) then File.bytes(model) else Fixture.cube(4.0)
 
