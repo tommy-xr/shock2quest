@@ -33,12 +33,12 @@ let normals = records("normals", Decode.skipThen(8.0, Decode.u32le) |> Decode.ma
 // Functor (0, 0 is the image's top-left in both), so no flip.
 let uvs = records("uvs", Decode.list(2.0, Decode.f32le) |> Decode.andThen((uv) => Decode.skipThen(4.0, Decode.succeed(uv))))
 
-// The mesh's texture once copied into ss2/ under its lowercased name (e.g.
-// ss2/og_pipe02.gif), else none: the model draws white.
+// The mesh's texture, ss2/mesh/txt16/ + its lowercased name (e.g.
+// ss2/mesh/txt16/og_pipe02.gif), else none: the model draws white.
 let texture = (mesh: Bytes.t): Option.t<Asset.Texture> =>
   match Decode.run(Lgmm.textureName, mesh) with
   | Result.Ok(n) =>
-    let path = Text.join("", ["ss2/", Text.toLower(n)]) in
+    let path = Text.join("", ["ss2/mesh/txt16/", Text.toLower(n)]) in
     if File.exists(Path.of(path)) then Option.Some(Asset.texture(path)) else Option.None
   | Result.Error(_) => Option.None
 

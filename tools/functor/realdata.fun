@@ -1,4 +1,4 @@
-// Checks against real game data, when it's in ss2/ (gitignored): the pipe
+// Checks against real game data, when ss2/ is mapped (see README): the pipe
 // hybrid at rest, in `ogpstd` frame 0 and at animated frames, against values
 // from shock2quest's own pipeline. Without the files these pass vacuously.
 
@@ -8,31 +8,31 @@ let near = (a: List<float>, b: List<float>): bool =>
   List.length(a) == List.length(b)
     && List.all((p) => match p with | (x, y) => Math.abs(x - y) < 0.001, List.zip(b, a))
 
-let hybrid = ["ss2/hybrid.bin", "ss2/hybrid.cal"]
-let standing = List.append(hybrid, ["ss2/motiondb.bin", "ss2/ogpstd_.mc"])
+let hybrid = ["ss2/mesh/GRUNT_P.BIN", "ss2/mesh/GRUNT_P.CAL"]
+let standing = List.append(hybrid, ["ss2/mschema/motiondb.bin", "ss2/motions/ogpstd_.mc"])
 
 let bounds = (m: Mesh.t): List<float> =>
   let b = Mesh.bounds(m) in
   [Vec3.x(b.min), Vec3.y(b.min), Vec3.z(b.min), Vec3.x(b.max), Vec3.y(b.max), Vec3.z(b.max)]
 
 expect not have(hybrid)
-  || near(bounds(Lgmm.rest(File.bytes(Path.of("ss2/hybrid.bin")), File.bytes(Path.of("ss2/hybrid.cal"))) |> Binary.require),
+  || near(bounds(Lgmm.rest(File.bytes(Path.of("ss2/mesh/GRUNT_P.BIN")), File.bytes(Path.of("ss2/mesh/GRUNT_P.CAL"))) |> Binary.require),
           [-0.2934, -5.5243, -4.0758, 1.5229, 3.6003, 3.4440])
 
 // Its one material's texture, and uvs as stored (shock2quest's loader passes them through).
-expect not have(hybrid) || Decode.run(Lgmm.textureName, File.bytes(Path.of("ss2/hybrid.bin"))) == Result.Ok("og_pipe02.gif")
+expect not have(hybrid) || Decode.run(Lgmm.textureName, File.bytes(Path.of("ss2/mesh/GRUNT_P.BIN"))) == Result.Ok("og_pipe02.gif")
 expect not have(hybrid)
-  || (Decode.run(Skinned.uvs, File.bytes(Path.of("ss2/hybrid.bin")))
+  || (Decode.run(Skinned.uvs, File.bytes(Path.of("ss2/mesh/GRUNT_P.BIN")))
         |> Result.map((ts) => near(List.flatten([Option.defaultValue([], List.nth(0.0, ts)), Option.defaultValue([], List.nth(100.0, ts))]),
              [0.020796, 0.937831, 0.995502, 0.201947]) && List.length(ts) == 202.0)) == Result.Ok(true)
 
 expect not have(standing)
-  || (let clip = Motion.clip(File.bytes(Path.of("ss2/motiondb.bin")), File.bytes(Path.of("ss2/ogpstd_.mc")), "ogpstd") |> Binary.require in
-      let skel = Decode.run(Cal.skeleton, File.bytes(Path.of("ss2/hybrid.cal"))) |> Binary.require in
+  || (let clip = Motion.clip(File.bytes(Path.of("ss2/mschema/motiondb.bin")), File.bytes(Path.of("ss2/motions/ogpstd_.mc")), "ogpstd") |> Binary.require in
+      let skel = Decode.run(Cal.skeleton, File.bytes(Path.of("ss2/mesh/GRUNT_P.CAL"))) |> Binary.require in
       let p = Motion.sample(clip, 0.0) in
       let joints = Cal.globals(Cal.chains(skel), p.root, p.animate) in
       let joint = (j) => Affine.offset(Option.defaultValue(Affine.identity, List.nth(j, joints))) in
-      let posed = Lgmm.posed(File.bytes(Path.of("ss2/hybrid.bin")), File.bytes(Path.of("ss2/hybrid.cal")), clip, 0.0) |> Binary.require in
+      let posed = Lgmm.posed(File.bytes(Path.of("ss2/mesh/GRUNT_P.BIN")), File.bytes(Path.of("ss2/mesh/GRUNT_P.CAL")), clip, 0.0) |> Binary.require in
       let b = bounds(posed) in
       clip.motion.frames == 43.0
         && near(joint(19.0), [0.7125, 0.0920, 3.4325])
@@ -43,13 +43,13 @@ expect not have(standing)
 // skeleton `animate` on the same clips, in native axes without its 90° turn):
 // the right toe, pipe tip and head (joints 1, 17, 19). A joined walk's frame 8
 // is `ogpbzwkr`'s frame 0.
-let moving = List.append(hybrid, ["ss2/motiondb.bin", "ss2/ogpidle1_.mc", "ss2/ogpbzwkl_.mc", "ss2/ogpbzwkr_.mc"])
+let moving = List.append(hybrid, ["ss2/mschema/motiondb.bin", "ss2/motions/ogpidle1_.mc", "ss2/motions/ogpbzwkl_.mc", "ss2/motions/ogpbzwkr_.mc"])
 
 let motionOf = (n: string): Motion.clip =>
-  Motion.clip(File.bytes(Path.of("ss2/motiondb.bin")), File.bytes(Path.of(Text.join("", ["ss2/", n, "_.mc"]))), n) |> Binary.require
+  Motion.clip(File.bytes(Path.of("ss2/mschema/motiondb.bin")), File.bytes(Path.of(Text.join("", ["ss2/motions/", n, "_.mc"]))), n) |> Binary.require
 
 let pinned = (c: Motion.clip, frame: float, expected: List<List<float>>): bool =>
-  let skel = Decode.run(Cal.skeleton, File.bytes(Path.of("ss2/hybrid.cal"))) |> Binary.require in
+  let skel = Decode.run(Cal.skeleton, File.bytes(Path.of("ss2/mesh/GRUNT_P.CAL"))) |> Binary.require in
   let p = Motion.sample(c, frame / c.motion.fps) in
   let g = Cal.globals(Cal.chains(skel), p.root, p.animate) in
   near(List.concatMap((j) => Affine.offset(Option.defaultValue(Affine.identity, List.nth(j, g))), [1.0, 17.0, 19.0]), List.flatten(expected))
@@ -69,7 +69,7 @@ expect not have(moving)
 // The GPU-skinned hybrid posed like `Lgmm` (same vertices, same order) within
 // 1e-4, at whole frames, between frames, and wrapping from the last frame.
 let clipNames = ["ogpstd", "ogpbzwkl", "ogpidle1"]
-let animated = List.append(List.map((n) => Text.join("", ["ss2/", n, "_.mc"]), List.append(["ogpbzwkr"], clipNames)), List.append(["ss2/motiondb.bin"], hybrid))
+let animated = List.append(List.map((n) => Text.join("", ["ss2/motions/", n, "_.mc"]), List.append(["ogpbzwkr"], clipNames)), List.append(["ss2/mschema/motiondb.bin"], hybrid))
 
 let clips: List<(string, Motion.clip)> =
   if not have(animated) then []
@@ -80,9 +80,9 @@ let clips: List<(string, Motion.clip)> =
 let skinned: Option.t<(Lgmm.rig, Model.t)> =
   if not have(animated) then Option.None
   else
-    let r = Lgmm.rig(Decode.run(Lgmm.model, File.bytes(Path.of("ss2/hybrid.bin"))) |> Binary.require,
-      Decode.run(Cal.skeleton, File.bytes(Path.of("ss2/hybrid.cal"))) |> Binary.require) in
-    Option.Some((r, Skinned.data(File.bytes(Path.of("ss2/hybrid.bin")), r, clips) |> Binary.require |> Model.skinned))
+    let r = Lgmm.rig(Decode.run(Lgmm.model, File.bytes(Path.of("ss2/mesh/GRUNT_P.BIN"))) |> Binary.require,
+      Decode.run(Cal.skeleton, File.bytes(Path.of("ss2/mesh/GRUNT_P.CAL"))) |> Binary.require) in
+    Option.Some((r, Skinned.data(File.bytes(Path.of("ss2/mesh/GRUNT_P.BIN")), r, clips) |> Binary.require |> Model.skinned))
 
 // The largest difference in `clipName` at `frame` (fractional between frames);
 // 0 without the files.

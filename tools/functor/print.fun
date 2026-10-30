@@ -1,24 +1,22 @@
 // System Shock 2 objects and characters, decoded in Functor: view them (a
-// character plays its clip) and print them. Copy a model into ss2/ (gitignored,
-// so game files stay out of the repo); without one, a synthetic cube shows.
+// character plays its clip) and print them. `ss2/` is the game's data/res,
+// mapped on your machine (see README), so game files stay out of the repo;
+// without it, a synthetic cube shows.
 //
-//   mkdir -p tools/functor/ss2 && cp Data/res/obj/CRATE01.BIN tools/functor/ss2/model.bin
-//   # or a character: its mesh, skeleton, the motion database and clips
-//   cp Data/res/mesh/GRUNT_P.BIN tools/functor/ss2/model.bin
-//   cp Data/res/mesh/GRUNT_P.CAL tools/functor/ss2/model.cal
-//   cp Data/motiondb.bin Data/res/motions/ogpbzwk{l,r}_.mc tools/functor/ss2/
-//   cp Data/res/mesh/txt16/og_pipe02.gif tools/functor/ss2/       # its texture
 //   functor -d tools/functor run native                         # view it
 //   functor -d tools/functor export -o tools/functor/part.stl   # print it
 
-let model = Path.of("ss2/model.bin")
+// The model to show: a character with its skeleton (the .CAL beside it), or
+// an object such as "ss2/obj/CRATE01.BIN".
+let model = Path.of("ss2/mesh/GRUNT_P.BIN")
+let skeleton = Path.of("ss2/mesh/GRUNT_P.CAL")
 
 // A character plays these clips in turn, looping (a walk is two half-step
 // clips; either alone snaps at its seam); it prints posed at `seconds`.
 let clipNames = ["ogpbzwkl", "ogpbzwkr"]
 let seconds = 0.0
 
-let clipFile = (n: string) => Path.of(Text.join("", ["ss2/", n, "_.mc"]))
+let clipFile = (n: string) => Path.of(Text.join("", ["ss2/motions/", n, "_.mc"]))
 
 let data = if File.exists(model) then File.bytes(model) else Fixture.cube(4.0)
 
@@ -29,15 +27,15 @@ let character: Option.t<character> =
   then Option.None
   else
     let clip =
-      if File.exists(Path.of("ss2/motiondb.bin")) && List.all((n) => File.exists(clipFile(n)), clipNames)
+      if File.exists(Path.of("ss2/mschema/motiondb.bin")) && List.all((n) => File.exists(clipFile(n)), clipNames)
       then
-        let clips = List.map((n) => Motion.clip(File.bytes(Path.of("ss2/motiondb.bin")), File.bytes(clipFile(n)), n) |> Binary.require, clipNames) in
+        let clips = List.map((n) => Motion.clip(File.bytes(Path.of("ss2/mschema/motiondb.bin")), File.bytes(clipFile(n)), n) |> Binary.require, clipNames) in
         List.head(clips)
           |> Option.map((first) => List.fold((joined, next) => Motion.join(joined, next) |> Binary.require, first, List.drop(1.0, clips)))
       else Option.None in
     let cal =
-      if File.exists(Path.of("ss2/model.cal")) then File.bytes(Path.of("ss2/model.cal"))
-      else Binary.invalid("ss2/model.bin is a character: copy its skeleton (the .CAL beside it) to ss2/model.cal") in
+      if File.exists(skeleton) then File.bytes(skeleton)
+      else Binary.invalid(Text.join("", [Path.toString(model), " is a character: set `skeleton` to its .CAL"])) in
     Option.Some({
       rig: Lgmm.rig(Decode.run(Lgmm.model, data) |> Binary.require,
         Decode.run(Cal.skeleton, cal) |> Binary.require),
@@ -61,7 +59,7 @@ let part = mesh |> Solid.fromMesh({ height: 60.0, nozzle: 0.4 })
 
 // The character as a GPU-skinned model (built once): the viewer plays its
 // joined clips on it (named after them), at rest without them. Textured when
-// its texture is in ss2/ (see README).
+// its texture is in ss2/mesh/txt16/.
 let clipName = Text.join("+", clipNames)
 
 let skinned: Option.t<Model.t> =

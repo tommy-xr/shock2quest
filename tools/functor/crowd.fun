@@ -1,7 +1,7 @@
 // A crowd of GPU-skinned pipe hybrids: `count` in a grid, each on its own
 // playhead blending two of its clips, so every figure is posed independently
-// every frame. Shadows are on (the engine's shadow map covers the near rows). Uses ss2/hybrid.{bin,cal}, ss2/motiondb.bin and
-// each clip's .mc, textured with ss2/og_pipe02.gif when present (see README).
+// every frame. Shadows are on (the engine's shadow map covers the near rows). Uses ss2/mesh/GRUNT_P.{BIN,CAL}, ss2/mschema/motiondb.bin and
+// each clip's .mc, textured with ss2/mesh/txt16/og_pipe02.gif when present (see README).
 //
 //   functor -d tools/functor run native --entry crowd
 //
@@ -14,17 +14,17 @@ let count = 100.0
 // alone snaps at its seam); one-shot gestures like `ogpidle1` would too.
 let clipNames = ["walk", "ogpstd"]
 
-let files = List.append(List.map((n) => Text.join("", ["ss2/", n, "_.mc"]), ["ogpbzwkl", "ogpbzwkr", "ogpstd"]),
-  ["ss2/hybrid.bin", "ss2/hybrid.cal", "ss2/motiondb.bin"])
+let files = List.append(List.map((n) => Text.join("", ["ss2/motions/", n, "_.mc"]), ["ogpbzwkl", "ogpbzwkr", "ogpstd"]),
+  ["ss2/mesh/GRUNT_P.BIN", "ss2/mesh/GRUNT_P.CAL", "ss2/mschema/motiondb.bin"])
 
 // Without the game files, the synthetic character from fixture.fun stands in.
 let real = List.all((p) => File.exists(Path.of(p)), files)
 
 let hybrid =
-  let mesh = if real then File.bytes(Path.of("ss2/hybrid.bin")) else Fixture.characterMesh in
-  let cal = if real then File.bytes(Path.of("ss2/hybrid.cal")) else Fixture.characterSkeleton in
+  let mesh = if real then File.bytes(Path.of("ss2/mesh/GRUNT_P.BIN")) else Fixture.characterMesh in
+  let cal = if real then File.bytes(Path.of("ss2/mesh/GRUNT_P.CAL")) else Fixture.characterSkeleton in
   let load = (n: string): Motion.clip =>
-    Motion.clip(File.bytes(Path.of("ss2/motiondb.bin")), File.bytes(Path.of(Text.join("", ["ss2/", n, "_.mc"]))), n) |> Binary.require in
+    Motion.clip(File.bytes(Path.of("ss2/mschema/motiondb.bin")), File.bytes(Path.of(Text.join("", ["ss2/motions/", n, "_.mc"]))), n) |> Binary.require in
   let clipOf = (n: string): Motion.clip =>
     if not real then Fixture.twisting
     else if n == "walk" then Motion.join(load("ogpbzwkl"), load("ogpbzwkr")) |> Binary.require
