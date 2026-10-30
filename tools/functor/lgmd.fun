@@ -9,24 +9,11 @@
 type counts = { version: float, polygons: float, vertices: float, objects: float }
 type header = { counts: counts, objectsAt: float, verticesAt: float, polygonsAt: float }
 
-// A 3×4 affine transform, rows x, y, z, each with its translation last.
-type affine = {
-  a: float, b: float, c: float, x: float,
-  d: float, e: float, f: float, y: float,
-  g: float, h: float, i: float, z: float
-}
-
 // A sub-object: its transform relative to its parent, its first child and
 // next sibling (-1 for none), and the vertices it owns.
-type part = { local: affine, child: float, next: float, start: float, count: float }
+type part = { local: Affine.t, child: float, next: float, start: float, count: float }
 
 type model = { header: header, positions: List<List<float>>, polygons: List<List<float>>, parts: List<part> }
-
-let identity: affine = {
-  a: 1.0, b: 0.0, c: 0.0, x: 0.0,
-  d: 0.0, e: 1.0, f: 0.0, y: 0.0,
-  g: 0.0, h: 0.0, i: 1.0, z: 0.0
-}
 
 let at8 = (offset: float) => Decode.at(offset, Decode.u8)
 let at16 = (offset: float) => Decode.at(offset, Decode.u16le)
@@ -74,10 +61,10 @@ let polygon = (version: float, vertices: float): Decode.t<List<float>> =>
           else Decode.skipThen(2.0 * p.count + uvs + tail, Decode.succeed(ids))))
 
 // Dark stores rotation columns, then the translation; all zeros = identity.
-let affineOf = (v: List<float>): affine =>
+let affineOf = (v: List<float>): Affine.t =>
   let n = (k: float) => Option.defaultValue(0.0, List.nth(k, v)) in
   if List.all((x) => x == 0.0, v)
-  then identity
+  then Affine.identity
   else {
     a: n(0.0), b: n(3.0), c: n(6.0), x: n(9.0),
     d: n(1.0), e: n(4.0), f: n(7.0), y: n(10.0),
@@ -119,24 +106,6 @@ let model =
                 then Decode.fail("a part owns vertices past the end of the vertex list")
                 else Decode.succeed(parts)))))
 
-// `outer` after `inner`.
-let compose = (outer: affine, inner: affine): affine => {
-  a: outer.a * inner.a + outer.b * inner.d + outer.c * inner.g,
-  b: outer.a * inner.b + outer.b * inner.e + outer.c * inner.h,
-  c: outer.a * inner.c + outer.b * inner.f + outer.c * inner.i,
-  x: outer.a * inner.x + outer.b * inner.y + outer.c * inner.z + outer.x,
-  d: outer.d * inner.a + outer.e * inner.d + outer.f * inner.g,
-  e: outer.d * inner.b + outer.e * inner.e + outer.f * inner.h,
-  f: outer.d * inner.c + outer.e * inner.f + outer.f * inner.i,
-  y: outer.d * inner.x + outer.e * inner.y + outer.f * inner.z + outer.y,
-  g: outer.g * inner.a + outer.h * inner.d + outer.i * inner.g,
-  h: outer.g * inner.b + outer.h * inner.e + outer.i * inner.h,
-  i: outer.g * inner.c + outer.h * inner.f + outer.i * inner.i,
-  z: outer.g * inner.x + outer.h * inner.y + outer.i * inner.z + outer.z
-}
-
-let rows = (m: affine): List<float> => [m.a, m.b, m.c, m.x, m.d, m.e, m.f, m.y, m.g, m.h, m.i, m.z]
-
 let partAt = (parts: List<part>, k: float): Option.t<part> =>
   if k < 0.0 then Option.None else List.nth(k, parts)
 
@@ -165,7 +134,7 @@ let parents = (parts: List<part>): List<float> =>
 
 // Each sub-object's rest pose in the model: its ancestors' transforms from the
 // root down, then its own.
-let worlds = (parts: List<part>): List<affine> =>
+let worlds = (parts: List<part>): List<Affine.t> =>
   let up = parents(parts) in
   List.indexedMap((j, p: part) =>
     let walked =
@@ -178,13 +147,7 @@ let worlds = (parts: List<part>): List<affine> =>
               (Option.defaultValue(-1.0, List.nth(at, up)), List.append(chain, [q.local]))
             | Option.None => walk, (j, [])) in
     match walked with
-    | (_, chain) => List.fold((m, local) => compose(m, local), identity, chain), parts)
-
-let apply = (m: affine, v: List<float>): List<float> =>
-  let n = (k: float) => Option.defaultValue(0.0, List.nth(k, v)) in
-  [ m.a * n(0.0) + m.b * n(1.0) + m.c * n(2.0) + m.x,
-    m.d * n(0.0) + m.e * n(1.0) + m.f * n(2.0) + m.y,
-    m.g * n(0.0) + m.h * n(1.0) + m.i * n(2.0) + m.z ]
+    | (_, chain) => List.fold((m, local) => Affine.compose(m, local), Affine.identity, chain), parts)
 
 // The model's triangles, each vertex moved to its rest pose first (by the
 // first part that owns it, else the root, as the game does) — corners that
@@ -192,12 +155,12 @@ let apply = (m: affine, v: List<float>): List<float> =>
 let pose = (m: model): Mesh.t =>
   let all = worlds(m.parts) in
   let poses = List.zip(all, m.parts) in
-  let root = Option.defaultValue(identity, List.nth(0.0, all)) in
+  let root = Option.defaultValue(Affine.identity, List.nth(0.0, all)) in
   let posed =
     List.indexedMap((i, v: List<float>) =>
       match List.find((pair) => match pair with | (p, w) => i >= p.start && i < p.start + p.count, poses) with
-      | Option.Some(pair) => (match pair with | (_, w) => apply(w, v))
-      | Option.None => apply(root, v), m.positions) in
+      | Option.Some(pair) => (match pair with | (_, w) => Affine.apply(w, v))
+      | Option.None => Affine.apply(root, v), m.positions) in
   Mesh.fromPolygons(Bytes.fromF32le(List.flatten(posed)), m.polygons)
 
 // An LGMD file's mesh at rest, or where decoding failed.
