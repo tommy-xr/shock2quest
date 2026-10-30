@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail, ensure};
+use ci_artifacts::{build_runs, cached, gh, output, pr_head, select_build_run};
 use clap::{Parser, Subcommand};
 use std::{
     io::{self, IsTerminal},
@@ -336,19 +337,6 @@ fn main() -> Result<()> {
         Action::Tui | Action::Devices | Action::Build => unreachable!(),
     }
     Ok(())
-}
-
-fn output(command: &mut Command) -> Result<String> {
-    let result = command
-        .output()
-        .with_context(|| format!("could not execute {:?}", command.get_program()))?;
-    ensure!(
-        result.status.success(),
-        "command failed ({}): {}",
-        result.status,
-        String::from_utf8_lossy(&result.stderr).trim()
-    );
-    Ok(String::from_utf8_lossy(&result.stdout).into_owned())
 }
 
 fn inherit(command: &mut Command) -> Result<()> {
@@ -839,60 +827,6 @@ fn apk_artifact_name(sha: &str) -> String {
     format!("shock2quest-apk-{sha}")
 }
 
-#[derive(Debug)]
-struct BuildRun {
-    id: u64,
-    status: String,
-    conclusion: String,
-    url: String,
-}
-
-/// `gh run list --json databaseId,status,conclusion,url` output.
-fn parse_runs(json: &str) -> Result<Vec<BuildRun>> {
-    let runs: Vec<serde_json::Value> = serde_json::from_str(json)?;
-    runs.iter()
-        .map(|run| {
-            let text = |key: &str| run[key].as_str().unwrap_or_default().to_owned();
-            Ok(BuildRun {
-                id: run["databaseId"]
-                    .as_u64()
-                    .context("run without databaseId")?,
-                status: text("status"),
-                conclusion: text("conclusion"),
-                url: text("url"),
-            })
-        })
-        .collect()
-}
-
-/// A successful run of the head commit's build (runs newest first); anything
-/// else is refused, so a stale APK is never installed.
-fn select_build_run<'a>(runs: &'a [BuildRun], sha: &str, branch: &str) -> Result<&'a BuildRun> {
-    if let Some(run) = runs
-        .iter()
-        .find(|run| run.status == "completed" && run.conclusion == "success")
-    {
-        return Ok(run);
-    }
-    let Some(latest) = runs.first() else {
-        bail!(
-            "no Build Android run for {sha} (paths-ignored pushes skip it); for a same-repo branch, start one: gh workflow run build-android.yml --ref {branch}"
-        )
-    };
-    if latest.status != "completed" {
-        bail!(
-            "Build Android for {sha} is still {}: {}",
-            latest.status,
-            latest.url
-        );
-    }
-    bail!(
-        "Build Android for {sha} ended {}: {}",
-        latest.conclusion,
-        latest.url
-    )
-}
-
 /// The installed `versionName` from `dumpsys package` output.
 fn version_name(dumpsys: &str) -> Option<&str> {
     dumpsys
@@ -915,41 +849,23 @@ fn replace_blocker(install_error: &str) -> Option<&'static str> {
     }
 }
 
-fn gh(args: &[&str]) -> Result<String> {
-    output(Command::new("gh").current_dir(repo_root()).args(args))
-}
-
 /// Downloads PR `number`'s CI APK into a per-commit temp cache.
 fn fetch_pr_apk(number: u32) -> Result<PathBuf> {
-    let pr: serde_json::Value = serde_json::from_str(&gh(&[
-        "pr",
-        "view",
-        &number.to_string(),
-        "--json",
-        "headRefOid,headRefName",
-    ])?)?;
-    let (Some(sha), Some(branch)) = (pr["headRefOid"].as_str(), pr["headRefName"].as_str()) else {
-        bail!("gh pr view {number} reported no head commit")
-    };
-    ensure!(
-        sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
-        "unexpected head SHA {sha:?}"
-    );
+    let (sha, branch) = pr_head(number)?;
+    let sha = sha.as_str();
     println!("PR #{number} {branch} @ {sha}");
     // One commit is one build, so a cached APK cannot be stale.
-    cached_apk(&format!("shock2quest-pr-apk/{sha}"), |staging| {
-        let runs = parse_runs(&gh(&[
-            "run",
-            "list",
-            "--workflow",
-            "build-android.yml",
-            "--commit",
-            sha,
-            "--json",
-            "databaseId,status,conclusion,url",
-        ])?)?;
-        let run = select_build_run(&runs, sha, branch)?;
-        gh(&[
+    cached(
+        &format!("shock2quest-pr-apk/{sha}"),
+        "shock2quest.apk",
+        |staging| {
+            let runs = build_runs("build-android.yml", sha)?;
+            let run = select_build_run(&runs, "Build Android", sha)?.with_context(|| {
+            format!(
+                "no Build Android run for {sha} (paths-ignored pushes skip it); for a same-repo branch, start one: gh workflow run build-android.yml --ref {branch}"
+            )
+        })?;
+            gh(&[
             "run",
             "download",
             &run.id.to_string(),
@@ -964,8 +880,9 @@ fn fetch_pr_apk(number: u32) -> Result<PathBuf> {
                 run.url
             )
         })?;
-        Ok(())
-    })
+            Ok(())
+        },
+    )
 }
 
 /// `0.0.4` or `v0.0.4` -> the release tag `v0.0.4`.
@@ -987,51 +904,31 @@ fn fetch_release_apk(version: &str) -> Result<PathBuf> {
     println!("Release {tag}");
     // release.yml never replaces a published release's assets, so a cached APK
     // cannot be stale.
-    cached_apk(&format!("shock2quest-release-apk/{tag}"), |staging| {
-        // v0.0.1 names its APK shock2quest-0.0.1.apk; later releases shock2quest.apk.
-        gh(&[
-            "release",
-            "download",
-            &tag,
-            "-p",
-            "*.apk",
-            "-D",
-            &staging.to_string_lossy(),
-        ])
-        .with_context(|| format!("could not download release {tag}'s APK (gh release list)"))?;
-        let apks: Vec<_> = std::fs::read_dir(staging)?
-            .map(|entry| entry.map(|e| e.path()))
-            .collect::<io::Result<_>>()?;
-        let [apk] = apks.as_slice() else {
-            bail!("release {tag} has {} APKs, expected one", apks.len())
-        };
-        std::fs::rename(apk, staging.join("shock2quest.apk"))?;
-        Ok(())
-    })
-}
-
-/// `<temp>/<key>/shock2quest.apk`, filled by `download` on a miss. `download`
-/// writes into a per-process staging directory, so an interrupted or
-/// concurrent download is never reused.
-fn cached_apk(key: &str, download: impl FnOnce(&Path) -> Result<()>) -> Result<PathBuf> {
-    let cache = std::env::temp_dir().join(key);
-    let apk = cache.join("shock2quest.apk");
-    if apk.is_file() {
-        return Ok(apk);
-    }
-    // Not with_extension: release tags contain dots (v0.0.4).
-    let staging = std::env::temp_dir().join(format!("{key}.partial-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&staging);
-    if let Err(error) = download(&staging) {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(error);
-    }
-    // A concurrent run may have published first; keep its copy.
-    if std::fs::rename(&staging, &cache).is_err() {
-        let _ = std::fs::remove_dir_all(&staging);
-        ensure!(apk.is_file(), "could not populate {}", cache.display());
-    }
-    Ok(apk)
+    cached(
+        &format!("shock2quest-release-apk/{tag}"),
+        "shock2quest.apk",
+        |staging| {
+            // v0.0.1 names its APK shock2quest-0.0.1.apk; later releases shock2quest.apk.
+            gh(&[
+                "release",
+                "download",
+                &tag,
+                "-p",
+                "*.apk",
+                "-D",
+                &staging.to_string_lossy(),
+            ])
+            .with_context(|| format!("could not download release {tag}'s APK (gh release list)"))?;
+            let apks: Vec<_> = std::fs::read_dir(staging)?
+                .map(|entry| entry.map(|e| e.path()))
+                .collect::<io::Result<_>>()?;
+            let [apk] = apks.as_slice() else {
+                bail!("release {tag} has {} APKs, expected one", apks.len())
+            };
+            std::fs::rename(apk, staging.join("shock2quest.apk"))?;
+            Ok(())
+        },
+    )
 }
 
 fn repo_root() -> PathBuf {
@@ -1139,38 +1036,9 @@ mod tests {
         let listing = format!("0\trec-11\t\n{listing}");
         assert_eq!(parse_recordings(&listing).len(), 2);
     }
-    fn run(id: u64, status: &str, conclusion: &str) -> BuildRun {
-        BuildRun {
-            id,
-            status: status.into(),
-            conclusion: conclusion.into(),
-            url: format!("https://example.test/runs/{id}"),
-        }
-    }
     #[test]
-    fn pr_build_selection_never_installs_a_stale_apk() {
-        let sha = "0123456789abcdef0123456789abcdef01234567";
-        assert_eq!(apk_artifact_name(sha), format!("shock2quest-apk-{sha}"));
-        let runs = parse_runs(
-            r#"[{"databaseId":2,"status":"completed","conclusion":"failure","url":"u2"},
-                {"databaseId":1,"status":"completed","conclusion":"success","url":"u1"}]"#,
-        )
-        .unwrap();
-        assert_eq!(select_build_run(&runs, sha, "b").unwrap().id, 1);
-        let error = |runs: &[BuildRun]| {
-            select_build_run(runs, sha, "feat/x")
-                .unwrap_err()
-                .to_string()
-        };
-        assert!(error(&[]).contains("--ref feat/x"));
-        assert!(
-            error(&[run(3, "in_progress", "")])
-                .contains("still in_progress: https://example.test/runs/3")
-        );
-        assert!(
-            error(&[run(4, "completed", "failure")])
-                .contains("failure: https://example.test/runs/4")
-        );
+    fn pr_apk_artifact_name_matches_build_android() {
+        assert_eq!(apk_artifact_name("abc"), "shock2quest-apk-abc");
     }
     #[test]
     fn release_tags_accept_bare_or_v_prefixed_versions() {

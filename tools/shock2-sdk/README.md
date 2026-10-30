@@ -284,6 +284,10 @@ stage offset is zero. Flat runtimes reject tracking patches.
   the code under test. The copy is removed when the runner exits.
   For an explicitly prebuilt executable, set `SHOCK2_RUNTIME_BINARY` or pass
   `runtimeBinary` to `GameServer.launch`; its freshness is then your responsibility.
+  To skip building a PR you have checked out, use the runtime CI built:
+  `bin=$(cargo ci 1234) && SHOCK2_RUNTIME_BINARY=$bin npm run test:e2e` (the
+  `&&` matters: an empty variable falls back to a local build). CI keeps these
+  for 7 days; the macOS one needs `brew install ffmpeg@6`.
 - SDK-launched runtimes get `--idle-timeout-secs 600`: if the owning process is
   SIGKILLed (so neither `shutdown()` nor the SIGINT/SIGTERM hook runs), the
   runtime exits by itself after ten quiet minutes instead of holding ~700 MB.

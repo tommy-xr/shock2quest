@@ -82,6 +82,7 @@ if a[:3] == ['pr', 'view', '7']:
 elif a[:2] == ['run', 'list']:
     assert a[a.index('--commit') + 1] == sha
     status = os.environ.get('DVR_TEST_RUN_STATUS', 'success')
+    if status == 'none': print('[]'); sys.exit(0)
     done = status in ('success', 'failure')
     print(json.dumps([{'databaseId': 42, 'status': 'completed' if done else status,
                        'conclusion': status if done else '', 'url': 'https://runs/42'}]))
@@ -500,6 +501,13 @@ fn pr_refuses_unfinished_builds_before_touching_the_device() {
         let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
         assert!(!calls.contains("devices"));
     }
+    let h = Harness::new();
+    let out = h
+        .command(&["pr", "7"])
+        .env("DVR_TEST_RUN_STATUS", "none")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--ref feat/x"));
 }
 #[test]
 fn uninstall_removes_the_package_and_warns_for_app_private_saves() {

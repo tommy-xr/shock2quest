@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
+ci_artifacts = { path = "../ci_artifacts" }
 clap = { version = "4.5.4", features = ["derive", "env"] }
 ratatui = "0.30"
 serde_json = "1.0"
