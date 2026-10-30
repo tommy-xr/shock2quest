@@ -8,15 +8,15 @@
 
 // The model to show: a character with its skeleton (the .CAL beside it), or
 // an object such as "ss2/obj/CRATE01.BIN".
-let model = "ss2/mesh/GRUNT_P.BIN"
-let skeleton = "ss2/mesh/GRUNT_P.CAL"
+let model = Path.of("ss2/mesh/GRUNT_P.BIN")
+let skeleton = Path.of("ss2/mesh/GRUNT_P.CAL")
 
 // A character plays these clips in turn, looping (a walk is two half-step
 // clips; either alone snaps at its seam); it prints posed at `seconds`.
 let clipNames = ["ogpbzwkl", "ogpbzwkr"]
 let seconds = 0.0
 
-let clipFile = (n: string) => Text.join("", ["ss2/motions/", n, "_.mc"])
+let clipFile = (n: string) => Path.of(Text.join("", ["ss2/motions/", n, "_.mc"]))
 
 let data = if File.exists(model) then File.bytes(model) else Fixture.cube(4.0)
 
@@ -27,15 +27,15 @@ let character: Option.t<character> =
   then Option.None
   else
     let clip =
-      if File.exists("ss2/mschema/motiondb.bin") && List.all((n) => File.exists(clipFile(n)), clipNames)
+      if File.exists(Path.of("ss2/mschema/motiondb.bin")) && List.all((n) => File.exists(clipFile(n)), clipNames)
       then
-        let clips = List.map((n) => Motion.clip(File.bytes("ss2/mschema/motiondb.bin"), File.bytes(clipFile(n)), n) |> Binary.require, clipNames) in
+        let clips = List.map((n) => Motion.clip(File.bytes(Path.of("ss2/mschema/motiondb.bin")), File.bytes(clipFile(n)), n) |> Binary.require, clipNames) in
         List.head(clips)
           |> Option.map((first) => List.fold((joined, next) => Motion.join(joined, next) |> Binary.require, first, List.drop(1.0, clips)))
       else Option.None in
     let cal =
       if File.exists(skeleton) then File.bytes(skeleton)
-      else Binary.invalid(Text.join("", [model, " is a character: set `skeleton` to its .CAL"])) in
+      else Binary.invalid(Text.join("", [Path.toString(model), " is a character: set `skeleton` to its .CAL"])) in
     Option.Some({
       rig: Lgmm.rig(Decode.run(Lgmm.model, data) |> Binary.require,
         Decode.run(Cal.skeleton, cal) |> Binary.require),

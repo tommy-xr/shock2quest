@@ -21,10 +21,10 @@ let files = List.append(List.map((n) => Text.join("", ["ss2/motions/", n, "_.mc"
 let real = List.all((p) => File.exists(Path.of(p)), files)
 
 let hybrid =
-  let mesh = if real then File.bytes("ss2/mesh/GRUNT_P.BIN") else Fixture.characterMesh in
-  let cal = if real then File.bytes("ss2/mesh/GRUNT_P.CAL") else Fixture.characterSkeleton in
+  let mesh = if real then File.bytes(Path.of("ss2/mesh/GRUNT_P.BIN")) else Fixture.characterMesh in
+  let cal = if real then File.bytes(Path.of("ss2/mesh/GRUNT_P.CAL")) else Fixture.characterSkeleton in
   let load = (n: string): Motion.clip =>
-    Motion.clip(File.bytes("ss2/mschema/motiondb.bin"), File.bytes(Text.join("", ["ss2/motions/", n, "_.mc"])), n) |> Binary.require in
+    Motion.clip(File.bytes(Path.of("ss2/mschema/motiondb.bin")), File.bytes(Path.of(Text.join("", ["ss2/motions/", n, "_.mc"]))), n) |> Binary.require in
   let clipOf = (n: string): Motion.clip =>
     if not real then Fixture.twisting
     else if n == "walk" then Motion.join(load("ogpbzwkl"), load("ogpbzwkr")) |> Binary.require
