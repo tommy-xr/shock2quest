@@ -2,7 +2,7 @@
 // hybrid at rest, in `ogpstd` frame 0 and at animated frames, against values
 // from shock2quest's own pipeline. Without the files these pass vacuously.
 
-let have = (paths: List<string>): bool => List.all((p) => File.exists(p), paths)
+let have = (paths: List<string>): bool => List.all((p) => File.exists(Path.of(p)), paths)
 
 let near = (a: List<float>, b: List<float>): bool =>
   List.length(a) == List.length(b)
@@ -16,16 +16,16 @@ let bounds = (m: Mesh.t): List<float> =>
   [Vec3.x(b.min), Vec3.y(b.min), Vec3.z(b.min), Vec3.x(b.max), Vec3.y(b.max), Vec3.z(b.max)]
 
 expect not have(hybrid)
-  || near(bounds(Lgmm.rest(File.bytes("ss2/hybrid.bin"), File.bytes("ss2/hybrid.cal")) |> Binary.require),
+  || near(bounds(Lgmm.rest(File.bytes(Path.of("ss2/hybrid.bin")), File.bytes(Path.of("ss2/hybrid.cal"))) |> Binary.require),
           [-0.2934, -5.5243, -4.0758, 1.5229, 3.6003, 3.4440])
 
 expect not have(standing)
-  || (let clip = Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes("ss2/ogpstd_.mc"), "ogpstd") |> Binary.require in
-      let skel = Decode.run(Cal.skeleton, File.bytes("ss2/hybrid.cal")) |> Binary.require in
+  || (let clip = Motion.clip(File.bytes(Path.of("ss2/motiondb.bin")), File.bytes(Path.of("ss2/ogpstd_.mc")), "ogpstd") |> Binary.require in
+      let skel = Decode.run(Cal.skeleton, File.bytes(Path.of("ss2/hybrid.cal"))) |> Binary.require in
       let p = Motion.sample(clip, 0.0) in
       let joints = Cal.globals(Cal.chains(skel), p.root, p.animate) in
       let joint = (j) => Affine.offset(Option.defaultValue(Affine.identity, List.nth(j, joints))) in
-      let posed = Lgmm.posed(File.bytes("ss2/hybrid.bin"), File.bytes("ss2/hybrid.cal"), clip, 0.0) |> Binary.require in
+      let posed = Lgmm.posed(File.bytes(Path.of("ss2/hybrid.bin")), File.bytes(Path.of("ss2/hybrid.cal")), clip, 0.0) |> Binary.require in
       let b = bounds(posed) in
       clip.motion.frames == 43.0
         && near(joint(19.0), [0.7125, 0.0920, 3.4325])
@@ -39,10 +39,10 @@ expect not have(standing)
 let moving = List.append(hybrid, ["ss2/motiondb.bin", "ss2/ogpidle1_.mc", "ss2/ogpbzwkl_.mc", "ss2/ogpbzwkr_.mc"])
 
 let motionOf = (n: string): Motion.clip =>
-  Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes(Text.join("", ["ss2/", n, "_.mc"])), n) |> Binary.require
+  Motion.clip(File.bytes(Path.of("ss2/motiondb.bin")), File.bytes(Path.of(Text.join("", ["ss2/", n, "_.mc"]))), n) |> Binary.require
 
 let pinned = (c: Motion.clip, frame: float, expected: List<List<float>>): bool =>
-  let skel = Decode.run(Cal.skeleton, File.bytes("ss2/hybrid.cal")) |> Binary.require in
+  let skel = Decode.run(Cal.skeleton, File.bytes(Path.of("ss2/hybrid.cal"))) |> Binary.require in
   let p = Motion.sample(c, frame / c.motion.fps) in
   let g = Cal.globals(Cal.chains(skel), p.root, p.animate) in
   near(List.concatMap((j) => Affine.offset(Option.defaultValue(Affine.identity, List.nth(j, g))), [1.0, 17.0, 19.0]), List.flatten(expected))

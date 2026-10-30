@@ -17,7 +17,7 @@ let model = Path.of("ss2/model.bin")
 let clipNames = ["ogpbzwkl", "ogpbzwkr"]
 let seconds = 0.0
 
-let clipFile = (n: string) => Text.join("", ["ss2/", n, "_.mc"])
+let clipFile = (n: string) => Path.of(Text.join("", ["ss2/", n, "_.mc"]))
 
 let data = if File.exists(model) then File.bytes(model) else Fixture.cube(4.0)
 
@@ -28,14 +28,14 @@ let character: Option.t<character> =
   then Option.None
   else
     let clip =
-      if File.exists("ss2/motiondb.bin") && List.all((n) => File.exists(clipFile(n)), clipNames)
+      if File.exists(Path.of("ss2/motiondb.bin")) && List.all((n) => File.exists(clipFile(n)), clipNames)
       then
-        let clips = List.map((n) => Motion.clip(File.bytes("ss2/motiondb.bin"), File.bytes(clipFile(n)), n) |> Binary.require, clipNames) in
+        let clips = List.map((n) => Motion.clip(File.bytes(Path.of("ss2/motiondb.bin")), File.bytes(clipFile(n)), n) |> Binary.require, clipNames) in
         List.head(clips)
           |> Option.map((first) => List.fold((joined, next) => Motion.join(joined, next) |> Binary.require, first, List.drop(1.0, clips)))
       else Option.None in
     let cal =
-      if File.exists("ss2/model.cal") then File.bytes("ss2/model.cal")
+      if File.exists(Path.of("ss2/model.cal")) then File.bytes(Path.of("ss2/model.cal"))
       else Binary.invalid("ss2/model.bin is a character: copy its skeleton (the .CAL beside it) to ss2/model.cal") in
     Option.Some({
       rig: Lgmm.rig(Decode.run(Lgmm.model, data) |> Binary.require,
