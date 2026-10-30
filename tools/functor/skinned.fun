@@ -39,7 +39,7 @@ let texture = (mesh: Bytes.t): Option.t<Asset.Texture> =>
   match Decode.run(Lgmm.textureName, mesh) with
   | Result.Ok(n) =>
     let path = Text.join("", ["ss2/", Text.toLower(n)]) in
-    if File.exists(path) then Option.Some(Asset.texture(path)) else Option.None
+    if File.exists(Path.of(path)) then Option.Some(Asset.texture(path)) else Option.None
   | Result.Error(_) => Option.None
 
 let name = (j: float): string => Text.join("", ["joint", Text.fromFloat(j)])

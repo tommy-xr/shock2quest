@@ -20,9 +20,9 @@ expect not have(hybrid)
           [-0.2934, -5.5243, -4.0758, 1.5229, 3.6003, 3.4440])
 
 // Its one material's texture, and uvs as stored (shock2quest's loader passes them through).
-expect not have(hybrid) || Decode.run(Lgmm.textureName, File.bytes("ss2/hybrid.bin")) == Result.Ok("og_pipe02.gif")
+expect not have(hybrid) || Decode.run(Lgmm.textureName, File.bytes(Path.of("ss2/hybrid.bin"))) == Result.Ok("og_pipe02.gif")
 expect not have(hybrid)
-  || (Decode.run(Skinned.uvs, File.bytes("ss2/hybrid.bin"))
+  || (Decode.run(Skinned.uvs, File.bytes(Path.of("ss2/hybrid.bin")))
         |> Result.map((ts) => near(List.flatten([Option.defaultValue([], List.nth(0.0, ts)), Option.defaultValue([], List.nth(100.0, ts))]),
              [0.020796, 0.937831, 0.995502, 0.201947]) && List.length(ts) == 202.0)) == Result.Ok(true)
 
