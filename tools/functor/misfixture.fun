@@ -1,5 +1,5 @@
 // A synthetic mission and PCX, written with `Encode`, to test `Mis`, `World`
-// and `Pcx` without game files: one cell holding a 1 ft square floor (one
+// and the engine's PCX decode without game files: one cell holding a 1 ft square floor (one
 // render polygon, a 2×2 lightmap), a texture list, the ambient level and one
 // player factory.
 
@@ -106,8 +106,9 @@ let pcx = Encode.run(Encode.sequence([
   Encode.zeros(53.0), Encode.u8(1.0), Encode.u16le(4.0), Encode.zeros(60.0),
   Encode.bytes(Bytes.fromU8([195.0, 1.0, 0.0, 0.0, 2.0, 193.0, 193.0, 0.0])),
   Encode.u8(12.0), Encode.bytes(Bytes.fromU8(palette))]))
-expect (Pcx.decode(pcx) |> Result.map((img) => (img.width, img.height, Bytes.equals(img.pixels,
-  Bytes.fromU8([1.0, 254.0, 7.0, 1.0, 254.0, 7.0, 1.0, 254.0, 7.0, 0.0, 255.0, 7.0, 2.0, 253.0, 7.0, 193.0, 62.0, 7.0]))))) == Result.Ok((3.0, 2.0, true))
+expect (Texture.decode(pcx, Texture.Srgb) |> Result.map((img: Texture.pixels) => (img.width, img.height, Bytes.equals(img.pixels,
+  Bytes.fromU8([1.0, 254.0, 7.0, 255.0, 1.0, 254.0, 7.0, 255.0, 1.0, 254.0, 7.0, 255.0,
+                0.0, 255.0, 7.0, 255.0, 2.0, 253.0, 7.0, 255.0, 193.0, 62.0, 7.0, 255.0]))))) == Result.Ok((3.0, 2.0, true))
 // Cut short, it is an error (not too few pixels).
-expect Result.isError(Pcx.decode(Encode.run(Encode.sequence([Encode.bytes(Bytes.slice(0.0, 130.0, pcx) |> Binary.require),
-  Encode.u8(12.0), Encode.bytes(Bytes.fromU8(palette))]))))
+expect Result.isError(Texture.decode(Encode.run(Encode.sequence([Encode.bytes(Bytes.slice(0.0, 130.0, pcx) |> Binary.require),
+  Encode.u8(12.0), Encode.bytes(Bytes.fromU8(palette))])), Texture.Srgb))
