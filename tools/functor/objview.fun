@@ -22,13 +22,16 @@ let tagOf = (id: float): Physics.tag => Physics.tag(Text.join("", ["obj", Text.f
 
 let modelPath = (name: string): Path.t => Path.of(Text.join("", ["ss2/obj/", name, ".bin"]))
 
-// A material's texture, `ss2/obj/txt16/<name>` (8-bit PCX), if it's there.
+// A material's texture in `ss2/obj/txt16/`, as shock2quest resolves it: the
+// name's stem with the first extension there (`DOOR.PCX` may be `door.png`).
 let textureOf = (name: string): Option.t<Asset.Texture> =>
-  let path = Path.of(Text.join("", ["ss2/obj/txt16/", name])) in
-  if not File.exists(path) then Option.None
-  else Texture.decode(File.bytes(path), Texture.Srgb) |> Result.toOption |> Option.map(Texture.fromPixels)
-
-let unit = (v: List<float>): List<float> => Affine.scale(1.0 / Math.max(Math.sqrt(World.dot(v, v)), 0.000001), v)
+  let chars = Text.chars(name) in
+  let dot = List.range(List.length(chars)) |> List.fold((at, i) => if List.nth(i, chars) == Option.Some(".") then i else at, List.length(chars)) in
+  let stem = Text.join("", List.take(dot, chars)) in
+  ["png", "pcx", "gif", "jpg", "jpeg"]
+    |> List.map((ext) => Path.of(Text.join("", ["ss2/obj/txt16/", stem, ".", ext])))
+    |> List.find(File.exists)
+    |> Option.bind((path) => Texture.decode(File.bytes(path), Texture.Srgb) |> Result.toOption |> Option.map(Texture.fromPixels))
 
 // Faces as one static model, fan-triangulated counter-clockwise (Dark winds
 // its polygons the other way), one group per run of a material slot.
@@ -49,25 +52,28 @@ let staticOf = (faces: List<Lgmd.face>, groupOf: (float) => Model.group): Model.
     |> List.map((g) => { groupOf(g.slot) with first: g.first, count: g.count }) in
   Model.static({
     positions: Bytes.fromF32le(List.concatMap((c: Lgmd.corner) => Skinned.up(c.p), corners)),
-    normals: Bytes.fromF32le(List.concatMap((c: Lgmd.corner) => Skinned.up(unit(c.n)), corners)),
+    normals: Bytes.fromF32le(List.concatMap((c: Lgmd.corner) => Skinned.up(World.unit(c.n)), corners)),
     uvs: Bytes.fromF32le(List.concatMap((c: Lgmd.corner) => c.uv, corners)),
     uvs2: Bytes.zeros(0.0),
     triangles: Bytes.fromU32le(match triangles with | (_, ts) => ts),
     groups: groups, lightmap: Option.None })
 
-// A model's look, as shock2quest draws it: texture-mapped polygons whose
-// material's texture is there (others are dropped), self-lit materials
-// fullbright, see-through ones in their own piece at their opacity. Colour
-// materials aren't drawn (no door uses one).
+// A model's look, near how shock2quest draws it: texture-mapped polygons
+// whose material's texture is there (others are dropped), see-through ones
+// in their own piece at their opacity. shock2quest adds texture ×
+// emissivity to the lit colour; here a fully self-lit material (emissivity
+// 1) draws fullbright and any other is lit. Colour materials aren't drawn
+// (no door uses one).
 let lookOf = (textures: Map<string, Asset.Texture>, s: Lgmd.surface): look =>
-  let materialOf = (slot: float) => List.find((m: Lgmd.material) => m.slot == slot, s.materials) in
+  // The last material naming a slot wins, as in shock2quest's slot table.
+  let materialOf = (slot: float) => List.find((m: Lgmd.material) => m.slot == slot, List.reverse(s.materials)) in
   let textureFor = (slot: float) => materialOf(slot) |> Option.bind((m: Lgmd.material) => if m.color then Option.None else Map.get(m.name, textures)) in
   let drawn = s.faces |> List.filter((f: Lgmd.face) => f.mapped && Option.isSome(textureFor(f.slot))) |> List.sortBy((f: Lgmd.face) => f.slot) in
   let clearness = (f: Lgmd.face) => materialOf(f.slot) |> Option.map((m: Lgmd.material) => m.transparency) |> Option.defaultValue(0.0) in
   let levels = drawn |> List.fold((m, f) => Map.insert(clearness(f), true, m), Map.empty()) |> Map.keys in
   let groupOf = (slot: float): Model.group =>
     { first: 0.0, count: 0.0, texture: textureFor(slot),
-      unlit: materialOf(slot) |> Option.map((m: Lgmd.material) => m.emissivity > 0.0) |> Option.defaultValue(false) } in
+      unlit: materialOf(slot) |> Option.map((m: Lgmd.material) => m.emissivity >= 1.0) |> Option.defaultValue(false) } in
   let points = List.concatMap((f: Lgmd.face) => List.map((c: Lgmd.corner) => c.p, f.corners), s.faces) in
   let lo = [0.0, 1.0, 2.0] |> List.map((k) => List.minimum(List.map((p) => Affine.n(k, p), points)) |> Option.defaultValue(0.0)) in
   let hi = [0.0, 1.0, 2.0] |> List.map((k) => List.maximum(List.map((p) => Affine.n(k, p), points)) |> Option.defaultValue(0.0)) in

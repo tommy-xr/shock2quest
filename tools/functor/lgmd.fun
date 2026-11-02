@@ -13,7 +13,8 @@ type header = { counts: counts, objectsAt: float, verticesAt: float, polygonsAt:
 // next sibling (-1 for none), and the vertices it owns.
 type part = { local: Affine.t, child: float, next: float, start: float, count: float }
 
-type model = { header: header, positions: List<List<float>>, polygons: List<List<float>>, parts: List<part> }
+// `polygons`: each surface's vertex indices; `faces`: every polygon record.
+type model = { header: header, positions: List<List<float>>, polygons: List<List<float>>, faces: List<polygon>, parts: List<part> }
 
 let at8 = (offset: float) => Decode.at(offset, Decode.u8)
 let at16 = (offset: float) => Decode.at(offset, Decode.u16le)
@@ -42,23 +43,21 @@ let header =
           Decode.field("verticesAt", at32(86.0)),
           Decode.field("polygonsAt", at32(98.0))))
 
-type polygonPrefix = { kind: float, count: float }
+// A polygon record: its material slot, then per corner its vertex (each
+// below `vertices`), lighting-normal and (when texture-mapped) uv indices.
+type polygon = { slot: float, vertices: List<float>, normals: List<float>, uvs: List<float> }
 
-// One polygon's vertex indices (each below `vertices`), skipping its normals,
-// UVs and trailer.
-let polygon = (version: float, vertices: float): Decode.t<List<float>> =>
-  Decode.map2(
-    (kind, count): polygonPrefix => { kind: kind, count: count },
-    Decode.skipThen(4.0, Decode.u8),
-    Decode.u8)
-    |> Decode.andThen((p: polygonPrefix) =>
-      Decode.skipThen(6.0, Decode.field("vertices", Decode.list(p.count, Decode.u16le)))
-        |> Decode.andThen((ids: List<float>) =>
-          let uvs = if Math.mod(p.kind, 4.0) == 3.0 then 2.0 * p.count else 0.0 in
-          let tail = if version >= 4.0 then 1.0 else 0.0 in
-          if List.any((i) => i >= vertices, ids)
+let polygon = (version: float, vertices: float): Decode.t<polygon> =>
+  Decode.map3((slot, kind, count) => (slot, kind, count), Decode.skipThen(2.0, Decode.u16le), Decode.u8, Decode.u8)
+    |> Decode.andThen((h) => match h with
+      | (slot, kind, count) =>
+        Decode.map3((vs, ns, uvs): polygon => { slot: slot, vertices: vs, normals: ns, uvs: uvs },
+          Decode.skipThen(6.0, Decode.field("vertices", Decode.list(count, Decode.u16le))), Decode.list(count, Decode.u16le),
+          Decode.list(if Math.mod(kind, 4.0) == 3.0 then count else 0.0, Decode.u16le))
+        |> Decode.andThen((p: polygon) =>
+          if List.any((i) => i >= vertices, p.vertices)
           then Decode.fail("a polygon uses a vertex past the end of the vertex list")
-          else Decode.skipThen(2.0 * p.count + uvs + tail, Decode.succeed(ids))))
+          else Decode.skipThen(if version >= 4.0 then 1.0 else 0.0, Decode.succeed(p))))
 
 // Dark stores rotation columns, then the translation; all zeros = identity.
 let affineOf = (v: List<float>): Affine.t =>
@@ -92,8 +91,8 @@ let model =
         Decode.map3(
           (positions, polygons, parts): model =>
             // Points and lines (under 3 corners) have no surface.
-            { header: h, positions: positions, parts: parts,
-              polygons: List.filter((ids) => List.length(ids) >= 3.0, polygons) },
+            { header: h, positions: positions, parts: parts, faces: polygons,
+              polygons: polygons |> List.map((p: polygon) => p.vertices) |> List.filter((ids) => List.length(ids) >= 3.0) },
           Decode.field("vertices",
             Decode.at(h.verticesAt, Decode.list(h.counts.vertices, Decode.list(3.0, Decode.f32le)))),
           Decode.field("polygons",
@@ -210,19 +209,6 @@ let extras = (at: float, size: float, ms: List<material>): Decode.t<List<materia
     |> Decode.map((tes) => List.zip(tes, ms) |> List.map((pair) => match pair with
       | (m, te) => (match te with | (t, e) => { m with transparency: if t == 1.0 then 0.0 else t, emissivity: e })))
 
-type faceRecord = { slot: float, vertices: List<float>, normals: List<float>, uvs: List<float> }
-
-// A polygon record: slot, then per corner its vertex, normal and (when the
-// polygon is texture-mapped) uv indices.
-let faceRecord = (version: float): Decode.t<faceRecord> =>
-  Decode.map3((slot, kind, count) => (slot, kind, count), Decode.skipThen(2.0, Decode.u16le), Decode.u8, Decode.u8)
-    |> Decode.andThen((h) => match h with
-      | (slot, kind, count) =>
-        Decode.map3((vs, ns, uvs): faceRecord => { slot: slot, vertices: vs, normals: ns, uvs: uvs },
-          Decode.skipThen(6.0, Decode.list(count, Decode.u16le)), Decode.list(count, Decode.u16le),
-          Decode.list(if Math.mod(kind, 4.0) == 3.0 then count else 0.0, Decode.u16le))
-        |> Decode.andThen((f: faceRecord) => Decode.skipThen(if version >= 4.0 then 1.0 else 0.0, Decode.succeed(f))))
-
 // An LGMD file's polygons as drawn, with their materials: corners posed at
 // rest, normals (the per-corner lighting normals) turned with them, as
 // shock2quest builds an object's vertices. A uv or normal index past its
@@ -235,21 +221,20 @@ let surface = (data: Bytes.t): Result.t<surface, Binary.error> =>
     let uvs = Decode.at(s.uvsAt, Decode.list(Math.floor((s.vhotsAt - s.uvsAt) / 8.0), Decode.list(2.0, Decode.f32le))) in
     let normals = Decode.at(s.lightsAt, Decode.list(Math.floor((s.normalsAt - s.lightsAt) / 8.0),
       Decode.skipThen(4.0, Decode.u32le) |> Decode.map(Skinned.normal))) in
-    let faces = Decode.at(m.header.polygonsAt, Decode.list(m.header.counts.polygons, faceRecord(m.header.counts.version))) in
-    Decode.run(Decode.map4((ms, us, ns, fs) => (ms, us, ns, fs), Decode.field("materials", mats), Decode.field("uvs", uvs),
-                           Decode.field("normals", normals), Decode.field("polygons", faces)), data)
+    Decode.run(Decode.map3((ms, us, ns) => (ms, us, ns), Decode.field("materials", mats), Decode.field("uvs", uvs),
+                           Decode.field("normals", normals)), data)
       |> Result.bind((r) => match r with
-        | (ms, us, ns, fs) =>
+        | (ms, us, ns) =>
           let at = placements(m) in
-          let corner = (f: faceRecord, k: float): Option.t<corner> =>
+          let corner = (f: polygon, k: float): Option.t<corner> =>
             let v = Option.defaultValue(0.0, List.nth(k, f.vertices)) in
             let w = Option.defaultValue(Affine.identity, List.nth(v, at)) in
             List.nth(v, m.positions) |> Option.bind((p) =>
               Option.bind((i) => List.nth(i, ns), List.nth(k, f.normals)) |> Option.map((nrm): corner =>
                 { p: Affine.apply(w, p), n: Affine.rotate(w, nrm),
                   uv: Option.defaultValue([0.0, 0.0], Option.bind((u) => List.nth(u, us), List.nth(k, f.uvs))) })) in
-          fs |> List.filter((f: faceRecord) => List.length(f.vertices) >= 3.0)
-            |> List.tryMapAccum((u, f: faceRecord) =>
+          m.faces |> List.filter((f: polygon) => List.length(f.vertices) >= 3.0)
+            |> List.tryMapAccum((u, f: polygon) =>
                  let cs = List.range(List.length(f.vertices)) |> List.map((k) => corner(f, k)) in
                  if List.any(Option.isNone, cs) || List.any((u) => u >= List.length(us), f.uvs)
                  then Result.Error(Decode.failure(m.header.polygonsAt, "a polygon names a vertex, normal or uv past its table"))

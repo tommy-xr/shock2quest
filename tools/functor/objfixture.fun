@@ -108,7 +108,7 @@ let rot0 = rotW(swing)
 let rotHist = List.range(13.0) |> List.fold((h, k) => match List.last(h) with
   | Option.Some(w) => List.append([step(w, if k == 0.0 then [20.0] else [])], h)
   | Option.None => h, [rot0])
-let near = (a: List<float>, b: List<float>): bool => List.all((d) => Math.abs(d) < 0.00001, World.sub(a, b))
+let near = Misfixture.near
 expect (Door.slider(rot0, 20.0), stateOf(rot0, 20.0)) == (Option.None, Door.Closed)
 expect stateOf(Cal.at(1.0, rotHist, rot0), 20.0) == Door.Opening
 expect stateOf(Cal.at(12.0, rotHist, rot0), 20.0) == Door.Open

@@ -49,7 +49,7 @@ expect (Objects.get(9.0, doors.world.props.rotDoor) |> Option.map((d: Door.rotDo
 // 98 bytes: each end is the base facing turned by its angle about the axis
 // (6° about Y here); 110 bytes: the closed and open facings that follow (90°
 // and 180° headings).
-let near = (a: List<float>, b: List<float>): bool => List.all((d) => Math.abs(d) < 0.00001, World.sub(a, b))
+let near = Misfixture.near
 let turns = (d: Door.rotDoor) => [Affine.angles(d.closedRotation), Affine.angles(d.openRotation)]
 expect (Objects.get(9.0, doors.world.props.rotDoor) |> Option.map(turns)) == Option.Some([[0.0, 0.0, 0.0], Affine.angles(Affine.axisAngle([0.0, 1.0, 0.0], 6.0 * Math.pi / 180.0))])
 let facings = Props.load(gamesys, Misfixture.chunkFile([chunk("L$MetaProp", []),
@@ -70,3 +70,10 @@ expect not (File.exists(gamesysFile) && File.exists(missionFile))
   || (Props.load(File.bytes(gamesysFile), File.bytes(missionFile)) |> Result.map((l: Props.loaded) => l.stats))
        == Result.Ok({ objects: 1556.0, metaLinks: 6762.0, belowArchetype: 0.0, transDoors: 56.0, rotDoors: 5.0,
                       locked: 9.0, frobInfo: 346.0, scripts: 749.0, switchLinks: 336.0, doors: 57.0 })
+
+// Every medsci1 StdDoor door (52 sliding, 5 rotating) gets a textured view:
+// its model decodes and its textures resolve.
+expect not (File.exists(gamesysFile) && File.exists(missionFile))
+  || (Props.load(File.bytes(gamesysFile), File.bytes(missionFile))
+        |> Result.map((l: Props.loaded) => Objview.views(l) |> List.filter((v: Objview.view) => List.length(v.look.pieces) > 0.0) |> List.length))
+       == Result.Ok(57.0)

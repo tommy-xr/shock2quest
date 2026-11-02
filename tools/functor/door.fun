@@ -128,10 +128,10 @@ let scriptOf = (d: transDoor): doorScript =>
     t: t }
 
 // A rotating door starts at an end: closed unless authored open (opening
-// or closing heads that way from closed).
+// or closing heads that way from closed; one without travel stays put).
 let rotScriptOf = (d: rotDoor): doorScript =>
   if d.state == 1.0 then { state: Open, t: 1.0 }
-  else { state: if d.state == 3.0 then Opening else if d.state == 2.0 then Closing else Closed, t: 0.0 }
+  else { state: if not swings(d) then Closed else if d.state == 3.0 then Opening else if d.state == 2.0 then Closing else Closed, t: 0.0 }
 
 let isMoving = (s: doorScript): bool => s.state == Opening || s.state == Closing
 
@@ -284,8 +284,7 @@ let swing = (d: rotDoor, t: float): pose =>
   else if 1.0 - t <= eps then { at: d.baseOpen, rotation: d.openRotation }
   else
     let total = travelDegrees(d) * Math.pi / 180.0 in
-    let a0 = Affine.rotate(d.baseRotation, hinge(d.axis)) in
-    let axis = Affine.scale(1.0 / Math.max(Math.sqrt(World.dot(a0, a0)), 0.000001), a0) in
+    let axis = World.unit(Affine.rotate(d.baseRotation, hinge(d.axis))) in
     let disp = World.sub(d.baseOpen, d.baseClosed) in
     let axial = Affine.scale(World.dot(disp, axis), axis) in
     let perp = World.sub(disp, axial) in

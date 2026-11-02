@@ -15,6 +15,8 @@ let water = 247.0
 let n = Affine.n
 let dot = (a: List<float>, b: List<float>): float => n(0.0, a) * n(0.0, b) + n(1.0, a) * n(1.0, b) + n(2.0, a) * n(2.0, b)
 let sub = (a: List<float>, b: List<float>): List<float> => [n(0.0, a) - n(0.0, b), n(1.0, a) - n(1.0, b), n(2.0, a) - n(2.0, b)]
+// `v` at length 1 (a zero vector stays zero).
+let unit = (v: List<float>): List<float> => Affine.scale(1.0 / Math.max(Math.sqrt(dot(v, v)), 0.000001), v)
 let cross = (a: List<float>, b: List<float>): List<float> =>
   [n(1.0, a) * n(2.0, b) - n(2.0, a) * n(1.0, b), n(2.0, a) * n(0.0, b) - n(0.0, a) * n(2.0, b),
    n(0.0, a) * n(1.0, b) - n(1.0, a) * n(0.0, b)]
