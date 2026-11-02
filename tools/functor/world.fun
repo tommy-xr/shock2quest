@@ -19,9 +19,6 @@ let cross = (a: List<float>, b: List<float>): List<float> =>
   [n(1.0, a) * n(2.0, b) - n(2.0, a) * n(1.0, b), n(2.0, a) * n(0.0, b) - n(0.0, a) * n(2.0, b),
    n(0.0, a) * n(1.0, b) - n(1.0, a) * n(0.0, b)]
 
-// Dark axes (Z up, feet) to scene axes (Y up, metres).
-let toScene = (p: List<float>): List<float> => Affine.scale(metresPerFoot, Skinned.up(p))
-
 // A base texture: what the texturing math needs (its size) and what draws.
 type surface = { width: float, height: float, texture: Option.t<Asset.Texture> }
 
@@ -77,7 +74,7 @@ let build = (surfaces: List<surface>, f: face, rect: Texture.rect): built =>
   let mv = vx * vx + vy * vy + vz * vz in
   let uv = ux * vx + uy * vy + uz * vz in
   let corr = 1.0 / (mu * mv - uv * uv) in
-  let skewed = Math.abs(uv) >= 0.0001 in
+  let square = Math.abs(uv) < 0.0001 in
   let normal = Skinned.up(cross(t.axisV, t.axisU)) in
   let len = Math.sqrt(dot(normal, normal)) in
   let unitNormal = List.map((x) => x / Math.max(len, 0.000001), normal) in
@@ -95,8 +92,8 @@ let build = (surfaces: List<surface>, f: face, rect: Texture.rect): built =>
     let dz = pz - oz in
     let au = ux * dx + uy * dy + uz * dz in
     let av = vx * dx + vy * dy + vz * dz in
-    let pu = if skewed then corr * (au * mv - av * uv) else au / mu in
-    let pv = if skewed then corr * (av * mu - au * uv) else av / mv in
+    let pu = if square then au / mu else corr * (au * mv - av * uv) in
+    let pv = if square then av / mv else corr * (av * mu - au * uv) in
     let lu = (4.0 * pu + 0.5 - f.light.u + t.u / 1024.0) / f.light.width in
     let lv = (4.0 * pv + 0.5 - f.light.v + t.v / 1024.0) / f.light.height in
     { p: [metresPerFoot * px, metresPerFoot * pz, metresPerFoot * (0.0 - py)],

@@ -59,7 +59,7 @@ let table = (at: float, count: float, size: float, read: (float) => 'a): List<'a
 
 // `next(at)` when `size` bytes from `at` are inside the data, else an error.
 let within = (at: float, size: float, what: string, data: Bytes.t, next: (float) => Result.t<'a, Binary.error>): Result.t<'a, Binary.error> =>
-  if at + size > Bytes.length(data) then Result.Error(Decode.failure(at, Text.join("", ["a cell's ", what, " run past the end of the data"])))
+  if at + size > Bytes.length(data) then Result.Error(Decode.failure(at, Text.join("", ["cell data past the end of the file (", what, ")"])))
   else next(at)
 
 // One cell from `at`: the cell and where the next one starts.
@@ -103,20 +103,18 @@ let cellAt = (at: float, data: Bytes.t): Result.t<(cell, float), Binary.error> =
                            indices: indices, lights: lights, lightmaps: match maps with | (_, ms) => ms },
                          cAt + 4.0 + skip))))))))
 
-type walk = { at: float, left: float, cells: List<cell>, error: Option.t<Binary.error> }
-
-// WRRGB: a u32, the cell count, then the cells.
+// WRRGB: a u32, the cell count, then the cells. A cell is at least 39
+// bytes, so a count the data can't hold fails before any is read.
 let cellsIn = (chunks: List<chunk>, data: Bytes.t): Result.t<List<cell>, Binary.error> =>
   find("WRRGB", chunks) |> Result.bind((wr: chunk) =>
     Bytes.u32le(wr.offset + 4.0, data) |> Result.bind((count) =>
-      let w = Loop.until((w: walk) => w.left <= 0.0, (w: walk) =>
-          match cellAt(w.at, data) with
-          | Result.Ok(r) => (match r with | (c, next) => { w with at: next, left: w.left - 1.0, cells: List.append([c], w.cells) })
-          | Result.Error(e) => { w with left: 0.0, error: Option.Some(e) },
-        { at: wr.offset + 8.0, left: count, cells: [], error: Option.None }) in
-      match w.error with
-      | Option.Some(e) => Result.Error(e)
-      | Option.None => Result.Ok(w.cells)))
+      if 39.0 * count > Bytes.length(data) - wr.offset - 8.0
+      then Result.Error(Decode.failure(wr.offset + 4.0, Text.join("", [Text.fromFloat(count), " cells can't fit in the data"])))
+      else List.range(count)
+        |> List.tryMapAccum((at, i) => cellAt(at, data)
+             |> Result.mapError((e) => Decode.within(Binary.Index(i), e))
+             |> Result.map((r) => match r with | (c, next) => (next, c)), wr.offset + 8.0)
+        |> Result.map((acc) => match acc with | (_, cells) => cells)))
 
 // A TXLIST texture: its family folder under `fam/` and its name.
 type texture = { family: string, name: string }
