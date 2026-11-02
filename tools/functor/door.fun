@@ -227,9 +227,11 @@ let tick = (dt: float, w: world): world =>
       else if s.t - rate <= 0.0 then play(id, "closed", setDoor(id, { state: Closed, t: 0.0 }, acc))
       else setDoor(id, { s with t: s.t - rate }, acc), w)
 
-// Where a door is now (Dark feet), if it's a door.
+// Where a door is now (Dark feet), if it's a door: where StdDoor has it, or
+// as authored without the script.
 let position = (w: world, id: float): Option.t<List<float>> =>
-  slider(w, id) |> Option.map((d: transDoor) => lerp(d.baseClosed, d.baseOpen, doorOf(w, id).t))
+  slider(w, id) |> Option.map((d: transDoor) =>
+    lerp(d.baseClosed, d.baseOpen, Map.get(id, w.door) |> Option.map((s: doorScript) => s.t) |> Option.defaultValue(progressOf(d))))
 
 // One frame: this frame's frobs, the drain, the doors. Sounds are the
 // frame's own.

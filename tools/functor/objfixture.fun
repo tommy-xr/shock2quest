@@ -80,6 +80,8 @@ expect stateOf(step(twice, [13.0]), 13.0) == Door.Opening
 // gets no door state.
 expect Door.scriptOf({ slide with state: 4.0, base: [0.0, 0.0, 1.5] }) == { state: Door.Open, t: 0.75 }
 expect Map.member(-1.0, Door.spawn(world0, -1.0).door) == false
+let unscripted = Door.spawn({ world0 with authored: { world0.authored with transDoor: Map.insert(15.0, openSlide, world0.authored.transDoor) } }, 15.0)
+expect (Map.member(15.0, unscripted.door), Door.position(unscripted, 15.0)) == (false, Option.Some([0.0, 0.0, 2.0]))
 // A locked door without travel still answers a frob; one authored open
 // without travel ignores it.
 let stuck = { slide with baseOpen: [0.0, 0.0, 0.0] }
