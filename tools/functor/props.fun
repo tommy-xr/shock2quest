@@ -110,9 +110,12 @@ let authoredIn = (chunks: List<Mis.chunk>, data: Bytes.t): Result.t<Door.authore
 
 let union = (a: Map<float, 't>, b: Map<float, 't>): Map<float, 't> => Map.fold((m, k, v) => Map.insert(k, v, m), a, b)
 
+// A property chunk (`P$…`).
+let isProperty = (c: Mis.chunk): bool => Text.length(c.name) > 2.0 && List.take(2.0, Text.chars(c.name)) == ["P", "$"]
+
 // Every object id with a property record in the file (any `P$` chunk).
 let objectIds = (chunks: List<Mis.chunk>, data: Bytes.t): List<float> =>
-  chunks |> List.filter((c: Mis.chunk) => Text.length(c.name) > 2.0 && List.take(2.0, Text.chars(c.name)) == ["P", "$"])
+  chunks |> List.filter(isProperty)
     |> List.fold((m, c: Mis.chunk) => List.fold((acc, r: record) => Map.insert(r.id, true, acc), m,
          records(c.name, chunks, data) |> Result.defaultValue([])), Map.empty())
     |> Map.keys
@@ -120,7 +123,15 @@ let objectIds = (chunks: List<Mis.chunk>, data: Bytes.t): List<float> =>
 type stats = { objects: float, metaLinks: float, belowArchetype: float, transDoors: float, rotDoors: float,
                locked: float, frobInfo: float, scripts: float, switchLinks: float, doors: float }
 
-type loaded = { world: Door.world, objects: List<float>, stats: stats }
+// `modelNames`: every authored `P$ModelName` (resolve through donors);
+// `headings`: each mission object's `P$Position` heading.
+type loaded = { world: Door.world, objects: List<float>, stats: stats, modelNames: Map<float, string>, headings: Map<float, float> }
+
+// A chunk's records as text (NUL-terminated within each record).
+let names = (name: string, chunks: List<Mis.chunk>, data: Bytes.t): Result.t<Map<float, string>, Binary.error> =>
+  records(name, chunks, data) |> Result.bind((rs) => rs
+    |> List.tryMapAccum((u, r: record) => Decode.run(Decode.at(r.at, Motion.name(r.length)), data) |> Result.map((v) => (u, (r.id, v))), 0.0)
+    |> Result.map((acc) => match acc with | (_, pairs) => Map.fromList(pairs)))
 
 // The gamesys's donors and records under the mission's (the mission's win;
 // its links replace the gamesys's for the same source, as shock2quest merges
@@ -131,16 +142,20 @@ let load = (gamesys: Bytes.t, mission: Bytes.t): Result.t<loaded, Binary.error> 
   metaProps(gc, gamesys) |> Result.bind((gm) =>
   metaProps(mc, mission) |> Result.bind((mm) =>
   authoredIn(gc, gamesys) |> Result.bind((ga) =>
-  authoredIn(mc, mission) |> Result.map((ma) =>
+  authoredIn(mc, mission) |> Result.bind((ma) =>
+  names("P$ModelName", gc, gamesys) |> Result.bind((gn) =>
+  names("P$ModelName", mc, mission) |> Result.bind((mn) =>
+  (match Mis.find("P$Position", mc) with
+   | Result.Ok(_) => Mis.positions(mc, mission)
+   | Result.Error(_) => Result.Ok(Map.empty())) |> Result.map((ps) =>
     let a: Door.authored = { transDoor: union(ga.transDoor, ma.transDoor), rotDoor: union(ga.rotDoor, ma.rotDoor),
       locked: union(ga.locked, ma.locked), frobInfo: union(ga.frobInfo, ma.frobInfo), scripts: union(ga.scripts, ma.scripts),
       switchLink: Map.fold((t, id, l) => Objects.linkAs(id, l, t), ga.switchLink, ma.switchLink.byId) } in
     let ids = objectIds(mc, mission) in
-    let w0: Door.world = { graph: union(gm.donors, mm.donors), edits: Map.empty(), authored: a, props: Door.noProps,
-      switchLink: a.switchLink, door: Map.empty(), moving: Map.empty(), queue: Objects.queue(), sounds: [] } in
+    let w0: Door.world = { Door.empty with graph: union(gm.donors, mm.donors), authored: a, switchLink: a.switchLink } in
     let w = List.fold(Door.spawn, w0, ids) in
-    { world: w, objects: ids,
+    { world: w, objects: ids, modelNames: union(gn, mn), headings: Map.fold((m, id, p: Mis.start) => Map.insert(id, p.heading, m), Map.empty(), ps),
       stats: { objects: List.length(ids), metaLinks: gm.links + mm.links, belowArchetype: gm.belowArchetype + mm.belowArchetype,
                transDoors: Map.size(w.props.transDoor), rotDoors: Map.size(w.props.rotDoor), locked: Map.size(w.props.locked),
                frobInfo: Map.size(w.props.frobInfo), scripts: Map.size(w.props.scripts),
-               switchLinks: Map.size(w.switchLink.byId), doors: Map.size(w.door) } }))))))
+               switchLinks: Map.size(w.switchLink.byId), doors: Map.size(w.door) } })))))))))

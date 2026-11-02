@@ -3,7 +3,8 @@
   "entries": {
     "client": "print.fun",
     "crowd": "crowd.fun",
-    "walk": "walk.fun"
+    "walk": "walk.fun",
+    "objbench": "objbench.fun"
   },
   "cursor": "visible"
 }
