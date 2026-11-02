@@ -94,17 +94,27 @@ let progressOf = (d: transDoor): float =>
   else if d.state == 1.0 then 1.0
   else Math.clamp01(distance(d.baseClosed, d.base) / Math.max(distance(d.baseClosed, d.baseOpen), 0.000001))
 
+// A halted door (state 4) counts as open past halfway, as StdDoor heads for
+// the nearer end.
 let scriptOf = (d: transDoor): doorScript =>
-  { state: if d.state == 1.0 then Open else if d.state == 2.0 then Closing else if d.state == 3.0 then Opening else Closed,
-    t: progressOf(d) }
+  let t = progressOf(d) in
+  { state: if d.state == 1.0 then Open else if d.state == 2.0 then Closing else if d.state == 3.0 then Opening
+           else if d.state == 4.0 && t >= 0.5 then Open else Closed,
+    t: t }
 
 let isMoving = (s: doorScript): bool => s.state == Opening || s.state == Closing
 
-// Start StdDoor's state when an object gains a sliding door (a running one
-// keeps its own), and drop it when the object loses one.
+let hasScript = (w: world, id: float, name: string): bool =>
+  Map.get(id, w.props.scripts) |> Option.defaultValue([]) |> List.any((s) => Text.toLower(s) == name)
+
+// Start StdDoor's state when an object gains a sliding door and the script
+// (a running one keeps its own), and drop it when it loses either.
 let syncDoor = (w: world, id: float): world =>
   match slider(w, id) with
-  | Option.Some(d) => if Map.member(id, w.door) then w else setDoor(id, scriptOf(d), w)
+  | Option.Some(d) =>
+    if not hasScript(w, id, "stddoor") then { w with door: Map.remove(id, w.door), moving: Map.remove(id, w.moving) }
+    else if Map.member(id, w.door) then w
+    else setDoor(id, scriptOf(d), w)
   | Option.None => { w with door: Map.remove(id, w.door), moving: Map.remove(id, w.moving) }
 
 // Copy an object's properties and links down from its donors, and start its door.
@@ -159,20 +169,23 @@ let head = (open: bool, id: float, w: world): world =>
 
 // StdDoor: a frob toggles the door unless it's locked and closed; TurnOn
 // and TurnOff (from a switch) open and close it, locked or not. A door
-// without travel never moves.
+// without travel never moves (a locked one still answers a frob), and one
+// authored open without travel is a doorway that ignores everything.
 let stdDoor = (w: world, self: float, m: msg): world =>
   match slider(w, self) with
   | Option.None => w
   | Option.Some(d) =>
-    if distance(d.baseClosed, d.baseOpen) < 0.001 then w
+    let travels = distance(d.baseClosed, d.baseOpen) >= 0.001 in
+    let go = (open: bool) => if travels then head(open, self, w) else w in
+    if not travels && d.state == 1.0 then w
     else match m with
       | Frob(_) =>
         let s = doorOf(w, self) in
-        if s.state == Open || s.state == Opening then head(false, self, w)
+        if s.state == Open || s.state == Opening then go(false)
         else if isLocked(w, self) then play(self, "hackfail", w)
-        else head(true, self, w)
-      | TurnOn(_) => head(true, self, w)
-      | TurnOff(_) => head(false, self, w)
+        else go(true)
+      | TurnOn(_) => go(true)
+      | TurnOff(_) => go(false)
 
 // StdButton: a frob turns on everything its SwitchLinks lead to.
 let stdButton = (w: world, self: float, m: msg): world =>
@@ -187,9 +200,15 @@ let run = (name: string, w: world, self: float, m: msg): world =>
   else if key == "stdbutton" then stdButton(w, self, m)
   else w
 
+// Each script once, in order: a name inherited twice (19 medsci1 objects)
+// runs once.
 let handle = (w: world, e: envelope): world =>
-  Map.get(e.dest, w.props.scripts) |> Option.defaultValue([])
-    |> List.fold((acc, name) => run(name, acc, e.dest, e.msg), w)
+  match Map.get(e.dest, w.props.scripts) |> Option.defaultValue([])
+    |> List.fold((acc, name) => match acc with
+      | (x, ran) =>
+        let key = Text.toLower(name) in
+        if List.any((r) => r == key, ran) then acc else (run(name, x, e.dest, e.msg), List.append([key], ran)), (w, [])) with
+  | (x, _) => x
 
 let drain = (w: world): world =>
   Objects.drain(cap, handle, (x: world) => x.queue, (q, x: world) => { x with queue: q }, w)

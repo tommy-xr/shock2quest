@@ -56,11 +56,13 @@ expect Door.isLocked(Door.setMeta(false, -3.0, 10.0, lockedW), 10.0) == false
 // The object's own value beats a metaproperty.
 expect Door.isLocked(Door.setMeta(true, -3.0, 12.0, world0), 12.0) == false
 
-// A metaproperty that brings a door starts it as authored (open here), and
+// A metaproperty that brings a door (and StdDoor) starts it as authored
+// (open here), and
 // one that brings a SwitchLink copies it down, tagged with its donor; both go
 // when the metaproperty does.
 let openSlide = { slide with state: 1.0, base: [0.0, 0.0, 2.0] }
 let rich = { world0 with authored: { world0.authored with transDoor: Map.insert(-5.0, openSlide, world0.authored.transDoor),
+  scripts: Map.insert(-5.0, script("StdDoor"), world0.authored.scripts),
   switchLink: Objects.linkAs(200.0, { src: -6.0, dst: 10.0, data: true, donor: Option.None }, world0.authored.switchLink) } }
 let gained = rich |> Door.setMeta(true, -5.0, 11.0) |> Door.setMeta(true, -6.0, 12.0)
 expect Door.position(gained, 11.0) == Option.Some([0.0, 0.0, 2.0])
@@ -68,6 +70,24 @@ expect List.map((l: Objects.link<bool>) => (l.dst, l.donor), Objects.from(12.0, 
 let lost = gained |> Door.setMeta(false, -5.0, 11.0) |> Door.setMeta(false, -6.0, 12.0)
 expect Map.member(11.0, lost.door) == false
 expect Objects.from(12.0, lost.switchLink) == []
+
+// A script inherited twice runs once: the frob opens the door.
+let twice = Door.spawn({ world0 with authored: { world0.authored with scripts: Map.insert(13.0, script("stddoor"), world0.authored.scripts) },
+  graph: Map.insert(13.0, [-2.0], world0.graph) }, 13.0)
+expect Map.get(13.0, twice.props.scripts) == Option.Some(["stddoor", "StdDoor"])
+expect stateOf(step(twice, [13.0]), 13.0) == Door.Opening
+// A halted door past halfway counts as open; a sliding door without StdDoor
+// gets no door state.
+expect Door.scriptOf({ slide with state: 4.0, base: [0.0, 0.0, 1.5] }) == { state: Door.Open, t: 0.75 }
+expect Map.member(-1.0, Door.spawn(world0, -1.0).door) == false
+// A locked door without travel still answers a frob; one authored open
+// without travel ignores it.
+let stuck = { slide with baseOpen: [0.0, 0.0, 0.0] }
+let stuckW = (d: Door.transDoor, locked: bool) => Door.spawn({ world0 with authored: { world0.authored with
+  transDoor: Map.insert(14.0, d, world0.authored.transDoor), locked: Map.insert(14.0, locked, world0.authored.locked) },
+  graph: Map.insert(14.0, [-2.0], world0.graph) }, 14.0)
+expect step(stuckW(stuck, true), [14.0]).sounds == [{ obj: 14.0, name: "hackfail" }]
+expect step(stuckW({ stuck with state: 1.0 }, true), [14.0]).sounds == []
 
 // Sounds: once when it starts, once when it arrives; none while it moves.
 expect List.map((w: Door.world) => List.map((s: Door.sound) => s.name, w.sounds), hist) == [[], [], ["opening"], [], ["open"], [], []]
@@ -85,6 +105,12 @@ expect Objects.donors(Map.fromList([(1.0, [-1.0]), (-1.0, [-2.0]), (-2.0, [-1.0,
 let chain = Map.fromList(List.map((k) => (0.0 - k, [0.0 - k - 1.0]), List.range(20.0)) |> List.append([(5.0, [0.0])]))
 expect List.length(Objects.donors(chain, Objects.noEdits, 5.0)) == 21.0
 expect List.last(Objects.donors(chain, Objects.noEdits, 5.0)) == Option.Some(-20.0)
+
+// A runtime-added metaprop ranks above every authored donor, its own donors
+// included (Dark's depth-first lookup; shock2quest's loader instead keeps the
+// authored lineage first).
+let g2 = Map.fromList([(1.0, [-20.0, -30.0]), (-70.0, [-30.0])])
+expect Objects.donors(g2, { added: [-70.0], removed: [] }, 1.0) == [-70.0, -30.0, -20.0]
 
 // Relation changes.
 let e0 = Objects.noEdits
