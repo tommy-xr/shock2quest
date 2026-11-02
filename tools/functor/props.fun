@@ -27,7 +27,7 @@ let records = (name: string, chunks: List<Mis.chunk>, data: Bytes.t): Result.t<L
           if w.at + 8.0 + size > end then { w with at: end, error: Option.Some(Decode.failure(w.at, Text.join("", [name, " record runs past its chunk"]))) }
           else { w with at: w.at + 8.0 + size, records: List.append([{ id: id, at: w.at + 8.0, length: size }], w.records) })
       | Result.Error(e) => { w with at: end, error: Option.Some(e) } in
-    let w = Objects.loop(step, (w: walk) => w.at >= end, { at: c.offset, records: [], error: Option.None }) in
+    let w = Loop.until((w: walk) => w.at >= end, step, { at: c.offset, records: [], error: Option.None }) in
     match w.error with
     | Option.Some(e) => Result.Error(e)
     | Option.None => Result.Ok(w.records)
