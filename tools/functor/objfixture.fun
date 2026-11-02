@@ -94,6 +94,37 @@ expect step(stuckW({ stuck with state: 1.0 }, true), [14.0]).sounds == []
 // Sounds: once when it starts, once when it arrives; none while it moves.
 expect List.map((w: Door.world) => List.map((s: Door.sound) => s.name, w.sounds), hist) == [[], [], ["opening"], [], ["open"], [], []]
 
+// --- A rotating door ------------------------------------------------------------
+// -7 swings 90° counter-clockwise about Z at π/2 rad/s (1 s), its hinge at
+// the origin: closed at (1, 0, 0), open at (0, 1, 0). Like the real ones it
+// also inherits a zero TransDoor, which it ignores. Object 20 runs StdDoor.
+let swing: Door.rotDoor = { closed: 0.0, open: 90.0, speed: Math.pi / 2.0, axis: 2.0, state: 0.0, clockwise: false,
+  baseClosed: [1.0, 0.0, 0.0], baseOpen: [0.0, 1.0, 0.0], base: [1.0, 0.0, 0.0],
+  baseRotation: Affine.identity, closedRotation: Affine.identity, openRotation: Affine.axisAngle([0.0, 0.0, 1.0], Math.pi / 2.0) }
+let rotW = (d: Door.rotDoor) => Door.spawn({ world0 with
+  authored: { world0.authored with rotDoor: Map.fromList([(-7.0, d)]), transDoor: Map.insert(-7.0, { slide with baseOpen: [0.0, 0.0, 0.0] }, world0.authored.transDoor) },
+  graph: Map.insert(-7.0, [-2.0], Map.insert(20.0, [-7.0], world0.graph)) }, 20.0)
+let rot0 = rotW(swing)
+let rotHist = List.range(13.0) |> List.fold((h, k) => match List.last(h) with
+  | Option.Some(w) => List.append([step(w, if k == 0.0 then [20.0] else [])], h)
+  | Option.None => h, [rot0])
+let near = (a: List<float>, b: List<float>): bool => List.all((d) => Math.abs(d) < 0.00001, World.sub(a, b))
+expect (Door.slider(rot0, 20.0), stateOf(rot0, 20.0)) == (Option.None, Door.Closed)
+expect stateOf(Cal.at(1.0, rotHist, rot0), 20.0) == Door.Opening
+expect stateOf(Cal.at(12.0, rotHist, rot0), 20.0) == Door.Open
+expect List.filter((x) => x != [], List.map((w: Door.world) => List.map((s: Door.sound) => s.name, w.sounds), rotHist)) == [["opening"], ["open"]]
+// Halfway it has turned 45° about the hinge; at the ends it is as authored.
+expect near(Door.swing(swing, 0.5).at, [Math.sqrt(0.5), Math.sqrt(0.5), 0.0])
+expect near(Affine.angles(Door.swing(swing, 0.5).rotation), [0.0, 0.0, Math.pi / 4.0])
+expect Door.swing(swing, 1.0) == { at: [0.0, 1.0, 0.0], rotation: swing.openRotation }
+expect Door.position(Cal.at(12.0, rotHist, rot0), 20.0) == Option.Some([0.0, 1.0, 0.0])
+// Clockwise turns negative; either way may go the long way round.
+expect List.map((d) => Door.travelDegrees(d), [{ swing with open: 270.0, clockwise: true }, { swing with closed: 350.0, open: 10.0 },
+  { swing with closed: 10.0, open: 350.0, clockwise: true }, { swing with closed: 10.0, open: 350.0 }]) == [-90.0, 20.0, -20.0, 340.0]
+// Without travel it ignores everything, frobs included (no sound).
+expect step(rotW({ swing with open: 0.0 }), [20.0]).sounds == []
+expect stateOf(step(rotW({ swing with open: 0.0 }), [20.0]), 20.0) == Door.Closed
+
 // --- Donors ---------------------------------------------------------------------
 // -10 ← {-20 (meta), -30 (archetype)}; both hold `hp`, and -20 ranks first.
 // -30 → -40 and -20 → -40: a shared ancestor, visited once, where first met.

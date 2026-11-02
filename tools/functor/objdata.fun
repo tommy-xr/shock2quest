@@ -46,6 +46,15 @@ let doors = Props.load(gamesys, Misfixture.chunkFile([chunk("L$MetaProp", []), c
 expect Objects.get(8.0, doors.world.props.transDoor) == Option.Some({ closed: 0.0, open: 6.0, speed: 12.0, axis: 1.0, state: 0.0,
   baseClosed: [1.0, 2.0, 3.0], baseOpen: [4.0, 5.0, 6.0], base: [7.0, 8.0, 9.0] })
 expect (Objects.get(9.0, doors.world.props.rotDoor) |> Option.map((d: Door.rotDoor) => (d.clockwise, d.base))) == Option.Some((true, [7.0, 8.0, 9.0]))
+// 98 bytes: each end is the base facing turned by its angle about the axis
+// (6° about Y here); 110 bytes: the closed and open facings that follow (90°
+// and 180° headings).
+let near = (a: List<float>, b: List<float>): bool => List.all((d) => Math.abs(d) < 0.00001, World.sub(a, b))
+let turns = (d: Door.rotDoor) => [Affine.angles(d.closedRotation), Affine.angles(d.openRotation)]
+expect (Objects.get(9.0, doors.world.props.rotDoor) |> Option.map(turns)) == Option.Some([[0.0, 0.0, 0.0], Affine.angles(Affine.axisAngle([0.0, 1.0, 0.0], 6.0 * Math.pi / 180.0))])
+let facings = Props.load(gamesys, Misfixture.chunkFile([chunk("L$MetaProp", []),
+  chunk("P$RotDoor", [prop(9.0, Bytes.concat([doorBytes(1.0), Bytes.fromU16le([0.0, 0.0, 16384.0, 0.0, 0.0, 32768.0])]))])])) |> Binary.require
+expect (Objects.get(9.0, facings.world.props.rotDoor) |> Option.map(turns) |> Option.map((ts) => List.zip([[0.0, 0.0, Math.pi / 2.0], [0.0, 0.0, Math.pi]], ts) |> List.all((p) => match p with | (a, b) => near(a, b)))) == Option.Some(true)
 // A record too short for its property, or running past its chunk, fails.
 expect Result.isError(Props.load(gamesys, missionWith([prop(6.0, Bytes.zeros(0.0)), prop(7.0, Bytes.fromU32le([1.0]))])))
 expect Result.isError(Props.load(gamesys, missionWith([Encode.sequence([i32s([6.0]), Encode.u32le(100.0), Encode.u32le(0.0)])])))
@@ -60,4 +69,4 @@ let missionFile = Path.of("ss2data/medsci1.mis")
 expect not (File.exists(gamesysFile) && File.exists(missionFile))
   || (Props.load(File.bytes(gamesysFile), File.bytes(missionFile)) |> Result.map((l: Props.loaded) => l.stats))
        == Result.Ok({ objects: 1556.0, metaLinks: 6762.0, belowArchetype: 0.0, transDoors: 56.0, rotDoors: 5.0,
-                      locked: 9.0, frobInfo: 346.0, scripts: 749.0, switchLinks: 336.0, doors: 52.0 })
+                      locked: 9.0, frobInfo: 346.0, scripts: 749.0, switchLinks: 336.0, doors: 57.0 })

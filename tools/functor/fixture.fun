@@ -92,6 +92,41 @@ expect Result.map(Mesh.triangleCount, Lgmd.mesh(flatTop)) == Result.Ok(12.0)
 expect Text.contains("polygons[0]", failure(cubeWith(4.0, corners, turned, 4.0, List.append(List.drop(1.0, faces), [[0.0, 1.0, 9.0, 4.0]]))))
 expect Text.contains("past the end", failure(cubeWith(4.0, corners, turned, 5.0, faces)))
 
+// A textured quad: material "TEST.PCX" in slot 7 (half see-through,
+// self-lit), four uvs, four lighting normals (+Z, packed: z field 256), one
+// polygon naming its uvs in reverse, and a root part turned 90° about Z.
+let quadSurface =
+  Encode.run(Encode.sequence([
+    Encode.latin1("LGMD"), Encode.u32le(4.0), Encode.zeros(52.0),
+    Encode.u16le(1.0), Encode.u16le(4.0), Encode.u16le(0.0),
+    Encode.u8(1.0), Encode.u8(0.0), Encode.u8(0.0), Encode.u8(1.0),
+    // objects, materials, uvs, vhots, vertices, lights, normals, polygons, nodes, size
+    Encode.bytes(Bytes.fromU32le([122.0, 215.0, 241.0, 273.0, 273.0, 321.0, 353.0, 353.0, 398.0, 398.0])),
+    Encode.bytes(Bytes.fromU32le([0.0, 390.0, 8.0])),
+    subObject([0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], -1.0, -1.0, 0.0, 4.0),
+    Encode.latin1("TEST.PCX"), Encode.zeros(8.0), Encode.u8(0.0), Encode.u8(7.0), Encode.zeros(8.0),
+    Encode.bytes(Bytes.fromF32le([0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0])),
+    Encode.bytes(Bytes.fromF32le([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0])),
+    Encode.list((k) => Encode.sequence([Encode.u16le(0.0), Encode.u16le(k), Encode.u32le(1024.0)]), List.range(4.0)),
+    Encode.u16le(0.0), Encode.u16le(7.0), Encode.u8(3.0), Encode.u8(4.0), Encode.zeros(6.0),
+    Encode.bytes(Bytes.fromU16le([0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 2.0, 3.0, 3.0, 2.0, 1.0, 0.0])), Encode.u8(0.0),
+    Encode.bytes(Bytes.fromF32le([0.5, 1.0]))
+  ]))
+
+let surface = Lgmd.surface(quadSurface) |> Binary.require
+expect Bytes.length(quadSurface) == 398.0
+expect surface.materials == [{ name: "TEST.PCX", slot: 7.0, color: false, transparency: 0.5, emissivity: 1.0 }]
+expect List.map((f: Lgmd.face) => (f.slot, f.mapped, List.length(f.corners)), surface.faces) == [(7.0, true, 4.0)]
+// Corner 1, (1, 0, 0), turns to (0, 1, 0); normals stay +Z; uvs reversed.
+expect (List.head(surface.faces) |> Option.bind((f: Lgmd.face) => List.nth(1.0, f.corners)))
+  == Option.Some({ p: [0.0, 1.0, 0.0], n: [0.0, 0.0, 1.0], uv: [1.0, 1.0] })
+// Drawn: one piece at its opacity when its texture is there, none without.
+let white = Texture.fromPixels({ width: 1.0, height: 1.0, format: Texture.Rgba8, colorSpace: Texture.Srgb, pixels: Bytes.fromU8([255.0, 255.0, 255.0, 255.0]) })
+let look = Objview.lookOf(Map.fromList([("TEST.PCX", white)]), surface)
+expect (List.map((p: Objview.piece) => p.opacity, look.pieces), look.center, look.size) == ([0.5], [-0.5, 0.5, 0.0], [1.0, 1.0, 0.0])
+expect Objview.lookOf(Map.empty(), surface).pieces == []
+expect Result.isError(Lgmd.surface(cube(4.0)))
+
 // A synthetic character: a root joint 0 and a limb to joint 1, 2 up. Three
 // vertices follow joint 0 rigidly; three blend on joint 1 (weights 1, 1, 0).
 

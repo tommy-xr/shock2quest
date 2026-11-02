@@ -55,14 +55,33 @@ let transDoor: Decode.t<Door.transDoor> =
         { closed: h.closed, open: h.open, speed: h.speed, axis: h.axis, state: h.state, baseClosed: bc, baseOpen: bo, base: b },
       Decode.skipThen(16.0, Mis.vec3), Mis.vec3, Mis.vec3))
 
+// A Dark facing: bank, pitch and heading as u16 angles (65536 a turn).
+let facing: Decode.t<Affine.t> =
+  Decode.map3((b, p, h) => Affine.facing(b * Math.pi / 32768.0, p * Math.pi / 32768.0, h * Math.pi / 32768.0),
+    Decode.u16le, Decode.u16le, Decode.u16le)
+
+// The closed and open facings a 110-byte RotDoor ends with, if it has them.
+let ends: Decode.t<Option.t<(Affine.t, Affine.t)>> =
+  { read: (data, offset) =>
+      if Bytes.length(data) >= offset + 12.0 then (Decode.map2((c, o) => Option.Some((c, o)), facing, facing)).read(data, offset)
+      else Decode.succeed(Option.None).read(data, offset) }
+
 // `P$RotDoor` (98 or 110 bytes): as a TransDoor up to the locations, then
-// the base angle, rooms and the clockwise flag at byte 94.
+// the base facing (byte 76), base angle, rooms, the clockwise flag (byte 94)
+// and, in 110 bytes, the closed and open facings. Without those, each end is
+// the base facing turned by its angle about the door's axis, as shock2quest
+// derives them.
 let rotDoor: Decode.t<Door.rotDoor> =
   doorHead |> Decode.andThen((h: doorHead) =>
-    Decode.map4((bc, bo, b, cw): Door.rotDoor =>
-        { closed: h.closed, open: h.open, speed: h.speed, axis: h.axis, state: h.state, clockwise: cw,
-          baseClosed: bc, baseOpen: bo, base: b },
-      Decode.skipThen(16.0, Mis.vec3), Mis.vec3, Mis.vec3, Decode.skipThen(18.0, bool32)))
+    Decode.map5((bc, bo, b, base, cw) => (bc, bo, b, base, cw),
+      Decode.skipThen(16.0, Mis.vec3), Mis.vec3, Mis.vec3, facing, Decode.skipThen(12.0, bool32))
+    |> Decode.andThen((r) => match r with | (bc, bo, b, base, cw) =>
+      ends |> Decode.map((e): Door.rotDoor =>
+        let turned = (deg: float) => Affine.compose(base, Affine.axisAngle(Door.hinge(h.axis), deg * Math.pi / 180.0)) in
+        match Option.defaultValue((turned(h.closed), turned(h.open)), e) with
+        | (c, o) =>
+          { closed: h.closed, open: h.open, speed: h.speed, axis: h.axis, state: h.state, clockwise: cw,
+            baseClosed: bc, baseOpen: bo, base: b, baseRotation: base, closedRotation: c, openRotation: o })))
 
 let frobInfo: Decode.t<Door.frobInfo> =
   Decode.map3((w, i, t): Door.frobInfo => { world: w, inventory: i, tool: t }, Decode.u32le, Decode.u32le, Decode.u32le)
