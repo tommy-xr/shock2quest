@@ -1,6 +1,7 @@
 // Objview — the doors as drawn and collided: each StdDoor door's static
 // mesh (its copied-down `P$ModelName`, from `ss2/obj/`), placed where
-// `Door.position` has it and turned to its `P$Position` heading, with a
+// `Door.position` has it and turned to its `P$Position` heading (bank and
+// pitch are ignored: every medsci1 door stands upright), with a
 // kinematic box from the mesh's bounds. Scene space as `World` (metres, Y up).
 
 // A door's look: its mesh (Dark axes, feet), heading, and box (centre and

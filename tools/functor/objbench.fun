@@ -37,10 +37,10 @@ type model = { tables: Map<string, Map<float, Objects.Cell<Bytes.t>>>, world: Do
 
 let init: model = { tables: tables, world: Level.world, step: 0.0 }
 
-// Write `k`: a record far from the last (a multiplicative stride), set to
-// 4 new bytes.
+// Write `k`: a record far from the last (an odd stride, coprime to the
+// 6,754 records, so all are reached), set to 4 new bytes.
 let write = (step: float, m: Map<string, Map<float, Objects.Cell<Bytes.t>>>, k: float) =>
-  match List.nth(Math.mod((step * writesPerStep + k) * 2654.0, Math.max(count, 1.0)), records) with
+  match List.nth(Math.mod((step * writesPerStep + k) * 2655.0, Math.max(count, 1.0)), records) with
   | Option.Some(r) => (match r with
     | (name, id) => Map.update(name, (t) => Option.map((x) => Objects.set(id, Bytes.fromF32le([step]), x), t), m))
   | Option.None => m

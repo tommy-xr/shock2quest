@@ -79,7 +79,7 @@ let sampledInput = (model, snap: Input.snapshot) =>
   let keys = { model with
     walk: unit(axis(Key.S, Key.W, snap)), strafe: unit(axis(Key.A, Key.D, snap)),
     turn: axis(Key.Right, Key.Left, snap) - dx * 0.3, look: axis(Key.Down, Key.Up, snap) - dy * 0.3,
-    frob: model.frob || List.any((k) => k == Key.E, snap.pressedKeys),
+    frob: List.any((k) => k == Key.E, snap.pressedKeys),
     dragX: if m.buttons.left then m.x else -1.0, dragY: if m.buttons.left then m.y else -1.0 } in
   match snap.xr with
   | Option.None => { keys with headYaw: 0.0, headPitch: 0.0, snap: 0.0 }
@@ -170,6 +170,7 @@ let ui = (model) =>
   let p = Physics.position(playerTag) in
   Ui.column([
     Ui.text(match loaded with | Result.Ok(_) => "medsci1" | Result.Error(e) => Binary.describe(e)),
+    Ui.text(match Level.objects with | Result.Ok(_) => "objects" | Result.Error(e) => Binary.describe(e)),
     Ui.text(Text.join("", ["grounded  ", if Physics.grounded(playerTag) then "yes" else "no"])),
     Ui.text(Text.join("", ["doors  ", Text.fromFloat(List.length(Level.doors)), "  moving ", Text.fromFloat(Map.size(model.objects.moving)), "  (E frobs)"])),
     Ui.text(Text.join("", ["position  ", Text.fixed(p.x, 2.0), ", ", Text.fixed(p.y, 2.0), ", ", Text.fixed(p.z, 2.0)])),

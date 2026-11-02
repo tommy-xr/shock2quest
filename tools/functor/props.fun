@@ -145,7 +145,9 @@ let load = (gamesys: Bytes.t, mission: Bytes.t): Result.t<loaded, Binary.error> 
   authoredIn(mc, mission) |> Result.bind((ma) =>
   names("P$ModelName", gc, gamesys) |> Result.bind((gn) =>
   names("P$ModelName", mc, mission) |> Result.bind((mn) =>
-  Result.Ok(Mis.positions(mc, mission) |> Result.defaultValue(Map.empty())) |> Result.map((ps) =>
+  (match Mis.find("P$Position", mc) with
+   | Result.Ok(_) => Mis.positions(mc, mission)
+   | Result.Error(_) => Result.Ok(Map.empty())) |> Result.map((ps) =>
     let a: Door.authored = { transDoor: union(ga.transDoor, ma.transDoor), rotDoor: union(ga.rotDoor, ma.rotDoor),
       locked: union(ga.locked, ma.locked), frobInfo: union(ga.frobInfo, ma.frobInfo), scripts: union(ga.scripts, ma.scripts),
       switchLink: Map.fold((t, id, l) => Objects.linkAs(id, l, t), ga.switchLink, ma.switchLink.byId) } in
