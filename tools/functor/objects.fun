@@ -144,8 +144,10 @@ let index = (key: float, id: float, on: bool, m: Map<float, Map<float, bool>>): 
     let next = if on then Map.insert(id, true, Option.defaultValue(Map.empty(), ids)) else Map.remove(id, Option.defaultValue(Map.empty(), ids)) in
     if Map.size(next) == 0.0 then Option.None else Option.Some(next), m)
 
-// Add a link under a given id (an authored link keeps its own).
-let linkAs = (id: float, l: link<'d>, t: links<'d>): links<'d> =>
+// Add a link under a given id (an authored link keeps its own), replacing
+// any link that had it.
+let linkAs = (id: float, l: link<'d>, t0: links<'d>): links<'d> =>
+  let t = unlink(id, t0) in
   { byId: Map.insert(id, l, t.byId), bySrc: index(l.src, id, true, t.bySrc), byDst: index(l.dst, id, true, t.byDst),
     next: Math.max(t.next, id + 1.0) }
 

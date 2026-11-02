@@ -10,15 +10,16 @@ let slide: Door.transDoor = { closed: 0.0, open: 2.0, speed: 8.0, axis: 2.0, sta
                               baseClosed: [0.0, 0.0, 0.0], baseOpen: [0.0, 0.0, 2.0], base: [0.0, 0.0, 0.0] }
 let script = (name: string): Objects.contribution<string> => { items: [name], inherits: true }
 
+let switches = Objects.linkAs(100.0, { src: 11.0, dst: 10.0, data: true, donor: Option.None }, Objects.noLinks())
+
 let world0: Door.world =
   let w: Door.world = {
     graph: Map.fromList([(-2.0, [-1.0]), (10.0, [-2.0]), (11.0, [-4.0]), (12.0, [-2.0])]),
     edits: Map.empty(),
     authored: { transDoor: Map.fromList([(-1.0, slide)]), rotDoor: Map.empty(),
                 locked: Map.fromList([(-3.0, true), (12.0, false)]), frobInfo: Map.empty(),
-                scripts: Map.fromList([(-2.0, script("StdDoor")), (-4.0, script("StdButton"))]) },
-    props: Door.noProps,
-    switchLink: Objects.linkAs(100.0, { src: 11.0, dst: 10.0, data: true, donor: Option.None }, Objects.noLinks()),
+                scripts: Map.fromList([(-2.0, script("StdDoor")), (-4.0, script("StdButton"))]), switchLink: switches },
+    props: Door.noProps, switchLink: switches,
     door: Map.empty(), moving: Map.empty(), queue: Objects.queue(), sounds: [],
   } in
   List.fold(Door.spawn, w, [10.0, 11.0, 12.0])
@@ -31,7 +32,7 @@ let frames = (inputs: List<List<float>>): List<Door.world> =>
 
 let inputs = [[], [10.0], [], [], [], []]
 let hist = frames(inputs)
-let at = (k: float): Door.world => List.nth(k, hist) |> Option.defaultValue(world0)
+let at = (k: float): Door.world => Cal.at(k, hist, world0)
 let doorZ = (w: Door.world, id: float): float => Door.position(w, id) |> Option.map((p) => Door.n(2.0, p)) |> Option.defaultValue(0.0)
 let stateOf = (w: Door.world, id: float): Door.doorState => Door.doorOf(w, id).state
 
@@ -54,6 +55,19 @@ expect step(lockedW, [10.0]).sounds == [{ obj: 10.0, name: "hackfail" }]
 expect Door.isLocked(Door.setMeta(false, -3.0, 10.0, lockedW), 10.0) == false
 // The object's own value beats a metaproperty.
 expect Door.isLocked(Door.setMeta(true, -3.0, 12.0, world0), 12.0) == false
+
+// A metaproperty that brings a door starts it as authored (open here), and
+// one that brings a SwitchLink copies it down, tagged with its donor; both go
+// when the metaproperty does.
+let openSlide = { slide with state: 1.0, base: [0.0, 0.0, 2.0] }
+let rich = { world0 with authored: { world0.authored with transDoor: Map.insert(-5.0, openSlide, world0.authored.transDoor),
+  switchLink: Objects.linkAs(200.0, { src: -6.0, dst: 10.0, data: true, donor: Option.None }, world0.authored.switchLink) } }
+let gained = rich |> Door.setMeta(true, -5.0, 11.0) |> Door.setMeta(true, -6.0, 12.0)
+expect Door.position(gained, 11.0) == Option.Some([0.0, 0.0, 2.0])
+expect List.map((l: Objects.link<bool>) => (l.dst, l.donor), Objects.from(12.0, gained.switchLink)) == [(10.0, Option.Some(-6.0))]
+let lost = gained |> Door.setMeta(false, -5.0, 11.0) |> Door.setMeta(false, -6.0, 12.0)
+expect Map.member(11.0, lost.door) == false
+expect Objects.from(12.0, lost.switchLink) == []
 
 // Sounds: once when it starts, once when it arrives; none while it moves.
 expect List.map((w: Door.world) => List.map((s: Door.sound) => s.name, w.sounds), hist) == [[], [], ["opening"], [], ["open"], [], []]
@@ -116,6 +130,11 @@ let gone = Objects.inherit(receptrons, ds1, Objects.donors(g, without, 1.0), 1.0
 expect List.map((l: Objects.link<float>) => l.dst, Objects.from(1.0, gone)) == [2.0]
 expect Objects.into(-900.0, gone) == []
 expect List.map((l: Objects.link<float>) => l.dst, Objects.from(1.0, Objects.inherit(receptrons, Objects.donors(g, without, 1.0), ds1, 1.0, gone))) == [2.0, -900.0]
+
+// Re-linking an id replaces the old link in every index.
+let relinked = Objects.noLinks() |> Objects.linkAs(5.0, { src: 1.0, dst: 2.0, data: 0.0, donor: Option.None })
+  |> Objects.linkAs(5.0, { src: 3.0, dst: 4.0, data: 0.0, donor: Option.None })
+expect (Objects.from(1.0, relinked), Objects.into(2.0, relinked), List.length(Objects.from(3.0, relinked))) == ([], [], 1.0)
 
 // --- Queue --------------------------------------------------------------------------
 // Each message n < 6 sends 2n+1 and 2n+2 (a sustained fan-out); a cap of 4

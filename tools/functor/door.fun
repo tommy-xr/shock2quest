@@ -24,7 +24,8 @@ type frobInfo = { world: float, inventory: float, tool: float }
 
 // Every authored record, donors' and objects' alike; immutable after load.
 type authored = { transDoor: Map<float, transDoor>, rotDoor: Map<float, rotDoor>, locked: Map<float, bool>,
-                  frobInfo: Map<float, frobInfo>, scripts: Map<float, Objects.contribution<string>> }
+                  frobInfo: Map<float, frobInfo>, scripts: Map<float, Objects.contribution<string>>,
+                  switchLink: Objects.links<bool> }
 
 // Live, per-object copied-down values. `scripts` caches the accumulated
 // list, recomputed from `scriptsLocal` and the donors.
@@ -66,7 +67,7 @@ type world = {
 // Messages handled per frame; the rest wait (in order) for the next.
 let cap = 1024.0
 
-let n = (k: float, v: List<float>): float => Option.defaultValue(0.0, List.nth(k, v))
+let n = Affine.n
 let lerp = (a: List<float>, b: List<float>, t: float): List<float> =>
   [n(0.0, a) + (n(0.0, b) - n(0.0, a)) * t, n(1.0, a) + (n(1.0, b) - n(1.0, a)) * t, n(2.0, a) + (n(2.0, b) - n(2.0, a)) * t]
 let distance = (a: List<float>, b: List<float>): float =>
@@ -99,7 +100,14 @@ let scriptOf = (d: transDoor): doorScript =>
 
 let isMoving = (s: doorScript): bool => s.state == Opening || s.state == Closing
 
-// Copy an object's properties down from its donors, and start its door.
+// Start StdDoor's state when an object gains a sliding door (a running one
+// keeps its own), and drop it when the object loses one.
+let syncDoor = (w: world, id: float): world =>
+  match slider(w, id) with
+  | Option.Some(d) => if Map.member(id, w.door) then w else setDoor(id, scriptOf(d), w)
+  | Option.None => { w with door: Map.remove(id, w.door), moving: Map.remove(id, w.moving) }
+
+// Copy an object's properties and links down from its donors, and start its door.
 let spawn = (w: world, id: float): world =>
   let ds = donorsOf(w, id) in
   let a = w.authored in
@@ -111,27 +119,25 @@ let spawn = (w: world, id: float): world =>
     transDoor: Objects.spawn(a.transDoor, ds, id, p.transDoor), rotDoor: Objects.spawn(a.rotDoor, ds, id, p.rotDoor),
     locked: Objects.spawn(a.locked, ds, id, p.locked), frobInfo: Objects.spawn(a.frobInfo, ds, id, p.frobInfo),
     scriptsLocal: local }) in
-  let w2 = { w with props: p2 } in
-  match slider(w2, id) with
-  | Option.Some(d) =>
-    let s = scriptOf(d) in
-    { w2 with door: Map.insert(id, s, w2.door), moving: if isMoving(s) then Map.insert(id, true, w2.moving) else w2.moving }
-  | Option.None => w2
+  syncDoor({ w with props: p2, switchLink: Objects.inherit(a.switchLink, [], ds, id, w.switchLink) }, id)
 
-// Re-derive an object's inherited values after its donors changed.
-let recompose = (w: world, id: float): world =>
+// Re-derive an object's inherited values and links after its donors changed
+// from `before`.
+let recompose = (w: world, before: List<float>, id: float): world =>
   let ds = donorsOf(w, id) in
   let a = w.authored in
   let p = w.props in
-  { w with props: scriptsOf(w, ds, id, { p with
-    transDoor: Objects.recompose(a.transDoor, ds, id, p.transDoor), rotDoor: Objects.recompose(a.rotDoor, ds, id, p.rotDoor),
-    locked: Objects.recompose(a.locked, ds, id, p.locked), frobInfo: Objects.recompose(a.frobInfo, ds, id, p.frobInfo) }) }
+  syncDoor({ w with
+    props: scriptsOf(w, ds, id, { p with
+      transDoor: Objects.recompose(a.transDoor, ds, id, p.transDoor), rotDoor: Objects.recompose(a.rotDoor, ds, id, p.rotDoor),
+      locked: Objects.recompose(a.locked, ds, id, p.locked), frobInfo: Objects.recompose(a.frobInfo, ds, id, p.frobInfo) }),
+    switchLink: Objects.inherit(a.switchLink, before, ds, id, w.switchLink) }, id)
 
 // Add or remove a metaproperty on an object at runtime (no-op when that
 // changes nothing; see `Objects.relate`).
 let setMeta = (add: bool, meta: float, id: float, w: world): world =>
   match Objects.relate(w.graph, add, meta, id, Map.get(id, w.edits) |> Option.defaultValue(Objects.noEdits)) with
-  | Option.Some(e) => recompose({ w with edits: Map.insert(id, e, w.edits) }, id)
+  | Option.Some(e) => recompose({ w with edits: Map.insert(id, e, w.edits) }, donorsOf(w, id), id)
   | Option.None => w
 
 let isLocked = (w: world, id: float): bool => Objects.get(id, w.props.locked) |> Option.defaultValue(false)
