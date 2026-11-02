@@ -119,7 +119,7 @@ let objectIds = (chunks: List<Mis.chunk>, data: Bytes.t): List<float> =>
     |> Map.keys
 
 type stats = { objects: float, metaLinks: float, belowArchetype: float, transDoors: float, rotDoors: float,
-               locked: float, frobInfo: float, scripts: float, switchLinks: float }
+               locked: float, frobInfo: float, scripts: float, switchLinks: float, doors: float }
 
 type loaded = { world: Door.world, objects: List<float>, stats: stats }
 
@@ -144,4 +144,4 @@ let load = (gamesys: Bytes.t, mission: Bytes.t): Result.t<loaded, Binary.error> 
       stats: { objects: List.length(ids), metaLinks: gm.links + mm.links, belowArchetype: gm.belowArchetype + mm.belowArchetype,
                transDoors: Map.size(w.props.transDoor), rotDoors: Map.size(w.props.rotDoor), locked: Map.size(w.props.locked),
                frobInfo: Map.size(w.props.frobInfo), scripts: Map.size(w.props.scripts),
-               switchLinks: Map.size(w.switchLink.byId) } }))))))
+               switchLinks: Map.size(w.switchLink.byId), doors: Map.size(w.door) } }))))))

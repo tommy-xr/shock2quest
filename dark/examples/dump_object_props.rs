@@ -1,7 +1,8 @@
 //! Dump each mission object's effective door properties as this crate
 //! resolves them (gamesys merged, ancestors applied), one JSON object per
 //! line, for differential checks of other implementations. Positions are in
-//! Dark feet (the loader's scale undone).
+//! feet (the loader's scale undone) but keep the loader's axes: Dark's
+//! (x, y, z) is stored as (-x, z, y).
 //!
 //!   cargo run -p dark --example dump_object_props -- shock2.gam medsci1.mis > props.jsonl
 
