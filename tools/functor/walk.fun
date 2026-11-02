@@ -1,6 +1,6 @@
 // walk — the `walk` entry: medsci1's world rep, textured and lightmapped,
 // walked with a capsule player on `Physics.character`, and its doors: E (or
-// the right trigger) frobs what's ahead, and a StdDoor door slides open.
+// the right trigger) frobs what's ahead, and a StdDoor door opens.
 //
 //   functor -d tools/functor run native --entry walk
 //   functor -d tools/functor run vr --entry walk
