@@ -35,11 +35,8 @@ let surfaceOf = (t: Mis.texture): surface =>
   let path = texturePath(t) in
   if t.name == "null" || not File.exists(path) then blank
   else
-    match Pcx.decode(File.bytes(path)) with
-    | Result.Ok(image) =>
-      { width: image.width, height: image.height,
-        texture: Option.Some(Texture.fromPixels({ width: image.width, height: image.height, format: Texture.Rgb8,
-                                                  colorSpace: Texture.Srgb, pixels: image.pixels })) }
+    match Texture.decode(File.bytes(path), Texture.Srgb) with
+    | Result.Ok(image) => { width: image.width, height: image.height, texture: Option.Some(Texture.fromPixels(image)) }
     | Result.Error(_) => blank
 
 // One rendered polygon, with what its vertices need.
