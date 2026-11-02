@@ -27,14 +27,6 @@ let isOwn = (c: Cell<'t>): bool =>
 let get = (id: float, table: Map<float, Cell<'t>>): Option.t<'t> => Map.get(id, table) |> Option.map(value)
 let set = (id: float, v: 't, table: Map<float, Cell<'t>>): Map<float, Cell<'t>> => Map.insert(id, Own(v), table)
 
-// Repeat `step` until `done`. Functor has no loop and only shallow recursion,
-// so steps run in folds whose length doubles each round: at most twice the
-// steps needed, and log2(steps) recursion.
-let loop = (step: ('s) => 's, done: ('s) => bool, s: 's): 's => rounds(step, done, s, 4.0)
-let rounds = (step: ('s) => 's, done: ('s) => bool, s: 's, n: float): 's =>
-  if done(s) then s
-  else rounds(step, done, List.fold((acc, _) => if done(acc) then acc else step(acc), s, List.range(n)), n * 2.0)
-
 let has = (x: float, xs: List<float>): bool => List.any((y) => y == x, xs)
 
 // --- Donors -----------------------------------------------------------------
@@ -64,7 +56,7 @@ let donors = (graph: Map<float, List<float>>, e: edits, id: float): List<float> 
     | [d, ..rest] =>
       if Map.member(d, w.seen) || Map.member(d, excluded) then { w with stack: rest }
       else { stack: List.append(rest, direct(graph, d)), seen: Map.insert(d, true, w.seen), out: List.append([d], w.out) } in
-  loop(step, (w: walk) => List.isEmpty(w.stack), start).out
+  Loop.until((w: walk) => List.isEmpty(w.stack), step, start).out
 
 // Add (`add`) or remove the relation `id → meta` at runtime, by
 // shock2quest's rules: adding a present relation or removing an absent one
@@ -200,7 +192,7 @@ let drain = (cap: float, handle: ('w, 'm) => 'w, read: ('w) => queue<'m>, write:
       match Map.get(q.head, q.items) with
       | Option.Some(m) => (handle(write({ q with head: q.head + 1.0, items: Map.remove(q.head, q.items) }, w), m), n + 1.0)
       | Option.None => (w, cap) in
-  match loop(step, (s) => match s with | (w, n) => n >= cap || pending(read(w)) == 0.0, (w0, 0.0)) with
+  match Loop.until((s) => match s with | (w, n) => n >= cap || pending(read(w)) == 0.0, step, (w0, 0.0)) with
   | (w, _) =>
     let q = read(w) in
     if pending(q) > 0.0 then write({ q with carried: q.carried + 1.0 }, w) else w
