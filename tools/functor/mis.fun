@@ -108,14 +108,23 @@ let positions = (chunks: List<chunk>, data: Bytes.t): Result.t<Map<float, start>
         Decode.skipThen(0.0, Decode.i32le), Decode.skipThen(4.0, vec3), Decode.skipThen(8.0, Decode.u16le)))), data)
       |> Result.map(Map.fromList))
 
+// A link chunk's links (14-byte records: id, source, destination, then a
+// flavor this skips); none when the file has no such chunk.
+type link = { id: float, src: float, dst: float }
+
+let links = (name: string, chunks: List<chunk>, data: Bytes.t): Result.t<List<link>, Binary.error> =>
+  match find(name, chunks) with
+  | Result.Error(_) => Result.Ok([])
+  | Result.Ok(c) =>
+    Decode.run(Decode.at(c.offset, Decode.list(c.length / 14.0,
+      Decode.map3((id, src, dst): link => { id: id, src: src, dst: dst }, Decode.i32le, Decode.i32le, Decode.i32le)
+        |> Decode.andThen((l) => Decode.skipThen(2.0, Decode.succeed(l))))), data)
+
 // Where the player starts: the last `L$PlayerFac` link's source, as
 // shock2quest picks it (medsci1 has four factories, for multiplayer).
 let start = (chunks: List<chunk>, data: Bytes.t): Result.t<start, Binary.error> =>
-  find("L$PlayerFac", chunks) |> Result.bind((c: chunk) =>
-    Decode.run(Decode.at(c.offset, Decode.list(c.length / 14.0,
-      Decode.skipThen(4.0, Decode.i32le) |> Decode.andThen((src) => Decode.skipThen(6.0, Decode.succeed(src))))), data)
-      |> Result.bind((sources) =>
-        positions(chunks, data) |> Result.bind((ps) =>
-          match Option.bind((src) => Map.get(src, ps), List.last(sources)) with
-          | Option.Some(s) => Result.Ok(s)
-          | Option.None => Result.Error(Decode.failure(c.offset, "no player factory position")))))
+  links("L$PlayerFac", chunks, data) |> Result.bind((factories) =>
+    positions(chunks, data) |> Result.bind((ps) =>
+      match Option.bind((l: link) => Map.get(l.src, ps), List.last(factories)) with
+      | Option.Some(s) => Result.Ok(s)
+      | Option.None => Result.Error(Decode.failure(0.0, "no player factory position"))))
