@@ -77,6 +77,12 @@ let distance = (a: List<float>, b: List<float>): float =>
 let noProps: props = { transDoor: Map.empty(), rotDoor: Map.empty(), locked: Map.empty(), frobInfo: Map.empty(),
                        scriptsLocal: Map.empty(), scripts: Map.empty() }
 
+// No objects.
+let empty: world = { graph: Map.empty(), edits: Map.empty(),
+  authored: { transDoor: Map.empty(), rotDoor: Map.empty(), locked: Map.empty(), frobInfo: Map.empty(), scripts: Map.empty(),
+              switchLink: Objects.noLinks() },
+  props: noProps, switchLink: Objects.noLinks(), door: Map.empty(), moving: Map.empty(), queue: Objects.queue(), sounds: [] }
+
 let donorsOf = (w: world, id: float): List<float> =>
   Objects.donors(w.graph, Map.get(id, w.edits) |> Option.defaultValue(Objects.noEdits), id)
 

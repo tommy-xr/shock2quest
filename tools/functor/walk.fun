@@ -1,5 +1,6 @@
 // walk — the `walk` entry: medsci1's world rep, textured and lightmapped,
-// walked with a capsule player on `Physics.character`. No objects or scripts.
+// walked with a capsule player on `Physics.character`, and its doors: E (or
+// the right trigger) frobs what's ahead, and a StdDoor door slides open.
 //
 //   functor -d tools/functor run native --entry walk
 //   functor -d tools/functor run vr --entry walk
@@ -11,6 +12,10 @@
 // The player is shock2quest's: a 6 ft capsule 1.2 ft in radius, 2 ft steps,
 // walkable up to a 0.7 normal (45.6°), snapping down a step, eyes 2.6 ft above
 // the centre, 11 ft/s forward, 0.7× sideways and 0.5× back.
+//
+// Objects live in the model (`Door.world`): a frob is a ray from the eye to
+// a door's body, sent to the door as a message; the queue is drained once a
+// step and the moving doors advance, so seeking a frame restores them.
 
 let loaded = Level.loaded
 let level = Level.level
@@ -25,6 +30,8 @@ let turnRate = 2.0
 let gravity = 32.0 * ft
 
 let playerTag = Physics.tag("player")
+// How far a frob reaches (metres).
+let reach = 3.0
 let levelTag = Physics.tag("level")
 
 // The player factory, in scene space. Its heading turns from Dark's +X
@@ -38,13 +45,15 @@ let physics = (model) =>
     Physics.character(playerTag, Physics.capsule(halfHeight - radius, radius),
                       { stepHeight: 2.0 * ft, maxSlope: Angle.radians(Math.acos(0.7)), snap: 2.0 * ft, offset: offset })
       |> Physics.at(marker),
-  ])
+    Physics.memo("doors", Objview.still(model.objects), (s) => Objview.placed(Level.doors, s, Objview.bodyAt)),
+  ] |> List.append(Objview.moving(Level.doors, model.objects, Objview.bodyAt)))
 
 // `placed`: the player stands on the floor under the marker. Until then the
 // level isn't in the physics world yet (moves see the last step's bodies),
 // so the player holds still and `tick` looks for the floor each step.
 let init = { yaw: startYaw, pitch: 0.0, vy: 0.0, walk: 0.0, strafe: 0.0, turn: 0.0, look: 0.0,
-             headYaw: 0.0, snap: 0.0, snapHeld: false, dragX: -1.0, dragY: -1.0, placed: false }
+             headYaw: 0.0, snap: 0.0, snapHeld: false, dragX: -1.0, dragY: -1.0, placed: false,
+             objects: Level.world, frob: false, frobHeld: false }
 
 let held = (k, snap) => snap.heldKeys |> List.any((h) => h == k)
 let axis = (neg, pos, snap) =>
@@ -67,6 +76,7 @@ let sampledInput = (model, snap: Input.snapshot) =>
   let keys = { model with
     walk: unit(axis(Key.S, Key.W, snap)), strafe: unit(axis(Key.A, Key.D, snap)),
     turn: axis(Key.Right, Key.Left, snap) - dx * 0.3, look: axis(Key.Down, Key.Up, snap) - dy * 0.3,
+    frob: model.frob || List.any((k) => k == Key.E, snap.pressedKeys),
     dragX: if m.buttons.left then m.x else -1.0, dragY: if m.buttons.left then m.y else -1.0 } in
   match snap.xr with
   | Option.None => { keys with headYaw: 0.0, snap: 0.0 }
@@ -79,15 +89,41 @@ let sampledInput = (model, snap: Input.snapshot) =>
       walk: unit(keys.walk + deadzone(stick.y)), strafe: unit(keys.strafe + deadzone(stick.x)),
       headYaw: Option.defaultValue(0.0, Option.map((h: Input.pose) => yawOf(model.headYaw, h.orientation), xr.head)),
       snap: if turnNow then 0.0 - Math.sign(flick) * Math.pi / 6.0 else 0.0,
-      snapHeld: Math.abs(flick) > 0.3 && (model.snapHeld || turnNow) }
+      snapHeld: Math.abs(flick) > 0.3 && (model.snapHeld || turnNow),
+      frob: keys.frob || (xr.right.trigger > 0.7 && not model.frobHeld), frobHeld: xr.right.trigger > 0.3 }
+
+// The door a frob reaches: the first body on a ray from the eye along the
+// view (level on a headset), if it is a door.
+let frobbed = (model): List<float> =>
+  let heading = model.yaw + model.headYaw in
+  let pitch = if model.headYaw == 0.0 then model.pitch else 0.0 in
+  let dir = Vec3.make(Math.sin(heading) * Math.cos(pitch), Math.sin(pitch), Math.cos(heading) * Math.cos(pitch)) in
+  let hit = Physics.castExcluding(playerTag, eye(model), dir, reach) in
+  if not hit.hit then []
+  else Level.doors |> List.filter((v: Objview.view) => Objview.tagOf(v.id) == hit.tag) |> List.map((v: Objview.view) => v.id)
+
+// A door's sounds, from SS2's own (`ss2/snd/Devices/`), where the door is.
+let soundFile = (name: string): Option.t<string> =>
+  if name == "opening" then Option.Some("DOOR1OP.WAV")
+  else if name == "closing" then Option.Some("DOOR1CL.WAV")
+  else if name == "closed" then Option.Some("DOOR1SLM.WAV")
+  else if name == "hackfail" then Option.Some("HACKFAIL.WAV")
+  else Option.None
+
+let play = (w: Door.world, s: Door.sound): List<Effect.t> =>
+  match soundFile(s.name) with
+  | Option.Some(file) =>
+    Door.position(w, s.obj) |> Option.toList
+      |> List.map((at) => Effect.playAt(Asset.sound(Text.join("", ["ss2/snd/Devices/", file])), Objview.scenePos(at)))
+  | Option.None => []
 
 let tick = (model, dt, tts) =>
   if not model.placed then
     let down = Physics.castExcluding(playerTag, marker, Vec3.make(0.0, -1.0, 0.0), 20.0) in
     if down.hit then
       let feet = Vec3.make(Vec3.x(marker), down.y + halfHeight + offset + 0.01, Vec3.z(marker)) in
-      ({ model with placed: true }, Physics.teleport(playerTag, feet))
-    else (model, Effect.none())
+      ({ model with placed: true, frob: false }, Physics.teleport(playerTag, feet))
+    else ({ model with frob: false }, Effect.none())
   else
     let grounded = Physics.grounded(playerTag) in
     let yaw = model.yaw + model.turn * turnRate * dt + model.snap in
@@ -99,8 +135,10 @@ let tick = (model, dt, tts) =>
     let vx = forward * Math.sin(heading) - side * Math.cos(heading) in
     let vz = forward * Math.cos(heading) + side * Math.sin(heading) in
     let vy = (if grounded && model.vy <= 0.0 then 0.0 else model.vy) - gravity * dt in
-    ({ model with yaw: yaw, pitch: pitch, vy: vy, snap: 0.0 },
-     Physics.move(playerTag, Vec3.make(vx * dt, vy * dt, vz * dt)))
+    let objects = Door.frame(dt, if model.frob then frobbed(model) else [], model.objects) in
+    ({ model with yaw: yaw, pitch: pitch, vy: vy, snap: 0.0, objects: objects, frob: false },
+     Effect.batch(List.append(List.concatMap((s) => play(objects, s), objects.sounds),
+                              [Physics.move(playerTag, Vec3.make(vx * dt, vy * dt, vz * dt))])))
 
 let eye = (model) =>
   let p = Physics.position(playerTag) in
@@ -108,17 +146,26 @@ let eye = (model) =>
 
 let world = Scene.modelOf(level.model)
 
+// Light for the objects only (the world's is in its lightmaps): the
+// mission's ambient level and a soft key light, both marked baked.
+let objectLights = [
+  Light.ambient(Color.rgb(level.ambient + 0.25, level.ambient + 0.25, level.ambient + 0.3)) |> Light.baked,
+  Light.directional(Vec3.make(0.3, -1.0, 0.4), Color.rgb(0.9, 0.9, 1.0), 0.6) |> Light.baked,
+]
+
 let draw = (model, tts) =>
   Frame.createLit(
     Camera3D.firstPerson(eye(model), Angle.radians(model.yaw), Angle.radians(model.pitch), Angle.degrees(75.0))
       |> Camera3D.clip(0.05, 400.0),
-    world, [])
+    Scene.group(List.flatten([[world, Scene.memo("doors", Objview.still(model.objects), (s) => Scene.group(Objview.placed(Level.doors, s, Objview.nodeAt)))],
+                              Objview.moving(Level.doors, model.objects, Objview.nodeAt)])), objectLights)
 
 let ui = (model) =>
   let p = Physics.position(playerTag) in
   Ui.column([
     Ui.text(match loaded with | Result.Ok(_) => "medsci1" | Result.Error(e) => Binary.describe(e)),
     Ui.text(Text.join("", ["grounded  ", if Physics.grounded(playerTag) then "yes" else "no"])),
+    Ui.text(Text.join("", ["doors  ", Text.fromFloat(List.length(Level.doors)), "  moving ", Text.fromFloat(Map.size(model.objects.moving)), "  (E frobs)"])),
     Ui.text(Text.join("", ["position  ", Text.fixed(p.x, 2.0), ", ", Text.fixed(p.y, 2.0), ", ", Text.fixed(p.z, 2.0)])),
   ])
     |> Ui.panel(Ui.topLeft())
