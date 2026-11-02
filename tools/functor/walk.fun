@@ -52,7 +52,7 @@ let physics = (model) =>
 // level isn't in the physics world yet (moves see the last step's bodies),
 // so the player holds still and `tick` looks for the floor each step.
 let init = { yaw: startYaw, pitch: 0.0, vy: 0.0, walk: 0.0, strafe: 0.0, turn: 0.0, look: 0.0,
-             headYaw: 0.0, snap: 0.0, snapHeld: false, dragX: -1.0, dragY: -1.0, placed: false,
+             headYaw: 0.0, headPitch: 0.0, snap: 0.0, snapHeld: false, dragX: -1.0, dragY: -1.0, placed: false,
              objects: Level.world, frob: false, frobHeld: false }
 
 let held = (k, snap) => snap.heldKeys |> List.any((h) => h == k)
@@ -64,6 +64,9 @@ let unit = (v) => Math.clamp(-1.0, 1.0, v)
 // The head's turn about +Y from the rig's forward (-Z), left positive: the
 // rotated +Z axis's heading. Looking nearly straight up or down it has none,
 // so `previous` stands.
+// The head's pitch (up positive): the height of its forward (-Z) axis.
+let pitchOf = (q: Input.quaternion) => Math.asin(Math.clamp(-1.0, 1.0, 0.0 - Affine.quaternion(q.w, q.x, q.y, q.z).f))
+
 let yawOf = (previous: float, q: Input.quaternion) =>
   let m = Affine.quaternion(q.w, q.x, q.y, q.z) in
   if m.c * m.c + m.i * m.i < 0.04 then previous else Math.atan2(m.c, m.i)
@@ -79,7 +82,7 @@ let sampledInput = (model, snap: Input.snapshot) =>
     frob: model.frob || List.any((k) => k == Key.E, snap.pressedKeys),
     dragX: if m.buttons.left then m.x else -1.0, dragY: if m.buttons.left then m.y else -1.0 } in
   match snap.xr with
-  | Option.None => { keys with headYaw: 0.0, snap: 0.0 }
+  | Option.None => { keys with headYaw: 0.0, headPitch: 0.0, snap: 0.0 }
   | Option.Some(xr) =>
     let stick = xr.left.thumbstick in
     let flick = xr.right.thumbstick.x in
@@ -88,15 +91,18 @@ let sampledInput = (model, snap: Input.snapshot) =>
     { keys with
       walk: unit(keys.walk + deadzone(stick.y)), strafe: unit(keys.strafe + deadzone(stick.x)),
       headYaw: Option.defaultValue(0.0, Option.map((h: Input.pose) => yawOf(model.headYaw, h.orientation), xr.head)),
+      headPitch: Option.defaultValue(0.0, Option.map((h: Input.pose) => pitchOf(h.orientation), xr.head)),
       snap: if turnNow then 0.0 - Math.sign(flick) * Math.pi / 6.0 else 0.0,
       snapHeld: Math.abs(flick) > 0.3 && (model.snapHeld || turnNow),
-      frob: keys.frob || (xr.right.trigger > 0.7 && not model.frobHeld), frobHeld: xr.right.trigger > 0.3 }
+      // One frob per pull, like the snap turn: it re-arms once released.
+      frob: keys.frob || (xr.right.trigger > 0.7 && not model.frobHeld),
+      frobHeld: xr.right.trigger > 0.3 && (model.frobHeld || xr.right.trigger > 0.7) }
 
 // The door a frob reaches: the first body on a ray from the eye along the
-// view (level on a headset), if it is a door.
+// view (the head's on a headset, from the eye's rest point), if it is a door.
 let frobbed = (model): List<float> =>
   let heading = model.yaw + model.headYaw in
-  let pitch = if model.headYaw == 0.0 then model.pitch else 0.0 in
+  let pitch = model.pitch + model.headPitch in
   let dir = Vec3.make(Math.sin(heading) * Math.cos(pitch), Math.sin(pitch), Math.cos(heading) * Math.cos(pitch)) in
   let hit = Physics.castExcluding(playerTag, eye(model), dir, reach) in
   if not hit.hit then []

@@ -16,7 +16,7 @@ let chunks = Decode.run(Mis.toc, data) |> Result.defaultValue([])
 
 // Every `P$` chunk's records as own cells of their raw bytes.
 let tables: Map<string, Map<float, Objects.Cell<Bytes.t>>> =
-  chunks |> List.filter((c: Mis.chunk) => List.take(2.0, Text.chars(c.name)) == ["P", "$"])
+  chunks |> List.filter(Props.isProperty)
     |> List.fold((m, c: Mis.chunk) =>
       let t = Props.records(c.name, chunks, data) |> Result.defaultValue([])
         |> List.fold((acc, r: Props.record) => match Bytes.slice(r.at, r.length, data) with
