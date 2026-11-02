@@ -737,6 +737,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ci_artifacts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1193,6 +1203,7 @@ name = "dark_vr_tool"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ci_artifacts",
  "clap",
  "ratatui",
  "serde_json",

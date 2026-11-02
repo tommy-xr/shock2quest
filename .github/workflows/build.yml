@@ -115,12 +115,12 @@ jobs:
 
       - name: Run all tests (Unix)
         if: runner.os != 'Windows'
-        run: cargo test --verbose --release -p shock2vr -p engine -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command
+        run: cargo test --verbose --release -p shock2vr -p engine -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command -p ci_artifacts
         env:
           RUSTFLAGS: "-D warnings"
       - name: Run all tests (Windows)
         if: runner.os == 'Windows'
-        run: cargo test --verbose --release --no-default-features -p shock2vr -p engine -p desktop_runtime -p dark_query -p debug_runtime -p debug_command
+        run: cargo test --verbose --release --no-default-features -p shock2vr -p engine -p desktop_runtime -p dark_query -p debug_runtime -p debug_command -p ci_artifacts
         env:
           RUSTFLAGS: "-D warnings"
 

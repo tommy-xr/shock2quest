@@ -258,8 +258,16 @@ fn surface_buttons(
     )
 }
 
+/// The repo's `assets/vr-grips.json`: beside this crate's source when built
+/// here, else under the working directory (a CI-built binary).
 pub fn default_library_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/vr-grips.json")
+    let built = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let assets = if built.is_dir() {
+        built
+    } else {
+        PathBuf::from("assets")
+    };
+    assets.join("vr-grips.json")
 }
 
 /// Each override, keyed by its class's canonical model as the runtime keys
