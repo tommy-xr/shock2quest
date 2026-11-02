@@ -56,6 +56,10 @@ let near = (a: List<float>, b: List<float>): bool =>
 
 let chunks = Decode.run(Mis.toc, mission) |> Binary.require
 let cells = Mis.cellsIn(chunks, mission) |> Binary.require
+// Cell data cut short at any byte is an error, not a crash.
+let wr = Mis.find("WRRGB", chunks) |> Binary.require
+let cut = (k: float) => Mis.cellsIn(chunks, Bytes.slice(0.0, k, mission) |> Binary.require)
+expect List.range(wr.length - 8.0) |> List.all((k) => Result.isError(cut(wr.offset + 8.0 + k)))
 
 expect List.map((c: Mis.chunk) => c.name, chunks) == ["WRRGB", "TXLIST", "RENDPARAMS", "L$PlayerFac", "P$Position"]
 expect Mis.textures(chunks, mission) == Result.Ok([{ family: "", name: "null" }, { family: "testfam", name: "wall" }])

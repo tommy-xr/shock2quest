@@ -56,34 +56,52 @@ type built = { texture: float, count: float, positions: List<float>, normals: Li
 // SS2's texturing (as shock2quest computes it): a vertex's offset from the
 // origin projected on the texture axes (correcting for skewed axes), in
 // 64-texel tiles for the texture and 16 texels per tile for the lightmap.
-// Lightmap uvs are clamped into the polygon's atlas rect.
+// Lightmap uvs are clamped into the polygon's atlas rect. Vector components
+// are read once per face or corner (list access dominates the load).
 let build = (surfaces: List<surface>, f: face, rect: Texture.rect): built =>
   let t = f.texturing in
   let ids = Option.defaultValue([], List.nth(f.polygon, f.cell.indices)) in
-  let vertex = (k: float) => Option.defaultValue([0.0, 0.0, 0.0], List.nth(n(k, ids), f.cell.vertices)) in
-  let origin = vertex(t.origin) in
+  let vertex = (id: float) => Option.defaultValue([0.0, 0.0, 0.0], List.nth(id, f.cell.vertices)) in
+  let origin = vertex(n(t.origin, ids)) in
+  let ox = n(0.0, origin) in
+  let oy = n(1.0, origin) in
+  let oz = n(2.0, origin) in
+  let ux = n(0.0, t.axisU) in
+  let uy = n(1.0, t.axisU) in
+  let uz = n(2.0, t.axisU) in
+  let vx = n(0.0, t.axisV) in
+  let vy = n(1.0, t.axisV) in
+  let vz = n(2.0, t.axisV) in
   let size = Option.defaultValue(blank, List.nth(t.texture, surfaces)) in
-  let mu = dot(t.axisU, t.axisU) in
-  let mv = dot(t.axisV, t.axisV) in
-  let uv = dot(t.axisU, t.axisV) in
+  let mu = ux * ux + uy * uy + uz * uz in
+  let mv = vx * vx + vy * vy + vz * vz in
+  let uv = ux * vx + uy * vy + uz * vz in
   let corr = 1.0 / (mu * mv - uv * uv) in
-  let project = (d: List<float>) =>
-    let pu = dot(t.axisU, d) in
-    let pv = dot(t.axisV, d) in
-    if Math.abs(uv) < 0.0001 then (pu / mu, pv / mv)
-    else (corr * (pu * mv - pv * uv), corr * (pv * mu - pu * uv)) in
+  let skewed = Math.abs(uv) >= 0.0001 in
   let normal = Skinned.up(cross(t.axisV, t.axisU)) in
   let len = Math.sqrt(dot(normal, normal)) in
   let unitNormal = List.map((x) => x / Math.max(len, 0.000001), normal) in
-  let corners = ids |> List.indexedMap((k, _) =>
-    let p = vertex(k) in
-    match project(sub(p, origin)) with
-    | (pu, pv) =>
-      let lu = (4.0 * pu + 0.5 - f.light.u + t.u / 1024.0) / f.light.width in
-      let lv = (4.0 * pv + 0.5 - f.light.v + t.v / 1024.0) / f.light.height in
-      { p: toScene(p),
-        uv: [(pu + t.u / 4096.0) / (size.width / 64.0), (pv + t.v / 4096.0) / (size.height / 64.0)],
-        uv2: [rect.u0 + Math.clamp01(lu) * (rect.u1 - rect.u0), rect.v0 + Math.clamp01(lv) * (rect.v1 - rect.v0)] }) in
+  let tileU = size.width / 64.0 in
+  let tileV = size.height / 64.0 in
+  let rectU = rect.u1 - rect.u0 in
+  let rectV = rect.v1 - rect.v0 in
+  let corners = ids |> List.map((id) =>
+    let p = vertex(id) in
+    let px = n(0.0, p) in
+    let py = n(1.0, p) in
+    let pz = n(2.0, p) in
+    let dx = px - ox in
+    let dy = py - oy in
+    let dz = pz - oz in
+    let au = ux * dx + uy * dy + uz * dz in
+    let av = vx * dx + vy * dy + vz * dz in
+    let pu = if skewed then corr * (au * mv - av * uv) else au / mu in
+    let pv = if skewed then corr * (av * mu - au * uv) else av / mv in
+    let lu = (4.0 * pu + 0.5 - f.light.u + t.u / 1024.0) / f.light.width in
+    let lv = (4.0 * pv + 0.5 - f.light.v + t.v / 1024.0) / f.light.height in
+    { p: [metresPerFoot * px, metresPerFoot * pz, metresPerFoot * (0.0 - py)],
+      uv: [(pu + t.u / 4096.0) / tileU, (pv + t.v / 4096.0) / tileV],
+      uv2: [rect.u0 + Math.clamp01(lu) * rectU, rect.v0 + Math.clamp01(lv) * rectV] }) in
   { texture: t.texture, count: List.length(ids),
     positions: List.concatMap((c) => c.p, corners),
     normals: List.concatMap((_) => unitNormal, corners),
