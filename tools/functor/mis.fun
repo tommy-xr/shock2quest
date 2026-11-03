@@ -43,15 +43,16 @@ type lightmap = { u: float, v: float, width: float, height: float, layers: float
 type cell = { vertices: List<List<float>>, polygons: List<polygon>, texturing: List<texturing>,
               indices: List<List<float>>, lights: List<lightmap>, lightmaps: List<Bytes.t> }
 
-// Cells are read with direct `Bytes` reads, about 3× cheaper per number
-// than `Decode` combinators (medsci1 has ~350k). Each section's extent is
-// checked against the data before it is read, so a read can't fail inside.
+// Cells are read with direct `Bytes` reads (medsci1 has ~350k numbers):
+// list readers for runs of one type (vertices, indices, texture axes),
+// single reads inside the mixed records. Each section's extent is checked
+// against the data before it is read, so a read can't fail inside.
 let u8At = (at: float, data: Bytes.t): float => Bytes.u8(at, data) |> Result.defaultValue(0.0)
 let u16At = (at: float, data: Bytes.t): float => Bytes.u16le(at, data) |> Result.defaultValue(0.0)
 let i16At = (at: float, data: Bytes.t): float => Bytes.i16le(at, data) |> Result.defaultValue(0.0)
 let u32At = (at: float, data: Bytes.t): float => Bytes.u32le(at, data) |> Result.defaultValue(0.0)
-let f32At = (at: float, data: Bytes.t): float => Bytes.f32le(at, data) |> Result.defaultValue(0.0)
-let vec3At = (at: float, data: Bytes.t): List<float> => [f32At(at, data), f32At(at + 4.0, data), f32At(at + 8.0, data)]
+let u8sAt = (at: float, count: float, data: Bytes.t): List<float> => Bytes.u8s(at, count, data) |> Result.defaultValue([])
+let vec3At = (at: float, data: Bytes.t): List<float> => Bytes.f32les(at, 3.0, data) |> Result.defaultValue([])
 
 // `count` records `size` bytes apart from `at`, each read by `read`.
 let table = (at: float, count: float, size: float, read: (float) => 'a): List<'a> =>
@@ -81,7 +82,7 @@ let cellAt = (at: float, data: Bytes.t): Result.t<(cell, float), Binary.error> =
       within(iAt, total, "polygon indices", data, (_) =>
         let starts = List.fold((acc, c) => match acc with | (next, ss) => (next + c, List.append([next], ss)), (iAt, []), counts) in
         let indices = match starts with
-          | (_, ss) => List.zip(counts, ss) |> List.map((pair) => match pair with | (s, c) => table(s, c, 1.0, (o) => u8At(o, data))) in
+          | (_, ss) => List.zip(counts, ss) |> List.map((pair) => match pair with | (s, c) => u8sAt(s, c, data)) in
         let lAt = iAt + total + 16.0 * npl + 2.0 * animated in
         within(lAt, 20.0 * nr, "lightmap records", data, (_) =>
           let lights = table(lAt, nr, 20.0, (o): lightmap =>
