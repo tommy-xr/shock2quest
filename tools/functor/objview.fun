@@ -61,9 +61,9 @@ let staticOf = (faces: List<Lgmd.face>, groupOf: (float) => Model.group): Model.
 // A model's look, near how shock2quest draws it: texture-mapped polygons
 // whose material's texture is there (others are dropped), see-through ones
 // in their own piece at their opacity. shock2quest adds texture ×
-// emissivity to the lit colour; here a fully self-lit material (emissivity
-// 1) draws fullbright and any other is lit. Colour materials aren't drawn
-// (no door uses one).
+// emissivity to the lit colour, as a group's `emissive` does; a fully
+// self-lit material (emissivity 1) draws fullbright, as the sum would
+// clamp to. Colour materials aren't drawn (no door uses one).
 let lookOf = (textures: Map<string, Asset.Texture>, s: Lgmd.surface): look =>
   // The last material naming a slot wins, as in shock2quest's slot table.
   let materialOf = (slot: float) => List.find((m: Lgmd.material) => m.slot == slot, List.reverse(s.materials)) in
@@ -72,8 +72,8 @@ let lookOf = (textures: Map<string, Asset.Texture>, s: Lgmd.surface): look =>
   let clearness = (f: Lgmd.face) => materialOf(f.slot) |> Option.map((m: Lgmd.material) => m.transparency) |> Option.defaultValue(0.0) in
   let levels = drawn |> List.fold((m, f) => Map.insert(clearness(f), true, m), Map.empty()) |> Map.keys in
   let groupOf = (slot: float): Model.group =>
-    { first: 0.0, count: 0.0, texture: textureFor(slot),
-      unlit: materialOf(slot) |> Option.map((m: Lgmd.material) => m.emissivity >= 1.0) |> Option.defaultValue(false) } in
+    let emissivity = materialOf(slot) |> Option.map((m: Lgmd.material) => Math.clamp01(m.emissivity)) |> Option.defaultValue(0.0) in
+    { first: 0.0, count: 0.0, texture: textureFor(slot), unlit: emissivity >= 1.0, emissive: emissivity } in
   let points = List.concatMap((f: Lgmd.face) => List.map((c: Lgmd.corner) => c.p, f.corners), s.faces) in
   let lo = [0.0, 1.0, 2.0] |> List.map((k) => List.minimum(List.map((p) => Affine.n(k, p), points)) |> Option.defaultValue(0.0)) in
   let hi = [0.0, 1.0, 2.0] |> List.map((k) => List.maximum(List.map((p) => Affine.n(k, p), points)) |> Option.defaultValue(0.0)) in
