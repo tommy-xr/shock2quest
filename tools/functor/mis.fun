@@ -44,15 +44,15 @@ type cell = { vertices: List<List<float>>, polygons: List<polygon>, texturing: L
               indices: List<List<float>>, lights: List<lightmap>, lightmaps: List<Bytes.t> }
 
 // Cells are read with direct `Bytes` reads (medsci1 has ~350k numbers):
-// list readers for runs of one type (vertices, indices, texture axes),
-// single reads inside the mixed records. Each section's extent is checked
+// list readers for runs of one type (each vertex and texture axis, each
+// polygon's indices), single reads inside the mixed records. Each section's extent is checked
 // against the data before it is read, so a read can't fail inside.
 let u8At = (at: float, data: Bytes.t): float => Bytes.u8(at, data) |> Result.defaultValue(0.0)
 let u16At = (at: float, data: Bytes.t): float => Bytes.u16le(at, data) |> Result.defaultValue(0.0)
 let i16At = (at: float, data: Bytes.t): float => Bytes.i16le(at, data) |> Result.defaultValue(0.0)
 let u32At = (at: float, data: Bytes.t): float => Bytes.u32le(at, data) |> Result.defaultValue(0.0)
 let u8sAt = (at: float, count: float, data: Bytes.t): List<float> => Bytes.u8s(at, count, data) |> Result.defaultValue([])
-let vec3At = (at: float, data: Bytes.t): List<float> => Bytes.f32les(at, 3.0, data) |> Result.defaultValue([])
+let vec3At = (at: float, data: Bytes.t): List<float> => Bytes.f32les(at, 3.0, data) |> Result.defaultValue([0.0, 0.0, 0.0])
 
 // `count` records `size` bytes apart from `at`, each read by `read`.
 let table = (at: float, count: float, size: float, read: (float) => 'a): List<'a> =>
