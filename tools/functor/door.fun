@@ -13,10 +13,13 @@
 type transDoor = { closed: float, open: float, speed: float, axis: float, state: float,
                    baseClosed: List<float>, baseOpen: List<float>, base: List<float> }
 
-// `P$RotDoor`: a door that swings `closed` → `open` degrees about `axis`,
-// at `speed` radians per second. Decoded and compared, not yet animated.
+// `P$RotDoor`: a door that swings `closed` → `open` degrees about `axis`
+// (0 X, 1 Y, 2 Z, turned by `baseRotation`) at `speed` radians per second,
+// the long way round when `clockwise` says so. `baseClosed`/`baseOpen` and
+// the two rotations are where it sits at each end.
 type rotDoor = { closed: float, open: float, speed: float, axis: float, state: float, clockwise: bool,
-                 baseClosed: List<float>, baseOpen: List<float>, base: List<float> }
+                 baseClosed: List<float>, baseOpen: List<float>, base: List<float>,
+                 baseRotation: Affine.t, closedRotation: Affine.t, openRotation: Affine.t }
 
 // `P$FrobInfo`: what frobbing does in the world, in inventory and as a tool
 // (flag bits: 1 move, 2 script, 4 delete, 8 ignore, …).
@@ -89,10 +92,26 @@ let donorsOf = (w: world, id: float): List<float> =>
 let scriptsOf = (w: world, ds: List<float>, id: float, p: props): props =>
   { p with scripts: Objects.cache(id, Objects.accumulate(p.scriptsLocal, w.authored.scripts, ds, id), p.scripts) }
 
-// A translating door StdDoor moves: a rotating one is left alone (Dark
-// prefers RotDoor when an object has both).
+// A translating door StdDoor moves; an object with both is a rotating door
+// (Dark prefers RotDoor: rotating doors inherit a zero TransDoor).
 let slider = (w: world, id: float): Option.t<transDoor> =>
   if Map.member(id, w.props.rotDoor) then Option.None else Objects.get(id, w.props.transDoor)
+
+let rotator = (w: world, id: float): Option.t<rotDoor> => Objects.get(id, w.props.rotDoor)
+
+// Signed degrees from closed to open: a clockwise door turns negative, and
+// either may go the long way round through 0/360.
+let travelDegrees = (d: rotDoor): float =>
+  let t = d.open - d.closed in
+  if Math.abs(t) <= 0.0000001192 then 0.0
+  else if d.clockwise then (if t > 0.0 then t - 360.0 * Math.ceil(t / 360.0) else t)
+  else if t < 0.0 then t + 360.0 * Math.ceil((0.0 - t) / 360.0) else t
+
+// A rotating door's `axis` in its own (unturned) axes.
+let hinge = (axis: float): List<float> =>
+  if axis == 0.0 then [1.0, 0.0, 0.0] else if axis == 1.0 then [0.0, 1.0, 0.0] else [0.0, 0.0, 1.0]
+
+let swings = (d: rotDoor): bool => Math.abs(travelDegrees(d)) > 0.0001
 
 // How far along a door's authored location is (0 at closed, 1 at open).
 let progressOf = (d: transDoor): float =>
@@ -108,19 +127,28 @@ let scriptOf = (d: transDoor): doorScript =>
            else if d.state == 4.0 && t >= 0.5 then Open else Closed,
     t: t }
 
+// A rotating door starts at an end: closed unless authored open (opening
+// or closing heads that way from closed; one without travel stays put).
+let rotScriptOf = (d: rotDoor): doorScript =>
+  if d.state == 1.0 then { state: Open, t: 1.0 }
+  else { state: if not swings(d) then Closed else if d.state == 3.0 then Opening else if d.state == 2.0 then Closing else Closed, t: 0.0 }
+
 let isMoving = (s: doorScript): bool => s.state == Opening || s.state == Closing
 
 let hasScript = (w: world, id: float, name: string): bool =>
   Map.get(id, w.props.scripts) |> Option.defaultValue([]) |> List.any((s) => Text.toLower(s) == name)
 
-// Start StdDoor's state when an object gains a sliding door and the script
-// (a running one keeps its own), and drop it when it loses either.
+// Start StdDoor's state when an object gains a door and the script (a
+// running one keeps its own), and drop it when it loses either.
 let syncDoor = (w: world, id: float): world =>
-  match slider(w, id) with
-  | Option.Some(d) =>
+  let start = match rotator(w, id) with
+    | Option.Some(r) => Option.Some(rotScriptOf(r))
+    | Option.None => slider(w, id) |> Option.map(scriptOf) in
+  match start with
+  | Option.Some(s) =>
     if not hasScript(w, id, "stddoor") then { w with door: Map.remove(id, w.door), moving: Map.remove(id, w.moving) }
     else if Map.member(id, w.door) then w
-    else setDoor(id, scriptOf(d), w)
+    else setDoor(id, s, w)
   | Option.None => { w with door: Map.remove(id, w.door), moving: Map.remove(id, w.moving) }
 
 // Copy an object's properties and links down from its donors, and start its door.
@@ -174,16 +202,20 @@ let head = (open: bool, id: float, w: world): world =>
   else play(id, if open then "opening" else "closing", setDoor(id, { s with state: if open then Opening else Closing }, w))
 
 // StdDoor: a frob toggles the door unless it's locked and closed; TurnOn
-// and TurnOff (from a switch) open and close it, locked or not. A door
-// without travel never moves (a locked one still answers a frob), and one
-// authored open without travel is a doorway that ignores everything.
+// and TurnOff (from a switch) open and close it, locked or not. A sliding
+// door without travel never moves (a locked one still answers a frob), and
+// one authored open without travel is a doorway that ignores everything; a
+// rotating door without travel ignores everything.
 let stdDoor = (w: world, self: float, m: msg): world =>
-  match slider(w, self) with
+  let kind = match rotator(w, self) with
+    | Option.Some(r) => Option.Some((swings(r), not swings(r)))
+    | Option.None => slider(w, self) |> Option.map((d: transDoor) =>
+      let travels = distance(d.baseClosed, d.baseOpen) >= 0.001 in (travels, not travels && d.state == 1.0)) in
+  match kind with
   | Option.None => w
-  | Option.Some(d) =>
-    let travels = distance(d.baseClosed, d.baseOpen) >= 0.001 in
+  | Option.Some(k) => match k with | (travels, deaf) =>
     let go = (open: bool) => if travels then head(open, self, w) else w in
-    if not travels && d.state == 1.0 then w
+    if deaf then w
     else match m with
       | Frob(_) =>
         let s = doorOf(w, self) in
@@ -219,25 +251,61 @@ let handle = (w: world, e: envelope): world =>
 let drain = (w: world): world =>
   Objects.drain(cap, handle, (x: world) => x.queue, (q, x: world) => { x with queue: q }, w)
 
+// How far along (0..1) a door moves per second: a sliding door's speed over
+// its travel, a rotating door's angular speed over its arc.
+let pace = (w: world, id: float): Option.t<float> =>
+  match rotator(w, id) with
+  | Option.Some(r) => Option.Some(Math.abs(r.speed) / Math.max(Math.abs(travelDegrees(r)) * Math.pi / 180.0, 0.000001))
+  | Option.None => slider(w, id) |> Option.map((d: transDoor) => d.speed / Math.max(distance(d.baseClosed, d.baseOpen), 0.000001))
+
 // Advance only the moving doors; one reaching its end stops and sounds.
 let tick = (dt: float, w: world): world =>
   Map.keys(w.moving) |> List.fold((acc, id) =>
-    match slider(acc, id) with
+    match pace(acc, id) with
     | Option.None => { acc with moving: Map.remove(id, acc.moving) }
-    | Option.Some(d) =>
+    | Option.Some(perSecond) =>
       let s = doorOf(acc, id) in
-      let rate = dt * d.speed / Math.max(distance(d.baseClosed, d.baseOpen), 0.000001) in
+      let rate = dt * perSecond in
       if s.state == Opening then
         (if s.t + rate >= 1.0 then play(id, "open", setDoor(id, { state: Open, t: 1.0 }, acc))
          else setDoor(id, { s with t: s.t + rate }, acc))
       else if s.t - rate <= 0.0 then play(id, "closed", setDoor(id, { state: Closed, t: 0.0 }, acc))
       else setDoor(id, { s with t: s.t - rate }, acc), w)
 
+// A rotating door's place and rotation (Dark) at progress `t`, as
+// shock2quest poses it: the ends exactly as authored; between them, the turn
+// about the hinge axis through the pivot both ends share (plus any slide
+// along the axis).
+type pose = { at: List<float>, rotation: Affine.t }
+
+let swing = (d: rotDoor, t: float): pose =>
+  let eps = 0.0000001192 in
+  if t <= eps || not swings(d) then { at: d.baseClosed, rotation: d.closedRotation }
+  else if 1.0 - t <= eps then { at: d.baseOpen, rotation: d.openRotation }
+  else
+    let total = travelDegrees(d) * Math.pi / 180.0 in
+    let axis = World.unit(Affine.rotate(d.baseRotation, hinge(d.axis))) in
+    let disp = World.sub(d.baseOpen, d.baseClosed) in
+    let axial = Affine.scale(World.dot(disp, axis), axis) in
+    let perp = World.sub(disp, axial) in
+    let alpha = Math.cos(total) - 1.0 in
+    let beta = Math.sin(total) in
+    let den = alpha * alpha + beta * beta in
+    let turn = Affine.axisAngle(axis, total * t) in
+    let at = if den > 0.000001 then
+        let radius = Affine.scale(1.0 / den, World.sub(Affine.scale(alpha, perp), Affine.scale(beta, World.cross(axis, perp)))) in
+        Affine.add(Affine.add(d.baseClosed, World.sub(Affine.rotate(turn, radius), radius)), Affine.scale(t, axial))
+      else Affine.add(d.baseClosed, Affine.scale(t, disp)) in
+    { at: at, rotation: Affine.compose(turn, d.closedRotation) }
+
 // Where a door is now (Dark feet), if it's a door: where StdDoor has it, or
 // as authored without the script.
 let position = (w: world, id: float): Option.t<List<float>> =>
-  slider(w, id) |> Option.map((d: transDoor) =>
-    lerp(d.baseClosed, d.baseOpen, Map.get(id, w.door) |> Option.map((s: doorScript) => s.t) |> Option.defaultValue(progressOf(d))))
+  match rotator(w, id) with
+  | Option.Some(r) => Option.Some(swing(r, Map.get(id, w.door) |> Option.map((s: doorScript) => s.t) |> Option.defaultValue(rotScriptOf(r).t)).at)
+  | Option.None =>
+    slider(w, id) |> Option.map((d: transDoor) =>
+      lerp(d.baseClosed, d.baseOpen, Map.get(id, w.door) |> Option.map((s: doorScript) => s.t) |> Option.defaultValue(progressOf(d))))
 
 // One frame: this frame's frobs, the drain, the doors. Sounds are the
 // frame's own.

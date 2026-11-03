@@ -55,3 +55,20 @@ let quaternion = (w: float, x: float, y: float, z: float): t => {
   d: 2.0 * (x * y + w * z), e: 1.0 - 2.0 * (x * x + z * z), f: 2.0 * (y * z - w * x), y: 0.0,
   g: 2.0 * (x * z - w * y), h: 2.0 * (y * z + w * x), i: 1.0 - 2.0 * (x * x + y * y), z: 0.0
 }
+
+// A turn of `angle` radians about the unit `axis` (right-handed).
+let axisAngle = (axis: List<float>, angle: float): t =>
+  let s = Math.sin(angle / 2.0) in
+  quaternion(Math.cos(angle / 2.0), s * n(0.0, axis), s * n(1.0, axis), s * n(2.0, axis))
+
+// Dark's facing (bank about X, pitch about Y, heading about Z, radians): the
+// heading applied last.
+let facing = (bank: float, pitch: float, heading: float): t =>
+  compose(axisAngle([0.0, 0.0, 1.0], heading), compose(axisAngle([0.0, 1.0, 0.0], pitch), axisAngle([1.0, 0.0, 0.0], bank)))
+
+// A rotation's facing [bank, pitch, heading] (`facing` undone). Pitched
+// straight up or down, bank and heading share an axis, so bank is 0.
+let angles = (m: t): List<float> =>
+  let pitch = Math.asin(Math.clamp(-1.0, 1.0, 0.0 - m.g)) in
+  if Math.abs(m.g) > 0.999999 then [0.0, pitch, Math.atan2(0.0 - m.b, m.e)]
+  else [Math.atan2(m.h, m.i), pitch, Math.atan2(m.d, m.a)]

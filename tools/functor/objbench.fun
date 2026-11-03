@@ -2,7 +2,7 @@
 // medsci1's scale, with history on. Every property record in the mission
 // (6,754 in 110 `P$` chunks) sits in a per-chunk `Map<id, Cell<Bytes>>`; each
 // step writes 20 of them (spread over the chunks) and every 30th step sends
-// a burst of TurnOn/TurnOff to all 52 doors, which the queue drains and the
+// a burst of TurnOn/TurnOff to all 57 doors, which the queue drains and the
 // door system moves. Read `stages.sim_ms` from `/state` and the process's
 // memory over the 900-frame history ring.
 //
