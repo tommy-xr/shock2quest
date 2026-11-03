@@ -150,7 +150,7 @@ let load = (data: Bytes.t): Result.t<level, Binary.error> =>
       |> ((acc) => match acc with | (gs, last, first, count) => List.append([(last, first, count)], gs))
       |> List.map((g) => match g with
         | (tex, first, count) =>
-          { first: first, count: count, unlit: false,
+          { first: first, count: count, unlit: false, emissive: 0.0,
             texture: Option.bind((s: surface) => s.texture, List.nth(tex, surfaces)) }) in
     let positions = Bytes.fromF32le(List.concatMap((b: built) => b.positions, builts)) in
     let tris = Bytes.fromU32le(triangles) in
