@@ -25,15 +25,16 @@ let chunkFile = (chunks: List<(string, Bytes.t)>) =>
 // A 1 ft square at z = 0 (Dark feet), texture axes 4 units a foot.
 let cell = Encode.sequence([
   Encode.bytes(Bytes.fromU8([4.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0])),     // verts, polys, rendered, portals, planes, medium, flags
-  Encode.zeros(6.0), Encode.u8(0.0), Encode.u8(0.0), Encode.zeros(16.0), // nxn, map size, animated lights, flow, centre, radius
+  Encode.zeros(6.0), Encode.u8(1.0), Encode.u8(0.0), Encode.zeros(16.0), // nxn, map size, animated lights (1), flow, centre, radius
   Encode.bytes(Bytes.fromF32le([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0])),
   Encode.bytes(Bytes.fromU8([0.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])),  // polygon: 4 vertices
   Encode.bytes(Bytes.fromF32le([4.0, 0.0, 0.0, 0.0, 4.0, 0.0])),         // texture axes
   Encode.u16le(0.0), Encode.u16le(0.0), Encode.u8(1.0), Encode.u8(0.0), Encode.zeros(18.0),
   Encode.u32le(4.0), Encode.bytes(Bytes.fromU8([0.0, 1.0, 2.0, 3.0])),
-  Encode.zeros(16.0),                                                      // plane
-  Encode.i16le(0.0), Encode.i16le(0.0), Encode.u16le(2.0), Encode.u8(2.0), Encode.zeros(9.0), Encode.u32le(0.0),
+  Encode.zeros(16.0), Encode.zeros(2.0),                                  // plane, animated light id
+  Encode.i16le(0.0), Encode.i16le(0.0), Encode.u16le(2.0), Encode.u8(2.0), Encode.zeros(9.0), Encode.u32le(1.0),
   Encode.bytes(Bytes.fromU16le([31.0, 992.0, 31744.0, 32767.0])),         // red, green, blue, white
+  Encode.zeros(8.0),                                                       // animated layer (skipped)
   Encode.u32le(1.0), Encode.u16le(0.0)
 ])
 
@@ -56,6 +57,10 @@ let near = (a: List<float>, b: List<float>): bool =>
 
 let chunks = Decode.run(Mis.toc, mission) |> Binary.require
 let cells = Mis.cellsIn(chunks, mission) |> Binary.require
+// Cell data cut short at any byte is an error, not a crash.
+let wr = Mis.find("WRRGB", chunks) |> Binary.require
+let cut = (k: float) => Mis.cellsIn(chunks, Bytes.slice(0.0, k, mission) |> Binary.require)
+expect List.range(wr.length - 8.0) |> List.all((k) => Result.isError(cut(wr.offset + 8.0 + k)))
 
 expect List.map((c: Mis.chunk) => c.name, chunks) == ["WRRGB", "TXLIST", "RENDPARAMS", "L$PlayerFac", "P$Position"]
 expect Mis.textures(chunks, mission) == Result.Ok([{ family: "", name: "null" }, { family: "testfam", name: "wall" }])
@@ -63,12 +68,12 @@ expect Mis.ambient(chunks, mission) == Result.Ok(0.25)
 expect Mis.start(chunks, mission) == Result.Ok({ position: [2.0, 2.0, 3.0], heading: Math.pi / 2.0 })
 expect List.length(cells) == 1.0
 expect (match List.head(cells) with
-  | Option.Some(c) => c.indices == [[0.0, 1.0, 2.0, 3.0]] && c.lights == [{ u: 0.0, v: 0.0, width: 2.0, height: 2.0, layers: 0.0 }]
+  | Option.Some(c) => c.indices == [[0.0, 1.0, 2.0, 3.0]] && c.lights == [{ u: 0.0, v: 0.0, width: 2.0, height: 2.0, layers: 1.0 }]
                       && List.map(Bytes.length, c.lightmaps) == [8.0]
   | Option.None => false)
 
 expect (match World.load(mission) with
-  | Result.Ok(level) => level.stats == { cells: 1.0, vertices: 4.0, renderPolygons: 1.0, lightmapBytes: 8.0, triangles: 2.0, textures: 1.0 }
+  | Result.Ok(level) => level.stats == { cells: 1.0, vertices: 4.0, renderPolygons: 1.0, lightmapBytes: 16.0, triangles: 2.0, textures: 1.0 }
   | Result.Error(_) => false)
 
 // The square's vertices: scene positions (x, z, -y) in metres, texture uvs in
@@ -112,3 +117,8 @@ expect (Texture.decode(pcx, Texture.Srgb) |> Result.map((img: Texture.pixels) =>
 // Cut short, it is an error (not too few pixels).
 expect Result.isError(Texture.decode(Encode.run(Encode.sequence([Encode.bytes(Bytes.slice(0.0, 130.0, pcx) |> Binary.require),
   Encode.u8(12.0), Encode.bytes(Bytes.fromU8(palette))])), Texture.Srgb))
+
+// A cell count the data can't hold fails at once, naming the count.
+let huge = Bytes.concat([Bytes.slice(0.0, wr.offset + 4.0, mission) |> Binary.require, Bytes.fromU32le([1000000.0]),
+                         Bytes.slice(wr.offset + 8.0, Bytes.length(mission) - wr.offset - 8.0, mission) |> Binary.require])
+expect (match Mis.cellsIn(chunks, huge) with | Result.Error(e) => Binary.describe(e) | Result.Ok(_) => "decoded") |> Text.contains("1000000 cells")

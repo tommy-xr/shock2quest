@@ -28,54 +28,93 @@ let vec3 = Cal.vec3
 
 // A polygon: its vertex count and, for a portal, the cell it leads to.
 type polygon = { count: float, target: float }
-let polygon =
-  Decode.map2((count, target): polygon => { count: count, target: target },
-    Decode.skipThen(1.0, Decode.u8), Decode.skipThen(2.0, Decode.u16le))
-    |> Decode.andThen((p: polygon) => Decode.skipThen(2.0, Decode.succeed(p)))
 
 // How a rendered polygon is textured (the 48-byte WRRGB record): texture
 // axes, the texture's offset in 1/4096ths of a tile, its TXLIST index and the
 // polygon vertex (an index into its own vertex list) the axes start at.
 type texturing = { axisU: List<float>, axisV: List<float>, u: float, v: float, texture: float, origin: float }
-let texturing =
-  Decode.map5((au, av, uv, tex, origin): texturing =>
-      { axisU: au, axisV: av, u: Option.defaultValue(0.0, List.nth(0.0, uv)),
-        v: Option.defaultValue(0.0, List.nth(1.0, uv)), texture: tex, origin: origin },
-    vec3, vec3, Decode.list(2.0, Decode.u16le), Decode.u8, Decode.u8)
-    |> Decode.andThen((t: texturing) => Decode.skipThen(18.0, Decode.succeed(t)))
 
 // A rendered polygon's lightmap: its texel offset, size, and which animated
 // lights add layers (one per set bit) after the base.
 type lightmap = { u: float, v: float, width: float, height: float, layers: float }
-let lightmapInfo =
-  Decode.map5((u, v, w, h, layers): lightmap => { u: u, v: v, width: w, height: h, layers: layers },
-    Decode.i16le, Decode.i16le, Decode.u16le, Decode.u8, Decode.skipThen(9.0, Decode.u32le))
 
 // One cell. `lightmaps` holds each rendered polygon's base lightmap (RGB555,
 // row 0 first); animated layers are skipped.
 type cell = { vertices: List<List<float>>, polygons: List<polygon>, texturing: List<texturing>,
               indices: List<List<float>>, lights: List<lightmap>, lightmaps: List<Bytes.t> }
 
-let cell: Decode.t<cell> =
-  Decode.list(7.0, Decode.u8) |> Decode.andThen((h) =>
-  Decode.skipThen(6.0, Decode.u8) |> Decode.andThen((animated) =>
-  Decode.skipThen(17.0, Decode.list(Affine.n(0.0, h), vec3)) |> Decode.andThen((vertices) =>
-  Decode.list(Affine.n(1.0, h), polygon) |> Decode.andThen((polygons) =>
-  Decode.list(Affine.n(2.0, h), texturing) |> Decode.andThen((tex) =>
-  Decode.skipThen(4.0, Decode.sequence(List.map((p: polygon) => Decode.list(p.count, Decode.u8), polygons))) |> Decode.andThen((ids) =>
-  Decode.skipThen(16.0 * Affine.n(4.0, h) + 2.0 * animated, Decode.list(Affine.n(2.0, h), lightmapInfo)) |> Decode.andThen((lights) =>
-  Decode.sequence(List.map((l: lightmap) =>
-      let size = 2.0 * l.width * l.height in
-      Decode.bytes(size) |> Decode.andThen((base) => Decode.skipThen(size * Bits.popcount(l.layers), Decode.succeed(base))),
-    lights)) |> Decode.andThen((maps) =>
-  Decode.u32le |> Decode.andThen((count) =>
-  Decode.skipThen(2.0 * count, Decode.succeed(
-    { vertices: vertices, polygons: polygons, texturing: tex, indices: ids, lights: lights, lightmaps: maps })))))))))))
+// Cells are read with direct `Bytes` reads, about 3× cheaper per number
+// than `Decode` combinators (medsci1 has ~350k). Each section's extent is
+// checked against the data before it is read, so a read can't fail inside.
+let u8At = (at: float, data: Bytes.t): float => Bytes.u8(at, data) |> Result.defaultValue(0.0)
+let u16At = (at: float, data: Bytes.t): float => Bytes.u16le(at, data) |> Result.defaultValue(0.0)
+let i16At = (at: float, data: Bytes.t): float => Bytes.i16le(at, data) |> Result.defaultValue(0.0)
+let u32At = (at: float, data: Bytes.t): float => Bytes.u32le(at, data) |> Result.defaultValue(0.0)
+let f32At = (at: float, data: Bytes.t): float => Bytes.f32le(at, data) |> Result.defaultValue(0.0)
+let vec3At = (at: float, data: Bytes.t): List<float> => [f32At(at, data), f32At(at + 4.0, data), f32At(at + 8.0, data)]
 
-// WRRGB: a u32, the cell count, then the cells.
+// `count` records `size` bytes apart from `at`, each read by `read`.
+let table = (at: float, count: float, size: float, read: (float) => 'a): List<'a> =>
+  List.range(count) |> List.map((i) => read(at + size * i))
+
+// `next(at)` when `size` bytes from `at` are inside the data, else an error.
+let within = (at: float, size: float, what: string, data: Bytes.t, next: (float) => Result.t<'a, Binary.error>): Result.t<'a, Binary.error> =>
+  if at + size > Bytes.length(data) then Result.Error(Decode.failure(at, Text.join("", ["cell data past the end of the file (", what, ")"])))
+  else next(at)
+
+// One cell from `at`: the cell and where the next one starts.
+let cellAt = (at: float, data: Bytes.t): Result.t<(cell, float), Binary.error> =>
+  within(at, 31.0, "header", data, (_) =>
+    let nv = u8At(at, data) in
+    let np = u8At(at + 1.0, data) in
+    let nr = u8At(at + 2.0, data) in
+    let npl = u8At(at + 4.0, data) in
+    let animated = u8At(at + 13.0, data) in
+    let vAt = at + 31.0 in
+    let pAt = vAt + 12.0 * nv in
+    let tAt = pAt + 8.0 * np in
+    let iAt = tAt + 48.0 * nr + 4.0 in
+    within(vAt, 12.0 * nv + 8.0 * np + 48.0 * nr + 4.0, "vertices, polygons and texturing", data, (_) =>
+      let polygons = table(pAt, np, 8.0, (o): polygon => { count: u8At(o + 1.0, data), target: u16At(o + 4.0, data) }) in
+      let counts = List.map((p: polygon) => p.count, polygons) in
+      let total = List.sum(counts) in
+      within(iAt, total, "polygon indices", data, (_) =>
+        let starts = List.fold((acc, c) => match acc with | (next, ss) => (next + c, List.append([next], ss)), (iAt, []), counts) in
+        let indices = match starts with
+          | (_, ss) => List.zip(counts, ss) |> List.map((pair) => match pair with | (s, c) => table(s, c, 1.0, (o) => u8At(o, data))) in
+        let lAt = iAt + total + 16.0 * npl + 2.0 * animated in
+        within(lAt, 20.0 * nr, "lightmap records", data, (_) =>
+          let lights = table(lAt, nr, 20.0, (o): lightmap =>
+            { u: i16At(o, data), v: i16At(o + 2.0, data), width: u16At(o + 4.0, data), height: u8At(o + 6.0, data), layers: u32At(o + 16.0, data) }) in
+          let mAt = lAt + 20.0 * nr in
+          let sizes = List.map((l: lightmap) => 2.0 * l.width * l.height * (Bits.popcount(l.layers) + 1.0), lights) in
+          within(mAt, List.sum(sizes) + 4.0, "lightmaps", data, (_) =>
+            let maps = List.fold((acc, pair) => match acc with
+                | (o, ms) => (match pair with
+                  | (l, size) => (o + size, List.append([Bytes.slice(o, 2.0 * l.width * l.height, data) |> Result.defaultValue(Bytes.zeros(0.0))], ms))),
+              (mAt, []), List.zip(sizes, lights)) in
+            let cAt = mAt + List.sum(sizes) in
+            let skip = 2.0 * u32At(cAt, data) in
+            within(cAt + 4.0, skip, "trailer", data, (_) =>
+              Result.Ok(({ vertices: table(vAt, nv, 12.0, (o) => vec3At(o, data)), polygons: polygons,
+                           texturing: table(tAt, nr, 48.0, (o): texturing =>
+                             { axisU: vec3At(o, data), axisV: vec3At(o + 12.0, data), u: u16At(o + 24.0, data), v: u16At(o + 26.0, data),
+                               texture: u8At(o + 28.0, data), origin: u8At(o + 29.0, data) }),
+                           indices: indices, lights: lights, lightmaps: match maps with | (_, ms) => ms },
+                         cAt + 4.0 + skip))))))))
+
+// WRRGB: a u32, the cell count, then the cells. A cell is at least 39
+// bytes, so a count the data can't hold fails before any is read.
 let cellsIn = (chunks: List<chunk>, data: Bytes.t): Result.t<List<cell>, Binary.error> =>
   find("WRRGB", chunks) |> Result.bind((wr: chunk) =>
-    Decode.run(Decode.at(wr.offset + 4.0, Decode.u32le |> Decode.andThen((count) => Decode.list(count, cell))), data))
+    Bytes.u32le(wr.offset + 4.0, data) |> Result.bind((count) =>
+      if 39.0 * count > Bytes.length(data) - wr.offset - 8.0
+      then Result.Error(Decode.failure(wr.offset + 4.0, Text.join("", [Text.fromFloat(count), " cells can't fit in the data"])))
+      else List.range(count)
+        |> List.tryMapAccum((at, i) => cellAt(at, data)
+             |> Result.mapError((e) => Decode.within(Binary.Index(i), e))
+             |> Result.map((r) => match r with | (c, next) => (next, c)), wr.offset + 8.0)
+        |> Result.map((acc) => match acc with | (_, cells) => cells)))
 
 // A TXLIST texture: its family folder under `fam/` and its name.
 type texture = { family: string, name: string }
